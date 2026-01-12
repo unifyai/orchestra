@@ -6,7 +6,7 @@ from . import HEADERS, _create_derived_entry, _create_log, _create_project
 
 @pytest.mark.anyio
 async def test_get_fields_with_derived_entries(client: AsyncClient):
-    project_name = f"test_project_derived-jsonb"
+    project_name = "test_project_derived"
     _ = await _create_project(client, project_name)
 
     # Implicit creation for entries - types inferred from values
@@ -196,7 +196,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
 @pytest.mark.anyio
 async def test_rename_field_basic(client: AsyncClient):
     """Test basic field renaming functionality."""
-    project_name = f"test-rename-field-jsonb"
+    project_name = "test-rename-field"
     _ = await _create_project(client, project_name)
 
     # Create initial logs with old field name
@@ -257,7 +257,7 @@ async def test_rename_field_basic(client: AsyncClient):
 @pytest.mark.anyio
 async def test_rename_field_edge_cases(client: AsyncClient):
     """Test edge cases for field renaming functionality."""
-    project_name = f"test-rename-field-edges-jsonb"
+    project_name = "test-rename-field-edges"
     _ = await _create_project(client, project_name)
 
     # Create a log with existing fields
@@ -317,7 +317,7 @@ async def test_field_type_constraints_and_mutability(
     client: AsyncClient,
 ):
     """Test that fields maintain their type (entry/derived) consistently and respect mutability."""
-    project_name = f"test_field_type_constraints-jsonb"
+    project_name = "test_field_type_constraints"
     await _create_project(client, project_name)
 
     # Create an entry field
@@ -404,7 +404,7 @@ async def test_field_type_constraints_and_mutability(
 @pytest.mark.anyio
 async def test_rename_field_preserves_order(client: AsyncClient):
     """Test that renaming a field preserves the original field order."""
-    project_name = f"test-rename-field-order-jsonb"
+    project_name = "test-rename-field-order"
     _ = await _create_project(client, project_name)
 
     # Create a log with fields in a specific order
@@ -498,7 +498,7 @@ async def test_rename_field_preserves_order(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_fields_happy_path(client: AsyncClient):
     """Test creating fields with explicit and untyped fields"""
-    project_name = f"test-create-fields-jsonb"
+    project_name = "test-create-fields"
     context_name = "fields-context"
 
     # Setup project and context
@@ -552,7 +552,7 @@ async def test_create_fields_happy_path(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_fields_invalid_type(client: AsyncClient):
     """Test creating fields with an invalid type"""
-    project_name = f"test-invalid-field-type-jsonb"
+    project_name = "test-invalid-field-type"
     context_name = "invalid-type-context"
 
     # Setup project and context
@@ -588,7 +588,7 @@ async def test_create_fields_invalid_type(client: AsyncClient):
 @pytest.mark.anyio
 async def test_delete_fields_endpoint(client: AsyncClient):
     """Test deleting fields using the DELETE /v0/logs/fields endpoint"""
-    project_name = f"test-delete-fields-jsonb"
+    project_name = "test-delete-fields"
 
     # Create a project
     await _create_project(client, project_name)
@@ -683,7 +683,7 @@ async def test_delete_fields_endpoint(client: AsyncClient):
 @pytest.mark.anyio
 async def test_delete_fields_preserves_log_events(client: AsyncClient):
     """Test that deleting fields only removes the field data, not the entire log events."""
-    project_name = f"test-delete-fields-preserve-logs-jsonb"
+    project_name = "test-delete-fields-preserve-logs"
 
     # Create a project
     await _create_project(client, project_name)
@@ -790,7 +790,7 @@ async def test_delete_all_fields_preserves_empty_log_events(
 
     Log data is stored directly in LogEvent.data, so empty logs are returned.
     """
-    project_name = f"test-delete-all-fields-jsonb"
+    project_name = "test-delete-all-fields"
 
     # Create a project
     await _create_project(client, project_name)
@@ -841,7 +841,7 @@ async def test_delete_all_fields_preserves_empty_log_events(
 @pytest.mark.anyio
 async def test_create_fields_with_backfill_default(client: AsyncClient):
     """Test that creating fields with default backfill_logs=True adds None values to existing logs."""
-    project_name = f"test-backfill-default-jsonb"
+    project_name = "test-backfill-default"
 
     # Create a project
     await _create_project(client, project_name)
@@ -907,7 +907,7 @@ async def test_create_fields_with_backfill_default(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_fields_without_backfill(client: AsyncClient):
     """Test that creating fields with backfill_logs=False does not add to existing logs."""
-    project_name = f"test-no-backfill-jsonb"
+    project_name = "test-no-backfill"
 
     # Create a project
     await _create_project(client, project_name)
@@ -985,7 +985,7 @@ async def test_create_fields_backfill_with_existing_values(
     client: AsyncClient,
 ):
     """Test that backfill does not overwrite existing field values."""
-    project_name = f"test-backfill-no-overwrite-jsonb"
+    project_name = "test-backfill-no-overwrite"
 
     # Create a project
     await _create_project(client, project_name)
@@ -1064,7 +1064,7 @@ async def test_create_fields_backfill_empty_context(
     client: AsyncClient,
 ):
     """Test that backfill works correctly when context has no logs."""
-    project_name = f"test-backfill-empty-jsonb"
+    project_name = "test-backfill-empty"
 
     # Create a project
     await _create_project(client, project_name)
@@ -1100,7 +1100,7 @@ async def test_create_fields_backfill_respects_derived_logs(
     client: AsyncClient,
 ):
     """Test that backfill does not create Log entries for fields that exist as DerivedLog entries."""
-    project_name = f"test-backfill-derived-jsonb"
+    project_name = "test-backfill-derived"
 
     # Create a project
     await _create_project(client, project_name)
@@ -1171,7 +1171,7 @@ async def test_create_fields_backfill_respects_derived_logs(
 @pytest.mark.anyio
 async def test_unique_field_constraint(client: AsyncClient):
     """Test that the unique constraint on fields is enforced."""
-    project_name = f"test-unique-field-jsonb"
+    project_name = "test-unique-field"
     await _create_project(client, project_name)
 
     # Create a field with a unique constraint via the /fields endpoint
@@ -1217,7 +1217,7 @@ async def test_unique_field_constraint_on_log_creation(
     client: AsyncClient,
 ):
     """Test creating a unique field during log creation."""
-    project_name = f"test-unique-on-creation-jsonb"
+    project_name = "test-unique-on-creation"
     await _create_project(client, project_name)
 
     # Create a log with a unique field defined in explicit_types
@@ -1238,7 +1238,7 @@ async def test_unique_field_constraint_on_log_creation(
 @pytest.mark.anyio
 async def test_unique_field_constraint_on_update(client: AsyncClient):
     """Test that the unique constraint on fields is enforced during update."""
-    project_name = f"test-unique-on-update-jsonb"
+    project_name = "test-unique-on-update"
     await _create_project(client, project_name)
 
     # Create a log with a unique field and another log to be updated
@@ -1292,7 +1292,7 @@ async def test_unique_field_constraint_on_update(client: AsyncClient):
 @pytest.mark.anyio
 async def test_field_description_crud(client: AsyncClient):
     """Test creating fields with descriptions and verifying CRUD operations."""
-    project_name = f"test-field-description-jsonb"
+    project_name = "test-field-description"
     await _create_project(client, project_name)
 
     # Create fields with and without descriptions via POST /logs/fields
@@ -1343,7 +1343,7 @@ async def test_field_description_crud(client: AsyncClient):
 @pytest.mark.anyio
 async def test_explicit_nested_type_in_get_fields(client: AsyncClient):
     """Test that get_fields returns explicit nested types correctly."""
-    project_name = f"test-get-fields-nested-jsonb"
+    project_name = "test-get-fields-nested"
     await _create_project(client, project_name)
 
     # Create a log with nested explicit type
@@ -1380,7 +1380,7 @@ async def test_explicit_nested_type_in_get_fields(client: AsyncClient):
 @pytest.mark.anyio
 async def test_explicit_type_overrides_in_fields(client: AsyncClient):
     """Test that explicit types override inferred types in get_fields."""
-    project_name = f"test-explicit-override-fields-jsonb"
+    project_name = "test-explicit-override-fields"
     await _create_project(client, project_name)
 
     # Create a log with explicit type overriding inference
@@ -1416,7 +1416,7 @@ async def test_get_fields_all_contexts_with_wildcard(
     client: AsyncClient,
 ):
     """Test that using context='*' returns fields from all contexts in the project."""
-    project_name = f"test-get-fields-all-contexts-jsonb"
+    project_name = "test-get-fields-all-contexts"
     context_name_1 = "ctx1"
     context_name_2 = "ctx2"
 

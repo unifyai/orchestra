@@ -602,6 +602,28 @@ class LogDAO:
                     f"Failed to delete GCS file for log_event_id {log_event_id}, field {field_name}: {str(e)}",
                 )
 
+    def delete(self, log_event_id: int) -> None:
+        """Deletes a single LogEvent and its associated GCS files if applicable."""
+        log_event = (
+            self.session.query(LogEvent)
+            .filter(LogEvent.id == log_event_id)
+            .one_or_none()
+        )
+
+        if not log_event:
+            raise ValueError(f"LogEvent with id {log_event_id} not found.")
+
+        # Delete associated GCS media before deleting DB records
+        self._bulk_delete_gcs_media([log_event_id], log_event.project_id)
+
+        # Delete LogEventContext associations
+        self.session.query(LogEventContext).filter(
+            LogEventContext.log_event_id == log_event_id,
+        ).delete(synchronize_session=False)
+
+        # Delete the LogEvent itself
+        self.session.delete(log_event)
+
     def _check_uniqueness(self, entries: List[Dict[str, Any]]):
         unique_field_defs = {}  # (project_id, context_id, key) -> FieldType
 

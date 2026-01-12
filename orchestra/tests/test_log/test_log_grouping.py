@@ -17,8 +17,7 @@ from . import (
 
 @pytest.mark.anyio
 async def test_get_logs_groups_project_not_found(client: AsyncClient):
-    mode_suffix = "jsonb"
-    project_name = f"non_existent_project_{mode_suffix}"
+    project_name = "non_existent_project"
 
     # This should return 404 as the project does not exist
     response = await client.get(
@@ -39,8 +38,7 @@ async def test_get_log_groups_by_context(client: AsyncClient):
 
     Uses entries instead of params to ensure compatibility with both EAV and JSONB modes.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-groups-by-context-{mode_suffix}"
+    project_name = "test-groups-by-context"
     _ = await _create_project(client, project_name)
 
     ctx_a = "Context/A"
@@ -98,8 +96,7 @@ async def test_get_log_groups_by_context(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_logs_with_group_threshold(client: AsyncClient):
-    mode_suffix = "jsonb"
-    project_name = f"group-threshold-test-{mode_suffix}"
+    project_name = "group-threshold-test"
     _ = await _create_project(client, project_name)
     await _create_logs_for_group_threshold(client, project_name)
 
@@ -204,8 +201,7 @@ async def test_get_log_groups(client: AsyncClient):
     Uses _create_logs_for_grouping_entries which creates logs with entries
     instead of params for JSONB compatibility.
     """
-    mode_suffix = "jsonb"
-    project_name = f"eval-project-{mode_suffix}"
+    project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_grouping_entries(client, project_name)
 
@@ -250,8 +246,7 @@ async def test_get_log_groups_combined(client: AsyncClient):
     Uses _create_logs_for_grouping_entries which creates logs with entries
     instead of params for JSONB compatibility.
     """
-    mode_suffix = "jsonb"
-    project_name = f"eval-project-combined-{mode_suffix}"
+    project_name = "eval-project-combined"
     _ = await _create_project(client, project_name)
     _ = await _create_logs_for_grouping_entries(client, project_name)
 
@@ -333,8 +328,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     - group_depth
     - group_sorting
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-grouping-comprehensive-{mode_suffix}"
+    project_name = "test-grouping-comprehensive"
     _ = await _create_project(client, project_name)
 
     # 1) Create initial logs using your existing fixture
@@ -762,8 +756,6 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
                             safe_group = safe_group_wrapper["entries/_/safe"]
                             assert "group_count" in safe_group
                             assert "count" in safe_group
-                            for safe_item in safe_group.get("group", []):
-                                pass  # Leaf values processed
 
     # ==========  SCENARIO 6: Group by + sort_across_groups  ==========
     response = await client.get(
@@ -848,8 +840,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
 @pytest.mark.anyio
 async def test_sorting_with_grouping(client: AsyncClient):
     """Test sorting functionality within groups and across groups."""
-    mode_suffix = "jsonb"
-    project_name = f"test-sorting-with-grouping-{mode_suffix}"
+    project_name = "test-sorting-with-grouping"
     await _create_project(client, project_name)
 
     # Create test data: student scores across different tests
@@ -977,8 +968,7 @@ async def test_sorting_with_grouping(client: AsyncClient):
 @pytest.mark.anyio
 async def test_sorting_edge_cases(client: AsyncClient):
     """Test edge cases in sorting with groups."""
-    mode_suffix = "jsonb"
-    project_name = f"test-sorting-edge-cases-{mode_suffix}"
+    project_name = "test-sorting-edge-cases"
     await _create_project(client, project_name)
 
     # Create test data with edge cases
@@ -1083,8 +1073,7 @@ async def test_nested_group_sorting_with_separate_metrics(
        - Sort each 'country' group by the SUM of scores (descending).
        - Within each country, sort 'student' groups by the MEAN of scores (descending).
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-nested-separate-metrics-{mode_suffix}"
+    project_name = "test-nested-separate-metrics"
     await _create_project(client, project_name)
 
     # Insert sample data
@@ -1224,8 +1213,7 @@ async def test_nested_group_sorting_leaf_only(client: AsyncClient):
     Same data, but we only specify 'group_sorting' for the *leaf* 'entries/student'.
     The top-level 'entries/country' is left unsorted (no aggregator).
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-nested-leaf-only-{mode_suffix}"
+    project_name = "test-nested-leaf-only"
     await _create_project(client, project_name)
 
     data = [
@@ -1330,8 +1318,7 @@ async def test_sort_within_and_across_groups_together(
     We group by 'student', sorting those groups across by mean(score) descending,
     but within each group, we sort logs by timestamp ascending.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-within-and-across-groups-{mode_suffix}"
+    project_name = "test-within-and-across-groups"
     await _create_project(client, project_name)
 
     # Data: 7 logs
@@ -1426,8 +1413,7 @@ async def test_sort_within_and_across_groups_together(
 @pytest.mark.anyio
 async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     """Test grouping with various filter parameters in both EAV and JSONB modes."""
-    mode_suffix = "jsonb"
-    project_name = f"test-grouping-with-other-filters-{mode_suffix}"
+    project_name = "test-grouping-with-other-filters"
     _ = await _create_project(client, project_name)
 
     # Create the standard logs
@@ -1996,7 +1982,7 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
 @pytest.mark.anyio
 async def test_jsonb_param_versioning_rejection(client: AsyncClient):
     """Verify param versioning raises clear error in JSONB mode."""
-    project_name = "test-jsonb-param-rejection"
+    project_name = "test-param-rejection"
     await _create_project(client, project_name)
 
     # Create some logs with entries (not params)
@@ -2030,8 +2016,7 @@ async def test_jsonb_param_versioning_rejection(client: AsyncClient):
 @pytest.mark.anyio
 async def test_groups_only_both_modes(client: AsyncClient):
     """Test groups_only parameter returns only IDs in both modes."""
-    mode_suffix = "jsonb"
-    project_name = f"test-groups-only-{mode_suffix}"
+    project_name = "test-groups-only"
     await _create_project(client, project_name)
 
     # Create test logs
@@ -2089,7 +2074,7 @@ async def test_groups_only_both_modes(client: AsyncClient):
 async def test_return_timestamps_jsonb_mode(client: AsyncClient):
     """Test return_timestamps with groups_only returns timestamps in JSONB mode."""
     # Note: EAV mode has a known issue with return_timestamps, so we only test JSONB
-    project_name = "test-return-timestamps-jsonb"
+    project_name = "test-return-timestamps"
     await _create_project(client, project_name)
 
     # Create test logs
@@ -2146,8 +2131,7 @@ async def test_return_timestamps_jsonb_mode(client: AsyncClient):
 @pytest.mark.anyio
 async def test_log_structure_preserved_both_modes(client: AsyncClient):
     """Test that log structure (entries, params, derived_entries) is preserved in both modes."""
-    mode_suffix = "jsonb"
-    project_name = f"test-log-structure-{mode_suffix}"
+    project_name = "test-log-structure"
     await _create_project(client, project_name)
 
     # Create logs with entries
@@ -2208,8 +2192,7 @@ async def test_log_structure_preserved_both_modes(client: AsyncClient):
 @pytest.mark.anyio
 async def test_grouping_sets_integration_depth_0(client: AsyncClient):
     """Test GROUPING SETS integration at depth=0 produces correct results."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-integration-d0-{mode_suffix}"
+    project_name = "test-gs-integration-d0"
     await _create_project(client, project_name)
 
     # Create test data with distinct status values
@@ -2258,8 +2241,7 @@ async def test_grouping_sets_integration_depth_0(client: AsyncClient):
 @pytest.mark.anyio
 async def test_grouping_sets_integration_depth_1(client: AsyncClient):
     """Test GROUPING SETS integration at depth=1 produces correct nested results."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-integration-d1-{mode_suffix}"
+    project_name = "test-gs-integration-d1"
     await _create_project(client, project_name)
 
     # Create test data with status × priority combinations
@@ -2318,8 +2300,7 @@ async def test_grouping_sets_fallback_for_groups_only(
     client: AsyncClient,
 ):
     """Test that groups_only=True falls back to recursive path (not GROUPING SETS)."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-fallback-groups-{mode_suffix}"
+    project_name = "test-gs-fallback-groups"
     await _create_project(client, project_name)
 
     # Create test data
@@ -2356,8 +2337,7 @@ async def test_grouping_sets_fallback_for_groups_only(
 @pytest.mark.anyio
 async def test_grouping_sets_with_sorting(client: AsyncClient):
     """Test that group_sorting works via GROUPING SETS path."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-sorting-{mode_suffix}"
+    project_name = "test-gs-sorting"
     await _create_project(client, project_name)
 
     # Create test data with different scores for sorting
@@ -2405,8 +2385,7 @@ async def test_grouping_sets_with_pagination(
     client: AsyncClient,
 ):
     """Test that group_limit/offset works via GROUPING SETS path."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-pagination-{mode_suffix}"
+    project_name = "test-gs-pagination"
     await _create_project(client, project_name)
 
     # Create test data
@@ -2452,8 +2431,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_0(
     This test compares the optimized GROUPING SETS path directly against the
     recursive array_agg path for the same dataset to ensure correctness.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-vs-recursive-d0-{mode_suffix}"
+    project_name = "test-gs-vs-recursive-d0-baseline"
     await _create_project(client, project_name)
 
     # Create moderately sized dataset with multiple distinct status values
@@ -2554,8 +2532,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_1(
     This test compares the optimized GROUPING SETS path directly against the
     recursive array_agg path for a two-level grouping scenario.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-vs-recursive-d1-{mode_suffix}"
+    project_name = "test-gs-vs-recursive-d1"
     await _create_project(client, project_name)
 
     # Create moderately sized dataset with status × priority combinations
@@ -2726,8 +2703,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_1(
 @pytest.mark.anyio
 async def test_grouping_sets_sorting_single_level(client: AsyncClient):
     """Test GROUPING SETS optimization with group_sorting at depth=0."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-sort-single-{mode_suffix}"
+    project_name = "test-gs-sort-single"
     await _create_project(client, project_name)
 
     # Create test data with scores: cat_0=0,5,10..., cat_1=1,6,11..., etc.
@@ -2779,8 +2755,7 @@ async def test_grouping_sets_sorting_single_level(client: AsyncClient):
 @pytest.mark.anyio
 async def test_grouping_sets_sorting_multi_level(client: AsyncClient):
     """Test GROUPING SETS with sorting at depth=1 (two levels)."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-sort-multi-{mode_suffix}"
+    project_name = "test-gs-sort-multi"
     await _create_project(client, project_name)
 
     # Create nested data: countries with students and scores
@@ -2836,8 +2811,7 @@ async def test_grouping_sets_sorting_multi_level(client: AsyncClient):
 @pytest.mark.anyio
 async def test_grouping_sets_pagination_multi_page(client: AsyncClient):
     """Test GROUPING SETS with group_limit and group_offset for multiple pages."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-pagination-multi-{mode_suffix}"
+    project_name = "test-gs-pagination-multi"
     await _create_project(client, project_name)
 
     # Create 20 distinct categories
@@ -2902,8 +2876,7 @@ async def test_grouping_sets_sorting_with_pagination(
     client: AsyncClient,
 ):
     """Test GROUPING SETS with both sorting and pagination combined."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-sort-page-{mode_suffix}"
+    project_name = "test-gs-sort-page"
     await _create_project(client, project_name)
 
     # Create 10 categories with different mean scores
@@ -2960,8 +2933,7 @@ async def test_grouping_sets_fallback_within_groups_sorting(
     client: AsyncClient,
 ):
     """Verify GROUPING SETS falls back to recursive for WITHIN_GROUPS sorting."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-fallback-within-{mode_suffix}"
+    project_name = "test-gs-fallback-within"
     await _create_project(client, project_name)
 
     # Create test data
@@ -3002,8 +2974,7 @@ async def test_grouping_sets_fallback_within_groups_sorting(
 @pytest.mark.anyio
 async def test_grouping_sets_depth_two(client: AsyncClient):
     """Test GROUPING SETS optimization with depth=2 (three levels)."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-depth-two-{mode_suffix}"
+    project_name = "test-gs-depth-two"
     await _create_project(client, project_name)
 
     # Create 3-level nested data: country -> city -> district
@@ -3083,8 +3054,7 @@ async def test_grouping_sets_sorting_vs_recursive_baseline(
     monkeypatch,
 ):
     """Compare GROUPING SETS sorting output to recursive baseline."""
-    mode_suffix = "jsonb"
-    project_name = f"test-gs-sort-vs-rec-{mode_suffix}"
+    project_name = "test-gs-sort-vs-rec"
     await _create_project(client, project_name)
 
     # Create test data with unique mean scores per group
@@ -3189,8 +3159,7 @@ async def test_get_logs_group_by_nested_groups_false(
 
     This test currently fails with a 500 error, indicating a backend bug.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-group-by-not-nested-{mode_suffix}"
+    project_name = "test-group-by-not-nested"
     _ = await _create_project(client, project_name)
 
     # Create some simple logs with a field to group by
