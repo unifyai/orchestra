@@ -136,9 +136,8 @@ async def test_log_filter_helper(
     client: AsyncClient,
     expression,
     values,
-    use_jsonb_mode,
 ):
-    project_name = f"test_filter_helper-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_filter_helper-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the test values
@@ -190,8 +189,8 @@ async def test_log_filter_helper(
 
 
 @pytest.mark.anyio
-async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
-    project_name = f"test_full_name_filter-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_full_name_filter_expression(client: AsyncClient):
+    project_name = f"test_full_name_filter-jsonb"
     await _create_project(client, project_name)
 
     # Create logs covering various edge cases
@@ -1347,13 +1346,12 @@ async def test_log_filter_with_whitespace_field_names(
     expression,
     values,
     expected_match,
-    use_jsonb_mode,
 ):
     """
     Integration test for filtering logs using backtick-quoted field names
     that contain whitespace or special characters.
     """
-    project_name = f"test_backtick_fields-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_backtick_fields-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with field names containing spaces
@@ -1400,11 +1398,8 @@ async def test_isinstance_function_in_filter_expressions(
     value,
     types_expr,
     should_match,
-    use_jsonb_mode,
 ):
-    project_name = (
-        f"test_isinstance_function_{key}-{'jsonb' if use_jsonb_mode else 'eav'}"
-    )
+    project_name = f"test_isinstance_function_{key}-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the specific key/value under test
@@ -1429,8 +1424,8 @@ async def test_isinstance_function_in_filter_expressions(
 
 
 @pytest.mark.anyio
-async def test_dict_get_and_setdefault_behavior(client: AsyncClient, use_jsonb_mode):
-    project_name = f"test_dict_get_setdefault-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
+    project_name = f"test_dict_get_setdefault-jsonb"
     await _create_project(client, project_name)
 
     # Create logs with dict values
@@ -1795,9 +1790,8 @@ async def test_log_filter_helper_w_arithmetic(
     expression,
     values,
     expected,
-    use_jsonb_mode,
 ):
-    project_name = f"test_filter_helper-arith-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_filter_helper-arith-jsonb"
     _ = await _create_project(client, project_name, user=1)
     response = await client.post(
         "/v0/logs",
@@ -1818,10 +1812,9 @@ async def test_log_filter_helper_w_arithmetic(
 @pytest.mark.anyio
 async def test_get_logs_with_derived_math_expressions_and_indexing(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
 
-    project_name = f"test_derived_logs_math-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_derived_logs_math-jsonb"
     user_id = 1
 
     # 1) Create project
@@ -2226,9 +2219,8 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(
 @pytest.mark.anyio
 async def test_filtering_and_sorting_base_and_derived_logs(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
-    project_name = f"test_base_derived_filters-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_base_derived_filters-jsonb"
     user_id = 1
 
     await _create_project(client, project_name, user=user_id)
@@ -2394,7 +2386,6 @@ async def test_get_logs_w_timestamp_filtering(
     timestamp_format,
     filter_format,
     should_match,
-    use_jsonb_mode,
 ):
     """
     Test that timestamp filtering works correctly with different timestamp formats.
@@ -2402,9 +2393,7 @@ async def test_get_logs_w_timestamp_filtering(
     This test verifies that the normalize_timestamp function correctly handles
     timestamps with and without the 'T' separator in ISO 8601 format.
     """
-    project_name = (
-        f"test_timestamp_normalization-{'jsonb' if use_jsonb_mode else 'eav'}"
-    )
+    project_name = f"test_timestamp_normalization-jsonb"
     _ = await _create_project(client, project_name, user=1)
 
     # Create a log with a timestamp in the specified format
@@ -2458,8 +2447,8 @@ async def test_get_logs_w_timestamp_filtering(
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
-    project_name = f"eval-project-filtering-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_get_logs_w_filtering(client: AsyncClient):
+    project_name = f"eval-project-filtering-jsonb"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name, batched=False)
 
@@ -2921,8 +2910,8 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_num_tokens_function_w_various_types(client: AsyncClient, use_jsonb_mode):
-    project_name = f"test_num_tokens_types-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_num_tokens_function_w_various_types(client: AsyncClient):
+    project_name = f"test_num_tokens_types-jsonb"
     await _create_project(client, project_name)
 
     # Create separate logs, one per data type/key
@@ -2979,7 +2968,7 @@ async def test_num_tokens_function_w_various_types(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb_mode):
+async def test_now_function_in_filter_expressions(client: AsyncClient):
     """
     Test the now() function in filter expressions.
 
@@ -2989,7 +2978,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb
     3. It works with different operators (>, <, ==, etc.)
     4. It maintains timezone awareness
     """
-    project_name = f"test_now_function-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_now_function-jsonb"
     await _create_project(client, project_name)
 
     # Create logs with timestamps in the past, present (approximately), and future
@@ -3066,7 +3055,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb
 
 
 @pytest.mark.anyio
-async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_mode):
+async def test_timezone_aware_datetime_filtering(client: AsyncClient):
     """
     Test datetime filtering with timezone differences.
 
@@ -3076,7 +3065,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     3. Timezone information is preserved in arithmetic operations
     4. now() function returns timezone-aware datetime
     """
-    project_name = f"test_timezone_filtering-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_timezone_filtering-jsonb"
     await _create_project(client, project_name)
 
     # Create logs with timestamps in different timezones
@@ -3181,7 +3170,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     assert len(result["logs"]) == 2
 
 
-async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode):
+async def test_advanced_datetime_arithmetic(client: AsyncClient):
     """
     Test advanced datetime arithmetic with fractional seconds and complex operations.
 
@@ -3194,7 +3183,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     6. Month boundary calculations with fractional seconds
     7. Complex filtering expressions combining multiple operations
     """
-    project_name = f"test_advanced_datetime-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_advanced_datetime-jsonb"
     await _create_project(client, project_name)
 
     # Create logs with various datetime values including fractional seconds
@@ -3409,8 +3398,8 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     assert result["logs"][0]["entries"]["dt/name"] == "millisecond_precision"
 
 
-async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
-    project_name = f"eval-project-str-filter-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_get_logs_w_str_filtering(client: AsyncClient):
+    project_name = f"eval-project-str-filter-jsonb"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
 
@@ -3486,13 +3475,12 @@ async def test_array_membership_operator(
     array_field,
     test_value,
     should_match,
-    use_jsonb_mode,
 ):
     """
     Test that the membership operator correctly handles the case when a literal
     is checked against a JSON array column using PostgreSQL's array containment operator (@>).
     """
-    project_name = f"test_array_membership-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_array_membership-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the test array
@@ -3539,14 +3527,13 @@ async def test_boolean_membership_operator_error(
     bool_field,
     test_value,
     expected_error,
-    use_jsonb_mode,
 ):
     """
     Test that the membership operator correctly handles the case when a literal
     is checked against a boolean column. This should raise an error since
     membership tests on single boolean columns are invalid.
     """
-    project_name = f"test_bool_membership-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_bool_membership-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the test boolean
@@ -3592,13 +3579,12 @@ async def test_capitalize_behavior(
     client: AsyncClient,
     input_string,
     expected_result,
-    use_jsonb_mode,
 ):
     """
     Test that the capitalize() method correctly uppercases only the first character
     and lowercases the rest, rather than using PostgreSQL's initcap() function.
     """
-    project_name = f"test_capitalize-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_capitalize-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the test string
@@ -3671,13 +3657,12 @@ async def test_unicode_whitespace_stripping(
     client: AsyncClient,
     input_string,
     expected_stripped,
-    use_jsonb_mode,
 ):
     """
     Test that strip(), lstrip(), and rstrip() methods correctly handle all Unicode
     whitespace characters, not just ASCII whitespace.
     """
-    project_name = f"test_unicode_strip-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_unicode_strip-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the test string
@@ -3751,13 +3736,12 @@ async def test_string_pattern_binding(
     pattern,
     test_string,
     should_match,
-    use_jsonb_mode,
 ):
     """
     Test that startswith() and endswith() methods correctly handle pattern binding
     and escape special characters in LIKE patterns.
     """
-    project_name = f"test_string_pattern-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_string_pattern-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the test string
@@ -3815,13 +3799,12 @@ async def test_string_slicing(
     start,
     stop,
     expected_result,
-    use_jsonb_mode,
 ):
     """
     Test that string slicing correctly handles various slice indices,
     including negative indices and None values.
     """
-    project_name = f"test_string_slice-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_string_slice-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the test string
@@ -3882,12 +3865,12 @@ async def test_string_slicing(
     assert log["derived_entries"]["derived_slice"] == expected_result
 
 
-async def test_complex_string_filter_expressions(client: AsyncClient, use_jsonb_mode):
+async def test_complex_string_filter_expressions(client: AsyncClient):
     """
     Test that filter expressions correctly match complex strings with special characters,
     multi-line content, and various formatting.
     """
-    project_name = f"test_complex_string_filters-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_complex_string_filters-jsonb"
     user_id = 1
 
     # Create project
@@ -3979,12 +3962,11 @@ async def test_complex_string_filter_expressions(client: AsyncClient, use_jsonb_
 
 async def test_filters_on_nones(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test filtering logs where a field is None.
     """
-    project_name = f"test_none_filter-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_none_filter-jsonb"
     await _create_project(client, project_name)
 
     for i in range(4):
@@ -4009,11 +3991,11 @@ async def test_filters_on_nones(
 
 
 @pytest.mark.anyio
-async def test_embed_column_function(client: AsyncClient, use_jsonb_mode):
+async def test_embed_column_function(client: AsyncClient):
     """
     Test the embed() and similarity functions.
     """
-    project_name = f"test_embed_column_function-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_embed_column_function-jsonb"
     await _create_project(client, project_name)
 
     # Create logs with text content that will be embedded
@@ -4113,13 +4095,12 @@ async def test_embed_column_function(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_filter_with_vector_function_on_uncomputed_base_field(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Verifies that a vector function (e.g., cosine) correctly resolves a BASE()
     argument, even if the target embedding field is empty or None.
     """
-    project_name = f"test_vector_base_call-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_vector_base_call-jsonb"
     await _create_project(client, project_name, user=1)
 
     # 1. Create a log with a text field but DO NOT create an embedding for it yet.
@@ -4169,13 +4150,12 @@ async def test_filter_with_vector_function_on_uncomputed_base_field(
 @pytest.mark.anyio
 async def test_filter_on_field_with_existing_embedding(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Verifies that a filter on a field with an existing embedding works correctly
     for both scalar and vector operations.
     """
-    project_name = f"test_ambiguous_field_filter-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_ambiguous_field_filter-jsonb"
     await _create_project(client, project_name, user=1)
 
     # 1. Create a log with a simple text field.
@@ -4269,9 +4249,8 @@ async def test_type_function_in_filter_expressions(
     key,
     value,
     expected_type,
-    use_jsonb_mode,
 ):
-    project_name = f"test_type_function_{key}-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_type_function_{key}-jsonb"
     await _create_project(client, project_name)
 
     # Create a log with the specific key/value under test
@@ -4313,7 +4292,6 @@ is skipped rather than modified to use explicit_types everywhere.
 @pytest.mark.anyio
 async def test_safe_temporal_casting_with_invalid_values(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that safe temporal casting functions handle invalid values gracefully.
@@ -4326,7 +4304,7 @@ async def test_safe_temporal_casting_with_invalid_values(
 
     If safe casting functions are removed, this test will fail with InvalidDatetimeFormat errors.
     """
-    project_name = f"test_safe_temporal_casting-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_safe_temporal_casting-jsonb"
     await _create_project(client, project_name)
 
     # Create logs with various temporal values - some valid, some invalid
@@ -4577,7 +4555,6 @@ is skipped rather than modified.
 @pytest.mark.anyio
 async def test_null_safe_equality_inequality_comparisons(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that NULL-safe equality and inequality comparisons work correctly.
@@ -4592,7 +4569,7 @@ async def test_null_safe_equality_inequality_comparisons(
     If NULL-safe comparison functions are removed, this test will fail because
     NULL comparisons will return NULL (falsy) instead of proper boolean values.
     """
-    project_name = f"test_null_safe_comparisons-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_null_safe_comparisons-jsonb"
     await _create_project(client, project_name)
 
     # Create logs with temporal values that will be cast to NULL (invalid values)
@@ -4790,7 +4767,6 @@ async def test_null_safe_equality_inequality_comparisons(
 @pytest.mark.anyio
 async def test_filter_with_json_schema_typed_field(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that filter expressions work correctly for fields with JSON schema types.
@@ -4810,7 +4786,7 @@ async def test_filter_with_json_schema_typed_field(
 
     Both should work identically when filtering with integer equality expressions.
     """
-    project_name = f"test_json_schema_filter-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_json_schema_filter-jsonb"
     await _create_project(client, project_name)
 
     # Step 1: Create fields with different type specifications
@@ -4997,7 +4973,6 @@ async def test_filter_with_json_schema_typed_field(
 @pytest.mark.anyio
 async def test_sort_and_aggregate_json_schema_typed_field(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that sorting and aggregation work correctly for fields with JSON schema types.
@@ -5012,7 +4987,7 @@ async def test_sort_and_aggregate_json_schema_typed_field(
 
     If sorting falls back to text extraction, this test will catch it.
     """
-    project_name = f"test_json_schema_sort-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test_json_schema_sort-jsonb"
     await _create_project(client, project_name)
 
     # Create field with JSON schema type (Optional[int])

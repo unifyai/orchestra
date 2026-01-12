@@ -15,9 +15,8 @@ from . import (
 @pytest.mark.anyio
 async def test_update_logs_partial_success_flat_and_nested(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
-    project_name = f"update-partial-success-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"update-partial-success-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create two logs
@@ -122,8 +121,8 @@ async def test_update_logs_partial_success_flat_and_nested(
 
 
 @pytest.mark.anyio
-async def test_update_logs_overwrites(client: AsyncClient, use_jsonb_mode):
-    project_name = f"eval-project-update-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_update_logs_overwrites(client: AsyncClient):
+    project_name = f"eval-project-update-jsonb"
     _ = await _create_project(client, project_name)
 
     response = await _create_log(client, project_name, entries=log_data["log"])
@@ -216,8 +215,8 @@ async def test_update_logs_overwrites(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs(client: AsyncClient, use_jsonb_mode):
-    project_name = f"multi-log-project-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_update_logs(client: AsyncClient):
+    project_name = f"multi-log-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create multiple logs
@@ -250,8 +249,8 @@ async def test_update_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs_multi_values(client: AsyncClient, use_jsonb_mode):
-    project_name = f"multi-log-project-mv-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_update_logs_multi_values(client: AsyncClient):
+    project_name = f"multi-log-project-mv-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create multiple logs
@@ -290,9 +289,9 @@ async def test_update_logs_multi_values(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs_with_context_string(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_with_context_string(client: AsyncClient):
     """Test updating logs with context provided as a string."""
-    project_name = f"context-string-project-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"context-string-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create a context
@@ -325,9 +324,9 @@ async def test_update_logs_with_context_string(client: AsyncClient, use_jsonb_mo
 
 
 @pytest.mark.anyio
-async def test_update_logs_with_context_list(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_with_context_list(client: AsyncClient):
     """Test updating logs with context provided as a list of strings."""
-    project_name = f"context-list-project-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"context-list-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create multiple contexts
@@ -363,9 +362,9 @@ async def test_update_logs_with_context_list(client: AsyncClient, use_jsonb_mode
 
 
 @pytest.mark.anyio
-async def test_update_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_by_value_filter(client: AsyncClient):
     """Test updating logs using a value filter instead of explicit IDs."""
-    project_name = f"filter-by-value-project-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"filter-by-value-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create two logs with different status values
@@ -434,12 +433,9 @@ async def test_update_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_update_logs_filter_missing_project_or_context(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that updating logs with a filter dict requires either project or context."""
-    project_name = (
-        f"missing-project-context-project-{'jsonb' if use_jsonb_mode else 'eav'}"
-    )
+    project_name = f"missing-project-context-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create a log with status value
@@ -482,9 +478,9 @@ async def test_update_logs_filter_missing_project_or_context(
 
 
 @pytest.mark.anyio
-async def test_update_logs_nested_array(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_nested_array(client: AsyncClient):
     """Test updating a specific element in an array using nested path syntax."""
-    project_name = f"nested-array-project-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"nested-array-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create a log with an array
@@ -525,9 +521,9 @@ async def test_update_logs_nested_array(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs_nested_object(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_nested_object(client: AsyncClient):
     """Test updating a nested field in an object using dot notation."""
-    project_name = f"nested-object-project-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"nested-object-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create a log with a nested object
@@ -576,11 +572,9 @@ async def test_update_logs_nested_object(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs_nested_mixed_notation(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_nested_mixed_notation(client: AsyncClient):
     """Test updating using mixed dot and bracket notation."""
-    project_name = (
-        f"nested-mixed-notation-project-{'jsonb' if use_jsonb_mode else 'eav'}"
-    )
+    project_name = f"nested-mixed-notation-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create a log with a complex nested structure
@@ -630,9 +624,9 @@ async def test_update_logs_nested_mixed_notation(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_update_logs_invalid_nested_path(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_invalid_nested_path(client: AsyncClient):
     """Test that using an invalid path returns a 400 error."""
-    project_name = f"invalid-path-project-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"invalid-path-project-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create a log with an array
@@ -670,10 +664,9 @@ async def test_update_logs_invalid_nested_path(client: AsyncClient, use_jsonb_mo
 @pytest.mark.anyio
 async def test_update_log_with_explicit_nested_type(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test updating a log with explicit nested types."""
-    project_name = f"test-update-nested-type-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-nested-type-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create initial log with nested type
@@ -731,12 +724,9 @@ async def test_update_log_with_explicit_nested_type(
 @pytest.mark.anyio
 async def test_update_adds_field_with_explicit_type(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that updating a log can add a new field with explicit type."""
-    project_name = (
-        f"test-update-add-field-explicit-{'jsonb' if use_jsonb_mode else 'eav'}"
-    )
+    project_name = f"test-update-add-field-explicit-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create initial log
@@ -774,9 +764,9 @@ async def test_update_adds_field_with_explicit_type(
 
 
 @pytest.mark.anyio
-async def test_batch_update_with_nested_types(client: AsyncClient, use_jsonb_mode):
+async def test_batch_update_with_nested_types(client: AsyncClient):
     """Test batch updating multiple logs with nested explicit types."""
-    project_name = f"test-batch-update-nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-batch-update-nested-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create two logs
@@ -841,9 +831,9 @@ async def test_batch_update_with_nested_types(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_update_log_matching_base_types(client: AsyncClient, use_jsonb_mode):
+async def test_update_log_matching_base_types(client: AsyncClient):
     """Test updating log with matching base types."""
-    project_name = f"test-update-match-base-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-match-base-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create field with base types
@@ -905,9 +895,9 @@ async def test_update_log_matching_base_types(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_update_log_mismatching_base_types(client: AsyncClient, use_jsonb_mode):
+async def test_update_log_mismatching_base_types(client: AsyncClient):
     """Test updating log with mismatching base types - should fail."""
-    project_name = f"test-update-mismatch-base-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-mismatch-base-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create field with base types
@@ -957,9 +947,9 @@ async def test_update_log_mismatching_base_types(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_update_log_matching_nested_types(client: AsyncClient, use_jsonb_mode):
+async def test_update_log_matching_nested_types(client: AsyncClient):
     """Test updating log with matching nested types."""
-    project_name = f"test-update-match-nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-match-nested-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create fields with nested types
@@ -1018,9 +1008,9 @@ async def test_update_log_matching_nested_types(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_update_log_mismatching_nested_types(client: AsyncClient, use_jsonb_mode):
+async def test_update_log_mismatching_nested_types(client: AsyncClient):
     """Test updating log with mismatching nested types - should fail."""
-    project_name = f"test-update-mismatch-nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-mismatch-nested-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create field with List[int]
@@ -1069,7 +1059,6 @@ async def test_update_log_mismatching_nested_types(client: AsyncClient, use_json
 @pytest.mark.anyio
 async def test_update_with_pydantic_schema_matching(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test updating log with Pydantic schema - matching data."""
     pytest.importorskip("pydantic")
@@ -1079,7 +1068,7 @@ async def test_update_with_pydantic_schema_matching(
         name: str
         age: int
 
-    project_name = f"test-update-pydantic-match-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-pydantic-match-jsonb"
     _ = await _create_project(client, project_name)
 
     person_schema = Person.model_json_schema()
@@ -1140,7 +1129,6 @@ async def test_update_with_pydantic_schema_matching(
 @pytest.mark.anyio
 async def test_update_with_pydantic_schema_mismatching(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test updating log with Pydantic schema - mismatching data should fail."""
     pytest.importorskip("pydantic")
@@ -1150,9 +1138,7 @@ async def test_update_with_pydantic_schema_mismatching(
         name: str
         age: int
 
-    project_name = (
-        f"test-update-pydantic-mismatch-{'jsonb' if use_jsonb_mode else 'eav'}"
-    )
+    project_name = f"test-update-pydantic-mismatch-jsonb"
     _ = await _create_project(client, project_name)
 
     person_schema = Person.model_json_schema()
@@ -1261,7 +1247,7 @@ async def test_update_with_pydantic_schema_mismatching(
 
 
 @pytest.mark.anyio
-async def test_update_nested_pydantic_schema(client: AsyncClient, use_jsonb_mode):
+async def test_update_nested_pydantic_schema(client: AsyncClient):
     """Test updating log with nested Pydantic schema."""
     pytest.importorskip("pydantic")
     from typing import List as TypingList
@@ -1276,7 +1262,7 @@ async def test_update_nested_pydantic_schema(client: AsyncClient, use_jsonb_mode
         order_id: str
         items: TypingList[Item]
 
-    project_name = f"test-update-nested-pydantic-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-nested-pydantic-jsonb"
     _ = await _create_project(client, project_name)
 
     order_schema = Order.model_json_schema()
@@ -1344,9 +1330,9 @@ async def test_update_nested_pydantic_schema(client: AsyncClient, use_jsonb_mode
 
 
 @pytest.mark.anyio
-async def test_update_complex_nested_dict_types(client: AsyncClient, use_jsonb_mode):
+async def test_update_complex_nested_dict_types(client: AsyncClient):
     """Test updating log with complex nested dict types."""
-    project_name = f"test-update-complex-nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-complex-nested-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create field with nested dict type
@@ -1398,9 +1384,9 @@ async def test_update_complex_nested_dict_types(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_update_list_of_dicts(client: AsyncClient, use_jsonb_mode):
+async def test_update_list_of_dicts(client: AsyncClient):
     """Test updating log with List[dict] type."""
-    project_name = f"test-update-list-dicts-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-list-dicts-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create field
@@ -1463,9 +1449,9 @@ async def test_update_list_of_dicts(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_with_heterogeneous_list(client: AsyncClient, use_jsonb_mode):
+async def test_update_with_heterogeneous_list(client: AsyncClient):
     """Test updating log with heterogeneous list type."""
-    project_name = f"test-update-hetero-list-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"test-update-hetero-list-jsonb"
     _ = await _create_project(client, project_name)
 
     # Create field with heterogeneous list

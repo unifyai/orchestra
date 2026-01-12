@@ -3,16 +3,13 @@ from httpx import AsyncClient
 
 from . import HEADERS, _create_log, _create_project, _update_logs
 
-# Fixtures use_jsonb_mode, enable_jsonb_mode, enable_eav_mode are provided by conftest.py
-
-
 #####################
 # Tests             #
 #####################
 
 
 @pytest.mark.anyio
-async def test_inner_join_logs(client: AsyncClient, use_jsonb_mode):
+async def test_inner_join_logs(client: AsyncClient):
     """Test inner join based on a common user_id."""
     project_name = "test_project_join_inner"
     await _create_project(client, project_name, user=1)
@@ -75,7 +72,7 @@ async def test_inner_join_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_no_match_join_logs(client: AsyncClient, use_jsonb_mode):
+async def test_no_match_join_logs(client: AsyncClient):
     """Test inner join where no logs match the join condition."""
     project_name = "test_project_join_no_match"
     await _create_project(client, project_name, user=1)
@@ -123,7 +120,7 @@ async def test_no_match_join_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_left_join_logs(client: AsyncClient, use_jsonb_mode):
+async def test_left_join_logs(client: AsyncClient):
     """Test left join ensuring all logs from the left context are present."""
     project_name = "test_project_join_left"
     await _create_project(client, project_name, user=1)
@@ -189,7 +186,7 @@ async def test_left_join_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_right_join_logs(client: AsyncClient, use_jsonb_mode):
+async def test_right_join_logs(client: AsyncClient):
     """Test right join ensuring all logs from the right context are present."""
     project_name = "test_project_join_right"
     await _create_project(client, project_name, user=1)
@@ -255,7 +252,7 @@ async def test_right_join_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_outer_join_logs(client: AsyncClient, use_jsonb_mode):
+async def test_outer_join_logs(client: AsyncClient):
     """Test outer join ensuring all logs from both contexts are present."""
     project_name = "test_project_join_outer"
     await _create_project(client, project_name, user=1)
@@ -367,7 +364,7 @@ async def test_outer_join_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_complex_join_expression(client: AsyncClient, use_jsonb_mode):
+async def test_complex_join_expression(client: AsyncClient):
     """Test inner join with a complex expression involving multiple fields."""
     project_name = "test_project_join_complex"
     await _create_project(client, project_name, user=1)
@@ -438,7 +435,7 @@ async def test_complex_join_expression(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_two_column_equality_join(client: AsyncClient, use_jsonb_mode):
+async def test_two_column_equality_join(client: AsyncClient):
     """Test inner join using a composite key (two columns)."""
     project_name = "proj_two_cols"
     await _create_project(client, project_name, user=1)
@@ -490,7 +487,7 @@ async def test_two_column_equality_join(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_duplicate_field_names(client: AsyncClient, use_jsonb_mode):
+async def test_duplicate_field_names(client: AsyncClient):
     """Test join handles columns with the same name in both contexts by prefixing."""
     project_name = "proj_dup_fields"
     await _create_project(client, project_name, user=1)
@@ -529,7 +526,7 @@ async def test_duplicate_field_names(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_invalid_column_name_returns_400(client: AsyncClient, use_jsonb_mode):
+async def test_invalid_column_name_returns_400(client: AsyncClient):
     """Test join rejects request with non-existent column name in 'columns' dict."""
     project_name = "proj_bad_col"
     await _create_project(client, project_name, user=1)
@@ -556,105 +553,8 @@ async def test_invalid_column_name_returns_400(client: AsyncClient, use_jsonb_mo
 
 
 @pytest.mark.anyio
-async def test_join_logs_pass_by_reference(client: AsyncClient, enable_eav_mode):
-    """Test join logs with copy=False to verify pass-by-reference behavior.
-
-    Note: Pass-by-reference (copy=False) is only supported in EAV mode.
-    In JSONB mode, all joins create independent copies of data.
-    """
-    project_name = "test_project_join_reference"
-    await _create_project(client, project_name, user=1)
-
-    context_a = "context_A_ref"
-    context_b = "context_B_ref"
-    joined_context = "joined_ref"
-
-    # Create initial logs
-    response_a = await _create_log(
-        client,
-        project_name,
-        context=context_a,
-        entries={"user_id": 1, "score": 100, "name": "Alice"},
-    )
-    assert response_a.status_code == 200
-
-    response_b = await _create_log(
-        client,
-        project_name,
-        context=context_b,
-        entries={"user_id": 1, "category": "premium", "status": "active"},
-    )
-    assert response_b.status_code == 200
-
-    # Perform join with copy=False (pass by reference)
-    join_payload = {
-        "project_name": project_name,
-        "pair_of_args": [{"context": context_a}, {"context": context_b}],
-        "join_expr": "A.user_id == B.user_id",
-        "mode": "inner",
-        "new_context": joined_context,
-        "columns": ["A.user_id", "A.score", "A.name", "B.category", "B.status"],
-        "copy": False,  # Pass by reference
-    }
-    response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
-    assert response.status_code == 200
-
-    # Verify the joined result
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}&context={joined_context}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    logs = response.json().get("logs", [])
-    assert len(logs) == 1
-
-    entries = logs[0].get("entries", {})
-    assert entries.get("user_id") == 1
-    assert entries.get("score") == 100
-    assert entries.get("category") == "premium"
-
-    # Update the original log in context A
-    # Get the log ID from context A first
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}&context={context_a}",
-        headers=HEADERS,
-    )
-    log_a = response.json().get("logs", [])[0]
-    log_a_id = log_a.get("id")
-
-    # Update the score in the original log
-    response = await _update_logs(
-        client,
-        [log_a_id],
-        {"score": 200},
-        overwrite=True,
-    )
-    assert response.status_code == 200
-
-    # Check if the joined context reflects the update (with pass-by-reference)
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}&context={joined_context}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    logs = response.json().get("logs", [])
-    assert len(logs) == 1
-
-    # With pass-by-reference (copy=False), the joined context should reflect the update
-    # because it references the original logs rather than creating copies.
-    # Note: When using pass-by-reference, the original keys are preserved (no aliases)
-    entries = logs[0].get("entries", {})
-    assert entries.get("user_id") == 1  # user_id should remain the same
-    assert (
-        entries.get("score") == 200
-    )  # score should be updated to 200 (original key, not alias)
-    assert entries.get("category") == "premium"  # category should remain the same
-
-
-@pytest.mark.anyio
 async def test_join_logs_pass_by_reference_fails_in_jsonb_mode(
     client: AsyncClient,
-    enable_jsonb_mode,
 ):
     """Test that pass-by-reference (copy=False) raises error in JSONB mode.
 
@@ -701,7 +601,7 @@ async def test_join_logs_pass_by_reference_fails_in_jsonb_mode(
 
 
 @pytest.mark.anyio
-async def test_join_logs_with_copy(client: AsyncClient, use_jsonb_mode):
+async def test_join_logs_with_copy(client: AsyncClient):
     """Test join logs with copy=True to verify copy behavior (default)."""
     project_name = "test_project_join_copy"
     await _create_project(client, project_name, user=1)
@@ -791,54 +691,6 @@ async def test_join_logs_with_copy(client: AsyncClient, use_jsonb_mode):
     assert entries.get("uuid") == 1
     assert entries.get("original_value") == 10  # Should still be 10, not 20
     assert entries.get("mult") == 2
-
-
-@pytest.mark.anyio
-async def test_join_logs_reference_with_dict_columns_fails(
-    client: AsyncClient,
-    enable_eav_mode,
-):
-    """Test that using dictionary columns with copy=False raises an error.
-
-    Note: This test is EAV-only because in JSONB mode, copy=False is not supported at all,
-    so we'd get a different error message.
-    """
-    project_name = "test_project_join_ref_dict_fail"
-    await _create_project(client, project_name, user=1)
-
-    context_a = "context_A"
-    context_b = "context_B"
-    joined_context = "joined"
-
-    # Create logs
-    await _create_log(
-        client,
-        project_name,
-        context=context_a,
-        entries={"user_id": 1, "value": 10},
-    )
-
-    await _create_log(
-        client,
-        project_name,
-        context=context_b,
-        entries={"user_id": 1, "status": "active"},
-    )
-
-    # Try to join with copy=False and dictionary columns (should fail)
-    join_payload = {
-        "project_name": project_name,
-        "pair_of_args": [{"context": context_a}, {"context": context_b}],
-        "join_expr": "A.user_id == B.user_id",
-        "mode": "inner",
-        "new_context": joined_context,
-        "columns": {"A.user_id": "id", "A.value": "val"},  # Dict format
-        "copy": False,  # Pass by reference
-    }
-
-    response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
-    assert response.status_code == 400
-    assert "column aliases are not supported" in response.json()["detail"]
 
 
 async def _setup_contexts_with_embeddings(
@@ -964,16 +816,14 @@ async def _setup_contexts_with_embeddings(
 async def test_join_with_derived_embedding_columns(
     client: AsyncClient,
     copy: bool,
-    use_jsonb_mode,
 ):
     """Test joining contexts that have derived embedding columns.
 
-    Note: copy=False only works in EAV mode. In JSONB mode with copy=False, the test
-    expects a failure due to JSONB not supporting pass-by-reference.
+    Note: copy=False is not supported - all joins create independent copies.
     """
-    # Skip copy=False in JSONB mode - it's not supported and will fail with ValueError
-    if use_jsonb_mode and not copy:
-        pytest.skip("copy=False is not supported in JSONB mode")
+    # Skip copy=False - it's not supported and will fail with ValueError
+    if not copy:
+        pytest.skip("copy=False is not supported")
     project_name = f"test_project_join_embeddings_copy_{copy}"
     joined_context = "joined_embeddings"
 
@@ -1068,7 +918,7 @@ async def test_join_with_derived_embedding_columns(
 
 
 @pytest.mark.anyio
-async def test_join_with_derived_cosine_similarity(client: AsyncClient, use_jsonb_mode):
+async def test_join_with_derived_cosine_similarity(client: AsyncClient):
     """Test joining contexts with embeddings and creating a derived cosine similarity column in the joined context."""
     project_name = "test_project_join_cosine_similarity"
     joined_context = "joined_cosine"
@@ -1177,113 +1027,8 @@ async def test_join_with_derived_cosine_similarity(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-async def test_join_with_derived_cosine_similarity_copy_false(
-    client: AsyncClient,
-    enable_eav_mode,
-):
-    """Test joining contexts with embeddings using copy=False (pass-by-reference).
-
-    Note: This test is EAV-only because copy=False is not supported in JSONB mode.
-    """
-    project_name = "test_project_join_cosine_ref"
-    joined_context = "joined_cosine_ref"
-
-    # Set up contexts with embeddings
-    setup_data = await _setup_contexts_with_embeddings(client, project_name)
-    context_a = setup_data["context_a"]
-    context_b = setup_data["context_b"]
-
-    # Perform inner join with copy=False to use pass-by-reference
-    # Must use list format for columns when copy=False
-    columns = [
-        "A.id",
-        "A.description",
-        "A._description_emb",
-        "B.title",
-        "B._title_emb",
-    ]
-
-    join_payload = {
-        "project_name": project_name,
-        "pair_of_args": [
-            {"context": context_a},
-            {"context": context_b},
-        ],
-        "join_expr": "A.id == B.id",
-        "mode": "inner",
-        "new_context": joined_context,
-        "columns": columns,
-        "copy": False,  # Use pass-by-reference to keep original structure
-    }
-    response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
-    assert response.status_code == 200, f"Join failed: {response.text}"
-
-    # Verify the joined context exists and has the expected logs
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}&context={joined_context}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    logs = response.json().get("logs", [])
-    assert len(logs) == 5, f"Expected 5 joined logs, got {len(logs)}"
-
-    # Create the cosine similarity derived column
-    # With copy=False, the embeddings should still be in derived_entries
-    cosine_equation = (
-        "((((cosine({lg:_description_emb}, embed('crowded downtown after dark', model='text-embedding-3-small'))) "
-        "if exists({lg:_description_emb}) else 0) + "
-        "((cosine({lg:_title_emb}, embed('City after dark', model='text-embedding-3-small'))) "
-        "if exists({lg:_title_emb}) else 0)) / "
-        "((1 if exists({lg:_description_emb}) else 0) + (1 if exists({lg:_title_emb}) else 0))) "
-        "if (((1 if exists({lg:_description_emb}) else 0) + (1 if exists({lg:_title_emb}) else 0)) > 0) else 2"
-    )
-
-    response = await client.post(
-        "/v0/logs/derived",
-        json={
-            "project_name": project_name,
-            "context": joined_context,
-            "key": "_sum_cos",
-            "equation": cosine_equation,
-            "referenced_logs": {"lg": {"context": joined_context}},
-        },
-        headers=HEADERS,
-    )
-    assert (
-        response.status_code == 200
-    ), f"Failed to create cosine similarity column: {response.text}"
-
-    # Verify the derived column exists and has non-None values
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}&context={joined_context}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    logs = response.json().get("logs", [])
-    assert len(logs) == 5
-
-    for i, log in enumerate(logs):
-        derived_entries = log.get("derived_entries", {})
-
-        assert (
-            "_sum_cos" in derived_entries
-        ), f"Missing _sum_cos in derived_entries for log {i}"
-
-        cos_value = derived_entries["_sum_cos"]
-        if cos_value is not None:
-            assert isinstance(
-                cos_value,
-                (int, float),
-            ), f"_sum_cos should be numeric, got {type(cos_value)}"
-            assert (
-                -1 <= cos_value <= 1 or cos_value == 2
-            ), f"_sum_cos value {cos_value} is out of expected range for log {i}"
-
-
-@pytest.mark.anyio
 async def test_join_transcripts_contacts_with_embeddings(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Create Contacts and Transcripts contexts from Pydantic models, embed columns, then join."""
 

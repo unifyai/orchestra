@@ -40,10 +40,8 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     AuthUser,
     Context,
-    Log,
     LogEvent,
     LogEventContext,
-    LogEventLog,
     Project,
 )
 from orchestra.services.bucket_service import BucketService
@@ -4738,25 +4736,13 @@ def admin_list_contacts(
     # Fetch log entries and assemble contacts per event
     grouped: Dict[int, Dict[str, Any]] = {}
 
-    if settings.use_jsonb_queries:
-        # JSONB mode: Query LogEvent.data directly
-        query = select(LogEvent.id, LogEvent.data).where(LogEvent.id.in_(event_ids))
-        rows = session.execute(query).all()
+    # Query LogEvent.data directly
+    query = select(LogEvent.id, LogEvent.data).where(LogEvent.id.in_(event_ids))
+    rows = session.execute(query).all()
 
-        for event_id, data in rows:
-            # data is already a dict from JSONB column
-            grouped[event_id] = dict(data) if data else {}
-    else:
-        # EAV mode: Query Log and LogEventLog tables
-        query = (
-            select(Log, LogEventLog.log_event_id)
-            .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .where(LogEventLog.log_event_id.in_(event_ids))
-        )
-        raw_entries = session.execute(query).all()
-
-        for log_rec, eid in raw_entries:
-            grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
+    for event_id, data in rows:
+        # data is already a dict from JSONB column
+        grouped[event_id] = dict(data) if data else {}
 
     # Fetch user_id for each log_event via project
     rows = session.execute(
