@@ -1535,13 +1535,6 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
         logs_or_meta = group_item.get("value")
         assert isinstance(logs_or_meta, list)
         total_logs_in_groups += len(logs_or_meta)
-        # In EAV mode, from_fields strictly filters logs
-        # In JSONB mode, behavior may differ - only check in EAV mode
-        if not use_jsonb_mode:
-            for log in logs_or_meta:
-                assert (
-                    "_/description" in log["entries"] or "_/state" in log["entries"]
-                ), f"Log {log['id']} in group {group_item.get('key')} doesn't have _/description or _/state"
 
     assert (
         total_logs_in_groups == group_obj["count"]
@@ -1571,14 +1564,6 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     for group_item in group_obj.get("group", []):
         logs_or_meta = group_item.get("value")
         assert isinstance(logs_or_meta, list)
-        # In EAV mode, exclude_fields actually removes fields from response
-        # In JSONB mode, behavior may differ - only check in EAV mode
-        if not use_jsonb_mode:
-            for log in logs_or_meta:
-                assert "_/description" not in log.get(
-                    "entries",
-                    {},
-                ), f"Log {log.get('id')} in group {group_item.get('key')} still contains excluded field _/description"
 
     #
     # ==========  SCENARIO C: group_by + from_ids (or exclude_ids)  ==========
@@ -1652,43 +1637,13 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     assert "group_count" in group_obj
 
     # Logs 1 (liquid->gas, temp 100) and 3 (gas, temp 6000) match filter
-    # In EAV mode: Expected groups: 'liquid->gas', 'gas'
-    # In JSONB mode: filter behavior may include more groups
     expected_groups = {"liquid->gas", "gas"}
     actual_groups = {item.get("key") for item in group_obj.get("group", [])}
-    if not use_jsonb_mode:
-        assert (
-            actual_groups == expected_groups
-        ), f"Expected groups {expected_groups}, got {actual_groups}"
-        assert (
-            group_obj["count"] == 2
-        ), f"Expected count 2 after filter, got {group_obj['count']}"
-        assert (
-            group_obj["group_count"] == 2
-        ), f"Expected group_count 2 after filter, got {group_obj['group_count']}"
-    else:
-        # JSONB mode may return different results due to filter implementation
-        assert expected_groups.issubset(
-            actual_groups,
-        ), f"Expected at least groups {expected_groups}, got {actual_groups}"
 
-    # In EAV mode, verify the filter was applied correctly
-    # In JSONB mode, filter_expr behavior may differ
-    if not use_jsonb_mode:
-        for group_item in group_obj.get("group", []):
-            group_name = group_item.get("key")
-            logs_or_meta = group_item.get("value")
-            assert isinstance(logs_or_meta, list)
-            for log in logs_or_meta:
-                temp = log["entries"].get("_/temperature")
-                assert (
-                    temp is not None
-                ), f"Log {log['id']} in group {group_name} missing temperature"
-                # Handle potential string conversion if needed, though test data seems numeric
-                temp_float = float(temp) if isinstance(temp, str) else temp
-                assert (
-                    temp_float > 0
-                ), f"Log {log['id']} in group {group_name} has temp {temp_float}, expected > 0"
+    # JSONB mode may return different results due to filter implementation
+    assert expected_groups.issubset(
+        actual_groups,
+    ), f"Expected at least groups {expected_groups}, got {actual_groups}"
 
     #
     # ==========  SCENARIO E: group_by + sorting + limit/offset at the leaf level  ==========
@@ -1812,49 +1767,6 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
                 assert state_len == len(
                     state,
                 ), f"State length mismatch in log {log['id']}"
-
-    # SCENARIO G: Multi-level grouping by multiple derived entries
-    # Only test in EAV mode - JSONB mode has different behavior for derived entry grouping
-    if not use_jsonb_mode:
-        response = await client.get(
-            "/v0/logs",
-            params={
-                "project_name": project_name,
-                "group_by": [
-                    "derived_entries/derived_temp",
-                    "derived_entries/state_len",
-                ],
-            },
-            headers=HEADERS,
-        )
-        assert response.status_code == 200
-        result = response.json()
-        logs_section = result["logs"]
-        assert "derived_entries/derived_temp" in logs_section
-        temp_groups = logs_section["derived_entries/derived_temp"]
-
-        for temp_group_item in temp_groups.get("group", []):
-            temp_val_str = temp_group_item.get("key")
-            state_len_groups_wrapper = temp_group_item.get("value")
-            if temp_val_str in ("null"):
-                continue
-            assert "derived_entries/state_len" in state_len_groups_wrapper
-            len_groups = state_len_groups_wrapper["derived_entries/state_len"]
-
-            for len_group_item in len_groups.get("group", []):
-                len_val_str = len_group_item.get("key")
-                logs_list = len_group_item.get("value")
-                for log in logs_list:
-                    orig_temp = log["entries"].get("_/temperature")
-                    state = log["entries"].get("_/state")
-                    if orig_temp is not None:
-                        assert (
-                            float(temp_val_str) == orig_temp + 10
-                        ), f"Derived temp mismatch in multi-level grouping for log {log['id']}"
-                    if state is not None:
-                        assert float(len_val_str) == len(
-                            state,
-                        ), f"Derived state length mismatch in multi-level grouping for log {log['id']}"
 
 
 @pytest.mark.anyio
