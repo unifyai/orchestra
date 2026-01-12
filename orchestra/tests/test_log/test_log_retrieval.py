@@ -19,7 +19,7 @@ from . import (
 
 
 @pytest.mark.anyio
-async def test_get_log(client: AsyncClient, use_jsonb_mode):
+async def test_get_log(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     log_response = await _create_log(client, project_name)
@@ -36,7 +36,7 @@ async def test_get_log(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -81,7 +81,7 @@ async def test_get_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_project_not_found(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_project_not_found(client: AsyncClient):
     project_name = "non_existent_project"
 
     # This should return 404 as the project does not exist
@@ -97,7 +97,7 @@ async def test_get_logs_project_not_found(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_entries(client: AsyncClient, use_jsonb_mode):
+async def test_get_entries(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -126,7 +126,7 @@ async def test_get_entries(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_from_ids(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_from_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -158,7 +158,7 @@ async def test_get_logs_from_ids(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_excluding_ids(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_excluding_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -190,7 +190,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_from_fields(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_from_fields(client: AsyncClient):
     """Test getting logs from specific fields."""
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
@@ -219,7 +219,7 @@ async def test_get_logs_from_fields(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_excluding_fields(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_excluding_fields(client: AsyncClient):
     """Test excluding fields from logs."""
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
@@ -260,7 +260,7 @@ async def test_get_logs_excluding_fields(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_w_column_context(client: AsyncClient):
     """Test getting logs with column context."""
     project_name = "eval-project"
     # create project and log
@@ -376,7 +376,7 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_latest_timestamp(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_latest_timestamp(client: AsyncClient):
     """Test getting latest timestamp."""
     # create logs
     project_name = "eval-project"
@@ -416,7 +416,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_log_ids(client: AsyncClient, use_jsonb_mode):
+async def test_get_log_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -441,7 +441,7 @@ async def test_get_log_ids(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_field_ordering(client: AsyncClient):
     project_name = "field-order-test"
     _ = await _create_project(client, project_name)
 
@@ -495,7 +495,7 @@ async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_with_value_limit(client: AsyncClient):
     """Test value_limit parameter for truncating large values."""
     project_name = "value-limit-test"
     _ = await _create_project(client, project_name)
@@ -615,7 +615,7 @@ async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_empty_logs(client: AsyncClient, use_jsonb_mode):
+async def test_get_empty_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
@@ -631,7 +631,7 @@ async def test_get_empty_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_pagination(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_w_pagination(client: AsyncClient):
     project_name = "test-pagination-project"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
@@ -721,7 +721,7 @@ async def test_get_logs_w_pagination(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_nested_dict_ordering(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_nested_dict_ordering(client: AsyncClient):
     """Test nested dict key ordering is preserved in both EAV and JSONB modes.
 
     JSONB mode uses a separate key_order column to store the original insertion order
@@ -829,7 +829,6 @@ async def test_get_logs_nested_dict_ordering(client: AsyncClient, use_jsonb_mode
 @pytest.mark.anyio
 async def test_get_logs_randomized_pagination_and_reproducibility(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     project = "randomize-test"
     await _create_project(client, project)

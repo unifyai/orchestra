@@ -5,8 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import HTTPException
-from sqlalchemy import alias, and_, cast, func, literal, or_, select, text, update
+from sqlalchemy import and_, cast, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -320,7 +319,6 @@ class LogDAO:
         Returns:
             List of log_event_ids that match the filters
         """
-        from orchestra.settings import settings
 
         if not filters:
             return []
@@ -337,43 +335,13 @@ class LogDAO:
                 LogEventContext.log_event_id == LogEvent.id,
             ).where(LogEventContext.context_id.in_(context_ids))
 
-        # JSONB Mode: Filter directly on LogEvent.data JSONB column
-        if settings.use_jsonb_queries:
-            for key, value in filters.items():
-                # Use JSONB containment operator @> or path-based filtering
-                # LogEvent.data @> '{"key": value}'::jsonb
-                query = query.where(
-                    LogEvent.data[key].astext == str(value)
-                    if isinstance(value, str)
-                    else LogEvent.data[key] == cast(literal(value), JSONB),
-                )
-            result = self.session.execute(query)
-            return [row[0] for row in result]
-
-        # EAV Mode: Use Log/LogEventLog tables
-        for idx, (key, value) in enumerate(filters.items()):
-            # Create a unique alias for each Log join to avoid conflicts
-            log_alias = f"log_{idx}"
-            log_table = alias(Log, name=log_alias)
-
-            # Join with the Log table
-            # First join to LogEventLog to get log_event_id associations
-            log_event_log_table = alias(LogEventLog.__table__, f"log_event_log_{idx}")
-            query = query.join(
-                log_event_log_table,
-                log_event_log_table.c.log_event_id == LogEvent.id,
-            ).join(
-                log_table,
-                log_table.c.id == log_event_log_table.c.log_id,
-            )
-
-            # Add filter conditions for this key-value pair
+        # Filter directly on LogEvent.data JSONB column
+        for key, value in filters.items():
             query = query.where(
-                log_table.c.key == key,
-                log_table.c.value == literal(value, type_=JSONB),
+                LogEvent.data[key].astext == str(value)
+                if isinstance(value, str)
+                else LogEvent.data[key] == cast(literal(value), JSONB),
             )
-
-        # Execute the query and return the list of log_event_ids
         result = self.session.execute(query)
         return [row[0] for row in result]
 
@@ -519,17 +487,12 @@ class LogDAO:
                 .update({"key": new_field_name}, synchronize_session=False)
             )
 
-            # JSONB Mode: Update LogEvent.data JSONB column - rename key within the JSON object
-            # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
-            from orchestra.settings import settings
-
-            if settings.use_jsonb_queries and log_event_ids:
+            # Update LogEvent.data JSONB column - rename key within the JSON object
+            if log_event_ids:
                 from sqlalchemy import text
 
-                # Use raw SQL for JSONB key rename since SQLAlchemy doesn't have
-                # direct support for this operation
+                # Use raw SQL for JSONB key rename
                 # Uses PostgreSQL JSONB operators: remove old key (-), add new key with same value (||)
-                # This is a single bulk UPDATE - O(1) query regardless of number of log events
                 self.session.execute(
                     text(
                         """
@@ -600,9 +563,6 @@ class LogDAO:
         """
         Finds all image/audio fields in LogEvent.data for the given log_event_ids
         and deletes the corresponding files from GCS.
-
-        This is the JSONB equivalent of _bulk_delete_gcs_media, used when
-        settings.use_jsonb_queries is enabled.
 
         Args:
             log_event_ids: List of LogEvent IDs to check for media fields
@@ -938,39 +898,13 @@ class LogDAO:
                         keys_and_values[entry["key"]].append(entry["value"])
 
                 for key, values in keys_and_values.items():
-                    # Check in Log table (EAV mode)
-                    q = (
-                        select(Log.id)
-                        .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
-                        .join(
-                            LogEventContext,
-                            LogEvent.id == LogEventContext.log_event_id,
-                        )
-                        .where(
-                            LogEvent.project_id == project_id,
-                            Log.key == key,
-                            Log.value.in_([literal(v, type_=JSONB) for v in values]),
-                        )
-                    )
-                    if context_id is not None:
-                        q = q.where(LogEventContext.context_id == context_id)
-
-                    if self.session.execute(q.limit(1)).first():
-                        raise ValueError(f"Duplicate entry for unique field '{key}'.")
-
-                    # JSONB Mode: Also check in LogEvent.data JSONB column
-                    # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
-                    from orchestra.settings import settings
-
-                    if settings.use_jsonb_queries and values:
+                    # Check in LogEvent.data JSONB column for duplicates
+                    if values:
                         import json as json_module
 
                         from sqlalchemy import text as sql_text
 
                         # BATCH OPTIMIZED: Build a single query to check all values at once
-                        # Uses JSONB @> operator with OR conditions for each value
-                        # This is O(1) query instead of O(N) queries
                         or_conditions = " OR ".join(
                             f"le.data @> CAST(:value_{i} AS jsonb)"
                             for i in range(len(values))
@@ -1890,507 +1824,6 @@ class LogDAO:
 
         return completed_ids
 
-    def bulk_update(
-        self,
-        updates: List[Dict[str, Any]],
-        overwrite: bool = False,
-        field_types: Optional[Dict] = None,
-    ) -> Dict[str, Any]:
-        """
-        Update multiple Log entries with partial success support.
-
-        Args:
-            updates: List of dictionaries with the following keys:
-                - log_event_id: int
-                - key: str
-                - value: Any
-                - param_version: int (optional)
-                - explicit_types: Dict (optional)
-                - context_id: int (optional)
-            overwrite: Whether to allow overwriting existing values
-            field_types: Dictionary of field types with mutable flags
-
-        Returns:
-            Dictionary with:
-                - successful_update_ids: List of log_event_ids that were updated successfully
-                - failed: List of dicts with log_event_id and error message
-        """
-        if not updates:
-            return {"successful_update_ids": [], "failed": []}
-
-        try:
-            self._check_uniqueness(updates)
-        except ValueError as e:
-            detail = e.detail if isinstance(e, HTTPException) else str(e)
-            return {
-                "successful_update_ids": [],
-                "failed": [
-                    {
-                        "error": f"Found differing log param value with the same version: {detail}",
-                    },
-                ],
-            }
-        except Exception as e:
-            return {"successful_update_ids": [], "failed": [{"error": str(e)}]}
-
-        field_types = field_types or {}
-
-        # Group updates by log_event_id for partial success handling
-        updates_by_log_id: Dict[int, List[Dict[str, Any]]] = {}
-        for update_item in updates:
-            le_id = update_item.get("log_event_id")
-            if le_id:
-                updates_by_log_id.setdefault(le_id, []).append(update_item)
-
-        update_result = {"successful_update_ids": [], "failed": []}
-
-        # Process each log_event_id independently
-        for process_log_id, log_updates in updates_by_log_id.items():
-            try:
-                now = datetime.now(timezone.utc)
-
-                # Group updates by log_event_id and key for efficient querying
-                update_groups = {}
-                for update_item in log_updates:
-                    log_event_id = update_item.get("log_event_id")
-                    key = update_item.get("key")
-                    if not log_event_id or not key:
-                        continue
-
-                    group_key = (log_event_id, key)
-                    update_groups[group_key] = update_item
-
-                if not update_groups:
-                    continue
-
-                # Query all existing logs in one go
-                log_event_ids = [k[0] for k in update_groups.keys()]
-                keys = [k[1] for k in update_groups.keys()]
-                existing_logs = (
-                    self.session.query(Log, LogEventLog.log_event_id)
-                    .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(LogEventLog.log_event_id.in_(log_event_ids))
-                    .filter(Log.key.in_(keys))
-                    .all()
-                )
-
-                # Create a lookup for existing logs
-                existing_log_map = {
-                    (log_event_id, log.key): log for log, log_event_id in existing_logs
-                }
-
-                # Query all existing JSON logs in one go via LogEventJSONLog association
-                existing_json_logs = (
-                    self.session.query(JSONLog, LogEventJSONLog.log_event_id)
-                    .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                    .filter(LogEventJSONLog.log_event_id.in_(log_event_ids))
-                    .filter(JSONLog.key.in_(keys))
-                    .all()
-                )
-
-                # Create a lookup for existing JSON logs
-                existing_json_log_map = {
-                    (log_event_id, json_log.key): json_log
-                    for json_log, log_event_id in existing_json_logs
-                }
-
-                log_event_ids_to_update = set()
-
-                # Collect rows for batch operations and conflict detection
-                rows_log = []
-                rows_json = []
-                rows_log_pk2val = {}  # Maps (log_event_id, key, param_version) to value
-                rows_json_pk2val = {}  # Maps (log_event_id, key) to value
-
-                # Process each update
-                for group_key, update_data in update_groups.items():
-                    log_event_id, key = group_key
-                    value = update_data.get("value")
-                    param_version = update_data.get("param_version")
-                    explicit_types = update_data.get("explicit_types", {})
-                    key_explicit_type = explicit_types.get(key, {})
-                    inferred_type = key_explicit_type.get("type")
-                    context_id = update_data.get("context_id")
-
-                    # Get project_id from log_event
-                    log_event = (
-                        self.session.query(LogEvent).filter_by(id=log_event_id).first()
-                    )
-                    project_id = log_event.project_id if log_event else None
-
-                    # Determine inferred type for Log.inferred_type column
-                    # Priority: explicit type > infer from value
-                    if inferred_type is not None:
-                        try:
-                            from orchestra.web.api.log.utils.type_utils import (
-                                is_pydantic_schema,
-                                normalize_pydantic_schema,
-                                pydantic_schema_to_string,
-                                validate_value_against_pydantic_schema,
-                            )
-
-                            if is_pydantic_schema(inferred_type):
-                                (
-                                    is_valid,
-                                    error_msg,
-                                ) = validate_value_against_pydantic_schema(
-                                    value,
-                                    inferred_type,
-                                )
-                                if not is_valid:
-                                    raise ValueError(
-                                        f"Value does not match Pydantic schema for field '{key}': {error_msg}",
-                                    )
-                                schema = normalize_pydantic_schema(inferred_type)
-                                inferred_type = pydantic_schema_to_string(schema)
-                            else:
-                                inferred_type = str(inferred_type)
-                        except Exception as e:
-                            raise e
-
-                    if inferred_type == "enum" and project_id is not None:
-                        # Handle enum field type
-                        enum_values = key_explicit_type.get("values")
-                        enum_restrict = key_explicit_type.get("restrict", False)
-
-                        try:
-                            self._handle_enum_field_type(
-                                project_id=project_id,
-                                context_id=context_id,
-                                key=key,
-                                value=value,
-                                enum_values=enum_values,
-                                enum_restrict=enum_restrict,
-                            )
-                            # Enum values are strings - use "str" for Log.inferred_type
-                            inferred_type = "str"
-                        except ValueError as e:
-                            raise e
-                    elif inferred_type is None:
-                        # No explicit type - infer from value using clean inference logic
-                        inferred_type = self.infer_type(key, value)
-
-                    # Handle media uploads
-                    # If infer_type detected it as image/audio, it's valid base64 with magic bytes
-                    # Just upload it - infer_type already validated it properly
-                    json_value = value
-                    if inferred_type == "image" and isinstance(value, str):
-                        json_value = self.upload_image_to_bucket(value)
-                    elif inferred_type == "audio" and isinstance(value, str):
-                        json_value = self.upload_audio_to_bucket(value)
-
-                    # Check if log exists
-                    existing_log = existing_log_map.get(group_key)
-
-                    if existing_log:
-                        # Check if overwrite is allowed
-                        if not update_data.get("overwrite", overwrite):
-                            raise OverwriteError
-
-                        # Check if field is immutable
-                        if key in field_types and context_id is not None:
-                            field_info = field_types.get(key)
-                            if field_info and not field_info.get("mutable", False):
-                                raise ImmutableFieldError
-
-                        # Update existing log
-                        existing_log.value = json_value
-                        existing_log.param_version = param_version
-                        existing_log.inferred_type = inferred_type
-                        existing_log.updated_at = now
-
-                        # Also update corresponding JSONLog
-                        existing_json_log = existing_json_log_map.get(group_key)
-                        if existing_json_log:
-                            existing_json_log.value = json_value
-                    else:
-                        # Prepare for batch upsert
-                        log_pk = (log_event_id, key, param_version)
-                        rows_log_pk2val[log_pk] = json_value
-                        rows_log.append(
-                            {
-                                "_log_event_id": log_event_id,  # Track which log_event_id this belongs to
-                                "key": key,
-                                "value": json_value,
-                                "param_version": param_version,
-                                "inferred_type": inferred_type,
-                                "created_at": now,
-                                "updated_at": now,
-                            },
-                        )
-
-                    # Handle JSON logs for dict/list values
-                    if isinstance(value, (dict, list)):
-                        json_pk = (log_event_id, key)
-                        rows_json_pk2val[json_pk] = json_value
-                        rows_json.append(
-                            {
-                                "_log_event_id": log_event_id,  # Track which log_event_id this belongs to
-                                "key": key,
-                                "value": json_value,
-                            },
-                        )
-
-                    # Track log events to update timestamps
-                    log_event_ids_to_update.add(log_event_id)
-
-                # Perform conflict detection if overwrite is False
-                if not overwrite:
-                    # Check Log conflicts
-                    if rows_log_pk2val:
-                        log_pks = list(rows_log_pk2val.keys())
-                        log_event_ids_check = [pk[0] for pk in log_pks]
-                        keys_check = [pk[1] for pk in log_pks]
-                        versions_check = [pk[2] for pk in log_pks]
-
-                        existing_conflicting_logs = (
-                            self.session.query(Log, LogEventLog.log_event_id)
-                            .join(LogEventLog, LogEventLog.log_id == Log.id)
-                            .filter(LogEventLog.log_event_id.in_(log_event_ids_check))
-                            .filter(Log.key.in_(keys_check))
-                            .filter(Log.param_version.in_(versions_check))
-                            .with_for_update()
-                            .all()
-                        )
-
-                        for existing_log, log_event_id in existing_conflicting_logs:
-                            pk = (
-                                log_event_id,
-                                existing_log.key,
-                                existing_log.param_version,
-                            )
-                            intended_value = rows_log_pk2val.get(pk)
-                            if (
-                                intended_value is not None
-                                and existing_log.value != intended_value
-                            ):
-                                raise OverwriteError(
-                                    f"Cannot overwrite existing value for key '{existing_log.key}'",
-                                )
-
-                    # Check JSONLog conflicts
-                    if rows_json_pk2val:
-                        json_pks = list(rows_json_pk2val.keys())
-                        json_log_event_ids_check = [pk[0] for pk in json_pks]
-                        json_keys_check = [pk[1] for pk in json_pks]
-
-                        existing_conflicting_json_logs = (
-                            self.session.query(JSONLog, LogEventJSONLog.log_event_id)
-                            .join(
-                                LogEventJSONLog,
-                                LogEventJSONLog.json_log_id == JSONLog.id,
-                            )
-                            .filter(
-                                LogEventJSONLog.log_event_id.in_(
-                                    json_log_event_ids_check,
-                                ),
-                            )
-                            .filter(JSONLog.key.in_(json_keys_check))
-                            .with_for_update()
-                            .all()
-                        )
-
-                        for (
-                            existing_json_log,
-                            log_event_id,
-                        ) in existing_conflicting_json_logs:
-                            pk = (log_event_id, existing_json_log.key)
-                            intended_value = rows_json_pk2val.get(pk)
-                            if (
-                                intended_value is not None
-                                and existing_json_log.value != intended_value
-                            ):
-                                raise OverwriteError(
-                                    f"Cannot overwrite existing JSON value for key '{existing_json_log.key}'",
-                                )
-
-                # Single multi-row UPSERT for LOG
-                if rows_log:
-                    # Build ordered list of (log_event_id, row_data) tuples
-                    log_event_rows = []
-                    for log_row in rows_log:
-                        # Extract the tracked log_event_id
-                        log_event_id = log_row.pop("_log_event_id")
-                        log_event_rows.append((log_event_id, log_row))
-
-                    # Extract all unique (log_event_id, key, param_version) combinations
-                    check_keys = [
-                        (eid, row["key"], row.get("param_version"))
-                        for eid, row in log_event_rows
-                    ]
-
-                    # Bulk query to find all existing logs for these log_events
-                    # This query finds logs that match our (log_event_id, key, param_version) tuples
-                    existing_logs_query = (
-                        self.session.query(
-                            Log,
-                            LogEventLog.log_event_id,
-                        )
-                        .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(
-                            or_(
-                                *[
-                                    and_(
-                                        LogEventLog.log_event_id == eid,
-                                        Log.key == k,
-                                        Log.param_version == pv,
-                                    )
-                                    for eid, k, pv in check_keys
-                                ],
-                            ),
-                        )
-                    )
-
-                    # Build a map of (log_event_id, key, param_version) -> Log
-                    existing_map = {}
-                    for log, log_event_id in existing_logs_query:
-                        key = (log_event_id, log.key, log.param_version)
-                        existing_map[key] = log
-
-                    # Process updates based on overwrite flag
-                    logs_to_insert = []
-                    insert_event_ids = []
-
-                    for i, (log_event_id, log_row) in enumerate(log_event_rows):
-                        lookup_key = (
-                            log_event_id,
-                            log_row["key"],
-                            log_row.get("param_version"),
-                        )
-                        existing_log = existing_map.get(lookup_key)
-
-                        if existing_log:
-                            if overwrite:
-                                # Update existing log
-                                existing_log.value = log_row["value"]
-                                existing_log.inferred_type = log_row["inferred_type"]
-                                existing_log.updated_at = now
-                            # else: skip (don't overwrite)
-                        else:
-                            # Need to create new log
-                            logs_to_insert.append(log_row)
-                            insert_event_ids.append(log_event_id)
-
-                    # Bulk insert new logs
-                    if logs_to_insert:
-                        stmt = pg_insert(Log).values(logs_to_insert).returning(Log.id)
-                        result = self.session.execute(stmt)
-                        new_log_ids = [row[0] for row in result]
-
-                        # Create associations for new logs
-                        log_event_log_rows = []
-                        for log_id, log_event_id in zip(new_log_ids, insert_event_ids):
-                            log_event_log_rows.append(
-                                {
-                                    "log_event_id": log_event_id,
-                                    "log_id": log_id,
-                                },
-                            )
-
-                        if log_event_log_rows:
-                            stmt_assoc = pg_insert(LogEventLog).values(
-                                log_event_log_rows,
-                            )
-                            self.session.execute(stmt_assoc)
-
-                # Handle JSONLog updates with many-to-many relationship
-                if rows_json:
-                    # Build ordered list of (log_event_id, json_row) tuples
-                    json_event_rows = []
-                    for json_row in rows_json:
-                        # Extract the tracked log_event_id
-                        log_event_id = json_row.pop("_log_event_id")
-                        json_event_rows.append((log_event_id, json_row))
-
-                    # Process based on overwrite flag
-                    json_logs_to_insert = []
-                    insert_json_event_ids = []
-
-                    for log_event_id, json_row in json_event_rows:
-                        existing_json_log = existing_json_log_map.get(
-                            (log_event_id, json_row["key"]),
-                        )
-
-                        if existing_json_log:
-                            if overwrite:
-                                # Update existing JSONLog value
-                                existing_json_log.value = json_row["value"]
-                            # else: skip (don't overwrite)
-                        else:
-                            # Need to create new JSONLog
-                            json_logs_to_insert.append(json_row)
-                            insert_json_event_ids.append(log_event_id)
-
-                    # Bulk insert new JSON logs
-                    if json_logs_to_insert:
-                        stmt = (
-                            pg_insert(JSONLog)
-                            .values(json_logs_to_insert)
-                            .returning(JSONLog.id)
-                        )
-                        result = self.session.execute(stmt)
-                        new_json_log_ids = [row[0] for row in result]
-
-                        # Create associations for new JSON logs
-                        json_log_event_log_rows = []
-                        for json_log_id, log_event_id in zip(
-                            new_json_log_ids,
-                            insert_json_event_ids,
-                        ):
-                            json_log_event_log_rows.append(
-                                {
-                                    "log_event_id": log_event_id,
-                                    "json_log_id": json_log_id,
-                                },
-                            )
-
-                        if json_log_event_log_rows:
-                            stmt_assoc = pg_insert(LogEventJSONLog).values(
-                                json_log_event_log_rows,
-                            )
-                            self.session.execute(stmt_assoc)
-
-                # Bulk update log event timestamps
-                if log_event_ids_to_update:
-                    stmt = (
-                        update(LogEvent)
-                        .where(LogEvent.id.in_(log_event_ids_to_update))
-                        .values(updated_at=now)
-                    )
-                    self.session.execute(stmt)
-
-                # Mark this log_event_id as successful
-                update_result["successful_update_ids"].append(process_log_id)
-
-            except ValueError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                update_result["failed"].append(
-                    {
-                        "log_event_id": process_log_id,
-                        "error": f"Found differing log param value with the same version: {detail}",
-                    },
-                )
-            except OverwriteError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                update_result["failed"].append(
-                    {
-                        "log_event_id": process_log_id,
-                        "error": f"Existing value cannot be overwritten because overwrite is set to False: {detail}",
-                    },
-                )
-            except ImmutableFieldError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                update_result["failed"].append(
-                    {
-                        "log_event_id": process_log_id,
-                        "error": f"Field is immutable and cannot be modified: {detail}",
-                    },
-                )
-
-        # Commit all successful updates
-        self.session.commit()
-        return update_result
-
     def _handle_enum_field_type(
         self,
         project_id: int,
@@ -2404,9 +1837,9 @@ class LogDAO:
         Handle enum field type creation, update, and validation.
 
         Note: For batch operations, use the batch enum handling implemented in
-        `bulk_update_jsonb` (Steps 1-5) to avoid N+1 queries. This method
+        `bulk_update` (Steps 1-5) to avoid N+1 queries. This method
         executes a database query per call and should only be used for
-        single-field operations (e.g., EAV mode, single updates).
+        single-field operations.
 
         Args:
             project_id: The project ID
@@ -2700,7 +2133,7 @@ class LogDAO:
             self.session.rollback()
             raise ValueError(f"Failed to apply JSONB patch: {str(e)}")
 
-    def bulk_update_jsonb(
+    def bulk_update(
         self,
         updates: List[Dict[str, Any]],
         overwrite: bool = False,

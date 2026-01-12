@@ -79,7 +79,7 @@ async def test_create_context_with_foreign_key(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_foreign_key_validation_on_insert(client: AsyncClient, use_jsonb_mode):
+async def test_foreign_key_validation_on_insert(client: AsyncClient):
     """Test that foreign key validation works when inserting logs."""
     project_name = "fk-validation-project"
 
@@ -212,7 +212,7 @@ async def test_foreign_key_invalid_format(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_foreign_key_null_values(client: AsyncClient, use_jsonb_mode):
+async def test_foreign_key_null_values(client: AsyncClient):
     """Test that NULL foreign key values are allowed."""
     project_name = "fk-null-project"
 
@@ -263,7 +263,7 @@ async def test_foreign_key_null_values(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_multiple_foreign_keys(client: AsyncClient, use_jsonb_mode):
+async def test_multiple_foreign_keys(client: AsyncClient):
     """Test creating a context with multiple foreign keys."""
     project_name = "fk-multiple-project"
 
@@ -374,7 +374,7 @@ async def test_foreign_key_duplicate_names(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_foreign_key_batch_validation(client: AsyncClient, use_jsonb_mode):
+async def test_foreign_key_batch_validation(client: AsyncClient):
     """Test foreign key validation with batch log creation."""
     project_name = "fk-batch-project"
 
@@ -453,7 +453,6 @@ async def test_foreign_key_batch_validation(client: AsyncClient, use_jsonb_mode)
 @pytest.mark.anyio
 async def test_cascade_delete_removes_referencing_rows(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that CASCADE DELETE automatically deletes referencing rows."""
     project_name = "cascade-delete-test"
@@ -552,7 +551,7 @@ async def test_cascade_delete_removes_referencing_rows(
 
 
 @pytest.mark.anyio
-async def test_cascade_update_propagates_changes(client: AsyncClient, use_jsonb_mode):
+async def test_cascade_update_propagates_changes(client: AsyncClient):
     """Test that CASCADE UPDATE propagates changes to referencing rows."""
     project_name = "cascade-update-test"
 
@@ -641,7 +640,7 @@ async def test_cascade_update_propagates_changes(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_set_null_on_delete(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_on_delete(client: AsyncClient):
     """Test that SET NULL sets FK to NULL when referenced row is deleted."""
     project_name = "set-null-delete-test"
 
@@ -733,7 +732,7 @@ async def test_set_null_on_delete(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_cascade_delete_multi_level(client: AsyncClient, use_jsonb_mode):
+async def test_cascade_delete_multi_level(client: AsyncClient):
     """Test CASCADE DELETE with chained foreign keys (A→B→C)."""
     project_name = "cascade-multi-level-test"
 
@@ -865,7 +864,7 @@ async def test_cascade_delete_multi_level(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
+async def test_mixed_actions_on_delete(client: AsyncClient):
     """Test multiple FKs with different actions (CASCADE and SET NULL)."""
     project_name = "mixed-actions-test"
 
@@ -1038,7 +1037,7 @@ async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_mixed_actions_on_update_vs_delete(client: AsyncClient, use_jsonb_mode):
+async def test_mixed_actions_on_update_vs_delete(client: AsyncClient):
     """Test FK with different actions: on_update SET NULL and on_delete CASCADE."""
     project_name = "mixed-update-delete-test"
 
@@ -1179,7 +1178,7 @@ async def test_mixed_actions_on_update_vs_delete(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_null_fk_values_not_affected(client: AsyncClient, use_jsonb_mode):
+async def test_null_fk_values_not_affected(client: AsyncClient):
     """Test that NULL FK values are not affected by CASCADE DELETE."""
     project_name = "null-fk-test"
 
@@ -1274,7 +1273,7 @@ async def test_null_fk_values_not_affected(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_cascade_with_no_referencing_rows(client: AsyncClient, use_jsonb_mode):
+async def test_cascade_with_no_referencing_rows(client: AsyncClient):
     """Test that CASCADE DELETE works fine when there are no referencing rows."""
     project_name = "cascade-no-refs-test"
 
@@ -1350,7 +1349,7 @@ async def test_cascade_with_no_referencing_rows(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_set_null_on_delete_v2(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_on_delete_v2(client: AsyncClient):
     """SET NULL should remove FK column when referenced row is deleted."""
     project_name = "set-null-delete-test"
     await _create_project(client, project_name)
@@ -1440,7 +1439,7 @@ async def test_set_null_on_delete_v2(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_set_null_on_update(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_on_update(client: AsyncClient):
     """SET NULL should remove FK column when referenced value is updated."""
     project_name = "set-null-update-test"
     await _create_project(client, project_name)
@@ -1522,7 +1521,7 @@ async def test_set_null_on_update(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_set_null_multiple_rows(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_multiple_rows(client: AsyncClient):
     """SET NULL should affect all rows referencing the deleted value."""
     project_name = "set-null-multiple-test"
     await _create_project(client, project_name)
@@ -1613,7 +1612,7 @@ async def test_set_null_multiple_rows(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_set_null_no_effect_on_null_values(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_no_effect_on_null_values(client: AsyncClient):
     """SET NULL should not affect rows that already have NULL FK values."""
     project_name = "set-null-already-null-test"
     await _create_project(client, project_name)
@@ -1708,7 +1707,7 @@ async def test_set_null_no_effect_on_null_values(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_set_null_preserves_other_columns(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_preserves_other_columns(client: AsyncClient):
     """SET NULL should only remove FK column, preserving all other columns."""
     project_name = "set-null-preserves-test"
     await _create_project(client, project_name)
@@ -1802,7 +1801,7 @@ async def test_set_null_preserves_other_columns(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_set_null_with_multiple_fks(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_with_multiple_fks(client: AsyncClient):
     """Context can have multiple FKs with SET NULL action."""
     project_name = "set-null-multiple-fks-test"
     await _create_project(client, project_name)
@@ -1942,7 +1941,7 @@ async def test_set_null_with_multiple_fks(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_set_null_and_cascade_combined(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_and_cascade_combined(client: AsyncClient):
     """Different referencing contexts can use different actions (SET NULL vs CASCADE)."""
     project_name = "set-null-cascade-mix-test"
     await _create_project(client, project_name)
@@ -2059,7 +2058,7 @@ async def test_set_null_and_cascade_combined(client: AsyncClient, use_jsonb_mode
 
 
 @pytest.mark.anyio
-async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
+async def test_set_null_idempotent(client: AsyncClient):
     """Deleting referenced value when FK is already NULL should have no effect."""
     project_name = "set-null-idempotent-test"
     await _create_project(client, project_name)
@@ -4142,7 +4141,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_batch_fk_validation_all_valid(client: AsyncClient, use_jsonb_mode):
+async def test_batch_fk_validation_all_valid(client: AsyncClient):
     """Test that batch validation succeeds when all FK values are valid."""
     project_name = "batch-validation-all-valid"
     await _create_project(client, project_name)
@@ -4213,7 +4212,7 @@ async def test_batch_fk_validation_all_valid(client: AsyncClient, use_jsonb_mode
 
 
 @pytest.mark.anyio
-async def test_batch_fk_validation_some_invalid(client: AsyncClient, use_jsonb_mode):
+async def test_batch_fk_validation_some_invalid(client: AsyncClient):
     """Test that batch validation correctly identifies invalid FK values."""
     project_name = "batch-validation-some-invalid"
     await _create_project(client, project_name)
@@ -4283,7 +4282,7 @@ async def test_batch_fk_validation_some_invalid(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_batch_fk_validation_with_nulls(client: AsyncClient, use_jsonb_mode):
+async def test_batch_fk_validation_with_nulls(client: AsyncClient):
     """Test that batch validation correctly handles NULL FK values."""
     project_name = "batch-validation-nulls"
     await _create_project(client, project_name)
@@ -4352,7 +4351,7 @@ async def test_batch_fk_validation_with_nulls(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_batch_cascade_update(client: AsyncClient, use_jsonb_mode):
+async def test_batch_cascade_update(client: AsyncClient):
     """Test that batch CASCADE UPDATE updates multiple FK values efficiently."""
     project_name = "batch-cascade-update"
     await _create_project(client, project_name)
@@ -4444,7 +4443,7 @@ async def test_batch_cascade_update(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_batch_set_null(client: AsyncClient, use_jsonb_mode):
+async def test_batch_set_null(client: AsyncClient):
     """Test that batch SET NULL removes multiple FK values efficiently."""
     project_name = "batch-set-null"
     await _create_project(client, project_name)
@@ -4537,7 +4536,7 @@ async def test_batch_set_null(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_batch_operations_performance(client: AsyncClient, use_jsonb_mode):
+async def test_batch_operations_performance(client: AsyncClient):
     """Test batch operations with larger dataset to verify performance."""
     project_name = "batch-performance"
     await _create_project(client, project_name)
@@ -4626,7 +4625,7 @@ async def test_batch_operations_performance(client: AsyncClient, use_jsonb_mode)
 
 
 @pytest.mark.anyio
-async def test_batch_multiple_fk_fields(client: AsyncClient, use_jsonb_mode):
+async def test_batch_multiple_fk_fields(client: AsyncClient):
     """Test batch validation with multiple FK fields per log."""
     project_name = "batch-multiple-fks"
     await _create_project(client, project_name)
@@ -4724,7 +4723,6 @@ async def test_batch_multiple_fk_fields(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_simple_circular_dependency_two_contexts(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that a simple A → B → A cycle is detected."""
     project_name = "circular-two-test"
@@ -4802,7 +4800,7 @@ async def test_simple_circular_dependency_two_contexts(
 
 
 @pytest.mark.anyio
-async def test_no_circular_dependency_chain(client: AsyncClient, use_jsonb_mode):
+async def test_no_circular_dependency_chain(client: AsyncClient):
     """Test that a simple chain (A → B → C → D) without cycles is allowed."""
     project_name = "chain-test"
     await _create_project(client, project_name)
@@ -4877,7 +4875,7 @@ async def test_no_circular_dependency_chain(client: AsyncClient, use_jsonb_mode)
 
 
 @pytest.mark.anyio
-async def test_self_referencing_context(client: AsyncClient, use_jsonb_mode):
+async def test_self_referencing_context(client: AsyncClient):
     """Test that self-referencing CASCADE FK is now allowed (field-level detection).
 
     With field-level cycle detection, a single self-referencing FK does NOT form
@@ -4921,7 +4919,7 @@ async def test_self_referencing_context(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_circular_with_set_null_breaks_cycle(client: AsyncClient, use_jsonb_mode):
+async def test_circular_with_set_null_breaks_cycle(client: AsyncClient):
     """Test that SET NULL breaks the cycle (no error)."""
     project_name = "set-null-breaks-cycle-test"
     await _create_project(client, project_name)
@@ -4978,7 +4976,7 @@ async def test_circular_with_set_null_breaks_cycle(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-async def test_no_circular_deep_chain(client: AsyncClient, use_jsonb_mode):
+async def test_no_circular_deep_chain(client: AsyncClient):
     """Test that a deep chain (A → B → C → D → E) with diamond pattern is allowed."""
     project_name = "deep-chain-test"
     await _create_project(client, project_name)
@@ -5039,7 +5037,7 @@ async def test_no_circular_deep_chain(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_no_circular_dependency_diamond(client: AsyncClient, use_jsonb_mode):
+async def test_no_circular_dependency_diamond(client: AsyncClient):
     """Test that diamond structure (no cycle) is allowed."""
     project_name = "diamond-test"
     await _create_project(client, project_name)
@@ -5113,7 +5111,7 @@ async def test_no_circular_dependency_diamond(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_no_circular_mixed_delete_actions(client: AsyncClient, use_jsonb_mode):
+async def test_no_circular_mixed_delete_actions(client: AsyncClient):
     """Test that mixed CASCADE/SET NULL on delete without cycles are allowed."""
     project_name = "mixed-delete-actions-test"
     await _create_project(client, project_name)
@@ -5170,7 +5168,7 @@ async def test_no_circular_mixed_delete_actions(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_no_circular_mixed_update_actions(client: AsyncClient, use_jsonb_mode):
+async def test_no_circular_mixed_update_actions(client: AsyncClient):
     """Test that mixed CASCADE/SET NULL on update without cycles are allowed."""
     project_name = "mixed-update-actions-test"
     await _create_project(client, project_name)
