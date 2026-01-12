@@ -2948,7 +2948,7 @@ def get_logs(
                     log_event_ids=event_ids_subq,
                     group_key=raw_key,
                     session=session,
-                    is_param=False,
+                    field_types={},
                 )
                 value_to_ids = {}
                 used_ids = set()
@@ -2958,7 +2958,7 @@ def get_logs(
                         group_key=raw_key,
                         group_value=val,
                         session=session,
-                        is_param=False,
+                        field_types={},
                     )
                     value_to_ids[val] = subset_ids
                     used_ids.update(subset_ids)
