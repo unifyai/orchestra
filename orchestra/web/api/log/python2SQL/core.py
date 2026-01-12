@@ -82,7 +82,7 @@ def build_sql_query(
 
         query_context = QueryContext()
 
-    result = _build_sql_query_jsonb(
+    result = _build_sql_query(
         filter_dict,
         log_event_alias,
         session,
@@ -102,10 +102,10 @@ def build_sql_query(
 
 
 # NOTE: ~270 lines of dead EAV code was removed from here
-# The _build_sql_query function now calls _build_sql_query_jsonb directly
+# The _build_sql_query function now calls _build_sql_query directly
 
 
-def _build_sql_query_jsonb(
+def _build_sql_query(
     filter_dict,
     log_event_alias,
     session,
@@ -145,7 +145,7 @@ def _build_sql_query_jsonb(
             if has_special_dicts:
                 # Build each element and return as Python list of SQL expressions
                 return [
-                    _build_sql_query_jsonb(
+                    _build_sql_query(
                         item,
                         log_event_alias,
                         session,
@@ -503,7 +503,7 @@ def _build_sql_query_jsonb(
 
     if operand == "hamming":
         # Hamming distance uses the same vector binary op with <~> operator
-        lhs = _build_sql_query_jsonb(
+        lhs = _build_sql_query(
             filter_dict.get("lhs"),
             log_event_alias,
             session,
@@ -515,7 +515,7 @@ def _build_sql_query_jsonb(
             context_id=context_id,
             query_context=query_context,
         )
-        rhs = _build_sql_query_jsonb(
+        rhs = _build_sql_query(
             filter_dict.get("rhs"),
             log_event_alias,
             session,
