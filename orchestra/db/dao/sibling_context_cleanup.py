@@ -14,14 +14,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import (
-    Context,
-    Log,
-    LogEvent,
-    LogEventContext,
-    LogEventLog,
-)
-from orchestra.settings import settings
+from orchestra.db.models.orchestra_models import Context, LogEvent, LogEventContext
 
 if TYPE_CHECKING:
     from orchestra.db.dao.context_dao import ContextDAO
@@ -78,37 +71,22 @@ def get_assistants_sibling_context_info(
             sibling_map[log_id].append(ctx_id)
 
     def _get_log_field_values(field_name: str) -> Dict[int, str]:
-        """Get field values for all log events.
-
-        Queries the appropriate storage based on current mode:
-        - JSONB mode: LogEvent.data JSONB column
-        - EAV mode: Log/LogEventLog tables
+        """Get field values for all log events from LogEvent.data JSONB column.
 
         Returns:
             Dict mapping log_event_id to field value string.
         """
-        if settings.use_jsonb_queries:
-            values = (
-                session.query(
-                    LogEvent.id,
-                    LogEvent.data[field_name].astext,
-                )
-                .filter(
-                    LogEvent.id.in_(log_event_ids),
-                    LogEvent.data.has_key(field_name),
-                )
-                .all()
+        values = (
+            session.query(
+                LogEvent.id,
+                LogEvent.data[field_name].astext,
             )
-        else:
-            values = (
-                session.query(LogEventLog.log_event_id, Log.value)
-                .join(Log, Log.id == LogEventLog.log_id)
-                .filter(
-                    LogEventLog.log_event_id.in_(log_event_ids),
-                    Log.key == field_name,
-                )
-                .all()
+            .filter(
+                LogEvent.id.in_(log_event_ids),
+                LogEvent.data.has_key(field_name),
             )
+            .all()
+        )
 
         result = {}
         for log_event_id, value in values:
