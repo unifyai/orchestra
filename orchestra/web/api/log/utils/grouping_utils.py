@@ -165,43 +165,6 @@ def _get_distinct_group_values(
     log_event_ids: List[int],
     group_key: str,
     session,
-    is_param: bool = False,
-    sort_direction: Optional[str] = None,
-    field_types: Optional[Dict[str, str]] = None,
-) -> List[Any]:
-    """
-    Get distinct values for a group key among provided log event IDs.
-
-    Queries LogEvent.data JSONB column directly. The `is_param` argument is IGNORED.
-    Semantics are derived solely from the `group_key` prefix via `parse_group_key()`
-    (e.g., "entries/score" vs "params/temperature").
-    Parameter versioning (params/ prefix) is NOT supported and will raise HTTPException.
-
-    Args:
-        log_event_ids: List of log event IDs to filter.
-        group_key: The field key to group by (may include prefix like "entries/" or "params/").
-        session: Database session.
-        is_param: Whether this is a parameter field. Only honored in EAV mode.
-        sort_direction: Optional 'ascending' or 'descending'.
-        field_types: Field type mapping from FieldTypeDAO.
-
-    Returns:
-        List of distinct values for the group key.
-    """
-    # JSONB mode - query LogEvent.data directly
-    return _get_distinct_group_values(
-        log_event_ids=log_event_ids,
-        group_key=group_key,
-        session=session,
-        field_types=field_types or {},
-        sort_direction=sort_direction,
-    )
-
-
-def _get_distinct_group_values(
-    log_event_ids: List[int],
-    group_key: str,
-    session,
     field_types: Dict[str, str],
     sort_direction: Optional[str] = None,
 ) -> List[Any]:
@@ -296,43 +259,6 @@ def _get_distinct_group_values(
         pass  # Silently ignore capture errors
 
     return [row[0] for row in query.all()]
-
-
-def _get_log_event_ids_for_group_value(
-    log_event_ids: List[int],
-    group_key: str,
-    group_value: Any,
-    session,
-    is_param: bool = False,
-    field_types: Optional[Dict[str, str]] = None,
-) -> List[int]:
-    """
-    Get log event IDs that match a specific group value.
-
-    Queries LogEvent.data JSONB column directly. The `is_param` argument is IGNORED.
-    Semantics are derived solely from the `group_key` prefix via `parse_group_key()`
-    (e.g., "entries/score" vs "params/temperature").
-    Parameter versioning (params/ prefix) is NOT supported and will raise HTTPException.
-
-    Args:
-        log_event_ids: List of log event IDs to filter.
-        group_key: The field key to filter on (may include prefix like "entries/" or "params/").
-        group_value: The value to match.
-        session: Database session.
-        is_param: Whether this is a parameter field. Only honored in EAV mode.
-        field_types: Field type mapping from FieldTypeDAO.
-
-    Returns:
-        List of matching log event IDs.
-    """
-    # JSONB mode - query LogEvent.data directly
-    return _get_log_event_ids_for_group_value(
-        log_event_ids=log_event_ids,
-        group_key=group_key,
-        group_value=group_value,
-        session=session,
-        field_types=field_types or {},
-    )
 
 
 def _get_log_event_ids_for_group_value(
