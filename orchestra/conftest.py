@@ -1318,7 +1318,7 @@ def pytest_sessionfinish(session, exitstatus):
             )
             print("-" * 100)
 
-            for item in test_stats[:20]:  # Show top 20 slowest
+            for item in test_stats[:30]:  # Show top 30 slowest
                 test_name = (
                     item["test_name"][:52] + "..."
                     if len(item["test_name"]) > 55
