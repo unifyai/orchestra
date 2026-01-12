@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # HTTP keep-alive timeout in seconds (how long to keep idle connections open)
     timeout_keep_alive: int = 15
 
+    # Inactivity timeout in seconds for local development
+    # When set, the server will shut down after this many seconds without API requests
+    # Default (None) means no timeout - server runs indefinitely
+    inactivity_timeout_seconds: Optional[int] = None
+
     # Current environment
     environment: str = "dev"
     is_staging: bool = os.environ.get("STAGING", "False") == "True"

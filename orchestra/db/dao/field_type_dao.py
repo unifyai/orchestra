@@ -654,7 +654,7 @@ class FieldTypeDAO:
             project_id = data["project_id"]
             field_name = data["field_name"]
             context_id = data["context_id"]
-            mutable = data.get("mutable", False)
+            mutable = data.get("mutable", True)
             field_category = data.get("field_category", "entry")
             unique = data.get("unique", False)
             field_description = data.get("description", description)

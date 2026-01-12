@@ -1464,7 +1464,7 @@ def _update_logs(
         # If only explicit_types are provided, collect mutability updates for batch
         if not this_data:
             for k, v in explicit_types.items():
-                mutable_setting = v.get("mutable", False)
+                mutable_setting = v.get("mutable", True)
                 # Accumulate for batch update (will be executed after loop)
                 pending_mutability_updates[k] = mutable_setting
 

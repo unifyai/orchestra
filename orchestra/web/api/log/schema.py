@@ -61,8 +61,8 @@ class StandardFieldDefinition(BaseModel):
 
     type: str
     mutable: bool = Field(
-        default=False,
-        description="If true, entries under this field can be updated via update endpoints; otherwise they are immutable after creation (default false).",
+        default=True,
+        description="If true, entries under this field can be updated via update endpoints; otherwise they are immutable after creation (default true).",
     )
     unique: bool = False
     description: Optional[str] = Field(
