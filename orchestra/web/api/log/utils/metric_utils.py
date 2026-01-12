@@ -31,13 +31,13 @@ __all__ = [
     "_reduce_shared_value",
     "AggregationMetric",
     "_get_reduction_expr",
-    "_build_jsonb_cast_expr",
+    "_build_cast_expr",
     "compute_metric_for_key",
-    "compute_metric_for_key_jsonb",
+    "compute_metric_for_key",
     "compute_metric_bulk",
-    "compute_metric_bulk_jsonb",
+    "compute_metric_bulk",
     "_compute_metric_for_key_grouped",
-    "_compute_metric_for_key_grouped_jsonb",
+    "_compute_metric_for_key_grouped",
 ]
 
 ######################
@@ -461,7 +461,7 @@ def _get_reduction_expr(metric, inferred_type, aggCol, label):
         return reduction_methods[metric](cast_expr).label(label)
 
 
-def _build_jsonb_cast_expr(
+def _build_cast_expr(
     key: str,
     field_type: Optional[str],
     log_event_alias,
@@ -715,7 +715,7 @@ def _compute_metric_for_key_grouped(
         Dict mapping group values to computed metric values
     """
     # JSONB mode - all log data is stored in LogEvent.data
-    return _compute_metric_for_key_grouped_jsonb(
+    return _compute_metric_for_key_grouped(
         key,
         metric,
         project_obj,
@@ -729,7 +729,7 @@ def _compute_metric_for_key_grouped(
     )
 
 
-def _compute_metric_for_key_grouped_jsonb(
+def _compute_metric_for_key_grouped(
     key: str,
     metric: str,
     project_obj,
@@ -841,7 +841,7 @@ def _compute_metric_for_key_grouped_jsonb(
     }
 
     # 3) Build the aggregation cast expression for the key
-    agg_cast_expr = _build_jsonb_cast_expr(key, field_types.get(key), LogEvent)
+    agg_cast_expr = _build_cast_expr(key, field_types.get(key), LogEvent)
 
     # 4) Build group-by expressions (extract values from JSONB)
     # Use -> operator to get JSONB values (not text) so Python converts them properly
@@ -985,7 +985,7 @@ def compute_metric_for_key(
         The computed metric value
     """
     # JSONB mode - all log data is stored in LogEvent.data
-    return compute_metric_for_key_jsonb(
+    return compute_metric_for_key(
         key,
         metric,
         project_obj,
@@ -998,7 +998,7 @@ def compute_metric_for_key(
     )
 
 
-def compute_metric_for_key_jsonb(
+def compute_metric_for_key(
     key: str,
     metric: str,
     project_obj,
@@ -1081,7 +1081,7 @@ def compute_metric_for_key_jsonb(
     filtered_events_subq = query.subquery()
 
     # 2) Build the cast expression for the key using JSONB
-    cast_expr = _build_jsonb_cast_expr(key, field_types.get(key), LogEvent)
+    cast_expr = _build_cast_expr(key, field_types.get(key), LogEvent)
 
     # 3) Build and execute the aggregation query directly on LogEvent
     metric_query = (
@@ -1174,7 +1174,7 @@ def compute_metric_bulk(
         Dict mapping keys to their computed metric values
     """
     # JSONB mode - all log data is stored in LogEvent.data
-    return compute_metric_bulk_jsonb(
+    return compute_metric_bulk(
         keys,
         metric,
         project_id,
@@ -1187,7 +1187,7 @@ def compute_metric_bulk(
     )
 
 
-def compute_metric_bulk_jsonb(
+def compute_metric_bulk(
     keys: Sequence[str],
     metric: str,
     project_id: int,
@@ -1276,7 +1276,7 @@ def compute_metric_bulk_jsonb(
     # 3) Build cast expressions for all keys upfront
     cast_exprs = {}
     for key in keys:
-        cast_exprs[key] = _build_jsonb_cast_expr(key, field_types.get(key), LogEvent)
+        cast_exprs[key] = _build_cast_expr(key, field_types.get(key), LogEvent)
 
     # 4) Build aggregate columns for the single batched query
     aggregate_columns = []

@@ -46,19 +46,19 @@ from .metric_utils import AggregationMetric, _get_reduction_expr
 
 __all__ = [
     "_get_distinct_group_values",
-    "_get_distinct_group_values_jsonb",
+    "_get_distinct_group_values",
     "_get_log_event_ids_for_group_value",
-    "_get_log_event_ids_for_group_value_jsonb",
+    "_get_log_event_ids_for_group_value",
     "_get_params_for_log_events",
     "_fetch_logs_for_event_ids",
     "_build_grouped_data",
-    "_build_grouped_data_jsonb",
+    "_build_grouped_data",
     "_get_all_filtered_log_event_ids",
     "_handle_group_depth_level",
-    "_handle_group_depth_level_jsonb",
+    "_handle_group_depth_level",
     "parse_group_key",
     "apply_group_threshold",
-    "_fetch_leaf_logs_jsonb",
+    "_fetch_leaf_logs",
     # GROUPING SETS optimization functions
     "_build_grouping_sets_query",
     "_reconstruct_nested_structure",
@@ -103,7 +103,7 @@ GROUP_THRESHOLD = 100
 #####################
 
 
-def _extract_jsonb_field(
+def _extract_field(
     field_key: str,
     field_types: Dict[str, str],
     cast_type: Optional[str] = None,
@@ -120,7 +120,7 @@ def _extract_jsonb_field(
         SQLAlchemy ColumnElement for the extracted field
 
     Example:
-        _extract_jsonb_field('score', field_types)
+        _extract_field('score', field_types)
         -> cast(LogEvent.data.op('->>')('score'), Float)
     """
     expr = LogEvent.data.op("->>")((field_key))
@@ -135,7 +135,7 @@ def _extract_jsonb_field(
     return expr
 
 
-def _build_jsonb_containment_filter(
+def _build_containment_filter(
     field_key: str,
     field_value: Any,
 ) -> Any:
@@ -152,7 +152,7 @@ def _build_jsonb_containment_filter(
         SQLAlchemy BinaryExpression for data @> '{"key": "value"}'
 
     Example:
-        _build_jsonb_containment_filter('status', 'fail')
+        _build_containment_filter('status', 'fail')
         -> LogEvent.data.op('@>')(cast('{"status": "fail"}', JSONB))
     """
     from sqlalchemy import literal
@@ -189,7 +189,7 @@ def _get_distinct_group_values(
         List of distinct values for the group key.
     """
     # JSONB mode - query LogEvent.data directly
-    return _get_distinct_group_values_jsonb(
+    return _get_distinct_group_values(
         log_event_ids=log_event_ids,
         group_key=group_key,
         session=session,
@@ -198,7 +198,7 @@ def _get_distinct_group_values(
     )
 
 
-def _get_distinct_group_values_jsonb(
+def _get_distinct_group_values(
     log_event_ids: List[int],
     group_key: str,
     session,
@@ -326,7 +326,7 @@ def _get_log_event_ids_for_group_value(
         List of matching log event IDs.
     """
     # JSONB mode - query LogEvent.data directly
-    return _get_log_event_ids_for_group_value_jsonb(
+    return _get_log_event_ids_for_group_value(
         log_event_ids=log_event_ids,
         group_key=group_key,
         group_value=group_value,
@@ -335,7 +335,7 @@ def _get_log_event_ids_for_group_value(
     )
 
 
-def _get_log_event_ids_for_group_value_jsonb(
+def _get_log_event_ids_for_group_value(
     log_event_ids: List[int],
     group_key: str,
     group_value: Any,
@@ -367,7 +367,7 @@ def _get_log_event_ids_for_group_value_jsonb(
         )
 
     # Use text extraction for type-agnostic comparison
-    # This matches how _get_distinct_group_values_jsonb extracts values via ->>
+    # This matches how _get_distinct_group_values extracts values via ->>
     query = (
         session.query(LogEvent.id)
         .filter(LogEvent.id.in_(select(log_event_ids)))
@@ -877,7 +877,7 @@ def _handle_group_depth_level(
     level,
 ):
     # JSONB mode - query LogEvent.data directly
-    return _handle_group_depth_level_jsonb(
+    return _handle_group_depth_level(
         session=session,
         log_event_ids=log_event_ids,
         field_types=field_types,
@@ -1637,7 +1637,7 @@ def _build_grouped_data_with_grouping_sets(
     return result
 
 
-def _handle_group_depth_level_jsonb(
+def _handle_group_depth_level(
     session,
     log_event_ids: Union[List[int], Subquery],
     field_types: Dict[str, str],
@@ -1854,7 +1854,7 @@ def _build_grouped_data(
     Performance is improved by minimizing in-memory processing.
     """
     # JSONB mode - query LogEvent.data directly
-    return _build_grouped_data_jsonb(
+    return _build_grouped_data(
         request_fastapi=request_fastapi,
         project_id=project_id,
         log_event_ids=log_event_ids,
@@ -2253,7 +2253,7 @@ def _build_grouped_data(
     return {current_group_key: result_dict}
 
 
-def _build_grouped_data_jsonb(
+def _build_grouped_data(
     request_fastapi: Request,
     project_id: int,
     log_event_ids: Union[List[int], Subquery],
@@ -2344,7 +2344,7 @@ def _build_grouped_data_jsonb(
                     return [r[0] for r in all_ids]
 
         # Fetch leaf logs using JSONB query
-        return _fetch_leaf_logs_jsonb(
+        return _fetch_leaf_logs(
             request_fastapi=request_fastapi,
             event_ids=event_ids_cte,
             project_id=project_id,
@@ -2367,7 +2367,7 @@ def _build_grouped_data_jsonb(
 
     # Handle group_depth limit
     if group_depth is not None and level == group_depth:
-        return _handle_group_depth_level_jsonb(
+        return _handle_group_depth_level(
             session=session,
             log_event_ids=event_ids_cte,
             field_types=field_types,
@@ -2566,7 +2566,7 @@ def _build_grouped_data_jsonb(
         subset_ids = list(row.event_ids)
 
         # Recursively build substructure
-        substructure = _build_grouped_data_jsonb(
+        substructure = _build_grouped_data(
             request_fastapi=request_fastapi,
             project_id=project_id,
             log_event_ids=subset_ids,
@@ -2609,7 +2609,7 @@ def _build_grouped_data_jsonb(
     missing_ids = [r[0] for r in session.execute(missing_ids_q).fetchall()]
 
     if missing_ids:
-        null_sub = _build_grouped_data_jsonb(
+        null_sub = _build_grouped_data(
             request_fastapi=request_fastapi,
             project_id=project_id,
             log_event_ids=missing_ids,
@@ -2681,7 +2681,7 @@ def _build_grouped_data_jsonb(
     return {current_group_key: result_dict}
 
 
-def _fetch_leaf_logs_jsonb(
+def _fetch_leaf_logs(
     request_fastapi: Request,
     event_ids: Subquery,
     project_id: int,
@@ -2706,7 +2706,7 @@ def _fetch_leaf_logs_jsonb(
 
     Uses direct JSONB queries instead of EAV joins.
     """
-    from .logging_utils import _format_jsonb_logs
+    from .logging_utils import _format_logs
 
     # Build query for LogEvent with JSONB data
     query = session.query(LogEvent.id, LogEvent.data, LogEvent.created_at).filter(
@@ -2752,7 +2752,7 @@ def _fetch_leaf_logs_jsonb(
     )
 
     # Format using JSONB formatter
-    logs_out, _ = _format_jsonb_logs(
+    logs_out, _ = _format_logs(
         rows=rows,
         field_types=field_types_full,
         value_limit=value_limit,

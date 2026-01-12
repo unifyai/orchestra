@@ -1193,9 +1193,9 @@ class ContextDAO:
         old_value_json: str,
     ) -> int:
         """Delete all log events where FK column matches old value."""
-        return self._cascade_delete_jsonb(context_id, fk_column, old_value_json)
+        return self._cascade_delete(context_id, fk_column, old_value_json)
 
-    def _cascade_delete_jsonb(
+    def _cascade_delete(
         self,
         context_id: int,
         fk_column: str,
@@ -1265,14 +1265,14 @@ class ContextDAO:
         new_value: Any,
     ) -> int:
         """Update all FK column values from old to new."""
-        return self._cascade_update_jsonb(
+        return self._cascade_update(
             context_id,
             fk_column,
             old_value_json,
             new_value,
         )
 
-    def _cascade_update_jsonb(
+    def _cascade_update(
         self,
         context_id: int,
         fk_column: str,
@@ -1311,9 +1311,9 @@ class ContextDAO:
 
     def _set_null(self, context_id: int, fk_column: str, old_value_json: str) -> int:
         """Delete FK column entries (effectively setting to NULL)."""
-        return self._set_null_jsonb(context_id, fk_column, old_value_json)
+        return self._set_null(context_id, fk_column, old_value_json)
 
-    def _set_null_jsonb(
+    def _set_null(
         self,
         context_id: int,
         fk_column: str,
@@ -1370,14 +1370,14 @@ class ContextDAO:
         if not old_values_json:
             return 0
 
-        return self._cascade_update_batch_jsonb(
+        return self._cascade_update_batch(
             context_id,
             fk_column,
             old_values_json,
             new_value,
         )
 
-    def _cascade_update_batch_jsonb(
+    def _cascade_update_batch(
         self,
         context_id: int,
         fk_column: str,
@@ -1445,9 +1445,9 @@ class ContextDAO:
         if not old_values_json:
             return 0
 
-        return self._set_null_batch_jsonb(context_id, fk_column, old_values_json)
+        return self._set_null_batch(context_id, fk_column, old_values_json)
 
-    def _set_null_batch_jsonb(
+    def _set_null_batch(
         self,
         context_id: int,
         fk_column: str,
@@ -1666,14 +1666,14 @@ class ContextDAO:
         Returns:
             Number of log events deleted or updated
         """
-        return self._cascade_delete_nested_jsonb(
+        return self._cascade_delete_nested(
             context_id,
             fk_path,
             path_segments,
             old_value_json,
         )
 
-    def _cascade_delete_nested_jsonb(
+    def _cascade_delete_nested(
         self,
         context_id: int,
         fk_path: str,
@@ -1692,7 +1692,7 @@ class ContextDAO:
 
         if has_wildcard:
             # Wildcard path: Remove matching elements from arrays
-            return self._cascade_delete_nested_remove_elements_jsonb(
+            return self._cascade_delete_nested_remove_elements(
                 context_id,
                 fk_path,
                 path_segments,
@@ -1772,7 +1772,7 @@ class ContextDAO:
 
         return len(matching_log_event_ids)
 
-    def _cascade_delete_nested_remove_elements_jsonb(
+    def _cascade_delete_nested_remove_elements(
         self,
         context_id: int,
         fk_path: str,
@@ -1914,7 +1914,7 @@ class ContextDAO:
             Number of log entries updated (log + json_log)
         """
         # JSONB mode only - EAV mode has been removed
-        return self._cascade_update_nested_batch_jsonb(
+        return self._cascade_update_nested_batch(
             context_id,
             fk_path,
             path_segments,
@@ -1922,7 +1922,7 @@ class ContextDAO:
             new_value,
         )
 
-    def _cascade_update_nested_batch_jsonb(
+    def _cascade_update_nested_batch(
         self,
         context_id: int,
         fk_path: str,
@@ -2063,14 +2063,14 @@ class ContextDAO:
             Number of log entries updated (log + json_log)
         """
         # JSONB mode only - EAV mode has been removed
-        return self._set_null_nested_batch_jsonb(
+        return self._set_null_nested_batch(
             context_id,
             fk_path,
             path_segments,
             old_values_json,
         )
 
-    def _set_null_nested_batch_jsonb(
+    def _set_null_nested_batch(
         self,
         context_id: int,
         fk_path: str,
@@ -3252,7 +3252,7 @@ class ContextDAO:
         )
         return [row[0] for row in result.fetchall()]
 
-    def check_for_duplicates_jsonb_batch(
+    def check_for_duplicates_batch(
         self,
         context_id: int,
         log_event_ids: List[int],
@@ -3616,7 +3616,7 @@ class ContextDAO:
         prev_commit_hash: Optional[str] = None,
     ) -> None:
         """Creates a snapshot of the context's current state."""
-        return self.create_version_snapshot_jsonb(
+        return self.create_version_snapshot(
             context=context,
             commit_hash=commit_hash,
             commit_message=commit_message,
@@ -3701,7 +3701,7 @@ class ContextDAO:
         Helper method to prepare the rollback.
         This method only prepares the operations and does NOT commit.
         """
-        return self.rollback_to_version_jsonb(
+        return self.rollback_to_version(
             context_id=context_id,
             context_version_id=context_version_id,
         )
@@ -3818,7 +3818,7 @@ class ContextDAO:
                     )
                     self.session.execute(stmt_json_assoc)
 
-    def create_version_snapshot_jsonb(
+    def create_version_snapshot(
         self,
         context: Context,
         commit_hash: str,
@@ -3896,7 +3896,7 @@ class ContextDAO:
         # 4. Bulk insert the log event snapshots for efficiency
         self.session.bulk_save_objects(log_event_versions)
 
-    def rollback_to_version_jsonb(
+    def rollback_to_version(
         self,
         context_id: int,
         context_version_id: int,
