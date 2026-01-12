@@ -812,8 +812,14 @@ def types_match(field_type: Any, inferred_type: str) -> bool:
         return TypeConstraint(kind="primitive", name=node.name)
 
     def _satisfies_c(exp: TypeConstraint, inf: TypeConstraint) -> bool:
-        # Top/weak
-        if exp.kind == "any" or inf.kind == "none" or exp.kind == "none":
+        # Top/weak types - Any matches anything in either direction
+        # inf.kind == "any" handles cases like empty lists [] which infer as List[Any]
+        if (
+            exp.kind == "any"
+            or inf.kind == "any"
+            or inf.kind == "none"
+            or exp.kind == "none"
+        ):
             return True
         if (
             exp.kind == "enum"

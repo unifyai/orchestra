@@ -537,7 +537,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
     project_name = f"test_default_immutable-jsonb"
     _ = await _create_project(client, project_name)
 
-    # Create a log without specifying mutability (should default to immutable)
+    # Create a log without specifying mutability (should default to mutable)
     response = await client.post(
         "/v0/logs",
         json={
@@ -551,32 +551,41 @@ async def test_create_log_default_immutable(client: AsyncClient):
     assert response.status_code == 200
     log_id = response.json()["log_event_ids"][0]
 
-    # Verify field is immutable by default and has type inferred from value
+    # Verify field is mutable by default and has type inferred from value
     field_types_response = await client.get(
         f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
     field_types = field_types_response.json()
-    assert field_types["default_field"]["mutable"] is False
+    assert field_types["default_field"]["mutable"] is True
     assert (
         field_types["default_field"]["data_type"] == "str"
     )  # Type inferred from value
 
-    # Attempt to update the default immutable field (should fail)
+    # Update the default mutable field (should succeed)
     response = await client.put(
         "/v0/logs",
         json={
             "logs": [log_id],
             "entries": {
-                "default_field": "attempted update",
+                "default_field": "updated value",
             },
             "overwrite": True,
         },
         headers=HEADERS,
     )
-    assert response.status_code == 400
-    assert "Field is immutable and cannot be modified" in response.json()["detail"]
+    assert response.status_code == 200
+
+    # Verify the update was applied
+    logs_response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["default_field"] == "updated value"
 
 
 @pytest.mark.anyio
@@ -1247,3 +1256,480 @@ async def test_nested_type_persists_across_logs(client: AsyncClient):
     field_types = field_types_response.json()
 
     assert field_types["data"]["data_type"] == "List[int]"
+
+
+# =============================================================================
+# Empty container type compatibility tests
+#
+# These tests verify that empty containers ([], {}) are correctly accepted
+# for strictly-typed parameterized fields like List[str], List[int], Dict[str, int].
+#
+# An empty list [] is a valid List[str] - it's a list of strings with zero elements.
+# Type inference from values cannot determine the element type of an empty container,
+# but validation should recognize that [] is structurally compatible with any List[T].
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_jsonb_mode):
+    """Test that an empty list [] is accepted for a List[str] typed field.
+
+    An empty list is a valid List[str] - it contains zero strings, which
+    trivially satisfies the constraint that all elements must be strings.
+
+    This currently fails because the backend infers List[Any] from [] and
+    compares it against the strict List[str] type, instead of checking
+    structural compatibility.
+    """
+    project_name = f"test_empty_list_str-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict List[str] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "tags": {"type": "List[str]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify field type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json()["tags"]["data_type"] == "List[str]"
+
+    # Log an empty list - this SHOULD succeed ([] is a valid List[str])
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"tags": []},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Empty list should be accepted for List[str] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify non-empty list works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"tags": ["a", "b", "c"]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_list_compatible_with_list_int(client: AsyncClient, use_jsonb_mode):
+    """Test that an empty list [] is accepted for a List[int] typed field."""
+    project_name = f"test_empty_list_int-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict List[int] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "scores": {"type": "List[int]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log an empty list - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"scores": []},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Empty list should be accepted for List[int] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify non-empty list works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"scores": [1, 2, 3]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_dict_compatible_with_dict_str_int(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test that an empty dict {} is accepted for a Dict[str, int] typed field."""
+    project_name = f"test_empty_dict-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict Dict[str, int] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "counts": {"type": "Dict[str, int]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log an empty dict - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"counts": {}},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Empty dict should be accepted for Dict[str, int] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify non-empty dict works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"counts": {"a": 1, "b": 2}},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_list_in_batch_create(client: AsyncClient, use_jsonb_mode):
+    """Test that empty lists work correctly in batch log creation."""
+    project_name = f"test_empty_list_batch-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict List[str] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "tags": {"type": "List[str]", "mutable": True},
+                "name": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Batch create with mix of empty and non-empty lists
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [
+                {"name": "first", "tags": []},
+                {"name": "second", "tags": ["x", "y"]},
+                {"name": "third", "tags": []},
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Batch create with empty lists should succeed. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Verify all logs were created
+    logs_response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 3
+
+
+# =============================================================================
+# Nested empty container type compatibility tests
+#
+# These tests verify that empty containers work correctly at ANY level of
+# nesting, not just at the top level. The fix must handle recursive type
+# comparison where Any acts as a wildcard at any depth.
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_nested_empty_list_in_list_of_lists(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test that [[]] is accepted for List[List[str]] typed field.
+
+    The value [[]] contains one element: an empty list.
+    The inner empty list should be compatible with List[str].
+    Inferred type: List[List[Any]]
+    Schema type: List[List[str]]
+
+    This requires recursive type comparison with Any-as-wildcard.
+    """
+    project_name = f"test_nested_list_list-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with nested List[List[str]] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "matrix": {"type": "List[List[str]]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log a list containing an empty list - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"matrix": [[]]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"[[]] should be accepted for List[List[str]] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify fully populated nested list works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"matrix": [["a", "b"], ["c"]]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_list_in_dict_value(client: AsyncClient, use_jsonb_mode):
+    """Test that {"key": []} is accepted for Dict[str, List[int]] typed field.
+
+    The value has a dict with string key and empty list value.
+    The empty list should be compatible with List[int].
+    Inferred type: Dict[str, List[Any]]
+    Schema type: Dict[str, List[int]]
+
+    This requires recursive type comparison into dict value types.
+    """
+    project_name = f"test_dict_with_empty_list-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with Dict[str, List[int]] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "scores_by_category": {"type": "Dict[str, List[int]]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log a dict with empty list value - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"scores_by_category": {"math": [], "science": []}},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f'{{"key": []}} should be accepted for Dict[str, List[int]] field. '
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify populated version works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"scores_by_category": {"math": [90, 85], "science": [88]}},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_dict_in_list(client: AsyncClient, use_jsonb_mode):
+    """Test that [{}] is accepted for List[Dict[str, int]] typed field.
+
+    The value is a list containing one empty dict.
+    The empty dict should be compatible with Dict[str, int].
+    Inferred type: List[Dict[Any, Any]]
+    Schema type: List[Dict[str, int]]
+
+    This requires recursive type comparison into list element types.
+    """
+    project_name = f"test_list_with_empty_dict-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with List[Dict[str, int]] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "records": {"type": "List[Dict[str, int]]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log a list with empty dict - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"records": [{}]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"[{{}}] should be accepted for List[Dict[str, int]] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify populated version works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"records": [{"a": 1, "b": 2}, {"c": 3}]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_deeply_nested_empty_list(client: AsyncClient, use_jsonb_mode):
+    """Test that [[[]]] is accepted for List[List[List[str]]] typed field.
+
+    Three levels of nesting with empty list at the deepest level.
+    Inferred type: List[List[List[Any]]]
+    Schema type: List[List[List[str]]]
+
+    This tests that the recursive comparison works at arbitrary depth.
+    """
+    project_name = f"test_deep_nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with deeply nested type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "cube": {"type": "List[List[List[str]]]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log deeply nested empty list - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"cube": [[[]]]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"[[[]]] should be accepted for List[List[List[str]]] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify populated version works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"cube": [[["a", "b"], ["c"]], [["d"]]]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_mixed_empty_and_populated_nested(client: AsyncClient, use_jsonb_mode):
+    """Test mixed empty and populated containers in nested structures.
+
+    Value: [[], ["a", "b"], []]
+    Schema: List[List[str]]
+
+    Some inner lists are empty, some are populated. All should be accepted.
+    """
+    project_name = f"test_mixed_nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with List[List[str]] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "rows": {"type": "List[List[str]]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log mixed empty and populated inner lists
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"rows": [[], ["a", "b"], []]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"[[], ['a', 'b'], []] should be accepted for List[List[str]] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
