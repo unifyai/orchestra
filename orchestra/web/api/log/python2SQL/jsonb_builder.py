@@ -398,13 +398,13 @@ def _handle_comparison_operator_jsonb(
         SQLAlchemy expression representing the comparison, either as a boolean
         expression or a Subquery with value and inferred_type columns.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     operand = filter_dict["operand"]
     lhs_dict = filter_dict["lhs"]
     rhs_dict = filter_dict["rhs"]
 
-    lhs_expr = _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query(
         lhs_dict,
         log_event_alias,
         session,
@@ -416,7 +416,7 @@ def _handle_comparison_operator_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs_expr = _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query(
         rhs_dict,
         log_event_alias,
         session,
@@ -699,12 +699,12 @@ def _value_or_coalesce_jsonb(
     This handles expressions like `first_name or ''` where the result should be
     the actual value, not a boolean.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     lhs_node = or_filter_dict.get("lhs")
     rhs_node = or_filter_dict.get("rhs")
 
-    lhs_expr = _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query(
         lhs_node,
         log_event_alias,
         session,
@@ -716,7 +716,7 @@ def _value_or_coalesce_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs_expr = _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query(
         rhs_node,
         log_event_alias,
         session,
@@ -780,7 +780,7 @@ def _handle_arithmetic_operator_jsonb(
     Returns:
         SQLAlchemy expression or Subquery representing the arithmetic result.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     operand = filter_dict["operand"]
     lhs_dict = filter_dict["lhs"]
@@ -802,7 +802,7 @@ def _handle_arithmetic_operator_jsonb(
             query_context=query_context,
         )
     else:
-        lhs_expr = _build_sql_query_jsonb(
+        lhs_expr = _build_sql_query(
             lhs_dict,
             log_event_alias,
             session,
@@ -829,7 +829,7 @@ def _handle_arithmetic_operator_jsonb(
             query_context=query_context,
         )
     else:
-        rhs_expr = _build_sql_query_jsonb(
+        rhs_expr = _build_sql_query(
             rhs_dict,
             log_event_alias,
             session,
@@ -1015,7 +1015,7 @@ def _handle_membership_operator_jsonb(
     Returns:
         Boolean expression or Subquery indicating membership result.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .helpers import _substring_expr
 
     operand = filter_dict["operand"]
@@ -1029,7 +1029,7 @@ def _handle_membership_operator_jsonb(
     or_fallback_array_expr = None
     if or_fallback_list is not None:
         # Build only the LHS of the 'or' (the array expression)
-        or_fallback_array_expr = _build_sql_query_jsonb(
+        or_fallback_array_expr = _build_sql_query(
             rhs_dict["lhs"],
             log_event_alias,
             session,
@@ -1042,7 +1042,7 @@ def _handle_membership_operator_jsonb(
             query_context=query_context,
         )
 
-    lhs_expr = _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query(
         lhs_dict,
         log_event_alias,
         session,
@@ -1059,7 +1059,7 @@ def _handle_membership_operator_jsonb(
     if or_fallback_array_expr is not None:
         rhs_expr = or_fallback_array_expr
     else:
-        rhs_expr = _build_sql_query_jsonb(
+        rhs_expr = _build_sql_query(
             rhs_dict,
             log_event_alias,
             session,
@@ -1263,13 +1263,13 @@ def _handle_logical_operator_jsonb(
     Returns:
         Boolean expression or Subquery representing the logical result.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     operand = filter_dict["operand"]
 
     if operand == "not":
         rhs_dict = filter_dict["rhs"]
-        rhs_expr = _build_sql_query_jsonb(
+        rhs_expr = _build_sql_query(
             rhs_dict,
             log_event_alias,
             session,
@@ -1305,7 +1305,7 @@ def _handle_logical_operator_jsonb(
     lhs_dict = filter_dict["lhs"]
     rhs_dict = filter_dict["rhs"]
 
-    lhs_expr = _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query(
         lhs_dict,
         log_event_alias,
         session,
@@ -1317,7 +1317,7 @@ def _handle_logical_operator_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs_expr = _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query(
         rhs_dict,
         log_event_alias,
         session,
@@ -1463,7 +1463,7 @@ def _handle_functions_jsonb(
         _get_reduction_expr,
     )
 
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     operand = filter_dict.get("operand")
 
@@ -1472,8 +1472,8 @@ def _handle_functions_jsonb(
         rhs = filter_dict.get("rhs")
 
         # rhs is the argument (unwrapped by parser if single arg, or list if multiple/list literal)
-        # We pass it directly to _build_sql_query_jsonb
-        arg_expr = _build_sql_query_jsonb(
+        # We pass it directly to _build_sql_query
+        arg_expr = _build_sql_query(
             rhs,
             log_event_alias,
             session,
@@ -1585,7 +1585,7 @@ def _handle_functions_jsonb(
                     inferred_type = normalize_field_type(ft)
 
         # Build argument expression
-        expr = _build_sql_query_jsonb(
+        expr = _build_sql_query(
             arg,
             log_event_alias,
             session,
@@ -1704,7 +1704,7 @@ def _handle_functions_jsonb(
             return log_event_alias.data.op("?")(literal(key))
         else:
             # Complex expression existence check
-            expr = _build_sql_query_jsonb(
+            expr = _build_sql_query(
                 arg,
                 log_event_alias,
                 session,
@@ -1757,7 +1757,7 @@ def _handle_functions_jsonb(
 
     # --- Length Function ---
     if operand == "len":
-        expr = _build_sql_query_jsonb(
+        expr = _build_sql_query(
             _get_single_arg(rhs_dict),
             log_event_alias,
             session,
@@ -1839,7 +1839,7 @@ def _handle_functions_jsonb(
                 return literal(normalized)
 
         # Fallback to runtime inspection
-        expr = _build_sql_query_jsonb(
+        expr = _build_sql_query(
             arg,
             log_event_alias,
             session,
@@ -1917,7 +1917,7 @@ def _handle_functions_jsonb(
 
     # --- String Conversion ---
     if operand == "str":
-        expr = _build_sql_query_jsonb(
+        expr = _build_sql_query(
             _get_single_arg(rhs_dict),
             log_event_alias,
             session,
@@ -1977,7 +1977,7 @@ def _handle_functions_jsonb(
                 Float,
             )
 
-        expr = _build_sql_query_jsonb(
+        expr = _build_sql_query(
             arg_dict,
             log_event_alias,
             session,
@@ -2052,7 +2052,7 @@ def _handle_functions_jsonb(
         args = []
         for arg in rhs:
             args.append(
-                _build_sql_query_jsonb(
+                _build_sql_query(
                     arg,
                     log_event_alias,
                     session,
@@ -2120,7 +2120,7 @@ def _handle_functions_jsonb(
         # isNone(x) checks if x is None/NULL and returns a boolean
         # Example: "isNone(field1)" returns True if field1 is NULL
         # Returns True if the value is NULL/None
-        arg_expr = _build_sql_query_jsonb(
+        arg_expr = _build_sql_query(
             _get_single_arg(rhs_dict),
             log_event_alias,
             session,
@@ -2163,7 +2163,7 @@ def _handle_functions_jsonb(
             raise ValueError("BASE(...) requires exactly 2 arguments: (event_id, key)")
 
         # Build the event_ids expression
-        event_id_expr = _build_sql_query_jsonb(
+        event_id_expr = _build_sql_query(
             rhs_dict[0],
             log_event_alias,
             session,
@@ -2503,7 +2503,7 @@ def _handle_functions_jsonb(
         args = []
         for arg in rhs:
             args.append(
-                _build_sql_query_jsonb(
+                _build_sql_query(
                     arg,
                     log_event_alias,
                     session,
@@ -2541,7 +2541,7 @@ def _handle_date_function_jsonb(
     """
     Handle date/time functions (date, time, round_timestamp) for JSONB.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     rhs_dict = filter_dict.get("rhs")
 
@@ -2567,7 +2567,7 @@ def _handle_date_function_jsonb(
         if not isinstance(rhs_dict, list) or len(rhs_dict) != 2:
             raise ValueError("round_timestamp requires exactly 2 arguments")
 
-        ts_expr = _build_sql_query_jsonb(
+        ts_expr = _build_sql_query(
             rhs_dict[0],
             log_event_alias,
             session,
@@ -2579,7 +2579,7 @@ def _handle_date_function_jsonb(
             context_id=context_id,
             query_context=query_context,
         )
-        sec_expr = _build_sql_query_jsonb(
+        sec_expr = _build_sql_query(
             rhs_dict[1],
             log_event_alias,
             session,
@@ -2624,7 +2624,7 @@ def _handle_date_function_jsonb(
         return _pg_round_timestamp(ts_expr, sec_expr)
 
     # For single-argument date/time functions
-    expr = _build_sql_query_jsonb(
+    expr = _build_sql_query(
         rhs_dict,
         log_event_alias,
         session,
@@ -2808,11 +2808,11 @@ def _handle_list_comp_jsonb(
     Builds the iterable expression, wraps it as a subquery if needed, and processes
     the comprehension logic.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .functions import _handle_list_comp
 
     # Build the iterable expression
-    iter_expr = _build_sql_query_jsonb(
+    iter_expr = _build_sql_query(
         filter_dict["iter"],
         log_event_alias,
         session,
@@ -2878,11 +2878,11 @@ def _handle_dict_comp_jsonb(
     Similar to list comprehensions but for {k: v*2 for k, v in items.items() if v > 0}.
     Wraps JSONB expressions as subqueries and delegates to shared handler logic.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .functions import _handle_dict_comp
 
     # Build the iterable expression
-    iter_expr = _build_sql_query_jsonb(
+    iter_expr = _build_sql_query(
         filter_dict["iter"],
         log_event_alias,
         session,
@@ -2950,11 +2950,11 @@ def _handle_if_expr_jsonb(
     2. If all branches are direct expressions, use SQL CASE directly
     3. If any branch is a subquery, delegate to shared handler
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .functions import _handle_if_expr
 
     # Build all three branches
-    test_expr = _build_sql_query_jsonb(
+    test_expr = _build_sql_query(
         filter_dict["test"],
         log_event_alias,
         session,
@@ -2967,7 +2967,7 @@ def _handle_if_expr_jsonb(
         query_context=query_context,
     )
 
-    body_expr = _build_sql_query_jsonb(
+    body_expr = _build_sql_query(
         filter_dict["body"],
         log_event_alias,
         session,
@@ -2980,7 +2980,7 @@ def _handle_if_expr_jsonb(
         query_context=query_context,
     )
 
-    else_expr = _build_sql_query_jsonb(
+    else_expr = _build_sql_query(
         filter_dict["orelse"],
         log_event_alias,
         session,
@@ -3061,14 +3061,14 @@ def _handle_index_operator_jsonb(
     from sqlalchemy import BindParameter
     from sqlalchemy.sql.selectable import Subquery
 
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .operators import _handle_index_operator
 
     lhs_node = filter_dict.get("lhs")
     rhs_node = filter_dict.get("rhs")
 
     # Build LHS and RHS expressions
-    lhs_expr = _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query(
         lhs_node,
         log_event_alias,
         session,
@@ -3081,7 +3081,7 @@ def _handle_index_operator_jsonb(
         query_context=query_context,
     )
 
-    rhs_expr = _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query(
         rhs_node,
         log_event_alias,
         session,
@@ -3204,7 +3204,7 @@ def _handle_slice_operator_jsonb(
     from sqlalchemy import literal_column
     from sqlalchemy.sql.selectable import Subquery
 
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .operators import _handle_slice_operator
 
     lhs_node = filter_dict.get("lhs")
@@ -3214,7 +3214,7 @@ def _handle_slice_operator_jsonb(
     lower, upper = rhs_bounds
 
     # Build LHS expression
-    lhs_expr = _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query(
         lhs_node,
         log_event_alias,
         session,
@@ -3396,7 +3396,7 @@ def _handle_dict_method_jsonb(
     """
     from sqlalchemy.sql.selectable import Subquery
 
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .functions import _handle_dict_method
 
     method = filter_dict.get("method")
@@ -3417,7 +3417,7 @@ def _handle_dict_method_jsonb(
         )
 
     # Build source expression
-    src_expr = _build_sql_query_jsonb(
+    src_expr = _build_sql_query(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -3507,7 +3507,7 @@ def _handle_dict_get_jsonb(
 
     from orchestra.db.dao.log_dao import LogDAO
 
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .functions import _handle_dict_get
     from .helpers import _select_value
 
@@ -3516,7 +3516,7 @@ def _handle_dict_get_jsonb(
         default_supplied = filter_dict.get("default_supplied", False)
 
     # Build source expression
-    src_expr = _build_sql_query_jsonb(
+    src_expr = _build_sql_query(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -3549,7 +3549,7 @@ def _handle_dict_get_jsonb(
     default_expr = filter_dict.get("default")
 
     # Build key expression
-    key = _build_sql_query_jsonb(
+    key = _build_sql_query(
         key_expr,
         log_event_alias,
         session,
@@ -3592,7 +3592,7 @@ def _handle_dict_get_jsonb(
         return extracted
 
     # Build default expression
-    default = _build_sql_query_jsonb(
+    default = _build_sql_query(
         default_expr,
         log_event_alias,
         session,
@@ -3655,14 +3655,14 @@ def _handle_str_method_jsonb(
     from sqlalchemy import BindParameter
     from sqlalchemy.sql.selectable import Subquery
 
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .functions import _handle_str_method
 
     method = filter_dict.get("method")
     bool_methods = {"startswith", "endswith", "contains", "match"}
 
     # Build source expression
-    src_expr = _build_sql_query_jsonb(
+    src_expr = _build_sql_query(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -3693,7 +3693,7 @@ def _handle_str_method_jsonb(
     args = []
     if "args" in filter_dict and filter_dict["args"]:
         args = [
-            _build_sql_query_jsonb(
+            _build_sql_query(
                 arg,
                 log_event_alias,
                 session,
@@ -3822,14 +3822,14 @@ def _handle_zip_jsonb(
     from sqlalchemy.sql.selectable import Subquery
 
     from . import alias_utils
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .helpers import _get_parent_idx, _select_value
 
     # Build and wrap arguments
     zipped_subqs = []
     for idx, arg in enumerate(filter_dict["rhs"]):
         # Build the expression
-        expr = _build_sql_query_jsonb(
+        expr = _build_sql_query(
             arg,
             log_event_alias,
             session,
@@ -3966,7 +3966,7 @@ def _handle_embed_jsonb(
     1. Literal text: Create embedding directly and return vector literal
     2. Field references: Extract text from LogEvent.data, create embeddings, return from Embedding table
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
     from .helpers import _queue_embeddings_for_generation
 
     rhs_dict = filter_dict.get("rhs")
@@ -3979,7 +3979,7 @@ def _handle_embed_jsonb(
         )
 
     # Build expressions for each argument
-    text_expr = _build_sql_query_jsonb(
+    text_expr = _build_sql_query(
         rhs_dict[0],
         log_event_alias,
         session,
@@ -3995,7 +3995,7 @@ def _handle_embed_jsonb(
     # Process optional model parameter
     model = None
     if len(rhs_dict) >= 2:
-        model_expr = _build_sql_query_jsonb(
+        model_expr = _build_sql_query(
             rhs_dict[1],
             log_event_alias,
             session,
@@ -4019,7 +4019,7 @@ def _handle_embed_jsonb(
     # Process optional dimensions parameter
     dimensions = None
     if len(rhs_dict) == 3:
-        dim_expr = _build_sql_query_jsonb(
+        dim_expr = _build_sql_query(
             rhs_dict[2],
             log_event_alias,
             session,
@@ -4171,12 +4171,12 @@ def _handle_embed_image_jsonb(
     2. JSONB expression (field reference): Query LogEvent.data, compute embeddings
     3. Literal (base64/URL): Compute embedding directly
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     rhs_dict = filter_dict.get("rhs")
 
     # Build expression for the argument
-    image_expr = _build_sql_query_jsonb(
+    image_expr = _build_sql_query(
         rhs_dict,
         log_event_alias,
         session,
@@ -4328,12 +4328,12 @@ def _handle_phash_jsonb(
     2. JSONB expression (field reference): Query LogEvent.data, compute hashes
     3. Literal (URL): Compute hash directly
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     rhs_dict = filter_dict.get("rhs")
 
     # Build expression for the argument
-    image_expr = _build_sql_query_jsonb(
+    image_expr = _build_sql_query(
         rhs_dict,
         log_event_alias,
         session,
@@ -4605,9 +4605,9 @@ def _handle_l2_jsonb(
     query_context=None,
 ):
     """Handle L2/Euclidean distance operator between two vectors: v1 <-> v2."""
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
-    lhs = _build_sql_query_jsonb(
+    lhs = _build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4619,7 +4619,7 @@ def _handle_l2_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = _build_sql_query_jsonb(
+    rhs = _build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4647,9 +4647,9 @@ def _handle_cosine_jsonb(
     query_context=None,
 ):
     """Handle cosine similarity operator between two vectors: v1 <=> v2."""
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
-    lhs = _build_sql_query_jsonb(
+    lhs = _build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4661,7 +4661,7 @@ def _handle_cosine_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = _build_sql_query_jsonb(
+    rhs = _build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4696,9 +4696,9 @@ def _handle_ip_jsonb(
     query_context=None,
 ):
     """Handle inner product operator between two vectors: v1 <#> v2."""
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
-    lhs = _build_sql_query_jsonb(
+    lhs = _build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4710,7 +4710,7 @@ def _handle_ip_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = _build_sql_query_jsonb(
+    rhs = _build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4738,9 +4738,9 @@ def _handle_l1_jsonb(
     query_context=None,
 ):
     """Handle L1/Manhattan distance operator between two vectors: v1 <+> v2."""
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
-    lhs = _build_sql_query_jsonb(
+    lhs = _build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4752,7 +4752,7 @@ def _handle_l1_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = _build_sql_query_jsonb(
+    rhs = _build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4807,9 +4807,9 @@ def _handle_jaccard_distance_jsonb(
     query_context=None,
 ):
     """Handle Jaccard distance operator between two vectors: v1 <%> v2."""
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
-    lhs = _build_sql_query_jsonb(
+    lhs = _build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4821,7 +4821,7 @@ def _handle_jaccard_distance_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = _build_sql_query_jsonb(
+    rhs = _build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4860,7 +4860,7 @@ def _handle_phash_distance_jsonb(
 
     Uses PostgreSQL's hamming_distance function to compute the distance.
     """
-    from .core import _build_sql_query_jsonb
+    from .core import _build_sql_query
 
     lhs_dict = filter_dict.get("lhs")
     rhs_dict = filter_dict.get("rhs")
@@ -4871,7 +4871,7 @@ def _handle_phash_distance_jsonb(
     if lhs_phash is not None:
         lhs = literal(lhs_phash)
     else:
-        lhs = _build_sql_query_jsonb(
+        lhs = _build_sql_query(
             lhs_dict,
             log_event_alias,
             session,
@@ -4888,7 +4888,7 @@ def _handle_phash_distance_jsonb(
     if rhs_phash is not None:
         rhs = literal(rhs_phash)
     else:
-        rhs = _build_sql_query_jsonb(
+        rhs = _build_sql_query(
             rhs_dict,
             log_event_alias,
             session,

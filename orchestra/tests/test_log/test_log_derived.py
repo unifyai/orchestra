@@ -5,8 +5,6 @@ import os
 import pytest
 from httpx import AsyncClient
 
-from orchestra.conftest import requires_eav_mode
-
 from . import (
     HEADERS,
     _create_derived_entry,
@@ -18,13 +16,10 @@ from . import (
     wait_for_gcs_images,
 )
 
-# Fixture use_jsonb_mode is provided by conftest.py
-
 
 @pytest.mark.anyio
-async def test_create_derived_entry_with_list(client: AsyncClient, use_jsonb_mode):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_project_list_{mode_suffix}"
+async def test_create_derived_entry_with_list(client: AsyncClient):
+    project_name = "test_project_list"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -49,9 +44,8 @@ async def test_create_derived_entry_with_list(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_derived_over_nested_containers(client: AsyncClient, use_jsonb_mode):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project = f"test_nested_containers_{mode_suffix}"
+async def test_derived_over_nested_containers(client: AsyncClient):
+    project = "test_nested_containers"
     await _create_project(client, project, user=1)
 
     # lod = list of dicts
@@ -85,14 +79,12 @@ async def test_derived_over_nested_containers(client: AsyncClient, use_jsonb_mod
 @pytest.mark.anyio
 async def test_derived_creation_batched_counts_not_cumulative(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Create logs in batches and immediately create derived logs for each batch's IDs.
     Verify each create-derived call reports only the count for that batch (not cumulative).
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_derived_batched_counts_{mode_suffix}"
+    project_name = "test_derived_batched_counts"
     await _create_project(client, project_name, user=1)
 
     key = "text_embed"
@@ -131,10 +123,8 @@ async def test_derived_creation_batched_counts_not_cumulative(
 @pytest.mark.anyio
 async def test_create_derived_entry_with_filter_expr(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_project_filter_{mode_suffix}"
+    project_name = "test_project_filter"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -161,10 +151,8 @@ async def test_create_derived_entry_with_filter_expr(
 @pytest.mark.anyio
 async def test_update_derived_entry_with_referenced_logs(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_update_derived_refs_{mode_suffix}"
+    project_name = "test_update_derived_refs"
     await _create_project(client, project_name)
 
     # 1. Create base logs with temperature values
@@ -249,9 +237,8 @@ async def test_update_derived_entry_with_referenced_logs(
 
 
 @pytest.mark.anyio
-async def test_update_derived_entry_with_filter(client: AsyncClient, use_jsonb_mode):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_update_derived_filter_{mode_suffix}"
+async def test_update_derived_entry_with_filter(client: AsyncClient):
+    project_name = "test_update_derived_filter"
     await _create_project(client, project_name)
 
     # 1) Create a few base logs
@@ -337,9 +324,8 @@ async def test_update_derived_entry_with_filter(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_get_logs_including_derived(client: AsyncClient, use_jsonb_mode):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_derived_logs_{mode_suffix}"
+async def test_get_logs_including_derived(client: AsyncClient):
+    project_name = "test_derived_logs"
     user_id = 1
 
     # 1) Create a new project
@@ -508,10 +494,8 @@ async def test_get_logs_including_derived(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_update_logs_and_derived_logs_are_updated(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_project_update_logs_{mode_suffix}"
+    project_name = "test_project_update_logs"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -565,9 +549,8 @@ async def test_update_logs_and_derived_logs_are_updated(
 
 
 @pytest.mark.anyio
-async def test_delete_derived_logs(client: AsyncClient, use_jsonb_mode):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_delete_derived_{mode_suffix}"
+async def test_delete_derived_logs(client: AsyncClient):
+    project_name = "test_delete_derived"
     await _create_project(client, project_name)
 
     # Create base logs
@@ -650,7 +633,7 @@ async def test_delete_derived_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_derived_entry_datetime_arithmetic(client: AsyncClient, use_jsonb_mode):
+async def test_derived_entry_datetime_arithmetic(client: AsyncClient):
     """
     Test datetime, time, and timedelta arithmetic in derived log entries.
 
@@ -663,8 +646,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient, use_jsonb_
     6. Work with fractional seconds
     7. Perform complex chained datetime operations
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_derived_datetime_arithmetic_{mode_suffix}"
+    project_name = "test_derived_datetime_arithmetic"
     await _create_project(client, project_name)
 
     # Create logs with various datetime values
@@ -931,7 +913,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_active_derived_logs_processing(client: AsyncClient, use_jsonb_mode):
+async def test_active_derived_logs_processing(client: AsyncClient):
     """
     Test the admin endpoint for processing active derived logs.
     This test verifies that after calling the admin endpoint, the new log gets the derived entry
@@ -939,8 +921,7 @@ async def test_active_derived_logs_processing(client: AsyncClient, use_jsonb_mod
     import os
 
     # Set up project and create base logs
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_admin_derived_processing_{mode_suffix}"
+    project_name = "test_admin_derived_processing"
     await _create_project(client, project_name, user=1)
     # Create base logs with different scores
     log_ids = []
@@ -1108,11 +1089,9 @@ async def test_active_derived_logs_processing(client: AsyncClient, use_jsonb_mod
 )
 async def test_advanced_comprehensions_and_conditionals(
     client: AsyncClient,
-    use_jsonb_mode,
     test_case,
 ):
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project = f"advanced-test_{mode_suffix}"
+    project = "advanced-test"
     await _create_project(client, project)
 
     entries = []
@@ -1153,7 +1132,7 @@ async def test_advanced_comprehensions_and_conditionals(
 
 
 @pytest.mark.anyio
-async def test_create_static_entries_with_flag(client: AsyncClient, use_jsonb_mode):
+async def test_create_static_entries_with_flag(client: AsyncClient):
     """
     Test creating static entries with derived=false flag.
 
@@ -1161,8 +1140,7 @@ async def test_create_static_entries_with_flag(client: AsyncClient, use_jsonb_mo
     the computed values are stored directly in the base logs' entries rather than in derived_entries.
     """
     # 1. Create a project
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_static_entries_{mode_suffix}"
+    project_name = "test_static_entries"
     await _create_project(client, project_name, user=1)
 
     # 2. Create base logs
@@ -1213,7 +1191,6 @@ async def test_create_static_entries_with_flag(client: AsyncClient, use_jsonb_mo
 @pytest.mark.anyio
 async def test_division_by_zero_safeguarding_all_operators(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that division by zero is properly safeguarded for all arithmetic operators
@@ -1222,8 +1199,7 @@ async def test_division_by_zero_safeguarding_all_operators(
     This test verifies that when the denominator contains zero values, the operations
     return NULL instead of throwing division by zero errors.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_division_by_zero_safeguarding_{mode_suffix}"
+    project_name = "test_division_by_zero_safeguarding"
     await _create_project(client, project_name, user=1)
 
     # Create logs with various numerator and denominator values, including zeros
@@ -1418,12 +1394,11 @@ async def test_division_by_zero_safeguarding_all_operators(
 
 
 @pytest.mark.anyio
-async def test_derived_embedding_and_filtering(client: AsyncClient, use_jsonb_mode):
+async def test_derived_embedding_and_filtering(client: AsyncClient):
     """
     Create an 'embedding' derived column once, then reuse it from filters.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project = f"derived_embed_demo_{mode_suffix}"
+    project = "derived_embed_demo"
     await _create_project(client, project)
 
     # 1) Create base logs with 'cat','dog','chair' descriptions
@@ -1481,7 +1456,6 @@ async def test_derived_embedding_and_filtering(client: AsyncClient, use_jsonb_mo
 @pytest.mark.xdist_group(name="gcs_serial")
 async def test_derived_image_embedding_and_filtering(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test image embedding functionality:
@@ -1492,8 +1466,7 @@ async def test_derived_image_embedding_and_filtering(
 
     Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project = f"derived_image_embed_demo_{mode_suffix}"
+    project = "derived_image_embed_demo"
     context = "image_test"
     await _create_project(client, project)
 
@@ -1643,7 +1616,6 @@ async def test_derived_image_embedding_and_filtering(
 @pytest.mark.anyio
 async def test_create_derived_entry_with_partial_null_values(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test creating derived entries where some logs have null/non-existent values
@@ -1652,8 +1624,7 @@ async def test_create_derived_entry_with_partial_null_values(
     This verifies that the derived entry creation succeeds even when some
     referenced values are missing or null.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_partial_null_derived_{mode_suffix}"
+    project_name = "test_partial_null_derived"
     await _create_project(client, project_name, user=1)
 
     # Create base logs with mixed presence of the target field
@@ -1767,14 +1738,12 @@ async def test_create_derived_entry_with_partial_null_values(
 @pytest.mark.anyio
 async def test_create_static_entries_with_correct_id_alignment(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Verifies that create_from_logs with derived=False correctly maps
     computed values to the right source logs, preventing ID misalignment.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_static_id_alignment_{mode_suffix}"
+    project_name = "test_static_id_alignment"
     await _create_project(client, project_name, user=1)
 
     # 1. Create several logs with distinct values
@@ -1833,15 +1802,13 @@ async def test_create_static_entries_with_correct_id_alignment(
 @pytest.mark.anyio
 async def test_derived_embedding_and_filtering_with_partial_null_values(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test creating embedding derived columns and filtering when some logs have null or empty
     values for the field being embedded. This verifies that embedding operations handle
     partial null values gracefully and filtering still works correctly.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project = f"embed_partial_null_demo_{mode_suffix}"
+    project = "embed_partial_null_demo"
     await _create_project(client, project)
 
     # Create base logs with mixed description values
@@ -2040,16 +2007,15 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
 
 @pytest.mark.anyio
 @pytest.mark.xdist_group(name="gcs_serial")
-async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
+async def test_visual_semantic_cache_e2e(client: AsyncClient):
     """
     Tests the Visual Semantic Cache by filtering for a subset of images
     and then sorting them by visual similarity to find the best match.
 
     Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"visual_cache_sorting_project_{mode_suffix}"
-    context_name = f"visual_cache_sorting_context_{mode_suffix}"
+    project_name = "visual_cache_sorting_project"
+    context_name = "visual_cache_sorting_context"
     user_id = 1
 
     await _create_project(client, project_name, user=user_id)
@@ -2156,115 +2122,20 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
     ), "The third best match should be the dog image"
 
 
-@requires_eav_mode
-@pytest.mark.anyio
-@pytest.mark.xdist_group(name="gcs_serial")
-async def test_phash_distance_with_raw_image_literal(
-    client: AsyncClient,
-):
-    """
-    Tests that phash_distance can accept a raw base64 image string as an argument.
-
-    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
-
-    Note: This test is skipped in JSONB mode due to a known issue where phash_distance
-    filtering returns multiple matches instead of exactly one. The root cause appears to
-    be related to how JSONB mode handles the phash comparison, returning both images
-    instead of just the closest match. This needs further investigation.
-    """
-    project_name = "visual_cache_raw_image_project_eav"
-    context_name = "visual_cache_raw_image_context_eav"
-    user_id = 1
-
-    # 1. Setup project, context, and log some images with their pHashes
-    await _create_project(client, project_name, user=user_id)
-    await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": context_name},
-        headers=HEADERS,
-    )
-    image_files = {
-        "cat_v1": "cat.png",
-        "dog": "dog.png",
-    }
-    log_ids_map = {}
-    for name, path in image_files.items():
-        response = await _create_image_log(
-            client,
-            project_name,
-            context_name,
-            path,
-            {"name": name},
-            image_col_name="img",
-        )
-        assert (
-            response.status_code == 200
-        ), f"Failed to create log for {name}: {response.text}"
-        log_ids_map[name] = response.json()["log_event_ids"][0]
-
-    # Wait for GCS images to become available before computing pHash
-    await wait_for_gcs_images(client, project_name, context_name, image_col_name="img")
-
-    response = await _create_derived_entry(
-        client,
-        project_name,
-        key="image_phash",
-        equation="phash({log:img})",
-        referenced_logs={"log": list(log_ids_map.values())},
-        context=context_name,
-        user=user_id,
-    )
-    assert response.status_code == 200, f"Failed to create pHash: {response.text}"
-
-    # 2. Get the raw base64 data URI for the 'cat' image to use in the query
-    cat_image_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-        "sample_datasets/cat.png",
-    )
-    with open(cat_image_path, "rb") as f:
-        cat_b64 = base64.b64encode(f.read()).decode("utf-8")
-    cat_data_uri = f"'data:image/png;base64,{cat_b64}'"
-
-    # 3. Construct the filter expression with the raw image literal.
-    # The query should find the log whose 'image_phash' is closest to the pHash of the raw cat image.
-    filter_expr = f"phash_distance(image_phash, {cat_data_uri}) < 5"
-
-    # 4. Execute the query
-    response = await client.get(
-        "/v0/logs",
-        params={
-            "project_name": project_name,
-            "context": context_name,
-            "filter_expr": filter_expr,
-        },
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, f"Query with raw image failed: {response.text}"
-
-    # 5. Verify the results
-    matching_logs = response.json()["logs"]
-    assert (
-        len(matching_logs) == 1
-    ), "Expected to find exactly one match for the raw cat image"
-    assert (
-        matching_logs[0]["entries"]["name"] == "cat_v1"
-    ), "The matched log should be the cat"
-
-
 # =============================================================================
 # JSONB-Specific Tests for Derived Log Materialization
 # =============================================================================
 
 
 @pytest.mark.anyio
-async def test_derived_field_category_jsonb(client: AsyncClient, use_jsonb_mode):
+async def test_derived_field_category_jsonb(client: AsyncClient):
     """
     Test that derived fields have field_category='derived_entry' in FieldType.
 
     This test verifies that when creating derived logs in either mode,
     the field type is properly marked as 'derived_entry'.
     """
-    project_name = f"test_field_category_{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_field_category"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2311,12 +2182,9 @@ async def test_no_derived_log_rows_jsonb(client: AsyncClient, monkeypatch):
     In JSONB mode, derived values are stored directly in LogEvent.data,
     not in separate DerivedLog rows.
     """
-    from orchestra import settings as settings_module
+    # JSONB mode is now always enabled - EAV mode has been removed
 
-    # Force JSONB mode for this test
-    monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", True)
-
-    project_name = "test_no_derived_rows_jsonb"
+    project_name = "test_no_derived_rows"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2367,56 +2235,46 @@ async def test_referenced_keys_populated_on_template_creation(
     dbsession,
 ):
     """Verify that referenced_keys is populated when creating derived log templates."""
-    from orchestra import settings as settings_module
     from orchestra.db.models.orchestra_models import ActiveDerivedLog
 
-    # Test in both modes
-    for use_jsonb in [False, True]:
-        monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", use_jsonb)
+    project_name = "test_referenced_keys"
+    await _create_project(client, project_name, user=1)
 
-        mode_suffix = "jsonb" if use_jsonb else "eav"
-        project_name = f"test_referenced_keys_{mode_suffix}"
-        await _create_project(client, project_name, user=1)
+    # Create base logs
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"score": 0.8, "accuracy": 0.9},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
 
-        # Create base logs
-        response = await _create_log(
-            client,
-            project_name,
-            entries={"score": 0.8, "accuracy": 0.9},
-        )
-        assert response.status_code == 200
-        log_id = response.json()["log_event_ids"][0]
+    # Create derived log with equation referencing both fields
+    equation = "{log0:score} + {log0:accuracy}"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="total",
+        equation=equation,
+        referenced_logs={"log0": {"filter_expr": "True"}},
+    )
+    assert response.status_code == 200
 
-        # Create derived log with equation referencing both fields
-        equation = "{log0:score} + {log0:accuracy}"
-        response = await _create_derived_entry(
-            client,
-            project_name,
-            key="total",
-            equation=equation,
-            referenced_logs={"log0": {"filter_expr": "True"}},
-        )
-        assert response.status_code == 200
+    # Verify referenced_keys was populated
+    dbsession.expire_all()  # Clear cache to get fresh data
+    template = (
+        dbsession.query(ActiveDerivedLog)
+        .filter(ActiveDerivedLog.key == "total")
+        .order_by(ActiveDerivedLog.id.desc())
+        .first()
+    )
 
-        # Verify referenced_keys was populated
-        dbsession.expire_all()  # Clear cache to get fresh data
-        template = (
-            dbsession.query(ActiveDerivedLog)
-            .filter(ActiveDerivedLog.key == "total")
-            .order_by(ActiveDerivedLog.id.desc())
-            .first()
-        )
-
-        assert (
-            template is not None
-        ), f"ActiveDerivedLog template should exist in {mode_suffix} mode"
-        assert (
-            template.referenced_keys is not None
-        ), f"referenced_keys should be populated in {mode_suffix} mode"
-        assert set(template.referenced_keys) == {"score", "accuracy"}, (
-            f"referenced_keys should contain ['score', 'accuracy'], "
-            f"got {template.referenced_keys} in {mode_suffix} mode"
-        )
+    assert template is not None, "ActiveDerivedLog template should exist"
+    assert template.referenced_keys is not None, "referenced_keys should be populated"
+    assert set(template.referenced_keys) == {"score", "accuracy"}, (
+        f"referenced_keys should contain ['score', 'accuracy'], "
+        f"got {template.referenced_keys}"
+    )
 
 
 @pytest.mark.anyio
@@ -2428,12 +2286,10 @@ async def test_referenced_keys_updated_on_template_update(
     """Verify that referenced_keys is updated when modifying derived log templates."""
     from datetime import datetime, timezone
 
-    from orchestra import settings as settings_module
     from orchestra.db.dao.derived_log_dao import _extract_field_names_from_equation
     from orchestra.db.models.orchestra_models import ActiveDerivedLog, Context, Project
 
-    # Force JSONB mode for this test
-    monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", True)
+    # JSONB mode is now always enabled - EAV mode has been removed
 
     project_name = "test_referenced_keys_update"
     await _create_project(client, project_name, user=1)
@@ -2525,12 +2381,9 @@ async def test_ripple_effect_jsonb(client: AsyncClient, monkeypatch):
 
     Uses GET /v0/logs API (now JSONB-aware) to verify results.
     """
-    from orchestra import settings as settings_module
+    # JSONB mode is now always enabled - EAV mode has been removed
 
-    # Force JSONB mode
-    monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", True)
-
-    project_name = "test_ripple_effect_jsonb"
+    project_name = "test_ripple_effect"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2627,12 +2480,9 @@ async def test_active_derived_log_materialization_jsonb(
 
     Uses GET /v0/logs API (now JSONB-aware) to verify results.
     """
-    from orchestra import settings as settings_module
+    # JSONB mode is now always enabled - EAV mode has been removed
 
-    # Force JSONB mode
-    monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", True)
-
-    project_name = "test_admin_materialization_jsonb"
+    project_name = "test_admin_materialization"
     await _create_project(client, project_name, user=1)
 
     # Create initial base logs
@@ -2746,12 +2596,9 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     3. Filter logs by cosine similarity to a query
     4. Sort logs by similarity (ascending = most similar first)
     """
-    from orchestra import settings as settings_module
+    # JSONB mode is now always enabled - EAV mode has been removed
 
-    # Force JSONB mode
-    monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", True)
-
-    project_name = "test_embed_filter_sort_jsonb"
+    project_name = "test_embed_filter_sort"
     await _create_project(client, project_name, user=1)
 
     # 1) Create base logs with various text descriptions
@@ -2908,14 +2755,13 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
 
 
 @pytest.mark.anyio
-async def test_create_derived_entry_both_modes(client: AsyncClient, use_jsonb_mode):
+async def test_create_derived_entry_both_modes(client: AsyncClient):
     """
     Test creating derived entries works correctly in both EAV and JSONB modes.
 
     This parametrized test ensures feature parity between modes.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_derived_both_modes_{mode_suffix}"
+    project_name = "test_derived_both_modes"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2958,14 +2804,13 @@ async def test_create_derived_entry_both_modes(client: AsyncClient, use_jsonb_mo
 
 
 @pytest.mark.anyio
-async def test_update_derived_entry_both_modes(client: AsyncClient, use_jsonb_mode):
+async def test_update_derived_entry_both_modes(client: AsyncClient):
     """
     Test updating derived entries works correctly in both EAV and JSONB modes.
 
     This parametrized test ensures feature parity between modes.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_update_derived_both_{mode_suffix}"
+    project_name = "test_update_derived_both"
     await _create_project(client, project_name, user=1)
 
     # Create base logs

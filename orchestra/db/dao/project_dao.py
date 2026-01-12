@@ -13,9 +13,7 @@ from orchestra.db.models.orchestra_models import (
     Context,
     ContextVersion,
     Embedding,
-    Log,
     LogEvent,
-    LogEventLog,
     Project,
     ProjectVersion,
     ResourceAccess,
@@ -186,18 +184,16 @@ class ProjectDAO:
             deleted_count = soft_delete_result.rowcount
 
             # Delete associated GCS media BEFORE deleting the project
-            log_dao = LogDAO(self.session, self.context_dao)
-            logs_to_delete_query = (
-                self.session.query(Log)
-                .join(
-                    LogEventLog,
-                    LogEventLog.log_id == Log.id,
-                )
-                .filter(
-                    LogEventLog.log_event_id.in_(select(log_events_subquery.c.id)),
-                )
-            )
-            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+            # Extract log_event_ids from subquery for new function signature
+            log_event_ids = [
+                row[0]
+                for row in self.session.execute(
+                    select(log_events_subquery.c.id),
+                ).fetchall()
+            ]
+            if log_event_ids:
+                log_dao = LogDAO(self.session, self.context_dao)
+                log_dao._bulk_delete_gcs_media(log_event_ids, id)
 
             # Proceed with deleting the project (DB cascades will handle the rest)
             # Note: CASCADE will delete log_events, which will trigger CASCADE delete
