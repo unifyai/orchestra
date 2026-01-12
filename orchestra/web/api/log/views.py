@@ -4655,7 +4655,7 @@ def delete_fields(
                     )
 
                     # Delete GCS media files before deleting database records
-                    log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+                    log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
 
                     # Delete the Log entries (not the LogEvents!)
                     deleted_logs_count = logs_to_delete_query.delete(

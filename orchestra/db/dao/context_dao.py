@@ -2853,17 +2853,15 @@ class ContextDAO:
                 .where(LogEventContext.context_id == id)
                 .subquery()
             )
-            logs_to_delete_query = (
-                self.session.query(Log)
-                .join(
-                    LogEventLog,
-                    LogEventLog.log_id == Log.id,
-                )
-                .filter(
-                    LogEventLog.log_event_id.in_(select(log_events_subquery.c.id)),
-                )
-            )
-            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+            # Extract log_event_ids from subquery for GCS media deletion
+            log_event_ids = [
+                row[0]
+                for row in self.session.execute(
+                    select(log_events_subquery.c.id),
+                ).fetchall()
+            ]
+            if log_event_ids:
+                log_dao._bulk_delete_gcs_media(log_event_ids, project.id)
 
             # Proceed with deleting the context from the database
             self.session.delete(context)

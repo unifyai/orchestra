@@ -9,10 +9,8 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import (
     Context,
-    Log,
     LogEvent,
     LogEventContext,
-    LogEventLog,
     Project,
 )
 
@@ -166,18 +164,13 @@ class LogEventDAO:
 
         try:
             # Delete associated GCS media BEFORE deleting DB records
-            log_dao = LogDAO(self.session, ContextDAO(self.session))
-            logs_to_delete_query = (
-                self.session.query(Log)
-                .join(
-                    LogEventLog,
-                    LogEventLog.log_id == Log.id,
-                )
-                .filter(
-                    LogEventLog.log_event_id.in_(ids),
-                )
+            # Get project_id from first log event for the new function signature
+            first_log_event = (
+                self.session.query(LogEvent).filter(LogEvent.id.in_(ids)).first()
             )
-            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+            if first_log_event:
+                log_dao = LogDAO(self.session, ContextDAO(self.session))
+                log_dao._bulk_delete_gcs_media(ids, first_log_event.project_id)
 
             # First, delete the association rows referencing these log events
             self.session.query(LogEventContext).filter(
