@@ -1,5 +1,3 @@
-import base64
-import io
 import json
 import os
 import random
@@ -330,119 +328,57 @@ async def client(
 
 
 # ============================================================================
-# Storage Mode Testing Infrastructure
+# Legacy Mode Fixtures (Backward Compatibility)
 # ============================================================================
-"""
-Parametrized testing infrastructure for running tests across different storage modes.
-
-Fixtures:
-- use_jsonb_mode: Parametrized fixture that runs tests in both storage modes
-- enable_jsonb_mode: Force JSONB storage mode for a single test
-- enable_eav_mode: Force EAV storage mode for a single test
-
-Decorators:
-- @requires_eav_mode: Skip test when JSONB storage mode is active
-- @skip_if_eav_mode: Skip test when EAV storage mode is active
-
-Helper Functions:
-- assert_mode_specific(): Different assertions per storage mode
-- get_mode_specific_value(): Different expected values per storage mode
-
-IMPORTANT: Do not change the fixture ids ("eav_mode", "jsonb_mode") in use_jsonb_mode
-as the test result tracking relies on these identifiers.
-"""
-
-
-@pytest.fixture(params=[False, True], ids=["eav_mode", "jsonb_mode"])
-def use_jsonb_mode(request, monkeypatch):
-    """
-    Parametrized fixture that runs tests in both storage modes for compatibility verification.
-
-    Usage:
-        @pytest.mark.anyio
-        async def test_something(client, use_jsonb_mode):
-            # Test runs in both modes
-            pass
-    """
-    import orchestra.settings as settings_module
-
-    monkeypatch.setattr(
-        settings_module,
-        "_use_jsonb_override",
-        request.param,
-        raising=False,
-    )
-    yield request.param
+# These fixtures exist for backward compatibility during EAV mode removal.
+# They can be removed once all tests are updated to not use them.
 
 
 @pytest.fixture
-def enable_jsonb_mode(monkeypatch):
+def use_jsonb_mode():
     """
-    Force JSONB storage mode for a single test.
+    Backward compatibility fixture. Always returns True since EAV mode is removed.
 
-    Usage:
-        @pytest.mark.usefixtures("enable_jsonb_mode")
-        def test_jsonb_only_feature(client):
-            # Test runs only in JSONB mode
-            pass
+    Tests using this fixture will continue to work but always run in JSONB mode.
     """
-    import orchestra.settings as settings_module
-
-    monkeypatch.setattr(settings_module, "_use_jsonb_override", True, raising=False)
-    yield True
+    return True
 
 
 @pytest.fixture
-def enable_eav_mode(monkeypatch):
+def enable_jsonb_mode():
     """
-    Force EAV storage mode for a single test.
-
-    Usage:
-        @pytest.mark.usefixtures("enable_eav_mode")
-        def test_eav_only_feature(client):
-            # Test runs only in EAV mode
-            pass
+    Backward compatibility fixture. Always returns True since EAV mode is removed.
     """
-    import orchestra.settings as settings_module
+    return True
 
-    monkeypatch.setattr(settings_module, "_use_jsonb_override", False, raising=False)
-    yield False
+
+@pytest.fixture
+def enable_eav_mode():
+    """
+    Backward compatibility fixture. Raises an error since EAV mode is removed.
+    """
+    pytest.skip("EAV mode has been removed. This test should be updated or deleted.")
 
 
 def requires_eav_mode(func):
     """
-    Skip test when JSONB storage mode is active.
-
-    Checks storage mode at execution time, compatible with parametrized fixtures.
-
-    Usage:
-        @requires_eav_mode
-        @pytest.mark.anyio
-        async def test_param_versioning(client):
-            pass
+    Decorator that skips tests marked with @requires_eav_mode since EAV mode is removed.
     """
     import asyncio
     import functools
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        # Check mode at execution time, not decoration time
-        if settings.use_jsonb_queries:
-            pytest.skip(
-                "Test requires EAV mode (param versioning not supported in JSONB)",
-            )
-        return func(*args, **kwargs)
+        pytest.skip(
+            "EAV mode has been removed. This test should be updated or deleted.",
+        )
 
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
-        # Check mode at execution time, not decoration time
-        if settings.use_jsonb_queries:
-            pytest.skip(
-                "Test requires EAV mode (param versioning not supported in JSONB)",
-            )
-        return await func(*args, **kwargs)
+        pytest.skip(
+            "EAV mode has been removed. This test should be updated or deleted.",
+        )
 
-    # Return appropriate wrapper based on whether the function is async
     if asyncio.iscoroutinefunction(func):
         return async_wrapper
     return wrapper
@@ -452,23 +388,19 @@ def requires_eav_mode(func):
 # Test Results Tracking
 # ============================================================================
 
-# Global dictionary to track test results by mode
-TEST_RESULTS_BY_MODE = {
-    "eav_mode": {"passed": [], "failed": [], "skipped": []},
-    "jsonb_mode": {"passed": [], "failed": [], "skipped": []},
-}
+# Global dictionary to track test results
+TEST_RESULTS = {"passed": [], "failed": [], "skipped": []}
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
     """
-    Hook to capture test name and mode before each test runs.
+    Hook to capture test name before each test runs.
     This allows timing records to include the test function name.
     """
     global CURRENT_TEST_INFO
 
     # Extract test function name (without module path and parameters)
-    # e.g., "test_filter_closed_jobs" from "orchestra/tests/.../test_repairs_performance.py::test_filter_closed_jobs[eav]"
     nodeid = item.nodeid
     # Get the function name part (after :: and before [)
     if "::" in nodeid:
@@ -477,145 +409,48 @@ def pytest_runtest_setup(item):
     else:
         test_name = nodeid
 
-    # Determine mode from parametrization or nodeid
-    mode = None
-    if hasattr(item, "callspec") and hasattr(item.callspec, "params"):
-        params = item.callspec.params
-        # Check for 'mode' parameter (used in test_repairs_performance.py)
-        if "mode" in params:
-            mode = params["mode"]
-        # Check for 'use_jsonb_mode' parameter (used in other tests)
-        elif "use_jsonb_mode" in params:
-            mode = "jsonb" if params["use_jsonb_mode"] else "eav"
-
-    # Fallback: check nodeid for mode markers
-    if mode is None:
-        if "[eav]" in nodeid or "[eav-" in nodeid:
-            mode = "eav"
-        elif "[jsonb]" in nodeid or "[jsonb-" in nodeid:
-            mode = "jsonb"
-
-    CURRENT_TEST_INFO = {"name": test_name, "mode": mode}
+    CURRENT_TEST_INFO = {"name": test_name}
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     """
-    Capture test results and categorize by storage mode.
-
-    Detects storage mode from test parametrization. Only parametrized tests are tracked in reports.
+    Capture test results.
     """
     outcome = yield
     report = outcome.get_result()
 
     # Only track test call phase (not setup/teardown)
     if report.when == "call":
-        mode = None
+        # Extract test name
+        test_name = item.nodeid.split("[")[0] if "[" in item.nodeid else item.nodeid
 
-        # Strategy 1: Check item.callspec.params for use_jsonb_mode parameter
-        # This is the most reliable method as it directly accesses the parametrized value
-        if hasattr(item, "callspec") and hasattr(item.callspec, "params"):
-            params = item.callspec.params
-            if "use_jsonb_mode" in params:
-                mode = "jsonb_mode" if params["use_jsonb_mode"] else "eav_mode"
-
-        # Strategy 2: Fallback to nodeid string matching for compatibility
-        # This handles cases where the parametrization ids might be in the nodeid
-        if mode is None:
-            if "[eav_mode]" in item.nodeid:
-                mode = "eav_mode"
-            elif "[jsonb_mode]" in item.nodeid:
-                mode = "jsonb_mode"
-
-        # Only track if we detected a parametrized test
-        if mode:
-            # Extract test name as module path + function name (up to first '[')
-            # This ensures unique identification even for same-named functions in different modules
-            # Example: "orchestra/tests/test_log/test_log_join.py::test_inner_join_logs"
-            test_name = item.nodeid.split("[")[0] if "[" in item.nodeid else item.nodeid
-
-            if report.passed:
-                TEST_RESULTS_BY_MODE[mode]["passed"].append(test_name)
-            elif report.failed:
-                TEST_RESULTS_BY_MODE[mode]["failed"].append(
-                    {
-                        "name": test_name,
-                        "error": str(report.longrepr)[:200],  # Truncate long errors
-                    },
-                )
-            elif report.skipped:
-                TEST_RESULTS_BY_MODE[mode]["skipped"].append(test_name)
-
-
-# ============================================================================
-# Helper Functions for Conditional Assertions
-# ============================================================================
-
-
-def assert_mode_specific(eav_condition, jsonb_condition, message=""):
-    """
-    Assert different conditions based on current storage mode.
-
-    Args:
-        eav_condition: Boolean condition to assert in EAV mode
-        jsonb_condition: Boolean condition to assert in JSONB mode
-        message: Optional assertion message
-
-    Usage:
-        assert_mode_specific(
-            eav_condition=len(derived_log_rows) > 0,
-            jsonb_condition=len(derived_log_rows) == 0,
-            message="DerivedLog rows should only exist in EAV mode"
-        )
-    """
-    if settings.use_jsonb_queries:
-        assert jsonb_condition, f"[JSONB Mode] {message}"
-    else:
-        assert eav_condition, f"[EAV Mode] {message}"
-
-
-def get_mode_specific_value(eav_value, jsonb_value):
-    """
-    Return different values based on storage mode.
-
-    Args:
-        eav_value: Value to return in EAV mode
-        jsonb_value: Value to return in JSONB mode
-
-    Returns:
-        The appropriate value for the current storage mode
-
-    Usage:
-        expected_count = get_mode_specific_value(eav_value=10, jsonb_value=0)
-    """
-    return jsonb_value if settings.use_jsonb_queries else eav_value
-
-
-def skip_if_eav_mode(reason="Feature only available in JSONB mode"):
-    """
-    Skip test when EAV storage mode is active.
-
-    Usage:
-        @skip_if_eav_mode("JSONB-specific optimization")
-        def test_something():
-            pass
-    """
-    return pytest.mark.skipif(not settings.use_jsonb_queries, reason=reason)
+        if report.passed:
+            TEST_RESULTS["passed"].append(test_name)
+        elif report.failed:
+            TEST_RESULTS["failed"].append(
+                {
+                    "name": test_name,
+                    "error": str(report.longrepr)[:200],  # Truncate long errors
+                },
+            )
+        elif report.skipped:
+            TEST_RESULTS["skipped"].append(test_name)
 
 
 ### SQL CAPTURE FOR TEST ANALYSIS ###
 
 
 @pytest.fixture(autouse=True)
-def sql_capture_context(request, use_jsonb_mode=None):
+def sql_capture_context(request):
     """
     Auto-use fixture that sets up SQL capture context for each test.
 
-    Captures test name, filter expression (if available), and storage mode for SQL query analysis.
+    Captures test name and filter expression (if available) for SQL query analysis.
     Enable SQL capture by setting: SQL_CAPTURE_ENABLED=1
 
     Captured SQL queries are written to:
-    orchestra/tests/test_log/captured_sql/sql_capture_{mode}.jsonl
+    orchestra/tests/test_log/captured_sql/sql_capture.jsonl
 
     Usage:
         SQL_CAPTURE_ENABLED=1 pytest orchestra/tests/test_log/test_log_filtering.py -v
@@ -630,35 +465,6 @@ def sql_capture_context(request, use_jsonb_mode=None):
         if not is_capture_enabled():
             yield
             return
-
-        # Determine mode from fixture or test name
-        mode = "unknown"
-        if (
-            hasattr(request, "fixturenames")
-            and "use_jsonb_mode" in request.fixturenames
-        ):
-            try:
-                jsonb_mode = request.getfixturevalue("use_jsonb_mode")
-                mode = "jsonb" if jsonb_mode else "eav"
-            except Exception:
-                pass
-
-        # Fallback: check node ID for mode markers
-        if mode == "unknown":
-            if (
-                "[jsonb_mode]" in request.node.nodeid
-                or "jsonb" in request.node.nodeid.lower()
-            ):
-                mode = "jsonb"
-            elif (
-                "[eav_mode]" in request.node.nodeid
-                or "eav" in request.node.nodeid.lower()
-            ):
-                mode = "eav"
-            elif "enable_jsonb_mode" in getattr(request, "fixturenames", []):
-                mode = "jsonb"
-            elif "enable_eav_mode" in getattr(request, "fixturenames", []):
-                mode = "eav"
 
         # Try to extract filter expression from test parameters
         filter_expr = None
@@ -675,7 +481,6 @@ def sql_capture_context(request, use_jsonb_mode=None):
         set_test_context(
             test_name=request.node.nodeid,
             filter_expr=filter_expr,
-            mode=mode,
             extra={"test_function": request.node.name},
         )
 
@@ -1414,14 +1219,11 @@ def flush_otel_traces():
 
 def pytest_sessionfinish(session, exitstatus):
     """
-    Generate test results and performance comparison reports.
+    Generate test results and performance reports.
 
     Outputs:
     - perf_timings.json
-    - repairs_perf_results.json
-    - repairs_perf_report.html
-    - dual_mode_test_results.json
-    - dual_mode_test_results.csv
+    - test_results.json
 
     :param session: The pytest session object.
     :param exitstatus: The exit status of the session.
@@ -1430,104 +1232,37 @@ def pytest_sessionfinish(session, exitstatus):
     # Test Results Report
     # ========================================================================
 
-    # Calculate totals first to determine if we have any tracked parametrized tests
-    eav_total = sum(
-        len(TEST_RESULTS_BY_MODE["eav_mode"][k])
-        for k in ["passed", "failed", "skipped"]
-    )
-    jsonb_total = sum(
-        len(TEST_RESULTS_BY_MODE["jsonb_mode"][k])
-        for k in ["passed", "failed", "skipped"]
-    )
+    # Calculate totals
+    total = sum(len(TEST_RESULTS[k]) for k in ["passed", "failed", "skipped"])
 
-    # Generate reports if we have any tracked tests (not just passed tests)
-    # This ensures all-fail or all-skip scenarios are still reported
-    if eav_total > 0 or jsonb_total > 0:
+    if total > 0:
+        passed = len(TEST_RESULTS["passed"])
+        failed = len(TEST_RESULTS["failed"])
+        skipped = len(TEST_RESULTS["skipped"])
+        pass_rate = f"{(passed/total*100):.1f}%" if total > 0 else "N/A"
+
         print("\n" + "=" * 80)
         print("TEST RESULTS SUMMARY")
         print("=" * 80)
-
-        # Calculate detailed statistics
-        eav_passed = len(TEST_RESULTS_BY_MODE["eav_mode"]["passed"])
-        jsonb_passed = len(TEST_RESULTS_BY_MODE["jsonb_mode"]["passed"])
-
-        eav_failed = len(TEST_RESULTS_BY_MODE["eav_mode"]["failed"])
-        jsonb_failed = len(TEST_RESULTS_BY_MODE["jsonb_mode"]["failed"])
-
-        eav_skipped = len(TEST_RESULTS_BY_MODE["eav_mode"]["skipped"])
-        jsonb_skipped = len(TEST_RESULTS_BY_MODE["jsonb_mode"]["skipped"])
-
-        # Print summary table
         print(
-            f"\n{'Mode':<15} {'Total':<10} {'Passed':<10} {'Failed':<10} {'Skipped':<10} {'Pass Rate':<10}",
+            f"Total: {total}, Passed: {passed}, Failed: {failed}, Skipped: {skipped}, Pass Rate: {pass_rate}",
         )
-        print("-" * 80)
-
-        # Handle division-by-zero when calculating pass rates
-        eav_rate = f"{(eav_passed/eav_total*100):.1f}%" if eav_total > 0 else "N/A"
-        jsonb_rate = (
-            f"{(jsonb_passed/jsonb_total*100):.1f}%" if jsonb_total > 0 else "N/A"
-        )
-
-        print(
-            f"{'EAV Mode':<15} {eav_total:<10} {eav_passed:<10} {eav_failed:<10} {eav_skipped:<10} {eav_rate:<10}",
-        )
-        print(
-            f"{'JSONB Mode':<15} {jsonb_total:<10} {jsonb_passed:<10} {jsonb_failed:<10} {jsonb_skipped:<10} {jsonb_rate:<10}",
-        )
-
-        # Export to JSON - handle pass_rate calculation safely
-        def safe_pass_rate(rate_str):
-            """Convert pass rate string to float, handling N/A case."""
-            if rate_str == "N/A":
-                return None
-            try:
-                return float(rate_str.rstrip("%"))
-            except (ValueError, AttributeError):
-                return None
+        print("=" * 80 + "\n")
 
         results_json = {
-            "eav_mode": {
-                "total": eav_total,
-                "passed": eav_passed,
-                "failed": eav_failed,
-                "skipped": eav_skipped,
-                "pass_rate": safe_pass_rate(eav_rate),
-                "failed_tests": TEST_RESULTS_BY_MODE["eav_mode"]["failed"],
-            },
-            "jsonb_mode": {
-                "total": jsonb_total,
-                "passed": jsonb_passed,
-                "failed": jsonb_failed,
-                "skipped": jsonb_skipped,
-                "pass_rate": safe_pass_rate(jsonb_rate),
-                "failed_tests": TEST_RESULTS_BY_MODE["jsonb_mode"]["failed"],
-            },
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "skipped": skipped,
+            "pass_rate": float(pass_rate.rstrip("%")) if pass_rate != "N/A" else None,
+            "failed_tests": TEST_RESULTS["failed"],
         }
 
-        with open("dual_mode_test_results.json", "w") as f:
+        with open("test_results.json", "w") as f:
             json.dump(results_json, f, indent=2)
 
-        print(f"\n✓ Test results exported to: dual_mode_test_results.json")
-
-        # Export to CSV
-        with open("dual_mode_test_results.csv", "w") as f:
-            f.write("Mode,Total,Passed,Failed,Skipped,Pass Rate\n")
-            f.write(
-                f"EAV,{eav_total},{eav_passed},{eav_failed},{eav_skipped},{eav_rate}\n",
-            )
-            f.write(
-                f"JSONB,{jsonb_total},{jsonb_passed},{jsonb_failed},{jsonb_skipped},{jsonb_rate}\n",
-            )
-
-        print(f"✓ Test results exported to: dual_mode_test_results.csv")
-        print("=" * 80 + "\n")
-    else:
-        # Log message when no parametrized tests were tracked
-        print("\n[INFO] No parametrized tests were tracked. Reports not generated.\n")
-
     # ========================================================================
-    # Performance Timing Reports (Existing Functionality)
+    # Performance Timing Reports
     # ========================================================================
 
     if not TIMING_RECORDS:
@@ -1577,25 +1312,12 @@ def pytest_sessionfinish(session, exitstatus):
         # =====================================================================
         # 2. PARSE AND GROUP TEST RECORDS BY TEST NAME
         # =====================================================================
-        test_groups = defaultdict(lambda: {"eav": [], "jsonb": []})
+        test_groups = defaultdict(list)
 
         for record in TIMING_RECORDS:
-            # Use the test_name and mode captured by TimedAsyncClient
             test_name = record.get("test_name", "unknown")
-            mode = record.get("mode", "unknown")
-
-            # Fallback: try to infer mode from project name in params (backward compat)
-            if mode == "unknown" or mode is None:
-                kwargs = record.get("kwargs", {})
-                params = kwargs.get("params", {})
-                project = params.get("project", "") if isinstance(params, dict) else ""
-                if "EAV" in str(project):
-                    mode = "eav"
-                elif "JSONB" in str(project):
-                    mode = "jsonb"
-
-            if mode in ("eav", "jsonb") and test_name != "unknown":
-                test_groups[test_name][mode].append(record)
+            if test_name != "unknown":
+                test_groups[test_name].append(record)
 
         # =====================================================================
         # 3. COMPUTE STATISTICS WITH OUTLIER DETECTION (3σ rule)
@@ -1640,510 +1362,76 @@ def pytest_sessionfinish(session, exitstatus):
             }
 
         # =====================================================================
-        # 4. MATCH TEST PAIRS AND CALCULATE SPEEDUPS
+        # 4. COMPUTE STATS FOR EACH TEST
         # =====================================================================
-        test_pairs = []
-        speedups = []
+        test_stats = []
 
-        for test_name, modes in test_groups.items():
-            eav_stats = compute_stats(modes["eav"])
-            jsonb_stats = compute_stats(modes["jsonb"])
+        for test_name, records in test_groups.items():
+            stats_data = compute_stats(records)
+            if stats_data:
+                test_stats.append(
+                    {
+                        "test_name": test_name,
+                        "stats": stats_data,
+                    },
+                )
 
-            pair = {
-                "test_name": test_name,
-                "eav": eav_stats,
-                "jsonb": jsonb_stats,
-                "speedup": None,
-                "time_saved_ms": None,
-                "is_regression": None,
-            }
-
-            if eav_stats and jsonb_stats:
-                if jsonb_stats["avg_ms"] > 0:
-                    speedup = eav_stats["avg_ms"] / jsonb_stats["avg_ms"]
-                    pair["speedup"] = speedup
-                    pair["time_saved_ms"] = eav_stats["avg_ms"] - jsonb_stats["avg_ms"]
-                    pair["is_regression"] = speedup < 1.0
-                    speedups.append(speedup)
-                else:
-                    pair["speedup"] = float("inf")
-                    pair["time_saved_ms"] = eav_stats["avg_ms"]
-                    pair["is_regression"] = False
-
-            test_pairs.append(pair)
-
-        # Sort by speedup (highest first)
-        test_pairs.sort(
-            key=lambda x: x["speedup"] if x["speedup"] is not None else 0,
+        # Sort by avg_ms (slowest first)
+        test_stats.sort(
+            key=lambda x: x["stats"]["avg_ms"] if x["stats"] else 0,
             reverse=True,
         )
 
         # =====================================================================
-        # 5. COMPUTE AGGREGATE STATISTICS
+        # 5. CONSOLE SUMMARY TABLE
         # =====================================================================
-        valid_speedups = [
-            p["speedup"]
-            for p in test_pairs
-            if p["speedup"] is not None and p["speedup"] != float("inf")
-        ]
-        time_savings = [
-            p["time_saved_ms"] for p in test_pairs if p["time_saved_ms"] is not None
-        ]
+        if test_stats:
+            print("\n" + "=" * 100)
+            print("=== Performance Summary ===")
+            print("=" * 100)
 
-        aggregate_stats = {
-            "num_tests": len(test_pairs),
-            "num_paired_tests": len(valid_speedups),
-            "num_regressions": sum(1 for p in test_pairs if p["is_regression"]),
-            "mean_speedup": float(np.mean(valid_speedups)) if valid_speedups else None,
-            "median_speedup": float(np.median(valid_speedups))
-            if valid_speedups
-            else None,
-            "p95_speedup": float(np.percentile(valid_speedups, 95))
-            if len(valid_speedups) > 1
-            else (valid_speedups[0] if valid_speedups else None),
-            "total_time_saved_ms": sum(time_savings) if time_savings else 0,
-            "max_speedup": max(valid_speedups) if valid_speedups else None,
-            "min_speedup": min(valid_speedups) if valid_speedups else None,
-        }
-
-        # =====================================================================
-        # 6. CONSOLE SUMMARY TABLE
-        # =====================================================================
-        print("\n" + "=" * 100)
-        print("=== Storage Mode Performance Comparison ===")
-        print("=" * 100)
-
-        # Header
-        print(
-            f"\n{'Test':<55} | {'EAV (ms)':>12} | {'JSONB (ms)':>12} | {'Speedup':>10} | {'Saved (ms)':>12}",
-        )
-        print("-" * 100)
-
-        for pair in test_pairs:
-            test_name = (
-                pair["test_name"][:52] + "..."
-                if len(pair["test_name"]) > 55
-                else pair["test_name"]
-            )
-            eav_ms = f"{pair['eav']['avg_ms']:.2f}" if pair["eav"] else "N/A"
-            jsonb_ms = f"{pair['jsonb']['avg_ms']:.2f}" if pair["jsonb"] else "N/A"
-
-            if pair["speedup"] is not None and pair["speedup"] != float("inf"):
-                speedup = f"{pair['speedup']:.2f}x"
-                saved = f"{pair['time_saved_ms']:.2f}"
-                # Mark regressions
-                if pair["is_regression"]:
-                    speedup = f"{speedup} ⚠️"
-            else:
-                speedup = "N/A"
-                saved = "N/A"
-
+            # Header
             print(
-                f"{test_name:<55} | {eav_ms:>12} | {jsonb_ms:>12} | {speedup:>10} | {saved:>12}",
+                f"\n{'Test':<55} | {'Avg (ms)':>12} | {'P95 (ms)':>12} | {'Count':>10}",
             )
+            print("-" * 100)
 
-        # Footer with aggregate stats
-        print("-" * 100)
-        print("\nAggregate Statistics:")
-        print(f"  Total Tests: {aggregate_stats['num_tests']}")
-        print(
-            f"  Paired Tests (both EAV & JSONB): {aggregate_stats['num_paired_tests']}",
-        )
-        if aggregate_stats["mean_speedup"]:
-            print(f"  Mean Speedup: {aggregate_stats['mean_speedup']:.2f}x")
-            print(f"  Median Speedup: {aggregate_stats['median_speedup']:.2f}x")
-            print(f"  P95 Speedup: {aggregate_stats['p95_speedup']:.2f}x")
-            print(f"  Max Speedup: {aggregate_stats['max_speedup']:.2f}x")
-            print(f"  Min Speedup: {aggregate_stats['min_speedup']:.2f}x")
-        print(f"  Total Time Saved: {aggregate_stats['total_time_saved_ms']:.2f} ms")
-        print(f"  Regressions (JSONB slower): {aggregate_stats['num_regressions']}")
+            for item in test_stats[:20]:  # Show top 20 slowest
+                test_name = (
+                    item["test_name"][:52] + "..."
+                    if len(item["test_name"]) > 55
+                    else item["test_name"]
+                )
+                avg_ms = f"{item['stats']['avg_ms']:.2f}"
+                p95_ms = f"{item['stats']['p95_ms']:.2f}"
+                count = str(item["stats"]["count"])
 
-        # =====================================================================
-        # 7. JSON REPORT GENERATION
-        # =====================================================================
-        json_report = {
-            "test_pairs": test_pairs,
-            "aggregate_stats": aggregate_stats,
+                print(
+                    f"{test_name:<55} | {avg_ms:>12} | {p95_ms:>12} | {count:>10}",
+                )
+
+            print("-" * 100)
+            print(f"  Total Tests with Timing: {len(test_stats)}")
+
+        # Save performance report
+        perf_report = {
+            "test_stats": test_stats,
             "raw_records": TIMING_RECORDS,
         }
 
-        with open("repairs_perf_results.json", "w") as f:
-            json.dump(json_report, f, indent=2, default=str)
+        with open("perf_results.json", "w") as f:
+            json.dump(perf_report, f, indent=2, default=str)
 
-        # =====================================================================
-        # 8. CHART GENERATION
-        # =====================================================================
-        chart_images = {}
-
-        # Only generate charts if we have paired test data and matplotlib is available
-        paired_tests = [p for p in test_pairs if p["eav"] and p["jsonb"]]
-
-        if paired_tests and HAS_MATPLOTLIB:
-            # Chart 1: Horizontal double bar chart comparing EAV vs JSONB per test
-            # Shows speedup annotations for easy comparison
-            try:
-                # Sort by speedup for better visualization
-                sorted_paired = sorted(
-                    paired_tests,
-                    key=lambda x: x["speedup"] if x["speedup"] else 0,
-                    reverse=True,
-                )
-
-                # Limit to top 30 tests for readability
-                display_tests = sorted_paired[:30]
-                num_tests = len(display_tests)
-
-                # Calculate figure height based on number of tests
-                fig_height = max(10, num_tests * 0.4)
-                fig, ax = plt.subplots(figsize=(14, fig_height))
-
-                test_names = [
-                    p["test_name"][:50] + "..."
-                    if len(p["test_name"]) > 50
-                    else p["test_name"]
-                    for p in display_tests
-                ]
-                eav_times = [p["eav"]["avg_ms"] for p in display_tests]
-                jsonb_times = [p["jsonb"]["avg_ms"] for p in display_tests]
-                speedups = [p["speedup"] for p in display_tests]
-
-                y = np.arange(num_tests)
-                height = 0.35
-
-                # Create horizontal bars
-                bars1 = ax.barh(
-                    y - height / 2,
-                    eav_times,
-                    height,
-                    label="EAV",
-                    color="#e74c3c",
-                    alpha=0.8,
-                )
-                bars2 = ax.barh(
-                    y + height / 2,
-                    jsonb_times,
-                    height,
-                    label="JSONB",
-                    color="#27ae60",
-                    alpha=0.8,
-                )
-
-                # Add speedup annotations at the end of each bar group
-                for i, (eav_t, jsonb_t, speedup) in enumerate(
-                    zip(eav_times, jsonb_times, speedups),
-                ):
-                    max_time = max(eav_t, jsonb_t)
-                    if speedup and speedup != float("inf"):
-                        color = "#27ae60" if speedup >= 1.0 else "#e74c3c"
-                        label = f"{speedup:.1f}x"
-                        ax.annotate(
-                            label,
-                            xy=(max_time, i),
-                            xytext=(5, 0),
-                            textcoords="offset points",
-                            va="center",
-                            fontsize=9,
-                            fontweight="bold",
-                            color=color,
-                        )
-
-                ax.set_ylabel("Test Name", fontsize=12)
-                ax.set_xlabel("Duration (ms)", fontsize=12)
-                ax.set_title(
-                    "EAV vs JSONB Performance Comparison (Per Test)\n"
-                    "Speedup shown at right (green = JSONB faster, red = EAV faster)",
-                    fontsize=14,
-                    fontweight="bold",
-                )
-                ax.set_yticks(y)
-                ax.set_yticklabels(test_names, fontsize=8)
-                ax.legend(loc="lower right")
-                ax.grid(axis="x", alpha=0.3)
-
-                # Use log scale if range is large
-                all_times = eav_times + jsonb_times
-                if max(all_times) / (min(all_times) + 0.001) > 100:
-                    ax.set_xscale("log")
-
-                # Invert y-axis so highest speedup is at top
-                ax.invert_yaxis()
-
-                plt.tight_layout()
-                # Save to file FIRST, before closing
-                plt.savefig("repairs_perf_bar_chart.png", dpi=100, bbox_inches="tight")
-                # Then save to buffer for HTML embedding
-                buf = io.BytesIO()
-                plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
-                buf.seek(0)
-                chart_images["bar_chart"] = base64.b64encode(buf.read()).decode()
-                plt.close(fig)
-            except Exception as e:
-                print(f"Warning: Failed to generate bar chart: {e}")
-
-            # Chart 2: Histogram of speedup distribution
-            try:
-                fig, ax = plt.subplots(figsize=(10, 6))
-                speedup_values = [
-                    p["speedup"]
-                    for p in paired_tests
-                    if p["speedup"] and p["speedup"] != float("inf")
-                ]
-
-                if speedup_values:
-                    ax.hist(
-                        speedup_values,
-                        bins=20,
-                        color="#3498db",
-                        alpha=0.7,
-                        edgecolor="black",
-                    )
-                    ax.axvline(
-                        x=1.0,
-                        color="#e74c3c",
-                        linestyle="--",
-                        linewidth=2,
-                        label="No Improvement (1.0x)",
-                    )
-                    ax.axvline(
-                        x=np.mean(speedup_values),
-                        color="#27ae60",
-                        linestyle="-",
-                        linewidth=2,
-                        label=f"Mean ({np.mean(speedup_values):.2f}x)",
-                    )
-
-                    ax.set_xlabel("Speedup Factor (EAV time / JSONB time)", fontsize=12)
-                    ax.set_ylabel("Number of Tests", fontsize=12)
-                    ax.set_title(
-                        "Distribution of Speedup Factors",
-                        fontsize=14,
-                        fontweight="bold",
-                    )
-                    ax.legend()
-                    ax.grid(alpha=0.3)
-
-                    plt.tight_layout()
-                    # Save to file FIRST, before closing
-                    plt.savefig(
-                        "repairs_perf_speedup_hist.png",
-                        dpi=100,
-                        bbox_inches="tight",
-                    )
-                    # Then save to buffer for HTML embedding
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
-                    buf.seek(0)
-                    chart_images["speedup_hist"] = base64.b64encode(buf.read()).decode()
-                    plt.close(fig)
-            except Exception as e:
-                print(f"Warning: Failed to generate speedup histogram: {e}")
-
-            # Chart 3: Waterfall chart showing cumulative time savings
-            try:
-                fig, ax = plt.subplots(figsize=(14, 8))
-                sorted_pairs = sorted(
-                    [p for p in paired_tests if p["time_saved_ms"] is not None],
-                    key=lambda x: x["time_saved_ms"],
-                    reverse=True,
-                )[
-                    :20
-                ]  # Top 20
-
-                if sorted_pairs:
-                    test_names = [
-                        p["test_name"][:35] + "..."
-                        if len(p["test_name"]) > 35
-                        else p["test_name"]
-                        for p in sorted_pairs
-                    ]
-                    time_savings_vals = [p["time_saved_ms"] for p in sorted_pairs]
-                    cumulative = np.cumsum(time_savings_vals)
-
-                    colors = [
-                        "#27ae60" if t > 0 else "#e74c3c" for t in time_savings_vals
-                    ]
-                    ax.bar(
-                        range(len(test_names)),
-                        time_savings_vals,
-                        color=colors,
-                        alpha=0.8,
-                    )
-                    ax.plot(
-                        range(len(test_names)),
-                        cumulative,
-                        "o-",
-                        color="#3498db",
-                        linewidth=2,
-                        label="Cumulative",
-                    )
-
-                    ax.set_xlabel("Test Name", fontsize=12)
-                    ax.set_ylabel("Time Saved (ms)", fontsize=12)
-                    ax.set_title(
-                        "Time Savings by Test (Sorted by Impact)",
-                        fontsize=14,
-                        fontweight="bold",
-                    )
-                    ax.set_xticks(range(len(test_names)))
-                    ax.set_xticklabels(test_names, rotation=45, ha="right", fontsize=8)
-                    ax.legend()
-                    ax.grid(axis="y", alpha=0.3)
-                    ax.axhline(y=0, color="black", linestyle="-", linewidth=0.5)
-
-                    plt.tight_layout()
-                    # Save to file FIRST, before closing
-                    plt.savefig(
-                        "repairs_perf_waterfall.png",
-                        dpi=100,
-                        bbox_inches="tight",
-                    )
-                    # Then save to buffer for HTML embedding
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
-                    buf.seek(0)
-                    chart_images["waterfall"] = base64.b64encode(buf.read()).decode()
-                    plt.close(fig)
-            except Exception as e:
-                print(f"Warning: Failed to generate waterfall chart: {e}")
-
-        # =====================================================================
-        # 9. HTML REPORT GENERATION
-        # =====================================================================
-        html_rows = []
-        for pair in test_pairs:
-            test_name = pair["test_name"]
-            eav_ms = f"{pair['eav']['avg_ms']:.2f}" if pair["eav"] else "N/A"
-            jsonb_ms = f"{pair['jsonb']['avg_ms']:.2f}" if pair["jsonb"] else "N/A"
-
-            if pair["speedup"] is not None and pair["speedup"] != float("inf"):
-                speedup = f"{pair['speedup']:.2f}x"
-                saved = f"{pair['time_saved_ms']:.2f}"
-                row_class = (
-                    "regression"
-                    if pair["is_regression"]
-                    else ("improvement" if pair["speedup"] > 1.5 else "")
-                )
-            else:
-                speedup = "N/A"
-                saved = "N/A"
-                row_class = ""
-
-            html_rows.append(
-                f'<tr class="{row_class}"><td>{test_name}</td><td>{eav_ms}</td><td>{jsonb_ms}</td><td>{speedup}</td><td>{saved}</td></tr>',
-            )
-
-        # Build chart HTML
-        chart_html = ""
-        if "bar_chart" in chart_images:
-            chart_html += f'<h2>Storage Mode Query Times</h2><img src="data:image/png;base64,{chart_images["bar_chart"]}" alt="Bar Chart">'
-        if "speedup_hist" in chart_images:
-            chart_html += f'<h2>Speedup Distribution</h2><img src="data:image/png;base64,{chart_images["speedup_hist"]}" alt="Speedup Histogram">'
-        if "waterfall" in chart_images:
-            chart_html += f'<h2>Time Savings Impact</h2><img src="data:image/png;base64,{chart_images["waterfall"]}" alt="Waterfall Chart">'
-
-        html_template = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Storage Mode Performance Report</title>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; background: #f5f5f5; }}
-        .container {{ max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-        h2 {{ color: #34495e; margin-top: 30px; }}
-        .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
-        .stat-card {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; text-align: center; }}
-        .stat-card.green {{ background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }}
-        .stat-card.orange {{ background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }}
-        .stat-value {{ font-size: 2em; font-weight: bold; }}
-        .stat-label {{ font-size: 0.9em; opacity: 0.9; }}
-        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-        th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
-        th {{ background: #3498db; color: white; position: sticky; top: 0; }}
-        tr:hover {{ background: #f8f9fa; }}
-        .regression {{ background: #ffebee !important; }}
-        .improvement {{ background: #e8f5e9 !important; }}
-        img {{ max-width: 100%; height: auto; margin: 20px 0; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        .timestamp {{ color: #7f8c8d; font-size: 0.9em; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚀 Storage Mode Performance Report</h1>
-        <p class="timestamp">Generated: {datetime.now().isoformat()}</p>
-
-        <div class="summary">
-            <div class="stat-card">
-                <div class="stat-value">{aggregate_stats['num_paired_tests']}</div>
-                <div class="stat-label">Paired Tests</div>
-            </div>
-            <div class="stat-card green">
-                <div class="stat-value">{f"{aggregate_stats['mean_speedup']:.2f}x" if aggregate_stats['mean_speedup'] is not None else "N/A"}</div>
-                <div class="stat-label">Mean Speedup</div>
-            </div>
-            <div class="stat-card green">
-                <div class="stat-value">{f"{aggregate_stats['median_speedup']:.2f}x" if aggregate_stats['median_speedup'] is not None else "N/A"}</div>
-                <div class="stat-label">Median Speedup</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">{aggregate_stats['total_time_saved_ms']:.0f}ms</div>
-                <div class="stat-label">Total Time Saved</div>
-            </div>
-            <div class="stat-card orange">
-                <div class="stat-value">{aggregate_stats['num_regressions']}</div>
-                <div class="stat-label">Regressions</div>
-            </div>
-        </div>
-
-        {chart_html}
-
-        <h2>Detailed Results</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Test Name</th>
-                    <th>EAV (ms)</th>
-                    <th>JSONB (ms)</th>
-                    <th>Speedup</th>
-                    <th>Time Saved (ms)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {''.join(html_rows)}
-            </tbody>
-        </table>
-
-        <h2>Legend</h2>
-        <ul>
-            <li><span style="background:#e8f5e9;padding:2px 8px;">Green rows</span> = Significant improvement (>1.5x speedup)</li>
-            <li><span style="background:#ffebee;padding:2px 8px;">Red rows</span> = Regression (JSONB slower than EAV)</li>
-            <li>Speedup = EAV time / JSONB time (higher is better)</li>
-        </ul>
-    </div>
-</body>
-</html>"""
-
-        with open("repairs_perf_report.html", "w") as f:
-            f.write(html_template)
-
-        # =====================================================================
-        # 10. FINAL OUTPUT
-        # =====================================================================
         print("\n" + "=" * 100)
         print("Reports generated:")
-        print(f"  - perf_timings.json (backward compatible)")
-        print(f"  - repairs_perf_results.json (detailed JSON)")
-        print(f"  - repairs_perf_report.html (visual report)")
-        if chart_images:
-            print(f"  - repairs_perf_bar_chart.png")
-            print(f"  - repairs_perf_speedup_hist.png")
-            print(f"  - repairs_perf_waterfall.png")
+        print("  - perf_timings.json")
+        print("  - perf_results.json")
         print("=" * 100)
 
     except Exception as e:
         # Error handling: ensure basic output even if report generation fails
         print(f"\n⚠️ Error generating performance reports: {e}")
         traceback.print_exc()
-        # Still try to write basic JSON
         try:
             with open("perf_timings.json", "w") as f:
                 json.dump({"records": TIMING_RECORDS, "error": str(e)}, f, indent=2)
@@ -2159,40 +1447,7 @@ REPAIRS_CONTEXT_PATH = "Assistant/Files/Local/_Users_yushaar____tranet_repairs_M
 
 
 @pytest.fixture(scope="session")
-def repairs_eav_project(_engine_session_prod: Engine) -> Generator[str, None, None]:
-    """
-    Session-scoped fixture that retrieves the existing RepairsAgent_EAV project.
-
-    :param _engine_session_prod: SQLAlchemy database engine connected to production DB.
-    :yield: Project name for RepairsAgent_EAV (used by the API)
-    :raises ValueError: If project is not found in the database
-    """
-    from orchestra.db.models.orchestra_models import Project
-
-    SessionLocal = sessionmaker(bind=_engine_session_prod, expire_on_commit=False)
-    session = SessionLocal()
-
-    try:
-        # Query project directly by name (doesn't require user_id)
-        project = (
-            session.query(Project).filter(Project.name == "RepairsAgent_EAV").first()
-        )
-
-        if not project:
-            raise ValueError(
-                "RepairsAgent_EAV project not found. Please ensure the project "
-                "exists in the database before running performance tests.",
-            )
-
-        print(f"Found RepairsAgent_EAV project: {project.name} (ID: {project.id})")
-        yield project.name
-
-    finally:
-        session.close()
-
-
-@pytest.fixture(scope="session")
-def repairs_jsonb_project(_engine_session_prod: Engine) -> Generator[str, None, None]:
+def repairs_project(_engine_session_prod: Engine) -> Generator[str, None, None]:
     """
     Session-scoped fixture that retrieves the existing RepairsAgent_JSONB project.
 
@@ -2227,13 +1482,13 @@ def repairs_jsonb_project(_engine_session_prod: Engine) -> Generator[str, None, 
 @pytest.fixture(scope="session")
 def repairs_context(
     _engine_session_prod: Engine,
-    repairs_eav_project: str,
+    repairs_project: str,
 ) -> Generator[str, None, None]:
     """
     Session-scoped fixture that retrieves the context name for RepairsDemo data.
 
     :param _engine_session_prod: SQLAlchemy database engine connected to production DB.
-    :param repairs_eav_project: Project name for the EAV project (used to verify context exists).
+    :param repairs_project: Project name for the RepairsAgent project.
     :yield: Context name (path) for the RepairsDemo context (used by the API)
     :raises ValueError: If context is not found in the database
     """
@@ -2244,12 +1499,10 @@ def repairs_context(
 
     try:
         # Query project directly by name
-        project = (
-            session.query(Project).filter(Project.name == repairs_eav_project).first()
-        )
+        project = session.query(Project).filter(Project.name == repairs_project).first()
 
         if not project:
-            raise ValueError(f"Project {repairs_eav_project} not found")
+            raise ValueError(f"Project {repairs_project} not found")
 
         # Query context by project_id and name
         context = (
@@ -2279,24 +1532,17 @@ def repairs_context(
 @pytest.fixture(scope="session")
 def large_repairs_dataset(
     _engine_session_prod: Engine,
-    repairs_eav_project: str,
-    repairs_jsonb_project: str,
+    repairs_project: str,
     repairs_context: str,
 ) -> Generator[None, None, None]:
     """
     Session-scoped fixture that creates ~40k log events for RepairsDemo performance testing.
 
-    Creates bulk data for both EAV and JSONB projects to enable comparative performance
-    testing. Uses realistic RepairsDemo field values with 80% realistic patterns and
+    Uses realistic RepairsDemo field values with 80% realistic patterns and
     20% randomized variations.
 
-    Note: This fixture does NOT toggle JSONB mode via the `/_debug/jsonb_mode` endpoint.
-    It only creates raw database records. Tests are responsible for toggling JSONB mode
-    as needed using the `toggle_jsonb_mode` helper function before executing queries.
-
     :param _engine_session_prod: SQLAlchemy database engine connected to production DB.
-    :param repairs_eav_project: Project name for RepairsAgent_EAV.
-    :param repairs_jsonb_project: Project name for RepairsAgent_JSONB.
+    :param repairs_project: Project name for RepairsAgent.
     :param repairs_context: Context name (path) for the RepairsDemo context.
     :yield: Nothing (data is available in database during test session)
     """
@@ -2304,7 +1550,6 @@ def large_repairs_dataset(
 
     from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.field_type_dao import FieldTypeDAO
-    from orchestra.db.dao.log_dao import LogDAO
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.models.orchestra_models import (
         Context,
@@ -2316,36 +1561,25 @@ def large_repairs_dataset(
     SessionLocal = sessionmaker(bind=_engine_session_prod, expire_on_commit=False)
     session = SessionLocal()
 
-    # Create separate deterministic RNGs for EAV and JSONB data generation
-    # to avoid cross-project coupling in generated data
-    rng_eav = random.Random(5678)
-    rng_jsonb = random.Random(5678)
+    rng = random.Random(5678)
 
     # Track IDs for cleanup
-    created_eav_event_ids = []
-    created_jsonb_event_ids = []
+    created_event_ids = []
 
     try:
-        # Look up project IDs from names for database operations
+        # Look up project ID from name
+        project = session.query(Project).filter(Project.name == repairs_project).first()
 
-        eav_project = (
-            session.query(Project).filter(Project.name == repairs_eav_project).first()
-        )
-        jsonb_project = (
-            session.query(Project).filter(Project.name == repairs_jsonb_project).first()
-        )
+        if not project:
+            raise ValueError("Could not find project by name")
 
-        if not eav_project or not jsonb_project:
-            raise ValueError("Could not find EAV or JSONB project by name")
-
-        eav_project_id = eav_project.id
-        jsonb_project_id = jsonb_project.id
+        project_id = project.id
 
         # Look up context ID from name
         context_obj = (
             session.query(Context)
             .filter(
-                Context.project_id == eav_project_id,
+                Context.project_id == project_id,
                 Context.name == repairs_context,
             )
             .first()
@@ -2359,10 +1593,10 @@ def large_repairs_dataset(
             text(
                 """
                 SELECT COUNT(*) FROM log_event
-                WHERE project_id IN (:eav_id, :jsonb_id) AND id > 1000
+                WHERE project_id = :project_id AND id > 1000
                 """,
             ),
-            {"eav_id": eav_project_id, "jsonb_id": jsonb_project_id},
+            {"project_id": project_id},
         ).scalar()
 
         if existing_count and existing_count > 0:
@@ -2376,7 +1610,6 @@ def large_repairs_dataset(
         context_dao = ContextDAO(session=session)
         field_type_dao = FieldTypeDAO(session=session)
         log_event_dao = LogEventDAO(session=session)
-        log_dao = LogDAO(session=session, context_dao=context_dao)
 
         # Number of events to create (configurable via env var)
         num_events = int(os.getenv("ORCHESTRA_PERF_REPAIRS_COUNT", "40000"))
@@ -2384,102 +1617,41 @@ def large_repairs_dataset(
 
         print(f"Creating {num_events} log events for RepairsDemo performance tests...")
 
-        # Register field types for RepairsDemo fields for BOTH projects
-        # so that both EAV and JSONB projects have matching FieldType rows
-        print("Registering field types for both EAV and JSONB projects...")
+        # Register field types for RepairsDemo fields
+        print("Registering field types...")
         field_types_data = []
-        rng_field_types = random.Random(
-            5678,
-        )  # Separate RNG for field type sample values
+        rng_field_types = random.Random(5678)
 
-        for pid in [eav_project_id, jsonb_project_id]:
-            for field_name in REPAIRS_DEMO_FIELDS:
-                field_types_data.append(
-                    {
-                        "project_id": pid,
-                        "field_name": field_name,
-                        "value": _make_repairs_value(field_name, 0, rng_field_types),
-                        "context_id": context_id,
-                        "mutable": True,
-                        "field_category": "entry",
-                    },
-                )
+        for field_name in REPAIRS_DEMO_FIELDS:
+            field_types_data.append(
+                {
+                    "project_id": project_id,
+                    "field_name": field_name,
+                    "value": _make_repairs_value(field_name, 0, rng_field_types),
+                    "context_id": context_id,
+                    "mutable": True,
+                    "field_category": "entry",
+                },
+            )
 
-            # Register embedding fields
-            for emb_field in REPAIRS_DEMO_EMBEDDINGS:
-                field_types_data.append(
-                    {
-                        "project_id": pid,
-                        "field_name": emb_field,
-                        "value": [0.0] * 1536,  # Mock embedding
-                        "context_id": context_id,
-                        "mutable": True,
-                        "field_category": "entry",
-                        "field_type": "List[float]",
-                    },
-                )
-
-            # Reset RNG for consistent sample values across projects
-            rng_field_types = random.Random(5678)
+        # Register embedding fields
+        for emb_field in REPAIRS_DEMO_EMBEDDINGS:
+            field_types_data.append(
+                {
+                    "project_id": project_id,
+                    "field_name": emb_field,
+                    "value": [0.0] * 1536,  # Mock embedding
+                    "context_id": context_id,
+                    "mutable": True,
+                    "field_category": "entry",
+                    "field_type": "List[float]",
+                },
+            )
 
         field_type_dao.bulk_create_field_types(field_types_data)
 
-        # === Create EAV project data ===
-        print(f"Creating {num_events} log events for EAV project...")
-
-        for batch_start in range(0, num_events, batch_size):
-            batch_count = min(batch_size, num_events - batch_start)
-
-            # Create log events
-            log_event_ids = log_event_dao.bulk_create(
-                project_id=eav_project_id,
-                count=batch_count,
-                context_id=context_id,
-            )
-            created_eav_event_ids.extend(log_event_ids)
-
-            # Create log entries for each event
-            entries = []
-            for i, log_event_id in enumerate(log_event_ids):
-                event_num = batch_start + i
-
-                # Create entries for all 30 RepairsDemo fields
-                for field_name in REPAIRS_DEMO_FIELDS:
-                    value = _make_repairs_value(field_name, event_num, rng_eav)
-                    entries.append(
-                        {
-                            "project_id": eav_project_id,
-                            "log_event_id": log_event_id,
-                            "key": field_name,
-                            "value": value,
-                            "context_id": context_id,
-                        },
-                    )
-
-                # Create mock embeddings (1536-dim vectors with small random values)
-                for emb_field in REPAIRS_DEMO_EMBEDDINGS:
-                    mock_embedding = [rng_eav.gauss(0, 0.1) for _ in range(1536)]
-                    entries.append(
-                        {
-                            "project_id": eav_project_id,
-                            "log_event_id": log_event_id,
-                            "key": emb_field,
-                            "value": mock_embedding,
-                            "context_id": context_id,
-                            "explicit_types": {emb_field: {"type": "List[float]"}},
-                        },
-                    )
-
-            # Bulk create log entries
-            log_dao.bulk_create(entries)
-
-            if (batch_start + batch_count) % 5000 == 0:
-                print(f"  EAV: Created {batch_start + batch_count}/{num_events} events")
-
-        print(f"  EAV: Completed {num_events} events")
-
-        # === Create JSONB project data ===
-        print(f"Creating {num_events} log events for JSONB project...")
+        # Create log events with JSONB data
+        print(f"Creating {num_events} log events...")
 
         ts = datetime.now()
 
@@ -2497,15 +1669,15 @@ def large_repairs_dataset(
                     data[field_name] = _make_repairs_value(
                         field_name,
                         event_num,
-                        rng_jsonb,
+                        rng,
                     )
 
                 # Add mock embeddings
                 for emb_field in REPAIRS_DEMO_EMBEDDINGS:
-                    data[emb_field] = [rng_jsonb.gauss(0, 0.1) for _ in range(1536)]
+                    data[emb_field] = [rng.gauss(0, 0.1) for _ in range(1536)]
 
                 log_event = LogEvent(
-                    project_id=jsonb_project_id,
+                    project_id=project_id,
                     data=data,
                     created_at=ts,
                     updated_at=ts,
@@ -2517,7 +1689,7 @@ def large_repairs_dataset(
 
             # Get IDs and create context associations
             for log_event in log_events:
-                created_jsonb_event_ids.append(log_event.id)
+                created_event_ids.append(log_event.id)
                 session.add(
                     LogEventContext(
                         log_event_id=log_event.id,
@@ -2528,14 +1700,11 @@ def large_repairs_dataset(
             session.flush()
 
             if (batch_start + batch_count) % 5000 == 0:
-                print(
-                    f"  JSONB: Created {batch_start + batch_count}/{num_events} events",
-                )
+                print(f"  Created {batch_start + batch_count}/{num_events} events")
 
         session.commit()
-        print(f"  JSONB: Completed {num_events} events")
         print(
-            f"RepairsDemo bulk data creation complete: {len(created_eav_event_ids)} EAV + {len(created_jsonb_event_ids)} JSONB events",
+            f"RepairsDemo bulk data creation complete: {len(created_event_ids)} events",
         )
 
         yield
@@ -2545,24 +1714,15 @@ def large_repairs_dataset(
         print("Cleaning up RepairsDemo bulk data...")
 
         try:
-            if created_eav_event_ids:
+            if created_event_ids:
                 # Delete in batches to avoid memory issues
-                for i in range(0, len(created_eav_event_ids), 1000):
-                    batch_ids = created_eav_event_ids[i : i + 1000]
+                for i in range(0, len(created_event_ids), 1000):
+                    batch_ids = created_event_ids[i : i + 1000]
                     session.execute(
                         delete(LogEvent).where(LogEvent.id.in_(batch_ids)),
                     )
                 session.commit()
-                print(f"  Cleaned up {len(created_eav_event_ids)} EAV events")
-
-            if created_jsonb_event_ids:
-                for i in range(0, len(created_jsonb_event_ids), 1000):
-                    batch_ids = created_jsonb_event_ids[i : i + 1000]
-                    session.execute(
-                        delete(LogEvent).where(LogEvent.id.in_(batch_ids)),
-                    )
-                session.commit()
-                print(f"  Cleaned up {len(created_jsonb_event_ids)} JSONB events")
+                print(f"  Cleaned up {len(created_event_ids)} events")
 
         except Exception as e:
             print(f"Warning: Failed to cleanup bulk data: {e}")

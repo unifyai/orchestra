@@ -9,20 +9,6 @@ from yarl import URL
 
 TEMP_DIR = Path(gettempdir())
 
-# Runtime storage mode override for testing
-_use_jsonb_override: Optional[bool] = None
-
-
-def set_jsonb_mode(enabled: Optional[bool]) -> None:
-    """
-    Override storage mode at runtime.
-
-    Args:
-        enabled: Storage mode flag (None uses environment variable).
-    """
-    global _use_jsonb_override
-    _use_jsonb_override = enabled
-
 
 class LogLevel(str, enum.Enum):  # noqa: WPS600
     """Possible log levels."""
@@ -252,24 +238,6 @@ class Settings(BaseSettings):
             path=f"/{self.db_base}",
             query=self.db_path_query,
         )
-
-    @property
-    def use_jsonb_queries(self) -> bool:
-        """
-        Enable JSONB-based query builder.
-
-        Checks runtime override, then environment variable.
-
-        :return: True if JSONB queries are enabled.
-        """
-        if _use_jsonb_override is not None:
-            return _use_jsonb_override
-        return os.environ.get("ORCHESTRA_USE_JSONB_QUERIES", "true").lower() == "true"
-
-    @use_jsonb_queries.setter
-    def use_jsonb_queries(self, value: bool) -> None:
-        """Set JSONB mode override (for testing)."""
-        set_jsonb_mode(value)
 
     @property
     def use_aggregation_cte_optimization(self) -> bool:

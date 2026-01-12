@@ -1,29 +1,17 @@
 """
-Versioning Tests - Dual-Mode Coverage (EAV + JSONB)
+Versioning Tests
 
-This test suite validates Orchestra's versioning system in both EAV and JSONB modes.
-All tests are parametrized with use_jsonb_mode fixture to run in both modes unless
-explicitly marked as mode-specific.
-
-MODE-SPECIFIC TESTS:
-- @requires_eav_mode: Tests that rely on EAV-only features (e.g., shared logs via copy=False)
-- JSONB-only tests: Tests that validate JSONB-specific features (e.g., TOAST, key_order)
+This test suite validates Orchestra's versioning system.
 
 VERSIONING ARCHITECTURE:
-- EAV mode: Uses LogVersion table (per-field snapshots) + Log/LogEventLog reconstruction
-- JSONB mode: Uses LogEventVersion table (per-event JSONB snapshots) + direct data restore
+- Uses LogEventVersion table (per-event JSONB snapshots) for version tracking
+- Rollback restores data directly from snapshots
 
-PERFORMANCE EXPECTATIONS:
-- JSONB snapshot creation: 2-10x faster (bulk insert vs N inserts)
-- JSONB rollback: 2-3x faster (no Log/JSONLog recreation)
-- Storage: JSONB uses ~3-4x more space (full document duplication vs EAV dedup)
-
-See conftest.py for dual-mode testing infrastructure and performance tracking.
+See conftest.py for testing infrastructure and performance tracking.
 """
 import pytest
 from httpx import AsyncClient
 
-from orchestra.conftest import requires_eav_mode
 from orchestra.tests.test_log import (
     HEADERS,
     _create_log,
@@ -34,7 +22,7 @@ from orchestra.tests.test_log import (
 
 
 @pytest.mark.anyio
-async def test_basic_commit_and_rollback(client: AsyncClient, use_jsonb_mode):
+async def test_basic_commit_and_rollback(client: AsyncClient):
     """
     Tests the core project-level functionality:
     1. Create a log and commit (v1).
@@ -110,7 +98,7 @@ async def test_basic_commit_and_rollback(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_rollback_with_structural_changes(client: AsyncClient, use_jsonb_mode):
+async def test_rollback_with_structural_changes(client: AsyncClient):
     """
     Tests that rollback correctly handles logs being added and removed.
     1. Create log_A and log_B, then commit.
@@ -201,7 +189,7 @@ async def test_rollback_with_structural_changes(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_context_level_commit_and_rollback(client: AsyncClient, use_jsonb_mode):
+async def test_context_level_commit_and_rollback(client: AsyncClient):
     """
     Tests that committing and rolling back a single context works and
     does not affect other contexts.
@@ -284,7 +272,7 @@ async def test_context_level_commit_and_rollback(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_commit_history_endpoints(client: AsyncClient, use_jsonb_mode):
+async def test_commit_history_endpoints(client: AsyncClient):
     """
     Tests the project and context commit history endpoints.
     """
@@ -363,7 +351,6 @@ async def test_commit_history_endpoints(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_project_rollback_ignores_context_commits(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Tests that a project-level rollback correctly restores its state,
@@ -440,7 +427,7 @@ async def test_project_rollback_ignores_context_commits(
 
 
 @pytest.mark.anyio
-async def test_project_level_branching(client: AsyncClient, use_jsonb_mode):
+async def test_project_level_branching(client: AsyncClient):
     """
     Tests project-level version branching functionality:
     1. Create a log and commit (commit A)
@@ -571,7 +558,7 @@ async def test_project_level_branching(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_context_level_branching(client: AsyncClient, use_jsonb_mode):
+async def test_context_level_branching(client: AsyncClient):
     """
     Tests context-level version branching functionality using context-specific endpoints.
     Mirrors the project-level branching test but uses context commit/rollback endpoints.
@@ -697,7 +684,7 @@ async def test_context_level_branching(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_branching_history_endpoints(client: AsyncClient, use_jsonb_mode):
+async def test_branching_history_endpoints(client: AsyncClient):
     """
     Tests that commit history endpoints return the correct branching information
     and that the new fields are present even in linear histories.
@@ -802,219 +789,13 @@ async def test_branching_history_endpoints(client: AsyncClient, use_jsonb_mode):
     assert proj_in_ctx["type"] == "project"
 
 
-@requires_eav_mode
-@pytest.mark.anyio
-async def test_rollback_with_shared_logs(client: AsyncClient, use_jsonb_mode):
-    """
-    Tests rollback when logs are shared between multiple LogEvents (many-to-many).
-    Ensures that LogVersion correctly captures each log's state for each LogEvent association.
-
-    EAV MODE BEHAVIOR:
-    - Multiple LogEvent rows can reference the same Log row via LogEventLog
-    - copy=False creates shared references (space-efficient)
-    - LogVersion snapshots each Log once per LogEvent association
-
-    JSONB MODE BEHAVIOR:
-    - Not supported: Each LogEvent has its own data JSONB column
-    - copy=False would need to duplicate data (no true sharing)
-    - Test is skipped in JSONB mode via @requires_eav_mode decorator
-    """
-    project_name = "test_shared_logs_rollback"
-    context1_name = "context_with_shared_logs_1"
-    context2_name = "context_with_shared_logs_2"
-
-    # Setup: Create a versioned project and two contexts
-    await client.post(
-        "/v0/project",
-        json={"name": project_name, "is_versioned": True},
-        headers=HEADERS,
-    )
-    await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": context1_name, "is_versioned": True},
-        headers=HEADERS,
-    )
-    await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": context2_name, "is_versioned": True},
-        headers=HEADERS,
-    )
-
-    # Create initial logs in context1
-    await _create_log(
-        client,
-        project_name,
-        context={"name": context1_name},
-        entries={"shared_key": "original_value"},
-    )
-    await _create_log(
-        client,
-        project_name,
-        context={"name": context1_name},
-        entries={"unique_to_ctx1": "unique_data"},
-    )
-
-    # Get the log IDs from context1
-    logs_ctx1 = await fetch_logs(client, project_name, context=context1_name)
-    shared_log_id = next(
-        log["id"] for log in logs_ctx1 if "shared_key" in log["entries"]
-    )
-
-    # Add the shared log to context2 (copy=False means it shares the same log)
-    add_logs_res = await client.post(
-        f"/v0/project/{project_name}/contexts/add_logs",
-        json={
-            "context_name": context2_name,
-            "log_ids": [shared_log_id],
-            "copy": False,  # This creates a many-to-many relationship
-        },
-        headers=HEADERS,
-    )
-    assert add_logs_res.status_code == 200
-
-    # Also create a unique log in context2
-    await _create_log(
-        client,
-        project_name,
-        context={"name": context2_name},
-        entries={"unique_to_ctx2": "ctx2_specific"},
-    )
-
-    # Verify both contexts have the expected logs
-    logs_ctx1_before = await fetch_logs(client, project_name, context=context1_name)
-    assert len(logs_ctx1_before) == 2
-
-    logs_ctx2_before = await fetch_logs(client, project_name, context=context2_name)
-    assert len(logs_ctx2_before) == 2
-
-    # The shared log should have the same values in both contexts
-    shared_in_ctx1 = next(
-        log for log in logs_ctx1_before if "shared_key" in log["entries"]
-    )
-    shared_in_ctx2 = next(
-        log for log in logs_ctx2_before if "shared_key" in log["entries"]
-    )
-    assert shared_in_ctx1["entries"]["shared_key"] == "original_value"
-    assert shared_in_ctx2["entries"]["shared_key"] == "original_value"
-
-    # Commit to create version history
-    commit_res = await client.post(
-        f"/v0/project/{project_name}/commit",
-        json={"commit_message": "Initial state with shared log"},
-        headers=HEADERS,
-    )
-    assert commit_res.status_code == 200
-    commit_hash = commit_res.json()["commit_hash"]
-
-    # Now update the shared log (this will affect both contexts)
-    update_res = await _update_logs(
-        client,
-        [shared_log_id],
-        {"shared_key": "updated_value", "new_field": "added_after_commit"},
-        context={"name": context1_name},
-        overwrite=True,  # Need to overwrite to update existing fields
-    )
-    assert update_res.status_code == 200, f"Update failed: {update_res.text}"
-
-    # Delete the unique log from context1
-    unique_ctx1_log_id = next(
-        log["id"] for log in logs_ctx1_before if "unique_to_ctx1" in log["entries"]
-    )
-    await _delete_logs(
-        client,
-        log_ids=[([unique_ctx1_log_id], None)],
-        project_name=project_name,
-        context=context1_name,
-    )
-
-    # Add a new log to context2
-    await _create_log(
-        client,
-        project_name,
-        context={"name": context2_name},
-        entries={"new_in_ctx2": "created_after_commit"},
-    )
-
-    # Verify the changes before rollback
-    logs_ctx1_after_changes = await fetch_logs(
-        client,
-        project_name,
-        context=context1_name,
-    )
-    logs_ctx2_after_changes = await fetch_logs(
-        client,
-        project_name,
-        context=context2_name,
-    )
-
-    # Context1 should have 1 log (shared log only, unique was deleted)
-    assert len(logs_ctx1_after_changes) == 1
-    assert logs_ctx1_after_changes[0]["entries"]["shared_key"] == "updated_value"
-    assert logs_ctx1_after_changes[0]["entries"]["new_field"] == "added_after_commit"
-
-    # Context2 should have 3 logs (shared + original unique + new)
-    assert len(logs_ctx2_after_changes) == 3
-
-    # Rollback to the committed state
-    rollback_res = await client.post(
-        f"/v0/project/{project_name}/rollback",
-        json={"commit_hash": commit_hash},
-        headers=HEADERS,
-    )
-    assert rollback_res.status_code == 200
-
-    # Verify rollback restored the original state
-    logs_ctx1_after_rollback = await fetch_logs(
-        client,
-        project_name,
-        context=context1_name,
-    )
-    logs_ctx2_after_rollback = await fetch_logs(
-        client,
-        project_name,
-        context=context2_name,
-    )
-
-    # Context1 should have 2 logs again
-    assert len(logs_ctx1_after_rollback) == 2
-
-    # Context2 should have 2 logs (shared + its original unique)
-    assert len(logs_ctx2_after_rollback) == 2
-
-    # Verify the shared log was restored to original value in both contexts
-    shared_ctx1_rollback = next(
-        log for log in logs_ctx1_after_rollback if "shared_key" in log["entries"]
-    )
-    shared_ctx2_rollback = next(
-        log for log in logs_ctx2_after_rollback if "shared_key" in log["entries"]
-    )
-
-    assert shared_ctx1_rollback["entries"]["shared_key"] == "original_value"
-    assert shared_ctx2_rollback["entries"]["shared_key"] == "original_value"
-    assert "new_field" not in shared_ctx1_rollback["entries"]
-    assert "new_field" not in shared_ctx2_rollback["entries"]
-
-    # Verify unique logs were restored
-    assert any(
-        log["entries"].get("unique_to_ctx1") == "unique_data"
-        for log in logs_ctx1_after_rollback
-    )
-    assert any(
-        log["entries"].get("unique_to_ctx2") == "ctx2_specific"
-        for log in logs_ctx2_after_rollback
-    )
-
-    # The new log created after commit should not exist
-    assert not any("new_in_ctx2" in log["entries"] for log in logs_ctx2_after_rollback)
-
-
 # =============================================================================
 # JSONB-Specific Versioning Tests
 # =============================================================================
 
 
 @pytest.mark.anyio
-async def test_jsonb_large_document_versioning(client: AsyncClient, use_jsonb_mode):
+async def test_jsonb_large_document_versioning(client: AsyncClient):
     """
     Tests versioning with large JSONB documents (>8KB) that trigger PostgreSQL TOAST storage.
 
@@ -1022,11 +803,7 @@ async def test_jsonb_large_document_versioning(client: AsyncClient, use_jsonb_mo
     storage threshold. This test ensures LogEventVersion correctly snapshots and restores
     large TOASTed JSONB values.
 
-    EAV mode doesn't have this concern since each Log row stores a single value.
     """
-    if not use_jsonb_mode:
-        pytest.skip("Test is JSONB-specific (large document TOAST storage)")
-
     project_name = "test_large_jsonb_versioning"
     context_name = "large_doc_context"
 
@@ -1098,18 +875,14 @@ async def test_jsonb_large_document_versioning(client: AsyncClient, use_jsonb_mo
 
 
 @pytest.mark.anyio
-async def test_jsonb_key_order_preservation(client: AsyncClient, use_jsonb_mode):
+async def test_jsonb_key_order_preservation(client: AsyncClient):
     """
     Tests that LogEvent.key_order is preserved through commit/rollback cycles.
 
     JSONB mode stores key_order separately to maintain dict insertion order for UI rendering.
     This test ensures key_order is correctly snapshotted in LogEventVersion and restored.
 
-    EAV mode doesn't have this concept since Log rows don't have ordering.
     """
-    if not use_jsonb_mode:
-        pytest.skip("Test is JSONB-specific (key_order field)")
-
     project_name = "test_key_order_versioning"
     context_name = "key_order_context"
 
@@ -1194,18 +967,14 @@ async def test_jsonb_key_order_preservation(client: AsyncClient, use_jsonb_mode)
 
 
 @pytest.mark.anyio
-async def test_jsonb_nested_structure_versioning(client: AsyncClient, use_jsonb_mode):
+async def test_jsonb_nested_structure_versioning(client: AsyncClient):
     """
     Tests versioning of deeply nested dicts and arrays in JSONB mode.
 
     JSONB mode stores complex nested structures in a single data column. This test
     ensures nested modifications are correctly captured and restored.
 
-    EAV mode stores each nested path as a separate Log row, so this behavior differs.
     """
-    if not use_jsonb_mode:
-        pytest.skip("Test is JSONB-specific (nested JSONB structures)")
-
     project_name = "test_nested_jsonb_versioning"
     context_name = "nested_context"
 

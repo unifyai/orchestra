@@ -322,7 +322,7 @@ class TestEdgeCases:
 
 
 @pytest.mark.anyio
-async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
+async def test_nested_array_cascade_delete(client: AsyncClient):
     """Test CASCADE DELETE with nested array FK (images[*].image_id)."""
     # Setup: Create project
     project_name = "test_nested_array_cascade_delete"
@@ -484,7 +484,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_nested_array_cascade_update(client: AsyncClient, use_jsonb_mode):
+async def test_nested_array_cascade_update(client: AsyncClient):
     """Test CASCADE UPDATE with nested array FK (images[*].image_id)."""
     # Setup: Create project
     project_name = "test_nested_array_cascade_update"
@@ -609,7 +609,7 @@ async def test_nested_array_cascade_update(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_nested_array_set_null(client: AsyncClient, use_jsonb_mode):
+async def test_nested_array_set_null(client: AsyncClient):
     """Test SET NULL with nested array FK (images[*].image_id)."""
     # Setup: Create project
     project_name = "test_nested_array_set_null"
@@ -723,7 +723,7 @@ async def test_nested_array_set_null(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_nested_object_cascade_delete(client: AsyncClient, use_jsonb_mode):
+async def test_nested_object_cascade_delete(client: AsyncClient):
     """Test CASCADE DELETE with nested object FK (metadata.author.user_id)."""
     # Setup: Create project
     project_name = "test_nested_object_cascade_delete"
@@ -835,7 +835,7 @@ async def test_nested_object_cascade_delete(client: AsyncClient, use_jsonb_mode)
 
 
 @pytest.mark.anyio
-async def test_nested_object_cascade_update(client: AsyncClient, use_jsonb_mode):
+async def test_nested_object_cascade_update(client: AsyncClient):
     """Test CASCADE UPDATE with nested object FK (metadata.author.user_id)."""
     # Setup: Create project
     project_name = "test_nested_object_cascade_update"
@@ -938,7 +938,7 @@ async def test_nested_object_cascade_update(client: AsyncClient, use_jsonb_mode)
 
 
 @pytest.mark.anyio
-async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
+async def test_deeply_nested_cascade_delete(client: AsyncClient):
     """Test CASCADE DELETE with deeply nested FK (teams[*].members[*].user_id)."""
     # Setup: Create project
     project_name = "test_deeply_nested_cascade_delete"
@@ -1094,7 +1094,6 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode)
 @pytest.mark.anyio
 async def test_nested_fk_multiple_occurrences_update(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test CASCADE UPDATE updates ALL occurrences in nested arrays."""
     # Setup: Create project
@@ -1204,7 +1203,6 @@ async def test_nested_fk_multiple_occurrences_update(
 @pytest.mark.anyio
 async def test_nested_fk_no_cascade_if_value_not_present(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that CASCADE doesn't affect logs without the nested FK value."""
     # Setup: Create project
@@ -1385,7 +1383,6 @@ async def test_nested_fk_no_cascade_if_value_not_present(
 @pytest.mark.anyio
 async def test_nested_fk_validation_prevents_invalid_reference(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that nested FK validation prevents creating logs with invalid references."""
     # Setup: Create project
@@ -1453,7 +1450,7 @@ async def test_nested_fk_validation_prevents_invalid_reference(
 
 
 @pytest.mark.anyio
-async def test_flat_array_validation(client: AsyncClient, use_jsonb_mode):
+async def test_flat_array_validation(client: AsyncClient):
     """Test validation of flat array FK (e.g., image_ids[*])."""
     project_name = "test_flat_array_validation"
     await _create_project(client, project_name)
@@ -1534,7 +1531,7 @@ async def test_flat_array_validation(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
+async def test_flat_array_cascade_delete(client: AsyncClient):
     """Test CASCADE DELETE with flat array FK - removes array elements."""
     project_name = "test_flat_array_cascade_delete"
     await _create_project(client, project_name)
@@ -1641,7 +1638,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_jsonb_mode):
+async def test_nested_array_objects_cascade_delete(client: AsyncClient):
     """Test CASCADE DELETE with nested array of objects - removes matching objects."""
     project_name = "test_nested_array_cascade_delete"
     await _create_project(client, project_name)
@@ -1756,7 +1753,6 @@ async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_json
 @pytest.mark.anyio
 async def test_nested_object_no_wildcard_cascade_delete(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test CASCADE DELETE with non-wildcard nested path - deletes entire log."""
     project_name = "test_nested_object_cascade"
@@ -1848,7 +1844,7 @@ async def test_nested_object_no_wildcard_cascade_delete(
 
 
 @pytest.mark.anyio
-async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
+async def test_deep_nested_cascade_delete(client: AsyncClient):
     """Test CASCADE DELETE with deep nesting - removes nested member objects."""
     project_name = "test_deep_nested_cascade"
     await _create_project(client, project_name)
@@ -1977,7 +1973,7 @@ async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
+async def test_flat_array_cascade_update(client: AsyncClient):
     """Test CASCADE UPDATE with flat array FK."""
     project_name = "test_flat_array_cascade_update"
     await _create_project(client, project_name)
@@ -2083,7 +2079,7 @@ async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
+async def test_flat_array_set_null(client: AsyncClient):
     """Test SET NULL with flat array FK."""
     project_name = "test_flat_array_set_null"
     await _create_project(client, project_name)
@@ -2190,7 +2186,7 @@ async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_flat_array_multiple_occurrences(client: AsyncClient, use_jsonb_mode):
+async def test_flat_array_multiple_occurrences(client: AsyncClient):
     """Test SET NULL with multiple occurrences of the same value."""
     project_name = "test_flat_array_multiple"
     await _create_project(client, project_name)
@@ -2277,7 +2273,7 @@ async def test_flat_array_multiple_occurrences(client: AsyncClient, use_jsonb_mo
 
 
 @pytest.mark.anyio
-async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
+async def test_flat_array_mixed_operations(client: AsyncClient):
     """Test multiple SET NULL operations on the same array."""
     project_name = "test_flat_array_mixed"
     await _create_project(client, project_name)
@@ -2410,7 +2406,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_nested_fk_empty_array_no_error(client: AsyncClient, use_jsonb_mode):
+async def test_nested_fk_empty_array_no_error(client: AsyncClient):
     """Empty arrays should not trigger FK validation errors.
 
     Regression test for bug where empty arrays in nested FKs would throw
@@ -2482,7 +2478,7 @@ async def test_nested_fk_empty_array_no_error(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_nested_fk_missing_field_no_error(client: AsyncClient, use_jsonb_mode):
+async def test_nested_fk_missing_field_no_error(client: AsyncClient):
     """Missing nested FK fields should not trigger validation errors."""
     project_name = "test_nested_fk_missing_field"
     await _create_project(client, project_name)

@@ -10,9 +10,9 @@ from . import HEADERS, _create_project, _create_several_logs
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_sorting(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_w_sorting(client: AsyncClient):
     """Test sorting by numeric field (temperature) in ascending/descending order."""
-    project_name = f"eval-project-sorting-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"eval-project-sorting-jsonb"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
 
@@ -179,9 +179,9 @@ async def test_get_logs_w_sorting(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_timestamp_sorting(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
     """Test sorting by timestamp field with dynamically created timestamps."""
-    project_name = f"eval-project-ts-sort-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"eval-project-ts-sort-jsonb"
     _ = await _create_project(client, project_name)
     data = log_data["logs_for_various"]
     timestamps = list()
@@ -257,9 +257,9 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient, use_jsonb_mode)
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_date_sorting(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_w_date_sorting(client: AsyncClient):
     """Test sorting by date field with fixed dates."""
-    project_name = f"eval-project-date-sort-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"eval-project-date-sort-jsonb"
     _ = await _create_project(client, project_name)
     data = log_data["logs_for_various"]
     dates = list()
@@ -337,10 +337,9 @@ async def test_get_logs_w_date_sorting(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_get_logs_w_dynamic_expression_sorting(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test sorting by a dynamic expression (e.g., round(_/temperature, 1))."""
-    project_name = f"expr-project-sort-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = f"expr-project-sort-jsonb"
     await _create_project(client, project_name)
     await _create_several_logs(client, project_name)
 
