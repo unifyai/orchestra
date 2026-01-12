@@ -7,9 +7,9 @@ from . import HEADERS, _create_log, _create_project
 
 
 @pytest.mark.anyio
-async def test_create_log_weakly_typed(client: AsyncClient, use_jsonb_mode):
+async def test_create_log_weakly_typed(client: AsyncClient):
     """Test that implicitly created fields always have type 'Any'."""
-    project_name = f"test_project-wt-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_project-wt"
     _ = await _create_project(client, project_name)
 
     # Create a log with implicitly typed fields (no POST /logs/fields first)
@@ -62,9 +62,9 @@ async def test_create_log_weakly_typed(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
+async def test_create_log_type_mismatch(client: AsyncClient):
     """Test that type mismatches are caught for explicitly typed fields."""
-    project_name = f"test_project-tm-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_project-tm"
     _ = await _create_project(client, project_name)
 
     # Step 1: Explicitly create strictly typed fields via POST /logs/fields
@@ -138,9 +138,9 @@ async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs_strongly_typed(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_strongly_typed(client: AsyncClient):
     """Test updating logs with implicitly created fields (type 'Any')."""
-    project_name = f"test_project-st-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_project-st"
     _ = await _create_project(client, project_name)
 
     # Create a log first - fields created implicitly will have type "Any"
@@ -178,9 +178,9 @@ async def test_update_logs_strongly_typed(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
+async def test_nonetype_is_weak_type(client: AsyncClient):
     """Test that NoneType is a weak type allowed with any strong type and also standalone."""
-    project_name = f"test_nonetype-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_nonetype"
     _ = await _create_project(client, project_name)
 
     # Create fields with different types
@@ -289,7 +289,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs_previously_none(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_previously_none(client: AsyncClient):
     """Test the field type creation policy.
 
     Policy:
@@ -297,7 +297,7 @@ async def test_update_logs_previously_none(client: AsyncClient, use_jsonb_mode):
     2. Implicit field creation (POST /logs, PUT /logs) → always type "Any"
     3. "Any" fields accept all value types and never change to strict types
     """
-    project_name = f"test_project-pn-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_project-pn"
     _ = await _create_project(client, project_name)
 
     # Part 1: Explicitly created fields have strict types
@@ -440,9 +440,9 @@ async def test_update_logs_previously_none(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_logs_type_mismatch(client: AsyncClient, use_jsonb_mode):
+async def test_update_logs_type_mismatch(client: AsyncClient):
     """Test that type mismatches are caught when updating strictly typed fields."""
-    project_name = f"test_project-utm-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_project-utm"
     _ = await _create_project(client, project_name)
 
     # Step 1: Create strictly typed field via POST /logs/fields
@@ -485,9 +485,9 @@ async def test_update_logs_type_mismatch(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_create_log_with_mutable_fields(client: AsyncClient, use_jsonb_mode):
+async def test_create_log_with_mutable_fields(client: AsyncClient):
     """Test creating fields with explicit mutability settings."""
-    project_name = f"test_mutable_fields-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_mutable_fields"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields with mutability settings
@@ -532,9 +532,9 @@ async def test_create_log_with_mutable_fields(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_create_log_default_mutable(client: AsyncClient, use_jsonb_mode):
-    """Test that implicitly created fields default to mutable."""
-    project_name = f"test_default_mutable-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_create_log_default_immutable(client: AsyncClient):
+    """Test that implicitly created fields default to immutable."""
+    project_name = "test_default_immutable"
     _ = await _create_project(client, project_name)
 
     # Create a log without specifying mutability (should default to mutable)
@@ -589,9 +589,9 @@ async def test_create_log_default_mutable(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_mutable_and_immutable_fields(client: AsyncClient, use_jsonb_mode):
+async def test_update_mutable_and_immutable_fields(client: AsyncClient):
     """Test updating mutable vs immutable fields."""
-    project_name = f"test_mutable_updates-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_mutable_updates"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields with different mutability settings
@@ -664,9 +664,9 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-async def test_update_field_mutability_only(client: AsyncClient, use_jsonb_mode):
+async def test_update_field_mutability_only(client: AsyncClient):
     """Test updating field mutability without changing the value."""
-    project_name = f"test_mutability_update-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_mutability_update"
     _ = await _create_project(client, project_name)
 
     # Create field via POST /logs/fields with mutable=True
@@ -756,9 +756,9 @@ async def test_update_field_mutability_only(client: AsyncClient, use_jsonb_mode)
 
 
 @pytest.mark.anyio
-async def test_create_log_closed_enum(client: AsyncClient, use_jsonb_mode):
+async def test_create_log_closed_enum(client: AsyncClient):
     """Test creating a log with a closed enum type."""
-    project_name = f"test_closed_enum-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_closed_enum"
     _ = await _create_project(client, project_name)
 
     # Create enum field via POST /logs/fields
@@ -815,9 +815,9 @@ async def test_create_log_closed_enum(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_update_log_enum_auto_expand(client: AsyncClient, use_jsonb_mode):
+async def test_update_log_enum_auto_expand(client: AsyncClient):
     """Test that open enums automatically expand when new values are added."""
-    project_name = f"test_enum_auto_expand-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_enum_auto_expand"
     _ = await _create_project(client, project_name)
 
     # Create open enum field via POST /logs/fields
@@ -883,9 +883,9 @@ async def test_update_log_enum_auto_expand(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_create_open_enum_without_values(client: AsyncClient, use_jsonb_mode):
+async def test_create_open_enum_without_values(client: AsyncClient):
     """Test creating open enum without initial values - values are inferred from first log."""
-    project_name = f"test_open_enum_no_values-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_open_enum_no_values"
     _ = await _create_project(client, project_name)
 
     # Create open enum field via POST /logs/fields (without values)
@@ -961,9 +961,9 @@ async def test_create_open_enum_without_values(client: AsyncClient, use_jsonb_mo
 
 
 @pytest.mark.anyio
-async def test_closed_enum_without_values(client: AsyncClient, use_jsonb_mode):
+async def test_closed_enum_without_values(client: AsyncClient):
     """Test creating closed enum that restricts to initially provided values."""
-    project_name = f"test_closed_enum_no_values-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_closed_enum_no_values"
     _ = await _create_project(client, project_name)
 
     # Create closed enum field via POST /logs/fields with initial value
@@ -1032,9 +1032,9 @@ async def test_closed_enum_without_values(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_filter_logs_by_enum(client: AsyncClient, use_jsonb_mode):
+async def test_filter_logs_by_enum(client: AsyncClient):
     """Tests filtering logs by enum values is treated as regular string filtering."""
-    project_name = f"test_enum_filtering-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_enum_filtering"
     _ = await _create_project(client, project_name)
 
     # Create enum field via POST /logs/fields
@@ -1099,10 +1099,9 @@ async def test_filter_logs_by_enum(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_nested_explicit_type_case_insensitive(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that nested explicit types are case-insensitive."""
-    project_name = f"test_nested_case-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_nested_case"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields with different casing
@@ -1157,9 +1156,9 @@ async def test_nested_explicit_type_case_insensitive(
 
 
 @pytest.mark.anyio
-async def test_explicit_type_with_entries(client: AsyncClient, use_jsonb_mode):
+async def test_explicit_type_with_entries(client: AsyncClient):
     """Test explicit types work with entries."""
-    project_name = f"test_entries_explicit_type-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_entries_explicit_type"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields
@@ -1210,9 +1209,9 @@ async def test_explicit_type_with_entries(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_nested_type_persists_across_logs(client: AsyncClient, use_jsonb_mode):
+async def test_nested_type_persists_across_logs(client: AsyncClient):
     """Test that nested type persists when creating multiple logs."""
-    project_name = f"test_type_persistence-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_type_persistence"
     _ = await _create_project(client, project_name)
 
     # Create field with nested type via POST /logs/fields
@@ -1272,7 +1271,7 @@ async def test_nested_type_persists_across_logs(client: AsyncClient, use_jsonb_m
 
 
 @pytest.mark.anyio
-async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_compatible_with_list_str(client: AsyncClient):
     """Test that an empty list [] is accepted for a List[str] typed field.
 
     An empty list is a valid List[str] - it contains zero strings, which
@@ -1282,7 +1281,7 @@ async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_json
     compares it against the strict List[str] type, instead of checking
     structural compatibility.
     """
-    project_name = f"test_empty_list_str-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_list_str"
     _ = await _create_project(client, project_name)
 
     # Create field with strict List[str] type
@@ -1333,9 +1332,9 @@ async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-async def test_empty_list_compatible_with_list_int(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_compatible_with_list_int(client: AsyncClient):
     """Test that an empty list [] is accepted for a List[int] typed field."""
-    project_name = f"test_empty_list_int-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_list_int"
     _ = await _create_project(client, project_name)
 
     # Create field with strict List[int] type
@@ -1380,10 +1379,9 @@ async def test_empty_list_compatible_with_list_int(client: AsyncClient, use_json
 @pytest.mark.anyio
 async def test_empty_dict_compatible_with_dict_str_int(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that an empty dict {} is accepted for a Dict[str, int] typed field."""
-    project_name = f"test_empty_dict-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_dict"
     _ = await _create_project(client, project_name)
 
     # Create field with strict Dict[str, int] type
@@ -1426,9 +1424,9 @@ async def test_empty_dict_compatible_with_dict_str_int(
 
 
 @pytest.mark.anyio
-async def test_empty_list_in_batch_create(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_in_batch_create(client: AsyncClient):
     """Test that empty lists work correctly in batch log creation."""
-    project_name = f"test_empty_list_batch-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_list_batch"
     _ = await _create_project(client, project_name)
 
     # Create field with strict List[str] type
@@ -1485,7 +1483,6 @@ async def test_empty_list_in_batch_create(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_nested_empty_list_in_list_of_lists(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that [[]] is accepted for List[List[str]] typed field.
 
@@ -1496,7 +1493,7 @@ async def test_nested_empty_list_in_list_of_lists(
 
     This requires recursive type comparison with Any-as-wildcard.
     """
-    project_name = f"test_nested_list_list-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_nested_list_list"
     _ = await _create_project(client, project_name)
 
     # Create field with nested List[List[str]] type
@@ -1539,7 +1536,7 @@ async def test_nested_empty_list_in_list_of_lists(
 
 
 @pytest.mark.anyio
-async def test_empty_list_in_dict_value(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_in_dict_value(client: AsyncClient):
     """Test that {"key": []} is accepted for Dict[str, List[int]] typed field.
 
     The value has a dict with string key and empty list value.
@@ -1549,7 +1546,7 @@ async def test_empty_list_in_dict_value(client: AsyncClient, use_jsonb_mode):
 
     This requires recursive type comparison into dict value types.
     """
-    project_name = f"test_dict_with_empty_list-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_dict_with_empty_list"
     _ = await _create_project(client, project_name)
 
     # Create field with Dict[str, List[int]] type
@@ -1592,7 +1589,7 @@ async def test_empty_list_in_dict_value(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_empty_dict_in_list(client: AsyncClient, use_jsonb_mode):
+async def test_empty_dict_in_list(client: AsyncClient):
     """Test that [{}] is accepted for List[Dict[str, int]] typed field.
 
     The value is a list containing one empty dict.
@@ -1602,7 +1599,7 @@ async def test_empty_dict_in_list(client: AsyncClient, use_jsonb_mode):
 
     This requires recursive type comparison into list element types.
     """
-    project_name = f"test_list_with_empty_dict-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_list_with_empty_dict"
     _ = await _create_project(client, project_name)
 
     # Create field with List[Dict[str, int]] type
@@ -1645,7 +1642,7 @@ async def test_empty_dict_in_list(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_deeply_nested_empty_list(client: AsyncClient, use_jsonb_mode):
+async def test_deeply_nested_empty_list(client: AsyncClient):
     """Test that [[[]]] is accepted for List[List[List[str]]] typed field.
 
     Three levels of nesting with empty list at the deepest level.
@@ -1654,7 +1651,7 @@ async def test_deeply_nested_empty_list(client: AsyncClient, use_jsonb_mode):
 
     This tests that the recursive comparison works at arbitrary depth.
     """
-    project_name = f"test_deep_nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_deep_nested"
     _ = await _create_project(client, project_name)
 
     # Create field with deeply nested type
@@ -1697,7 +1694,7 @@ async def test_deeply_nested_empty_list(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_mixed_empty_and_populated_nested(client: AsyncClient, use_jsonb_mode):
+async def test_mixed_empty_and_populated_nested(client: AsyncClient):
     """Test mixed empty and populated containers in nested structures.
 
     Value: [[], ["a", "b"], []]
@@ -1705,7 +1702,7 @@ async def test_mixed_empty_and_populated_nested(client: AsyncClient, use_jsonb_m
 
     Some inner lists are empty, some are populated. All should be accepted.
     """
-    project_name = f"test_mixed_nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_mixed_nested"
     _ = await _create_project(client, project_name)
 
     # Create field with List[List[str]] type

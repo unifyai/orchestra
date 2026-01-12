@@ -65,7 +65,6 @@ from . import HEADERS, _create_log, _create_project
 @pytest.mark.anyio
 async def test_metadata_get_truthiness(
     client: AsyncClient,
-    use_jsonb_mode,
     value,
     should_be_truthy,
     description,
@@ -110,7 +109,6 @@ async def test_metadata_get_truthiness(
 @pytest.mark.anyio
 async def test_missing_key_is_falsy(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that metadata.get('missing_key') is falsy when the key doesn't exist.
@@ -143,7 +141,6 @@ async def test_missing_key_is_falsy(
 @pytest.mark.anyio
 async def test_negated_truthiness(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that `not metadata.get('key')` correctly negates truthiness.
@@ -182,7 +179,6 @@ async def test_negated_truthiness(
 @pytest.mark.anyio
 async def test_chained_truthiness_short_circuit(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test chained truthiness with short-circuit evaluation.
@@ -255,7 +251,6 @@ async def test_chained_truthiness_short_circuit(
 @pytest.mark.anyio
 async def test_membership_with_or_fallback(
     client: AsyncClient,
-    use_jsonb_mode,
     tags_value,
     has_vip,
     description,
@@ -307,7 +302,6 @@ async def test_membership_with_or_fallback(
 @pytest.mark.anyio
 async def test_or_fallback_with_non_empty_default(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test (expr or ['default']) pattern - using non-empty fallback.
@@ -352,7 +346,6 @@ async def test_or_fallback_with_non_empty_default(
 @pytest.mark.anyio
 async def test_nested_or_fallback_pattern(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test deeply nested (expr or []) pattern.
@@ -408,7 +401,6 @@ async def test_nested_or_fallback_pattern(
 @pytest.mark.anyio
 async def test_full_complex_filter(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test a complex filter combining both bug patterns.
@@ -478,7 +470,6 @@ async def test_full_complex_filter(
 @pytest.mark.anyio
 async def test_truthiness_in_or_expression(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test truthiness within an OR expression.
@@ -541,7 +532,6 @@ async def test_truthiness_in_or_expression(
 @pytest.mark.anyio
 async def test_field_not_equals_none_filter(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that `field != None` filter correctly returns logs where field has a value.
@@ -618,7 +608,6 @@ async def test_field_not_equals_none_filter(
 @pytest.mark.anyio
 async def test_field_equals_none_filter(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test `field == None` filter (the equality variant, not just inequality).
@@ -663,7 +652,6 @@ async def test_field_equals_none_filter(
 @pytest.mark.anyio
 async def test_explicit_json_null_vs_missing_key(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that we correctly distinguish between:
@@ -725,7 +713,6 @@ async def test_explicit_json_null_vs_missing_key(
 @pytest.mark.anyio
 async def test_nested_field_none_comparison(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test None comparisons on nested field access like `metadata.nested.field != None`.
@@ -767,7 +754,6 @@ async def test_nested_field_none_comparison(
 @pytest.mark.anyio
 async def test_none_comparison_with_is_operator(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Verify that `is None` and `is not None` still work correctly
@@ -820,7 +806,6 @@ async def test_none_comparison_with_is_operator(
 @pytest.mark.anyio
 async def test_chained_none_comparisons(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test chained None comparisons: `field1 != None and field2 != None`
@@ -857,7 +842,6 @@ async def test_chained_none_comparisons(
 @pytest.mark.anyio
 async def test_none_comparison_with_or(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test None comparisons with OR: `field1 != None or field2 != None`
@@ -899,7 +883,6 @@ async def test_none_comparison_with_or(
 @pytest.mark.anyio
 async def test_none_comparison_after_get_method(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test None comparison on result of .get() method: `metadata.get('key') != None`
@@ -939,7 +922,6 @@ async def test_none_comparison_after_get_method(
 @pytest.mark.anyio
 async def test_mixed_none_and_value_comparison(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test filter combining None check with value comparison:
@@ -977,7 +959,6 @@ async def test_mixed_none_and_value_comparison(
 @pytest.mark.anyio
 async def test_none_in_list_membership(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test None behavior in list membership: `field in [None, 'a', 'b']`
@@ -1030,7 +1011,6 @@ async def test_none_in_list_membership(
 @pytest.mark.anyio
 async def test_truthiness_in_grouping_filter(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that truthiness works correctly in grouping context.

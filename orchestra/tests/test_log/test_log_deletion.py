@@ -1,8 +1,6 @@
 import pytest
 from httpx import AsyncClient
 
-from orchestra.conftest import assert_mode_specific
-
 from . import (
     HEADERS,
     _create_log,
@@ -15,7 +13,7 @@ from . import (
 
 
 @pytest.mark.anyio
-async def test_delete_logs(client: AsyncClient, use_jsonb_mode):
+async def test_delete_logs(client: AsyncClient):
     """Test deleting logs."""
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
@@ -61,7 +59,7 @@ async def test_delete_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_delete_field_for_all_logs(client: AsyncClient, use_jsonb_mode):
+async def test_delete_field_for_all_logs(client: AsyncClient):
     """Test deleting a specific field from all logs when log ID is None."""
     project_name = "delete-field-all-logs"
     _ = await _create_project(client, project_name)
@@ -157,7 +155,7 @@ async def test_delete_field_for_all_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_field_cascaded_delete(client: AsyncClient, use_jsonb_mode):
+async def test_field_cascaded_delete(client: AsyncClient):
     """Test that when a field is deleted from all logs, it is also removed from the field type table."""
     project_name = "field-cascaded-delete"
     _ = await _create_project(client, project_name)
@@ -226,7 +224,7 @@ async def test_field_cascaded_delete(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_delete_log_fields_from_logs(client: AsyncClient, use_jsonb_mode):
+async def test_delete_log_fields_from_logs(client: AsyncClient):
     """Test deleting specific fields from specific logs."""
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
@@ -294,7 +292,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_mode):
+async def test_delete_logs_from_specific_context(client: AsyncClient):
     """Test deleting logs from a specific context while preserving them in other contexts."""
     project_name = "context-specific-deletion"
     _ = await _create_project(client, project_name)
@@ -393,7 +391,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_
 
 
 @pytest.mark.anyio
-async def test_delete_project_deletes_logs(client: AsyncClient, use_jsonb_mode):
+async def test_delete_project_deletes_logs(client: AsyncClient):
     url = "/v0/project/test-project"
     project_name = "test-project"
 
@@ -427,7 +425,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_delete_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
+async def test_delete_logs_by_value_filter(client: AsyncClient):
     """Test deleting logs by value filter instead of explicit IDs."""
     project_name = "filter-deletion-test"
     _ = await _create_project(client, project_name)
@@ -497,7 +495,7 @@ async def test_delete_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
+async def test_delete_empty_fields_flag(client: AsyncClient):
     """Test that the delete_empty_fields flag controls whether fields are removed when no logs use them."""
     project_name = "empty-fields-test"
     _ = await _create_project(client, project_name)
@@ -635,7 +633,6 @@ async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_delete_all_logs_removes_all_fields_when_empty(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that deleting all logs with delete_empty_fields=True removes all unused fields."""
     project_name = "delete-all-logs-fields-test"
@@ -721,7 +718,6 @@ async def test_delete_all_logs_removes_all_fields_when_empty(
 @pytest.mark.anyio
 async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that deleting some logs with delete_empty_fields=True keeps fields used by remaining logs but deletes unused fields."""
     project_name = "partial-log-deletion-field-test"
@@ -839,7 +835,6 @@ async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
 @pytest.mark.anyio
 async def test_delete_logs_keeps_fields_used_by_other_contexts(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that deleting logs with delete_empty_fields=True keeps fields used by logs in other contexts."""
     project_name = "cross-context-field-deletion-test"
@@ -1011,7 +1006,6 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
 @pytest.mark.anyio
 async def test_assistants_3tier_delete_from_global_all_context(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test deleting logs from 'All/Transcripts' also removes from User/All and User/Assistant contexts.
@@ -1100,7 +1094,6 @@ async def test_assistants_3tier_delete_from_global_all_context(
 @pytest.mark.anyio
 async def test_assistants_3tier_delete_from_user_assistant_context(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test deleting logs from 'User/Assistant/Transcripts' also removes from other tiers.
@@ -1188,7 +1181,6 @@ async def test_assistants_3tier_delete_from_user_assistant_context(
 @pytest.mark.anyio
 async def test_assistants_3tier_preserves_unrelated_context(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that logs in an unrelated context are preserved when deleting from 3-tier contexts.
@@ -1286,7 +1278,6 @@ async def test_assistants_3tier_preserves_unrelated_context(
 @pytest.mark.anyio
 async def test_assistants_3tier_partial_siblings_exist(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test deletion when only some sibling contexts exist.
@@ -1348,7 +1339,6 @@ async def test_assistants_3tier_partial_siblings_exist(
 @pytest.mark.anyio
 async def test_assistants_3tier_delete_from_user_all_context(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test deletion from User/All context cascades correctly.
@@ -1436,7 +1426,6 @@ async def test_assistants_3tier_delete_from_user_all_context(
 @pytest.mark.anyio
 async def test_non_assistants_project_normal_behavior(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that non-Assistants projects don't have 3-tier context deletion.
@@ -1511,7 +1500,6 @@ async def test_non_assistants_project_normal_behavior(
 @pytest.mark.anyio
 async def test_assistants_context_without_slash_normal_behavior(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that Assistants project contexts without '/' don't trigger 3-tier deletion.
@@ -1586,7 +1574,6 @@ async def test_assistants_context_without_slash_normal_behavior(
 @pytest.mark.anyio
 async def test_assistants_3tier_delete_fields_preserves_system_fields(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that deleting user fields from Assistants logs preserves _user and _assistant fields.
@@ -1670,7 +1657,6 @@ async def test_assistants_3tier_delete_fields_preserves_system_fields(
 @pytest.mark.anyio
 async def test_assistants_3tier_nested_subcontext(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test 3-tier context deletion with nested subcontexts.
@@ -1748,7 +1734,6 @@ async def test_assistants_3tier_nested_subcontext(
 @pytest.mark.anyio
 async def test_unitytests_3tier_delete_from_global_all_context(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that UnityTests project uses the same 3-tier context deletion as Assistants.
@@ -1837,7 +1822,6 @@ async def test_unitytests_3tier_delete_from_global_all_context(
 @pytest.mark.anyio
 async def test_assistants_3tier_with_prefix(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test 3-tier context deletion with arbitrary prefix before the hierarchy.
@@ -1933,7 +1917,6 @@ async def test_assistants_3tier_with_prefix(
 @pytest.mark.anyio
 async def test_assistants_3tier_with_prefix_and_nested_subcontext(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test 3-tier deletion with both prefix AND nested subcontext.
@@ -2020,7 +2003,6 @@ async def test_assistants_3tier_with_prefix_and_nested_subcontext(
 @pytest.mark.anyio
 async def test_delete_logs_source_type_derived_rejected_in_jsonb(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that source_type='derived' returns different errors in JSONB vs EAV mode.
 
@@ -2047,8 +2029,6 @@ async def test_delete_logs_source_type_derived_rejected_in_jsonb(
 
     assert response.status_code == 400, response.json()
     detail = response.json()["detail"]
-    assert_mode_specific(
-        eav_condition="Cannot delete derived logs without specifying fields" in detail,
-        jsonb_condition="JSONB mode does not distinguish" in detail,
-        message="source_type='derived' rejection messages differ by mode",
-    )
+    assert (
+        "JSONB mode does not distinguish" in detail
+    ), f"Expected JSONB mode error message, got: {detail}"

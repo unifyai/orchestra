@@ -22,7 +22,6 @@ from sqlalchemy import (
     or_,
     select,
     text,
-    union_all,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.expression import ColumnClause
@@ -61,12 +60,12 @@ from ..python2SQL.parsers import str_filter_exp_to_dict
 
 __all__ = [
     "_get_logs_query",
-    "_get_logs_query_jsonb",
+    "_get_logs_query",
     "create_logs_internal",
     "_build_unified_logs_subquery",
     "_flatten_fields",
     "_format_flat_logs",
-    "_format_jsonb_logs",
+    "_format_logs",
     "_get_final_logs",
     "is_image_field",
     "is_audio_field",
@@ -761,643 +760,11 @@ def _prefetch_json_values(session, paginated_ids_subq):
     return jl_vals, jlh_vals
 
 
+# NOTE: The old EAV-based _get_logs_query function has been deleted.
+# The JSONB-based version below is now the only implementation.
+
+
 def _get_logs_query(
-    request_fastapi: Request,
-    project_name: str,
-    column_context: Optional[str],
-    context: Optional[str],
-    filter_expr: Optional[str],
-    sorting: Optional[str],
-    from_ids: Optional[Any],
-    exclude_ids: Optional[Any],
-    from_fields: Optional[str],
-    exclude_fields: Optional[str],
-    limit: Optional[int],
-    offset: int,
-    project_dao: ProjectDAO,
-    field_type_dao: FieldTypeDAO,
-    context_dao: ContextDAO,
-    session=Depends(get_db_session),
-    latest_timestamp=False,
-    randomize: bool = False,
-    seed: Optional[str] = "42",
-):
-    """
-    Returns a combined list of base logs (Log) and derived logs (DerivedLog)
-    that match the given user filters. See docstring above for details.
-    """
-    user_id = request_fastapi.state.user_id
-    organization_id = getattr(request_fastapi.state, "organization_id", None)
-
-    # 1) Validate the project
-    try:
-        project_id = project_dao.get_by_user_and_name(
-            name=project_name,
-            user_id=user_id,
-            organization_id=organization_id,
-        ).id
-    except (IndexError, AttributeError):
-        raise not_found(f"Project {project_name}")
-
-    # Filtering, sorting, pagination, etc.
-    log_event_query = session.query(LogEvent.id).filter(
-        LogEvent.project_id == project_id,
-    )
-    context_name = "" if not context else context
-    context_obj = context_dao.filter(name=context_name, project_id=project_id)
-    if context_obj:
-        context_id = context_obj[0][0].id
-        log_event_query = log_event_query.join(LogEventContext).filter(
-            LogEventContext.context_id == context_id,
-        )
-    else:
-        context_id = None
-
-    field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
-
-    if filter_expr:
-        try:
-            filter_dict = str_filter_exp_to_dict(
-                filter_expr,
-                field_names=list(field_types.keys()),
-            )
-        except Exception as e:
-            session.rollback()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid filter expression: {str(e)}",
-            )
-
-        if filter_dict:
-
-            def validate_filter_dict(fd):
-                if isinstance(fd, dict):
-                    if "type" in fd and fd["type"] == "identifier":
-                        field = fd.get("value")
-                        if is_image_field(field, field_types) or is_audio_field(
-                            field,
-                            field_types,
-                        ):
-                            parent = getattr(validate_filter_dict, "parent", None)
-                            if parent and parent.get("operand") not in (
-                                "exists",
-                                "isNone",
-                                "phash",
-                                "phash_distance",
-                            ):
-                                raise HTTPException(
-                                    status_code=400,
-                                    detail=f"Field '{field}' is a media type and can only be used with 'exists' or 'isNone' or 'phash' or 'phash_distance' operator",
-                                )
-                    for k, v in fd.items():
-                        if isinstance(v, dict):
-                            validate_filter_dict.parent = fd
-                            validate_filter_dict(v)
-
-            # # Define a subquery for event IDs to pass to the query builder
-            # event_ids_subq = log_event_query.subquery(name="event_ids_subq")
-
-            # Materialize as CTE to prevent re-execution within EXISTS clauses
-            # This is critical when multiple filter conditions create multiple EXISTS clauses,
-            # each of which would otherwise re-execute the event_ids_subq subquery
-            event_ids_subq = log_event_query.cte("event_ids_subq").prefix_with(
-                "MATERIALIZED",
-            )
-
-            try:
-                # --- OPTIMIZATION FOR 'OR' ---
-                if isinstance(filter_dict, dict) and filter_dict.get("operand") == "or":
-                    or_conditions = flatten_or_conditions(filter_dict)
-                    matching_id_subqueries = []
-
-                    for i, condition_dict in enumerate(or_conditions):
-                        validate_filter_dict(condition_dict)
-                        condition_sql = build_sql_query(
-                            condition_dict,
-                            LogEvent,
-                            session,
-                            log_event_ids=event_ids_subq,
-                            project_id=project_id,
-                            context_id=context_id,
-                        )
-                        if isinstance(condition_sql, Subquery):
-                            truthiness_clause = _create_truthiness_condition(
-                                condition_sql,
-                                session,
-                            )
-                            matching_ids = select(condition_sql.c.log_event_id).where(
-                                truthiness_clause,
-                            )
-                            matching_id_subqueries.append(matching_ids)
-
-                    if matching_id_subqueries:
-                        # Materialize the union_all CTE to prevent re-execution
-                        unioned_ids_subq = (
-                            union_all(*matching_id_subqueries)
-                            .cte("unioned_matching_ids")
-                            .prefix_with("MATERIALIZED")
-                        )
-                        log_event_query = log_event_query.filter(
-                            LogEvent.id.in_(select(unioned_ids_subq.c.log_event_id)),
-                        )
-
-                # --- OPTIMIZATION FOR 'AND' ---
-                elif (
-                    isinstance(filter_dict, dict)
-                    and filter_dict.get("operand") == "and"
-                ):
-                    and_conditions = flatten_and_conditions(filter_dict)
-
-                    # Collect all matching_ids CTEs first, then intersect via JOINs
-                    # This allows PostgreSQL to use Hash Joins instead of Nested Loop Semi Joins
-                    matching_ids_ctes = []
-                    non_subquery_conditions = []
-
-                    for i, condition_dict in enumerate(and_conditions):
-                        validate_filter_dict(condition_dict)
-                        condition_sql = build_sql_query(
-                            condition_dict,
-                            LogEvent,
-                            session,
-                            log_event_ids=event_ids_subq,
-                            project_id=project_id,
-                            context_id=context_id,
-                        )
-                        if isinstance(condition_sql, Subquery):
-                            truthiness_clause = _create_truthiness_condition(
-                                condition_sql,
-                                session,
-                            )
-                            # Create materialized CTE for this condition
-                            matching_ids_subq = (
-                                select(condition_sql.c.log_event_id)
-                                .where(truthiness_clause)
-                                .cte(f"matching_ids_{i}")
-                                .prefix_with("MATERIALIZED")
-                            )
-                            matching_ids_ctes.append(matching_ids_subq)
-                        else:
-                            non_subquery_conditions.append(condition_sql)
-
-                    # Apply non-subquery conditions directly
-                    for cond in non_subquery_conditions:
-                        log_event_query = log_event_query.filter(cond)
-
-                    # Intersect all matching_ids CTEs using explicit JOINs
-                    # This enables Hash Join strategy instead of Nested Loop Semi Join
-                    if matching_ids_ctes:
-                        if len(matching_ids_ctes) == 1:
-                            # Single CTE - use directly
-                            log_event_query = log_event_query.filter(
-                                LogEvent.id.in_(
-                                    select(matching_ids_ctes[0].c.log_event_id),
-                                ),
-                            )
-                        else:
-                            # Multiple CTEs - JOIN them for intersection
-                            # Start with first CTE as base
-                            first_cte = matching_ids_ctes[0]
-                            intersected = select(
-                                first_cte.c.log_event_id,
-                            ).select_from(first_cte)
-
-                            # JOIN each subsequent CTE to compute intersection
-                            for cte in matching_ids_ctes[1:]:
-                                intersected = intersected.join(
-                                    cte,
-                                    first_cte.c.log_event_id == cte.c.log_event_id,
-                                )
-
-                            # Create CTE for intersected results (let planner decide materialization)
-                            intersected_cte = intersected.cte(
-                                "intersected_matching_ids",
-                            )
-
-                            log_event_query = log_event_query.filter(
-                                LogEvent.id.in_(
-                                    select(intersected_cte.c.log_event_id),
-                                ),
-                            )
-
-                # --- FALLBACK FOR SINGLE CONDITIONS OR OTHER OPERATORS ---
-                else:
-                    validate_filter_dict(filter_dict)
-                    condition_sql = build_sql_query(
-                        filter_dict,
-                        LogEvent,
-                        session,
-                        log_event_ids=event_ids_subq,
-                        project_id=project_id,
-                        context_id=context_id,
-                    )
-                    if isinstance(condition_sql, Subquery):
-                        truthiness_clause = _create_truthiness_condition(
-                            condition_sql,
-                            session,
-                        )
-                        # Use IN subquery instead of EXISTS to avoid correlated execution
-                        # Materialize as CTE so PostgreSQL can see actual row counts and choose
-                        # hash join instead of nested loop join
-                        matching_ids_subq = (
-                            select(condition_sql.c.log_event_id)
-                            .where(truthiness_clause)
-                            .cte("matching_ids_single")
-                            .prefix_with("MATERIALIZED")
-                        )
-                        log_event_query = log_event_query.filter(
-                            LogEvent.id.in_(select(matching_ids_subq.c.log_event_id)),
-                        )
-                    else:
-                        log_event_query = log_event_query.filter(condition_sql)
-
-            except Exception as e:
-                session.rollback()
-                # Provide detailed error information
-                error_msg = f"Error processing filter expression: {str(e)}"
-                if hasattr(e, "__class__"):
-                    error_msg = f"{e.__class__.__name__}: {error_msg}"
-                raise HTTPException(
-                    status_code=400,
-                    detail=error_msg,
-                )
-
-    # Apply from_ids/exclude_ids filters early since they filter on log_event_id
-    if from_ids and exclude_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot set both from_ids and exclude_ids.",
-        )
-
-    if from_ids:
-        include_ids = [int(x) for x in from_ids.split("&")]
-        log_event_query = log_event_query.filter(
-            LogEvent.id.in_(include_ids),
-        )
-    elif exclude_ids:
-        exclude_set = [int(x) for x in exclude_ids.split("&")]
-        log_event_query = log_event_query.filter(
-            LogEvent.id.notin_(exclude_set),
-        )
-
-    # Apply field filters at log event level
-    if from_fields and exclude_fields:
-        raise HTTPException(
-            status_code=400,
-            detail="Only one of from_fields or exclude_fields can be set.",
-        )
-
-    if from_fields:
-        # Filter to only include log events that have at least one of the specified fields
-        allowed_fields = from_fields.split("&")
-        # Check both Log and DerivedLog tables for matching fields
-        log_exists = (
-            session.query(LogEventLog.log_event_id)
-            .join(Log, LogEventLog.log_id == Log.id)
-            .filter(
-                LogEventLog.log_event_id == LogEvent.id,
-                Log.key.in_(allowed_fields),
-            )
-            .exists()
-        )
-        derived_log_exists = (
-            session.query(LogEventDerivedLog.log_event_id)
-            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(
-                LogEventDerivedLog.log_event_id == LogEvent.id,
-                DerivedLog.key.in_(allowed_fields),
-            )
-            .exists()
-        )
-        log_event_query = log_event_query.filter(
-            or_(log_exists, derived_log_exists),
-        )
-    elif exclude_fields:
-        # Filter to only include log events that have at least one field NOT in the excluded list
-        excluded_fields = exclude_fields.split("&")
-        # Check both Log and DerivedLog tables for non-excluded fields
-        log_exists = (
-            session.query(LogEventLog.log_event_id)
-            .join(Log, LogEventLog.log_id == Log.id)
-            .filter(
-                LogEventLog.log_event_id == LogEvent.id,
-                Log.key.notin_(excluded_fields),
-            )
-            .exists()
-        )
-        derived_log_exists = (
-            session.query(LogEventDerivedLog.log_event_id)
-            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(
-                LogEventDerivedLog.log_event_id == LogEvent.id,
-                DerivedLog.key.notin_(excluded_fields),
-            )
-            .exists()
-        )
-        log_event_query = log_event_query.filter(
-            or_(log_exists, derived_log_exists),
-        )
-
-    # Potential duplicate logic - review for consolidation
-    if context:
-        context_obj = context_dao.filter(name=context, project_id=project_id)
-    else:
-        context_obj = context_dao.filter(name="", project_id=project_id)
-        if not context_obj:
-            if latest_timestamp:
-                project_obj = project_dao.filter(name=project_name, user_id=user_id)
-                return project_obj[0][0].created_at.isoformat()
-            else:
-                return [], 0, 0
-
-    if not context_obj:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Context '{context}' not found",
-        )
-    context_obj = context_obj[0][0]
-    ctx_id_val = context_obj.id
-
-    # ---- Phase-1: gather all event IDs that match user filters ------------
-    # Note: filter_expr has already been applied to log_event_query
-
-    # Build ORDER BY expressions
-    sort_val_sqs: List[Subquery] = []
-    sort_criteria: List[Any] = []
-
-    if not randomize and sorting:
-        # Step 1: Create relevant log events subquery
-        relevant_log_events_cte = log_event_query.cte(
-            "relevant_log_events",
-        ).prefix_with(  # WITH relevant_log_events AS ( … )
-            "MATERIALIZED",
-        )  # force single evaluation in PG ≥12
-        # keep a handy alias – this line replaces every previous reference
-        relevant_log_events = relevant_log_events_cte
-
-        # Step 2: Build sort clauses
-        is_vector_sort, vector_sort_details = _build_sort_clauses(
-            session,
-            log_event_query,
-            field_types,
-            sorting,
-            relevant_log_events,
-            sort_val_sqs,
-            sort_criteria,
-        )
-
-        if is_vector_sort:
-            # --- vector ANN fast-path  ---
-
-            # 0) Use the already-built CTE of filtered IDs
-            event_ids = relevant_log_events  # CTE with column "id"
-
-            # 1) Extract parsed pieces from vector_sort_details
-            expr_dict = vector_sort_details["expr_dict"]
-            operand = vector_sort_details["operand"]  # "cosine" | "l2" | "ip"
-            mode = vector_sort_details["mode"]  # "ascending" | "descending"
-            lhs_key = vector_sort_details["lhs_key"]  # e.g. "_content_text_emb"
-            rhs_embed = vector_sort_details[
-                "rhs_embed"
-            ]  # parsed embed(...) dict or expr
-
-            # 2) Build RHS vector literal once
-            rhs_sql = build_sql_query(
-                rhs_embed,
-                LogEvent,
-                session,
-                log_event_ids=event_ids,  # scope for any correlated pieces (should be literal)
-            )
-            rhs_vec, _ = _select_value(rhs_sql, session, is_vector=True)
-
-            # 3) Detect the model and dimension for this key
-            # Query to get the model used for this embedding key
-            embedding_model_query = session.execute(
-                select(Embedding.model).where(Embedding.key == lhs_key).limit(1),
-            ).scalar()
-
-            # Map model to dimension for proper casting
-            model_to_dim = {
-                "text-embedding-3-small": 1536,
-                "multimodalembedding@001": 1408,
-            }
-            embedding_dim = model_to_dim.get(embedding_model_query, None)
-
-            # 4) Choose the correct distance operator and cast vector
-            op = {"cosine": "<=>", "l2": "<->", "ip": "<#>"}[operand]
-
-            # Cast the vector to the correct dimension to use the HNSW index
-            # This is critical for pgvector to use the model-specific partial indexes
-            if embedding_dim and embedding_model_query:
-                # Use casted vector to match the expression index
-                casted_vector = func.cast(Embedding.vector, Vector(embedding_dim))
-                dist = casted_vector.op(op)(rhs_vec)
-                # Add model filter for the partial index
-                model_filter = Embedding.model == embedding_model_query
-            else:
-                # Fallback: no cast (will be slower without index)
-                dist = Embedding.vector.op(op)(rhs_vec)
-                model_filter = literal(True)
-
-            asc_sort = mode == "ascending"
-
-            # 5) ANN top-K on Embedding first (pushdown LIMIT)
-            top_k = (offset or 0) + (limit or 100)
-            ann_topk = (
-                select(
-                    Embedding.ref_id.label("id"),
-                    dist.label("dist"),
-                )
-                .where(
-                    Embedding.key == lhs_key,
-                    model_filter,  # Filter by model for partial index
-                    Embedding.vector.isnot(None),
-                    Embedding.ref_id.in_(select(event_ids.c.id)),
-                )
-                .order_by(
-                    dist.asc() if asc_sort else dist.desc(),
-                    Embedding.ref_id.desc(),
-                )
-                .limit(top_k)
-                .subquery("ann_topk")
-            )
-
-            # 5) Page and expose row numbers for downstream logic
-            row_order = [
-                ann_topk.c.dist.asc() if asc_sort else ann_topk.c.dist.desc(),
-                ann_topk.c.id.desc(),
-            ]
-
-            paginated_ids_subq = select(
-                ann_topk.c.id,
-                func.row_number().over(order_by=row_order).label("row_num"),
-            ).order_by(*row_order)
-            if offset > 0:
-                paginated_ids_subq = paginated_ids_subq.offset(offset)
-            if limit:
-                paginated_ids_subq = paginated_ids_subq.limit(limit)
-
-            paginated_ids_subq = paginated_ids_subq.cte("paginated_ids").prefix_with(
-                "MATERIALIZED",
-            )
-
-            # Keep total_count consistent with legacy path
-            total_count = log_event_query.distinct().count()
-
-        else:
-            # Step 3: Add deterministic tie-breaker
-            sort_criteria.append(desc(relevant_log_events.c.id))
-
-            # Step 4: Join sort subqueries with log events
-            joined_events = relevant_log_events
-            for i, sq in enumerate(sort_val_sqs):
-                joined_events = joined_events.outerjoin(
-                    sq,
-                    sq.c.log_event_id == relevant_log_events.c.id,
-                )
-
-            # Step 5: Build final query with sort info
-            base_event_q = session.query(relevant_log_events.c.id).select_from(
-                joined_events,
-            )
-
-            # For _paginate_events, we need to pass the joined query and sort criteria
-            # This will ensure proper ordering without cartesian products
-            has_joins = True
-
-            # Calculate total count using the query without any joins or sorting
-            total_count = log_event_query.distinct().count()
-
-            # Paginate the events
-            paginated_ids_subq = _paginate_events(
-                session,
-                base_event_q,
-                sort_criteria,
-                limit,
-                offset,
-                randomize=randomize,
-                seed=seed,
-                has_joins=has_joins,
-            )
-            paginated_ids_cte = (
-                select(paginated_ids_subq.c.id, paginated_ids_subq.c.row_num)  # ⬅ wrap
-                .cte("paginated_ids")  #     then cte()
-                .prefix_with("MATERIALIZED")  # (PG ≥12)
-            )
-            paginated_ids_subq = paginated_ids_cte
-
-    else:
-        # No sorting needed, just use the filtered events
-        base_event_q = log_event_query
-
-        # ---- Phase-2: total_count + page -------------------------------
-        # Check if we have joins (when sorting is enabled)
-        has_joins = bool(sorting) and not randomize
-
-        # Calculate total count using the query without any joins or sorting
-        total_count = log_event_query.distinct().count()
-
-        # Paginate the events
-        paginated_ids_subq = _paginate_events(
-            session,
-            base_event_q,
-            sort_criteria,
-            limit,
-            offset,
-            randomize=randomize,
-            seed=seed,
-            has_joins=has_joins,
-        )
-        paginated_ids_cte = (
-            select(paginated_ids_subq.c.id, paginated_ids_subq.c.row_num)  # ⬅ wrap
-            .cte("paginated_ids")  #     then cte()
-            .prefix_with("MATERIALIZED")  # (PG ≥12)
-        )
-        paginated_ids_subq = paginated_ids_cte
-
-    # Handle special cases
-    if latest_timestamp:
-        # Build unified logs only for timestamp check
-        unified_logs_for_timestamp = _build_unified_logs_subquery(
-            session=session,
-            relevant_log_events=paginated_ids_subq,
-        )
-        max_updated_at = session.query(
-            func.max(unified_logs_for_timestamp.c.updated_at),
-        ).scalar()
-        result = max_updated_at.isoformat() if max_updated_at else None
-        return result
-
-    # ---- Phase-4: build unified logs ONLY for the paginated IDs ----
-    unified_logs_limited = _build_unified_logs_limited(
-        session,
-        paginated_ids_subq,
-    )
-
-    filtered_logs_q = session.query(unified_logs_limited).filter(True)
-
-    context_len = 0
-    if column_context is not None:
-        split_context = column_context.split("/")
-        # Remove legacy "params" and "entries" keywords from column context
-        split_context = [s for s in split_context if s not in ("params", "entries")]
-        column_context = "/".join(split_context)
-        if column_context and column_context[-1] != "/":
-            column_context += "/"
-        context_len = len(column_context or "")
-    if column_context:
-        filtered_logs_q = filtered_logs_q.filter(
-            unified_logs_limited.c.key.startswith(column_context),
-        )
-
-    filtered_logs_q = _apply_post_filters(
-        filtered_logs_q,
-        unified_logs_limited,
-        from_ids=None,  # Already applied to log_event_query
-        exclude_ids=None,  # Already applied to log_event_query
-        exclude_params=False,  # No longer used
-        exclude_entries=False,  # No longer used
-        from_fields=from_fields,  # Still need to filter the actual fields returned
-        exclude_fields=exclude_fields,  # Still need to filter the actual fields returned
-    )
-    # Materialize as CTE to help PostgreSQL optimize the join with paginated_ids_subq
-    # This prevents PostgreSQL from treating filtered_logs_subq as a correlated subquery
-    # and encourages a hash join instead of a nested loop join
-    filtered_logs_subq = filtered_logs_q.cte("filtered_logs_subq").prefix_with(
-        "MATERIALIZED",
-    )
-
-    # Get final logs - total_count already calculated in _paginate_events
-    raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
-
-    results = []
-    for (
-        row_id,
-        row_event_id,
-        row_key,
-        row_value,
-        row_inferred_type,
-        row_param_version,
-        row_context_version,
-        row_created_at,
-        row_source_type,
-    ) in raw_rows:
-        results.append(
-            (
-                row_key,
-                row_value,
-                row_inferred_type,
-                row_param_version,
-                row_context_version,
-                row_source_type,
-                row_created_at,
-                row_event_id,
-            ),
-        )
-
-    return results, context_len, total_count
-
-
-def _get_logs_query_jsonb(
     request_fastapi: Request,
     project_name: str,
     context: Optional[str],
@@ -1570,7 +937,6 @@ def _get_logs_query_jsonb(
                 validate_filter_dict(filter_dict)
 
                 # Build SQL condition using JSONB query builder
-                # build_sql_query routes to JSONB mode when settings.use_jsonb_queries is True
                 # Apply CTE optimization for aggregation functions if enabled
                 enable_cte = getattr(
                     settings,
@@ -1718,7 +1084,7 @@ def _get_logs_query_jsonb(
         or_conditions.append(embedding_exists)
         query = query.filter(or_(*or_conditions))
     # Note: exclude_fields is NOT applied at the query level in JSONB mode.
-    # It's applied at the formatting level in _format_jsonb_logs to filter
+    # It's applied at the formatting level in _format_logs to filter
     # which fields are returned, not which log events are returned.
     # This matches EAV behavior where exclude_fields filters keys, not log events.
 
@@ -2096,7 +1462,7 @@ def _get_logs_query_jsonb(
         )
 
         if is_capture_enabled():
-            mode = "jsonb" if settings.use_jsonb_queries else "eav"
+            mode = "jsonb"
             # Compile SQL for capture
             compiled_sql = query.statement.compile(
                 dialect=session.bind.dialect,
@@ -2197,7 +1563,7 @@ def _get_logs_query_jsonb(
     return (rows, total_count)
 
 
-def _create_logs_internal_jsonb(
+def _create_logs_internal(
     entries_list: list,
     entries_len: int,
     total_logs: int,
@@ -2641,7 +2007,7 @@ def _create_logs_internal_jsonb(
     # =========================================================================
     if context_obj and not context_obj.allow_duplicates and created_event_ids:
         # Use JSONB-aware batch duplicate checking (single SQL query)
-        duplicate_ids = context_dao.check_for_duplicates_jsonb_batch(
+        duplicate_ids = context_dao.check_for_duplicates_batch(
             context_obj.id,
             created_event_ids,
         )
@@ -2755,372 +2121,19 @@ def create_logs_internal(
     entries_len = len(entries_list)
     total_logs = entries_len
 
-    # JSONB Mode: When use_jsonb_queries is enabled, use the new JSONB-based log creation
-    if settings.use_jsonb_queries:
-        return _create_logs_internal_jsonb(
-            entries_list=entries_list,
-            entries_len=entries_len,
-            total_logs=total_logs,
-            project_id=project_id,
-            context_id=context_id,
-            context_obj=context_obj,
-            field_types=field_types,
-            field_type_dao=field_type_dao,
-            log_event_dao=log_event_dao,
-            context_dao=context_dao,
-        )
-
-    provided_unique_ids = None
-    # Handle auto-counting fields (both in unique_keys and not)
-    if context_obj and (context_obj.unique_keys or context_obj.auto_counting):
-        unique_keys = context_obj.unique_keys or {}
-        auto_counting = context_obj.auto_counting or {}
-
-        # 1. Extract and validate composite key values from entries
-        all_composite_values = []
-        for i in range(total_logs):
-            current_entries = entries_list[min(i, len(entries_list) - 1)] or {}
-
-            # Extract values for composite key columns
-            composite_values = {}
-            provided_counting_values = {}
-
-            # First process unique key columns
-            for col_name, col_type in unique_keys.items():
-                if col_name in auto_counting:
-                    # For auto-counting columns, check if user provided a value
-                    if col_name in current_entries:
-                        provided_counting_values[col_name] = current_entries[col_name]
-                else:
-                    # Non-auto-counting columns must be provided
-                    if col_name not in current_entries:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Must provide value for composite key column '{col_name}' (type: {col_type}).",
-                        )
-                    composite_values[col_name] = current_entries[col_name]
-
-            # Then process auto-counting columns that are NOT in unique keys
-            for col_name, parent_col in auto_counting.items():
-                if col_name not in unique_keys and col_name in current_entries:
-                    provided_counting_values[col_name] = current_entries[col_name]
-
-            # Validate auto-counting columns follow rules
-            if auto_counting and provided_counting_values:
-                # For hierarchical counters, validate parent-child relationships
-                for col_name, value in provided_counting_values.items():
-                    if col_name in auto_counting:
-                        parent_col = auto_counting.get(col_name)
-                        if (
-                            parent_col
-                            and parent_col not in composite_values
-                            and parent_col not in provided_counting_values
-                        ):
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Cannot provide value for '{col_name}' without providing parent column '{parent_col}'.",
-                            )
-
-                # Add provided counting values to composite values
-                composite_values.update(provided_counting_values)
-
-            all_composite_values.append(composite_values)
-
-        # 2. Pop composite key columns from original entries to prevent them from becoming log fields
-        for i in range(total_logs):
-            current_entries = entries_list[min(i, len(entries_list) - 1)]
-            composite_values = all_composite_values[i]
-
-            # Remove composite key columns from entries
-            if current_entries:
-                for key in unique_keys.keys():
-                    current_entries.pop(key, None)
-
-        # 3. Construct the `provided_unique_ids` list for the DAO
-        provided_unique_ids = all_composite_values
-
-    # Bulk create all log events in one operation
-    log_event_ids, row_ids = log_event_dao.bulk_create(
+    # JSONB mode - all log data is stored in LogEvent.data
+    return _create_logs_internal(
+        entries_list=entries_list,
+        entries_len=entries_len,
+        total_logs=total_logs,
         project_id=project_id,
         context_id=context_id,
-        count=total_logs,
-        return_row_ids=True,
-        provided_unique_ids=provided_unique_ids,
+        context_obj=context_obj,
+        field_types=field_types,
+        field_type_dao=field_type_dao,
+        log_event_dao=log_event_dao,
+        context_dao=context_dao,
     )
-
-    # Prepare collections for bulk operations
-    new_field_types = []
-    log_records_to_create = []
-    failed_logs = []
-    successful_indices = []
-
-    # OPTIMIZATION: Batch FK validation - validate all logs at once before processing
-    batch_merged_data = []
-    for i in range(total_logs):
-        current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
-
-        # Add auto-incremented values if applicable
-        if context_obj and context_obj.auto_counting and row_ids and i < len(row_ids):
-            row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
-            unique_keys = context_obj.unique_keys or {}
-
-            for col_name, col_value in row_id_dict.items():
-                if (
-                    col_name in context_obj.auto_counting
-                    and col_name not in unique_keys
-                ):
-                    if col_name not in current_entries:
-                        current_entries[col_name] = col_value
-
-        batch_merged_data.append(current_entries)
-
-    # FK validation disabled - allows creating logs with any FK values
-    failed_fk_validations = {}
-
-    # Process all logs in the batch
-    for i in range(total_logs):
-        log_event_id = log_event_ids[i]
-
-        # Per-log staging to isolate failures
-        perlog_field_types = []
-        perlog_records = []
-
-        # Check if this log failed FK validation
-        if i in failed_fk_validations:
-            failed_logs.append(
-                {
-                    "index": i,
-                    "error": failed_fk_validations[i],
-                },
-            )
-            continue
-
-        # Get current entries (clone to avoid in-place mutations leaking)
-        current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
-        try:
-            # Add auto-incremented values from row_ids that are not in unique_keys back to entries
-            if (
-                context_obj
-                and context_obj.auto_counting
-                and row_ids
-                and i < len(row_ids)
-            ):
-                row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
-                unique_keys = context_obj.unique_keys or {}
-
-                for col_name, col_value in row_id_dict.items():
-                    # Only add if it's an auto-counting field that's NOT in unique_keys
-                    # (unique_key fields are already handled by log_event_dao.bulk_create)
-                    if (
-                        col_name in context_obj.auto_counting
-                        and col_name not in unique_keys
-                    ):
-                        if col_name not in current_entries:
-                            # Add to entries
-                            current_entries[col_name] = col_value
-
-            # Extract explicit types - NOTE: This mutates entries dict in-place
-            # Callers should pass fresh copies if they need to reuse the original dicts
-            entries_explicit_types = (
-                current_entries.pop("explicit_types", {})
-                if isinstance(current_entries, dict)
-                else None
-            )
-
-            # Process entries - create new fields if they don't exist
-            for k, v in current_entries.items():
-                # Check if field needs to be created
-                if k not in field_types:
-                    mutable = (
-                        entries_explicit_types.get(k, {}).get("mutable", True)
-                        if entries_explicit_types
-                        else True
-                    )
-                    unique = (
-                        entries_explicit_types.get(k, {}).get("unique", False)
-                        if entries_explicit_types
-                        else False
-                    )
-                    # If in a versioned context, force mutable=True
-                    if context_obj and context_obj.is_versioned:
-                        mutable = True
-
-                    # Check for explicit type
-                    field_type = None
-                    enum_values = None
-                    enum_restrict = False
-                    if entries_explicit_types and k in entries_explicit_types:
-                        field_spec = entries_explicit_types[k]
-                        if isinstance(field_spec, dict):
-                            field_type = field_spec.get("type")
-                            enum_values = field_spec.get("values")
-                            enum_restrict = field_spec.get("restrict", False)
-                        elif isinstance(field_spec, str):
-                            field_type = field_spec
-
-                    perlog_field_types.append(
-                        {
-                            "project_id": project_id,
-                            "field_name": k,
-                            "value": v,
-                            "mutable": mutable,
-                            "unique": unique,
-                            "field_category": "entry",
-                            "context_id": context_id,
-                            "field_type": field_type,
-                            "enum_values": enum_values,
-                            "enum_restrict": enum_restrict,
-                        },
-                    )
-                else:
-                    # Field exists - enforce types (cannot modify existing field types)
-                    enforce_types(
-                        k,
-                        v,
-                        field_types=field_types,
-                        field_type_dao=field_type_dao,
-                        context_dao=context_dao,
-                        project_id=project_id,
-                        batch_index=i,
-                        explicit_types=entries_explicit_types,
-                        context_id=context_id,
-                        is_param=False,
-                    )
-
-                # Add to records for bulk creation (entries don't have version)
-                perlog_records.append(
-                    {
-                        "project_id": project_id,
-                        "log_event_id": log_event_id,
-                        "key": k,
-                        "value": v,
-                        "explicit_types": entries_explicit_types,
-                        "context_id": context_id,
-                    },
-                )
-
-            # If we made it here, this log is valid; stage its artifacts
-            new_field_types.extend(perlog_field_types)
-            log_records_to_create.extend(perlog_records)
-            successful_indices.append(i)
-
-        except HTTPException as http_err:
-            try:
-                log_event_dao.delete(log_event_id)
-            except Exception:
-                pass
-            failed_logs.append(
-                {
-                    "index": i,
-                    "error": getattr(http_err, "detail", str(http_err)),
-                },
-            )
-            continue
-        except Exception as e:  # Broad catch to avoid aborting the batch
-            try:
-                log_event_dao.delete(log_event_id)
-            except Exception:
-                pass
-            failed_logs.append({"index": i, "error": str(e)})
-            continue
-
-    # Bulk create new field types if any
-    # Note: We CAN create new fields, but we CANNOT modify existing fields
-    try:
-        if new_field_types:
-            field_type_dao.bulk_create_field_types(new_field_types)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    # Bulk create all log records
-    created_event_ids = [log_event_ids[i] for i in successful_indices]
-    try:
-        if log_records_to_create:
-            log_dao.bulk_create(log_records_to_create, context_obj=context_obj)
-    except Exception:
-        # Fallback to per-log insertion to salvage successes
-        # Build per-log buckets
-        by_event = {}
-        for rec in log_records_to_create:
-            eid = rec.get("log_event_id")
-            by_event.setdefault(eid, []).append(rec)
-        # Reset created list and attempt per-log
-        created_event_ids = []
-        for i in successful_indices:
-            eid = log_event_ids[i]
-            recs = by_event.get(eid, [])
-            if not recs:
-                continue
-            try:
-                log_dao.bulk_create(recs, context_obj=context_obj)
-                created_event_ids.append(eid)
-            except Exception as e:
-                try:
-                    log_event_dao.delete(eid)
-                except Exception:
-                    pass
-                failed_logs.append({"index": i, "error": str(e)})
-
-    # Check for duplicates if context doesn't allow duplicates
-    if context_obj and not context_obj.allow_duplicates:
-        for log_event_id in created_event_ids:
-            # Check for duplicates
-            duplicate = context_dao.check_for_duplicates(context_obj.id, log_event_id)
-            if duplicate:
-                log_event_dao.delete(log_event_id)
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Duplicate log detected in context '{context_obj.name}' which doesn't allow duplicates. Log event ID: {log_event_id}",
-                )
-    if context_obj and context_obj.is_versioned:
-        context_obj.updated_at = datetime.now(timezone.utc)
-
-    # Build row_ids payload (unique key columns only)
-    row_ids_payload = None
-    unique_keys = context_obj.unique_keys or {}
-
-    names = []
-    ids_list = []
-
-    # Transform row_ids into the list format
-    # Filter row_ids to only successful ones (preserve order)
-    row_ids_filtered = [row_ids[i] for i in successful_indices] if row_ids else []
-
-    if row_ids_filtered and unique_keys:
-        # Use the preserved order from context
-        names = context_obj.unique_key_names or list(unique_keys.keys())
-
-        if isinstance(row_ids_filtered[0], dict):
-            # Dictionary format - convert to list of lists using the correct order
-            for row_id in row_ids_filtered:
-                ids_list.append([row_id.get(name) for name in names])
-        else:
-            # Legacy single ID case - wrap each ID in a list
-            ids_list = [[row_id] for row_id in row_ids_filtered]
-
-    row_ids_payload = {
-        "names": names,
-        "ids": ids_list,
-    }
-
-    # Build auto_counting payload (all auto-counting columns with their values)
-    # row_ids from DAO contains dictionaries with ALL auto_counting columns (both in unique_keys and not)
-    # Always return a dict, empty if no auto-counting configured
-    auto_counting_payload = {}
-    auto_counting_cfg = context_obj.auto_counting or {}
-    if row_ids_filtered and auto_counting_cfg and isinstance(row_ids_filtered[0], dict):
-        # Extract auto-counting values as a dict mapping column name to list of values
-        for col_name in auto_counting_cfg.keys():
-            auto_counting_payload[col_name] = [
-                row_id.get(col_name) for row_id in row_ids_filtered
-            ]
-
-    return {
-        "log_event_ids": created_event_ids,
-        "row_ids": row_ids_payload,
-        "auto_counting": auto_counting_payload,
-        "failed": failed_logs,
-    }
 
 
 # TODO(yusha): refactor get_logs_query to make it modular
@@ -3381,7 +2394,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
     return logs_out, {}
 
 
-def _format_jsonb_logs(
+def _format_logs(
     rows: list,
     field_types: dict,
     value_limit: Optional[int],
@@ -3830,7 +2843,7 @@ def _build_log_subquery(
     return final_query.subquery(alias), field_names_dict
 
 
-def _build_log_subquery_jsonb(
+def _build_log_subquery(
     args: Dict[str, Any],
     project_name: str,
     project_id: int,
@@ -4084,7 +3097,7 @@ def _construct_join_query(
     return joined_query
 
 
-def _construct_join_query_jsonb(
+def _construct_join_query(
     subq_a,
     subq_b,
     join_expr: str,
@@ -4216,7 +3229,7 @@ def _construct_join_query_jsonb(
 
             # Skip embedding (vector) columns - they are stored in the Embedding table,
             # not in LogEvent.data. They will be copied separately via the Embedding
-            # table copy logic in _create_logs_from_joined_rows_jsonb.
+            # table copy logic in _create_logs_from_joined_rows.
             field_type = fields.get(actual_col) if fields else None
             if field_type == "vector":
                 continue
@@ -4731,7 +3744,7 @@ def _create_logs_from_joined_rows(
     return new_log_ids
 
 
-def _create_logs_from_joined_rows_jsonb(
+def _create_logs_from_joined_rows(
     result_rows,
     project_id: int,
     context_id: int,
@@ -5120,210 +4133,6 @@ def _create_logs_from_joined_rows_jsonb(
     return new_log_ids
 
 
-def _create_logs_by_reference_eav(
-    result_rows,
-    project_id: int,
-    context_id: int,
-    columns: Optional[Dict[str, str]],
-    session,
-) -> List[int]:
-    """
-    EAV-only helper: Create log events that reference existing logs (pass-by-reference).
-
-    This function implements pass-by-reference join semantics for EAV mode only.
-    It creates new LogEvent entries that reference existing Log/DerivedLog rows
-    from the joined sources, without copying the actual data.
-
-    NOTE: This function is NOT supported in JSONB mode. JSONB mode stores data
-    inline in LogEvent.data, making pass-by-reference semantically impossible.
-    When settings.use_jsonb_queries = True, the _join_logs function will raise
-    a ValueError if copy=False is passed.
-
-    Args:
-        result_rows: Result rows from the join query containing log_event_id_a and log_event_id_b
-        project_id: ID of the project
-        context_id: ID of the context
-        columns: List of source columns to include (aliases not supported in reference mode)
-        session: SQLAlchemy session
-
-    Returns:
-        List of IDs of the newly created log events
-    """
-    new_log_ids = []
-    now = datetime.now(timezone.utc)
-
-    # Prepare collections for bulk operations
-    log_events = []
-    log_event_contexts = []
-    log_event_logs = []
-    log_event_derived_logs = []
-
-    # Process each row
-    for row in result_rows:
-        # Create a new LogEvent
-        log_event = LogEvent(
-            project_id=project_id,
-            created_at=now,
-            updated_at=now,
-        )
-        log_events.append(log_event)
-        session.add(log_event)
-
-    # Flush to get IDs
-    session.flush()
-
-    # Now create the related records with the generated IDs
-    for i, log_event in enumerate(log_events):
-        row = result_rows[i]
-
-        # Create LogEventContext association
-        log_event_contexts.append(
-            LogEventContext(
-                log_event_id=log_event.id,
-                context_id=context_id,
-            ),
-        )
-
-        # Get source LogEvent IDs
-        log_event_id_a = getattr(row, "log_event_id_a", None)
-        log_event_id_b = getattr(row, "log_event_id_b", None)
-
-        # Process columns that should be included
-        if columns:
-            # Convert to list if it's still a dict (shouldn't happen with validation)
-            columns_list = (
-                columns if isinstance(columns, list) else list(columns.keys())
-            )
-
-            # Only include columns specified in the list
-            for source_col in columns_list:
-                table_prefix, original_col = source_col.split(".", 1)
-                source_log_event_id = (
-                    log_event_id_a if table_prefix.upper() == "A" else log_event_id_b
-                )
-
-                # Find the original Log with this key from the source LogEvent
-                original_log = (
-                    session.query(Log)
-                    .join(LogEventLog)
-                    .filter(
-                        LogEventLog.log_event_id == source_log_event_id,
-                        Log.key == original_col,
-                    )
-                    .first()
-                )
-
-                # Check if it's a derived log
-                original_derived_log = (
-                    session.query(DerivedLog)
-                    .join(LogEventDerivedLog)
-                    .filter(
-                        LogEventDerivedLog.log_event_id == source_log_event_id,
-                        DerivedLog.key == original_col,
-                    )
-                    .first()
-                )
-
-                if original_log:
-                    # For pass-by-reference, we reference the original log
-                    # Check if this association already exists to avoid duplicates
-                    existing = any(
-                        lel.log_id == original_log.id
-                        for lel in log_event_logs
-                        if lel.log_event_id == log_event.id
-                    )
-                    if not existing:
-                        log_event_logs.append(
-                            LogEventLog(
-                                log_event_id=log_event.id,
-                                log_id=original_log.id,
-                            ),
-                        )
-                elif original_derived_log:
-                    # Check if this association already exists
-                    existing = any(
-                        ledl.derived_log_id == original_derived_log.id
-                        for ledl in log_event_derived_logs
-                        if ledl.log_event_id == log_event.id
-                    )
-                    if not existing:
-                        log_event_derived_logs.append(
-                            LogEventDerivedLog(
-                                log_event_id=log_event.id,
-                                derived_log_id=original_derived_log.id,
-                            ),
-                        )
-        else:
-            # Include all columns with default naming
-            for col in row._fields:
-                # Skip the log_event_id columns
-                if col in ("log_event_id_a", "log_event_id_b"):
-                    continue
-
-                value = getattr(row, col)
-                if value is not None:
-                    # Determine which source this column came from
-                    source_log_event_id = None
-                    original_col = col
-
-                    # Default naming convention: A_column or B_column
-                    if col.startswith("A_"):
-                        source_log_event_id = log_event_id_a
-                        original_col = col[2:]  # Remove 'A_' prefix
-                    elif col.startswith("B_"):
-                        source_log_event_id = log_event_id_b
-                        original_col = col[2:]  # Remove 'B_' prefix
-
-                    if source_log_event_id:
-                        # Find the Log with this key from the source LogEvent
-                        log = (
-                            session.query(Log)
-                            .join(LogEventLog)
-                            .filter(
-                                LogEventLog.log_event_id == source_log_event_id,
-                                Log.key == original_col,
-                            )
-                            .first()
-                        )
-
-                        # Check if it's a derived log
-                        derived_log = (
-                            session.query(DerivedLog)
-                            .join(LogEventDerivedLog)
-                            .filter(
-                                LogEventDerivedLog.log_event_id == source_log_event_id,
-                                DerivedLog.key == original_col,
-                            )
-                            .first()
-                        )
-
-                        if log:
-                            # Reference the existing log
-                            log_event_logs.append(
-                                LogEventLog(
-                                    log_event_id=log_event.id,
-                                    log_id=log.id,
-                                ),
-                            )
-                        elif derived_log:
-                            log_event_derived_logs.append(
-                                LogEventDerivedLog(
-                                    log_event_id=log_event.id,
-                                    derived_log_id=derived_log.id,
-                                ),
-                            )
-
-        new_log_ids.append(log_event.id)
-
-    # No need to flush or create associations for new logs since we're not creating any
-
-    # Bulk insert related records
-    session.bulk_save_objects(log_event_contexts)
-    session.bulk_save_objects(log_event_logs)
-    session.bulk_save_objects(log_event_derived_logs)
-    return new_log_ids
-
-
 def _join_logs(
     project_id: int,
     project_name: str,
@@ -5342,25 +4151,12 @@ def _join_logs(
     """
     Join logs from two different queries and create new log entries with the joined data.
 
-    Routes to JSONB or EAV implementation based on settings.use_jsonb_queries flag.
-
     This method performs a SQL-based join between two sets of logs, using SQLAlchemy to
     construct and execute the join query directly in the database. It avoids materializing
     large result sets in Python memory by delegating the join operation to the database.
 
-    IMPORTANT: Mode-specific behavior for `copy` parameter:
-
-    - **JSONB mode** (settings.use_jsonb_queries = True):
-      Only `copy=True` is supported. JSONB stores data inline in LogEvent.data,
-      so all joins necessarily create independent copies. Passing `copy=False`
-      will raise a ValueError.
-
-    - **EAV mode** (settings.use_jsonb_queries = False):
-      Both `copy=True` and `copy=False` are supported.
-      - `copy=True`: Creates new LogEvent rows with copied data.
-      - `copy=False`: Creates references to existing logs (pass-by-reference).
-        When using `copy=False`, column aliases are not supported - use a list
-        format for `columns` instead of a dictionary.
+    Only `copy=True` is supported. JSONB stores data inline in LogEvent.data,
+    so all joins create independent copies. Passing `copy=False` will raise a ValueError.
 
     Args:
         project_id: ID of the project containing the logs
@@ -5370,13 +4166,9 @@ def _join_logs(
                    (e.g., 'A.user_id = B.user_id')
         mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
         context_id: ID of the context where joined logs will be stored
-        columns: Optional column specification. Can be either:
-                 - Dictionary mapping source columns to new column names (only with copy=True):
-                   {'A.column_name': 'new_name', 'B.column_name': 'other_name'}
-                 - List of source columns to include (required with copy=False in EAV mode):
-                   ['A.column_name', 'B.column_name']
-        copy: If True (default), creates copies of the logs. If False, references existing
-              logs (EAV mode only - raises ValueError in JSONB mode).
+        columns: Optional column specification. Dictionary mapping source columns to new column names:
+                 {'A.column_name': 'new_name', 'B.column_name': 'other_name'}
+        copy: Must be True. Creates copies of the logs with independent data.
         request_fastapi: FastAPI request object for accessing user state
         project_dao: ProjectDAO instance for project operations
         field_type_dao: FieldTypeDAO instance for field type operations
@@ -5390,161 +4182,30 @@ def _join_logs(
         ValueError: If the join parameters are invalid, if copy=False is used in JSONB mode,
                     or if any other error occurs
     """
-    # JSONB mode validation and routing
-    if settings.use_jsonb_queries:
-        if not copy:
-            raise ValueError(
-                "Pass-by-reference (copy=False) is not supported in JSONB mode. "
-                "JSONB stores data inline, so all joins create independent copies. "
-                "Please set copy=True or disable JSONB mode.",
-            )
-        return _join_logs_jsonb(
-            project_id=project_id,
-            project_name=project_name,
-            pair_of_args=pair_of_args,
-            join_expr=join_expr,
-            mode=mode,
-            context_id=context_id,
-            columns=columns,
-            request_fastapi=request_fastapi,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
+    # JSONB mode - all log data is stored in LogEvent.data
+    if not copy:
+        raise ValueError(
+            "Pass-by-reference (copy=False) is not supported. "
+            "JSONB stores data inline, so all joins create independent copies. "
+            "Please set copy=True.",
         )
-
-    # EAV mode (existing logic)
-    try:
-        # Build subqueries for both sets of filtering criteria
-        context_a = pair_of_args[0].get("context")
-        context_b = pair_of_args[1].get("context")
-        if not context_a or not context_b:
-            raise ValueError(
-                f"Contexts for both queries must be provided in the pair of args. Got: {context_a} and {context_b}",
-            )
-
-        filter_expr_a = pair_of_args[0].get("filter_expr")
-        filter_expr_b = pair_of_args[1].get("filter_expr")
-        if filter_expr_a:
-            pair_of_args[0]["filter_expr"] = filter_expr_a.replace(context_a + ".", "")
-        if filter_expr_b:
-            pair_of_args[1]["filter_expr"] = filter_expr_b.replace(context_b + ".", "")
-
-        # Validate columns format based on copy parameter
-        if not copy and columns is not None and isinstance(columns, dict):
-            raise ValueError(
-                "When copy=False (pass-by-reference), column aliases are not supported. "
-                "Please provide columns as a list of column names instead of a dictionary.",
-            )
-
-        # replace context_a with 'A' alias and context_b with 'B' alias
-        join_expr = join_expr.replace(context_a, "A").replace(context_b, "B")
-        if columns is not None:
-            if isinstance(columns, dict):
-                # Dictionary format - process aliases
-                new_columns = {}
-                for source_col, new_alias in columns.items():
-                    processed_source_col = source_col.replace(context_a, "A").replace(
-                        context_b,
-                        "B",
-                    )
-                    new_columns[processed_source_col] = new_alias
-                columns = new_columns
-            elif isinstance(columns, list):
-                # List format - just replace context names
-                new_columns = []
-                for source_col in columns:
-                    processed_source_col = source_col.replace(context_a, "A").replace(
-                        context_b,
-                        "B",
-                    )
-                    new_columns.append(processed_source_col)
-                columns = new_columns
-            else:
-                raise ValueError(
-                    "columns must be either a dictionary (for aliasing with copy=True) "
-                    "or a list (for column selection with copy=False)",
-                )
-
-        subq_a, fields_a = _build_log_subquery(
-            args=pair_of_args[0],
-            project_name=project_name,
-            project_id=project_id,
-            request_fastapi=request_fastapi,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            alias="A",
-        )
-        subq_b, fields_b = _build_log_subquery(
-            args=pair_of_args[1],
-            project_name=project_name,
-            project_id=project_id,
-            request_fastapi=request_fastapi,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            alias="B",
-        )
-        # Construct the join query
-        joined_query = _construct_join_query(
-            subq_a=subq_a,
-            subq_b=subq_b,
-            join_expr=join_expr,
-            mode=mode,
-            columns=columns,
-            fields_a=fields_a,
-            fields_b=fields_b,
-            include_log_ids=True,  # Always include log IDs for embedding lookups
-            session=session,
-        )
-        # Execute the join query
-        result_rows = session.execute(joined_query).fetchall()
-
-        # If no results, return empty list
-        if not result_rows:
-            return []
-
-        # Get source context IDs for field type lookups
-        source_contexts = {}
-        context_a_id = context_dao.get_or_create(project_id, name=context_a)
-        context_b_id = context_dao.get_or_create(project_id, name=context_b)
-        source_contexts["A"] = context_a_id
-        source_contexts["B"] = context_b_id
-
-        # Create new log entries from the joined results
-        if copy:
-            # Create copies of the logs
-            new_log_ids = _create_logs_from_joined_rows(
-                result_rows=result_rows,
-                project_id=project_id,
-                context_id=context_id,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-                source_contexts=source_contexts,
-            )
-        else:
-            # Reference existing logs (EAV mode only)
-            new_log_ids = _create_logs_by_reference_eav(
-                result_rows=result_rows,
-                project_id=project_id,
-                context_id=context_id,
-                columns=columns,
-                session=session,
-            )
-
-        # Commit the transaction
-        session.commit()
-        return new_log_ids
-
-    except Exception as e:
-        raise ValueError(f"Failed to join logs: {traceback.format_exc()}")
+    return _join_logs_internal(
+        project_id=project_id,
+        project_name=project_name,
+        pair_of_args=pair_of_args,
+        join_expr=join_expr,
+        mode=mode,
+        context_id=context_id,
+        columns=columns,
+        request_fastapi=request_fastapi,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+    )
 
 
-def _join_logs_jsonb(
+def _join_logs_internal(
     project_id: int,
     project_name: str,
     pair_of_args: List[Dict[str, Any]],
@@ -5632,7 +4293,7 @@ def _join_logs_jsonb(
                 )
 
         # Build JSONB subqueries for both contexts
-        subq_a, fields_a = _build_log_subquery_jsonb(
+        subq_a, fields_a = _build_log_subquery(
             args=pair_of_args[0],
             project_name=project_name,
             project_id=project_id,
@@ -5643,7 +4304,7 @@ def _join_logs_jsonb(
             session=session,
             alias="A",
         )
-        subq_b, fields_b = _build_log_subquery_jsonb(
+        subq_b, fields_b = _build_log_subquery(
             args=pair_of_args[1],
             project_name=project_name,
             project_id=project_id,
@@ -5656,7 +4317,7 @@ def _join_logs_jsonb(
         )
 
         # Construct the JSONB join query
-        joined_query = _construct_join_query_jsonb(
+        joined_query = _construct_join_query(
             subq_a=subq_a,
             subq_b=subq_b,
             join_expr=join_expr,
@@ -5683,7 +4344,7 @@ def _join_logs_jsonb(
         source_contexts["B"] = context_b_id
 
         # Create new log entries from the joined results using JSONB merge
-        new_log_ids = _create_logs_from_joined_rows_jsonb(
+        new_log_ids = _create_logs_from_joined_rows(
             result_rows=result_rows,
             project_id=project_id,
             context_id=context_id,
