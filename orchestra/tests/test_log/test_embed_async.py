@@ -29,8 +29,7 @@ async def test_embed_default_sync_behavior(
     """
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
 
-    mode_suffix = "jsonb"
-    project_name = f"test_embed_default_sync_{mode_suffix}"
+    project_name = "test_embed_default_sync"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -82,8 +81,7 @@ async def test_embed_explicit_sync(client: AsyncClient, dbsession):
     """
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
 
-    mode_suffix = "jsonb"
-    project_name = f"test_embed_explicit_sync_{mode_suffix}"
+    project_name = "test_embed_explicit_sync"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -141,8 +139,7 @@ async def test_embed_async_queues_for_background(
     """
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
 
-    mode_suffix = "jsonb"
-    project_name = f"test_embed_async_{mode_suffix}"
+    project_name = "test_embed_async"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -201,8 +198,7 @@ async def test_embed_async_with_model_arg(
     """
     from orchestra.db.models.orchestra_models import EmbeddingQueue
 
-    mode_suffix = "jsonb"
-    project_name = f"test_embed_async_model_{mode_suffix}"
+    project_name = "test_embed_async_model"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -252,8 +248,7 @@ async def test_embed_sync_with_model_and_dimensions(
     """
     from orchestra.db.models.orchestra_models import Embedding
 
-    mode_suffix = "jsonb"
-    project_name = f"test_embed_sync_full_{mode_suffix}"
+    project_name = "test_embed_sync_full"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -301,8 +296,7 @@ async def test_embed_invalid_async_embeddings_value(
 
     The async_embeddings parameter must be a boolean literal.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_embed_invalid_async_{mode_suffix}"
+    project_name = "test_embed_invalid_async"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content

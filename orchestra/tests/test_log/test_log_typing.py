@@ -9,7 +9,7 @@ from . import HEADERS, _create_log, _create_project
 @pytest.mark.anyio
 async def test_create_log_weakly_typed(client: AsyncClient):
     """Test that implicitly created fields always have type 'Any'."""
-    project_name = f"test_project-wt-jsonb"
+    project_name = "test_project-wt"
     _ = await _create_project(client, project_name)
 
     # Create a log with implicitly typed fields (no POST /logs/fields first)
@@ -64,7 +64,7 @@ async def test_create_log_weakly_typed(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_log_type_mismatch(client: AsyncClient):
     """Test that type mismatches are caught for explicitly typed fields."""
-    project_name = f"test_project-tm-jsonb"
+    project_name = "test_project-tm"
     _ = await _create_project(client, project_name)
 
     # Step 1: Explicitly create strictly typed fields via POST /logs/fields
@@ -140,7 +140,7 @@ async def test_create_log_type_mismatch(client: AsyncClient):
 @pytest.mark.anyio
 async def test_update_logs_strongly_typed(client: AsyncClient):
     """Test updating logs with implicitly created fields (type 'Any')."""
-    project_name = f"test_project-st-jsonb"
+    project_name = "test_project-st"
     _ = await _create_project(client, project_name)
 
     # Create a log first - fields created implicitly will have type "Any"
@@ -180,7 +180,7 @@ async def test_update_logs_strongly_typed(client: AsyncClient):
 @pytest.mark.anyio
 async def test_nonetype_is_weak_type(client: AsyncClient):
     """Test that NoneType is a weak type allowed with any strong type and also standalone."""
-    project_name = f"test_nonetype-jsonb"
+    project_name = "test_nonetype"
     _ = await _create_project(client, project_name)
 
     # Create fields with different types
@@ -297,7 +297,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
     2. Implicit field creation (POST /logs, PUT /logs) → always type "Any"
     3. "Any" fields accept all value types and never change to strict types
     """
-    project_name = f"test_project-pn-jsonb"
+    project_name = "test_project-pn"
     _ = await _create_project(client, project_name)
 
     # Part 1: Explicitly created fields have strict types
@@ -442,7 +442,7 @@ async def test_update_logs_previously_none(client: AsyncClient):
 @pytest.mark.anyio
 async def test_update_logs_type_mismatch(client: AsyncClient):
     """Test that type mismatches are caught when updating strictly typed fields."""
-    project_name = f"test_project-utm-jsonb"
+    project_name = "test_project-utm"
     _ = await _create_project(client, project_name)
 
     # Step 1: Create strictly typed field via POST /logs/fields
@@ -487,7 +487,7 @@ async def test_update_logs_type_mismatch(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_log_with_mutable_fields(client: AsyncClient):
     """Test creating fields with explicit mutability settings."""
-    project_name = f"test_mutable_fields-jsonb"
+    project_name = "test_mutable_fields"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields with mutability settings
@@ -534,7 +534,7 @@ async def test_create_log_with_mutable_fields(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_log_default_immutable(client: AsyncClient):
     """Test that implicitly created fields default to immutable."""
-    project_name = f"test_default_immutable-jsonb"
+    project_name = "test_default_immutable"
     _ = await _create_project(client, project_name)
 
     # Create a log without specifying mutability (should default to mutable)
@@ -591,7 +591,7 @@ async def test_create_log_default_immutable(client: AsyncClient):
 @pytest.mark.anyio
 async def test_update_mutable_and_immutable_fields(client: AsyncClient):
     """Test updating mutable vs immutable fields."""
-    project_name = f"test_mutable_updates-jsonb"
+    project_name = "test_mutable_updates"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields with different mutability settings
@@ -666,7 +666,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient):
 @pytest.mark.anyio
 async def test_update_field_mutability_only(client: AsyncClient):
     """Test updating field mutability without changing the value."""
-    project_name = f"test_mutability_update-jsonb"
+    project_name = "test_mutability_update"
     _ = await _create_project(client, project_name)
 
     # Create field via POST /logs/fields with mutable=True
@@ -758,7 +758,7 @@ async def test_update_field_mutability_only(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_log_closed_enum(client: AsyncClient):
     """Test creating a log with a closed enum type."""
-    project_name = f"test_closed_enum-jsonb"
+    project_name = "test_closed_enum"
     _ = await _create_project(client, project_name)
 
     # Create enum field via POST /logs/fields
@@ -817,7 +817,7 @@ async def test_create_log_closed_enum(client: AsyncClient):
 @pytest.mark.anyio
 async def test_update_log_enum_auto_expand(client: AsyncClient):
     """Test that open enums automatically expand when new values are added."""
-    project_name = f"test_enum_auto_expand-jsonb"
+    project_name = "test_enum_auto_expand"
     _ = await _create_project(client, project_name)
 
     # Create open enum field via POST /logs/fields
@@ -885,7 +885,7 @@ async def test_update_log_enum_auto_expand(client: AsyncClient):
 @pytest.mark.anyio
 async def test_create_open_enum_without_values(client: AsyncClient):
     """Test creating open enum without initial values - values are inferred from first log."""
-    project_name = f"test_open_enum_no_values-jsonb"
+    project_name = "test_open_enum_no_values"
     _ = await _create_project(client, project_name)
 
     # Create open enum field via POST /logs/fields (without values)
@@ -963,7 +963,7 @@ async def test_create_open_enum_without_values(client: AsyncClient):
 @pytest.mark.anyio
 async def test_closed_enum_without_values(client: AsyncClient):
     """Test creating closed enum that restricts to initially provided values."""
-    project_name = f"test_closed_enum_no_values-jsonb"
+    project_name = "test_closed_enum_no_values"
     _ = await _create_project(client, project_name)
 
     # Create closed enum field via POST /logs/fields with initial value
@@ -1034,7 +1034,7 @@ async def test_closed_enum_without_values(client: AsyncClient):
 @pytest.mark.anyio
 async def test_filter_logs_by_enum(client: AsyncClient):
     """Tests filtering logs by enum values is treated as regular string filtering."""
-    project_name = f"test_enum_filtering-jsonb"
+    project_name = "test_enum_filtering"
     _ = await _create_project(client, project_name)
 
     # Create enum field via POST /logs/fields
@@ -1101,7 +1101,7 @@ async def test_nested_explicit_type_case_insensitive(
     client: AsyncClient,
 ):
     """Test that nested explicit types are case-insensitive."""
-    project_name = f"test_nested_case-jsonb"
+    project_name = "test_nested_case"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields with different casing
@@ -1158,7 +1158,7 @@ async def test_nested_explicit_type_case_insensitive(
 @pytest.mark.anyio
 async def test_explicit_type_with_entries(client: AsyncClient):
     """Test explicit types work with entries."""
-    project_name = f"test_entries_explicit_type-jsonb"
+    project_name = "test_entries_explicit_type"
     _ = await _create_project(client, project_name)
 
     # Create fields via POST /logs/fields
@@ -1211,7 +1211,7 @@ async def test_explicit_type_with_entries(client: AsyncClient):
 @pytest.mark.anyio
 async def test_nested_type_persists_across_logs(client: AsyncClient):
     """Test that nested type persists when creating multiple logs."""
-    project_name = f"test_type_persistence-jsonb"
+    project_name = "test_type_persistence"
     _ = await _create_project(client, project_name)
 
     # Create field with nested type via POST /logs/fields
