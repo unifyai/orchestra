@@ -9,7 +9,6 @@ from sqlalchemy import and_, cast, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.query import Query
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.models.orchestra_models import (
@@ -515,45 +514,6 @@ class LogDAO:
             self.session.rollback()
             raise ValueError(f"Failed to rename field: {str(e)}")
 
-    def _bulk_delete_gcs_media(self, logs_query: Query):
-        """
-        Finds all image/audio logs in a given query and deletes the
-        corresponding files from GCS.
-        """
-        gcs_url_prefix = (
-            f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
-        )
-
-        # Filter the query to only include logs that might have GCS files
-        media_logs_query = logs_query.filter(
-            Log.inferred_type.in_(("image", "audio")),
-        )
-
-        logs_to_delete = media_logs_query.all()
-        if not logs_to_delete:
-            return
-
-        logging.info(
-            f"Found {len(logs_to_delete)} media log(s) to check for GCS deletion.",
-        )
-
-        for log in logs_to_delete:
-            if isinstance(log.value, str):
-                # Strip potential quotes from JSONB string literal
-                clean_value = log.value.strip("\"'")
-                if clean_value.startswith(gcs_url_prefix):
-                    try:
-                        filename = clean_value.split("/")[-1]
-                        logging.warning(
-                            f"Deleting GCS file: {filename} for log ID: {log.id}",
-                        )
-                        self.bucket_service.delete_media(filename)
-                    except Exception as e:
-                        # Log the error but don't stop the overall delete process
-                        logging.error(
-                            f"Failed to delete file from GCS for log {log.id}: {str(e)}",
-                        )
-
     def _bulk_delete_gcs_media(
         self,
         log_event_ids: List[int],
@@ -641,48 +601,6 @@ class LogDAO:
                 logging.error(
                     f"Failed to delete GCS file for log_event_id {log_event_id}, field {field_name}: {str(e)}",
                 )
-
-    def delete(self, id: int):
-        """Deletes a single Log record and its associated GCS file if applicable."""
-        try:
-            log_query = self.session.query(Log).filter_by(id=id)
-            log = log_query.one_or_none()
-
-            if not log:
-                raise ValueError(f"Log with id {id} not found.")
-
-            # Call the bulk helper to handle GCS deletion
-            self._bulk_delete_gcs_media(log_query)
-
-            # Delete corresponding JSONLog if it exists
-            # First get the log_event_id from LogEventLog association
-            log_event_log = (
-                self.session.query(LogEventLog).filter_by(log_id=log.id).first()
-            )
-
-            if log_event_log:
-                # Find JSONLog via LogEventJSONLog association
-                json_log = (
-                    self.session.query(JSONLog)
-                    .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                    .filter(
-                        LogEventJSONLog.log_event_id == log_event_log.log_event_id,
-                        JSONLog.key == log.key,
-                    )
-                    .first()
-                )
-            else:
-                json_log = None
-            if json_log:
-                self.session.delete(json_log)
-
-            # Delete the log record itself
-            self.session.delete(log)
-            self.session.commit()
-
-        except Exception as e:
-            self.session.rollback()
-            raise ValueError(f"Failed to delete log with id {id}: {e}")
 
     def _check_uniqueness(self, entries: List[Dict[str, Any]]):
         unique_field_defs = {}  # (project_id, context_id, key) -> FieldType
