@@ -109,18 +109,9 @@ class TestStandardFallbacks:
     """Tests for the STANDARD_FALLBACKS mapping."""
 
     def test_api_key_fallbacks_exist(self):
-        """All major provider API keys should have fallbacks defined."""
+        """OpenAI API key (used for embeddings) should have fallback defined."""
         expected_keys = [
             "ORCHESTRA_OPENAI_API_KEY",
-            "ORCHESTRA_ANTHROPIC_API_KEY",
-            "ORCHESTRA_XAI_API_KEY",
-            "ORCHESTRA_TOGETHER_AI_API_KEY",
-            "ORCHESTRA_REPLICATE_API_KEY",
-            "ORCHESTRA_MISTRAL_AI_API_KEY",
-            "ORCHESTRA_GROQ_API_KEY",
-            "ORCHESTRA_FIREWORKS_AI_API_KEY",
-            "ORCHESTRA_DEEPINFRA_API_KEY",
-            "ORCHESTRA_DEEPSEEK_API_KEY",
         ]
         for key in expected_keys:
             assert key in STANDARD_FALLBACKS, f"Missing fallback for {key}"
@@ -138,7 +129,6 @@ class TestStandardFallbacks:
     def test_fallback_values_are_standard_names(self):
         """Fallback values should be the standard (unprefixed) names."""
         assert STANDARD_FALLBACKS["ORCHESTRA_OPENAI_API_KEY"] == "OPENAI_API_KEY"
-        assert STANDARD_FALLBACKS["ORCHESTRA_ANTHROPIC_API_KEY"] == "ANTHROPIC_API_KEY"
         assert (
             STANDARD_FALLBACKS["ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"]
             == "GOOGLE_APPLICATION_CREDENTIALS"
@@ -147,21 +137,12 @@ class TestStandardFallbacks:
 
 
 class TestAllProviderApiKeys:
-    """Integration-style tests for all provider API key fallbacks."""
+    """Integration-style tests for API key fallbacks."""
 
     @pytest.mark.parametrize(
         "orchestra_key,standard_key",
         [
             ("ORCHESTRA_OPENAI_API_KEY", "OPENAI_API_KEY"),
-            ("ORCHESTRA_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
-            ("ORCHESTRA_XAI_API_KEY", "XAI_API_KEY"),
-            ("ORCHESTRA_TOGETHER_AI_API_KEY", "TOGETHER_AI_API_KEY"),
-            ("ORCHESTRA_REPLICATE_API_KEY", "REPLICATE_API_KEY"),
-            ("ORCHESTRA_MISTRAL_AI_API_KEY", "MISTRAL_AI_API_KEY"),
-            ("ORCHESTRA_GROQ_API_KEY", "GROQ_API_KEY"),
-            ("ORCHESTRA_FIREWORKS_AI_API_KEY", "FIREWORKS_AI_API_KEY"),
-            ("ORCHESTRA_DEEPINFRA_API_KEY", "DEEPINFRA_API_KEY"),
-            ("ORCHESTRA_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"),
         ],
     )
     def test_api_key_fallback(self, orchestra_key: str, standard_key: str):

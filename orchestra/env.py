@@ -20,17 +20,8 @@ from typing import Optional
 # Only vars with well-known standard names should be listed here.
 # Internal Orchestra config (DB settings, logging, etc.) should NOT have fallbacks.
 STANDARD_FALLBACKS: dict[str, str] = {
-    # Provider API keys
+    # OpenAI API key (used for embeddings in log search)
     "ORCHESTRA_OPENAI_API_KEY": "OPENAI_API_KEY",
-    "ORCHESTRA_ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
-    "ORCHESTRA_XAI_API_KEY": "XAI_API_KEY",
-    "ORCHESTRA_TOGETHER_AI_API_KEY": "TOGETHER_AI_API_KEY",
-    "ORCHESTRA_REPLICATE_API_KEY": "REPLICATE_API_KEY",
-    "ORCHESTRA_MISTRAL_AI_API_KEY": "MISTRAL_AI_API_KEY",
-    "ORCHESTRA_GROQ_API_KEY": "GROQ_API_KEY",
-    "ORCHESTRA_FIREWORKS_AI_API_KEY": "FIREWORKS_AI_API_KEY",
-    "ORCHESTRA_DEEPINFRA_API_KEY": "DEEPINFRA_API_KEY",
-    "ORCHESTRA_DEEPSEEK_API_KEY": "DEEPSEEK_API_KEY",
     # GCP/VertexAI credentials
     "ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON": "GOOGLE_APPLICATION_CREDENTIALS",
     "ORCHESTRA_VERTEXAI_PROJECT": "GCP_PROJECT_ID",
