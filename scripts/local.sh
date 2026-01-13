@@ -25,8 +25,7 @@
 #   ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)
 #   ORCHESTRA_WORKERS       Number of uvicorn workers (default: auto-detect from CPU cores)
 #
-# Seeding (optional):
-#   ORCHESTRA_SEED_USER     Set to "1" to seed a test user
+# Test user (always seeded for local development):
 #   ORCHESTRA_TEST_USER_ID  Test user ID (default: "test-user-001")
 #   ORCHESTRA_TEST_EMAIL    Test user email (default: "test@debug.local")
 #   UNIFY_KEY               API key for test user (default: "local-test-api-key")
@@ -614,11 +613,9 @@ cmd_start() {
     return 1
   fi
 
-  # Optional: seed test user if requested
-  if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-    if ! seed_test_user; then
-      log_warn "Failed to seed test user (tests may fail without auth)"
-    fi
+  # Always seed test user for local development (required for authentication)
+  if ! seed_test_user; then
+    log_warn "Failed to seed test user (tests may fail without auth)"
   fi
 
   if ! start_orchestra_server "$ORCHESTRA_REPO_PATH"; then
@@ -637,18 +634,14 @@ cmd_start() {
   echo ""
   echo "To use in your shell:"
   echo "  export UNIFY_BASE_URL='$LOCAL_ORCHESTRA_URL'"
-  if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-    echo "  export UNIFY_KEY='$test_api_key'"
-  fi
+  echo "  export UNIFY_KEY='$test_api_key'"
   echo ""
   echo "Or source this script:"
   echo "  eval \"\$(./local_orchestra.sh)\""
   echo ""
 
   echo "export UNIFY_BASE_URL='$LOCAL_ORCHESTRA_URL'"
-  if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-    echo "export UNIFY_KEY='$test_api_key'"
-  fi
+  echo "export UNIFY_KEY='$test_api_key'"
 
   return 0
 }
@@ -727,9 +720,7 @@ cmd_env() {
 
   if cmd_check &>/dev/null; then
     echo "export UNIFY_BASE_URL='$LOCAL_ORCHESTRA_URL'"
-    if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-      echo "export UNIFY_KEY='$test_api_key'"
-    fi
+    echo "export UNIFY_KEY='$test_api_key'"
   else
     echo "# Local orchestra not running, using staging"
     echo "export UNIFY_BASE_URL='$STAGING_URL'"
@@ -813,7 +804,7 @@ main() {
       echo "  ORCHESTRA_LOG_DIR       Directory for orchestra logs (optional)"
       echo "  ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)"
       echo ""
-      echo "User Seeding (set ORCHESTRA_SEED_USER=1 to enable):"
+      echo "Test User (always seeded on start/restart):"
       echo "  ORCHESTRA_TEST_USER_ID  Test user ID (default: 'test-user-001')"
       echo "  ORCHESTRA_TEST_EMAIL    Test user email (default: 'test@debug.local')"
       echo "  UNIFY_KEY               API key for test user (default: 'local-test-api-key')"
@@ -821,7 +812,6 @@ main() {
       echo "Examples:"
       echo "  $0 start                              # Start orchestra"
       echo "  ORCHESTRA_PREFIX=myapp $0 start       # Start with custom prefix"
-      echo "  ORCHESTRA_SEED_USER=1 $0 start        # Start and seed test user"
       echo "  eval \"\$($0 env)\"                     # Set env vars"
       ;;
     *)
