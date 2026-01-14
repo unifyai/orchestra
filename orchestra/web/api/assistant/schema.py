@@ -92,10 +92,15 @@ class AssistantCreate(BaseModel):
         description="URL to the assistant's desktop profile/page",
         example="https://app.example.com/assistants/ada",
     )
-    user_local_desktop: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
+    desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="User's local desktop operating system",
+        description="Desktop operating system mode",
         example="windows",
+    )
+    is_user_desktop: Optional[bool] = Field(
+        None,
+        description="Whether the desktop is user-owned",
+        example=True,
     )
     about: Optional[str] = Field(
         None,
@@ -191,7 +196,8 @@ class AssistantCreate(BaseModel):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
-                "user_local_desktop": "windows",
+                "desktop_mode": "windows",
+                "is_user_desktop": True,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -284,7 +290,8 @@ class AssistantRead(AssistantCreate):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
-                "user_local_desktop": "windows",
+                "desktop_mode": "windows",
+                "is_user_desktop": True,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -341,10 +348,15 @@ class AssistantUpdate(BaseModel):
         description="URL to the assistant's desktop profile/page",
         example="https://app.example.com/assistants/ada",
     )
-    user_local_desktop: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
+    desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="User's local desktop operating system",
+        description="Desktop operating system mode",
         example="macos",
+    )
+    is_user_desktop: Optional[bool] = Field(
+        None,
+        description="Whether the desktop is user-owned",
+        example=True,
     )
     about: Optional[str] = Field(
         None,
@@ -463,7 +475,8 @@ class AssistantUpdate(BaseModel):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada_new.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
-                "user_local_desktop": "macos",
+                "desktop_mode": "macos",
+                "is_user_desktop": True,
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",

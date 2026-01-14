@@ -305,7 +305,8 @@ async def create_assistant(
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
             desktop_url=assistant_in.desktop_url,
-            user_local_desktop=assistant_in.user_local_desktop,
+            desktop_mode=assistant_in.desktop_mode,
+            is_user_desktop=assistant_in.is_user_desktop,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -729,7 +730,8 @@ async def create_assistant(
             profile_photo=assistant.profile_photo,
             profile_video=assistant.profile_video,
             desktop_url=assistant.desktop_url,
-            user_local_desktop=assistant.user_local_desktop,
+            desktop_mode=assistant.desktop_mode,
+            is_user_desktop=assistant.is_user_desktop,
             about=assistant.about,
             weekly_limit=(
                 float(assistant.weekly_limit)
@@ -891,7 +893,8 @@ def list_assistants(
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
-                    user_local_desktop=a.user_local_desktop,
+                    desktop_mode=a.desktop_mode,
+                    is_user_desktop=a.is_user_desktop,
                     about=a.about,
                     phone_country=a.phone_country,
                     weekly_limit=(
@@ -1031,7 +1034,8 @@ async def delete_assistant_contact(
                 profile_photo=updated_assistant.profile_photo,
                 profile_video=updated_assistant.profile_video,
                 desktop_url=updated_assistant.desktop_url,
-                user_local_desktop=updated_assistant.user_local_desktop,
+                desktop_mode=updated_assistant.desktop_mode,
+                is_user_desktop=updated_assistant.is_user_desktop,
                 about=updated_assistant.about,
                 phone_country=updated_assistant.phone_country,
                 weekly_limit=(
@@ -1643,7 +1647,8 @@ async def update_assistant_config(
                 profile_photo=updated.profile_photo,
                 profile_video=updated.profile_video,
                 desktop_url=updated.desktop_url,
-                user_local_desktop=updated.user_local_desktop,
+                desktop_mode=updated.desktop_mode,
+                is_user_desktop=updated.is_user_desktop,
                 about=updated.about,
                 phone_country=updated.phone_country,
                 weekly_limit=(
@@ -4396,7 +4401,8 @@ def admin_list_all_assistants(
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
-                    user_local_desktop=a.user_local_desktop,
+                    desktop_mode=a.desktop_mode,
+                    is_user_desktop=a.is_user_desktop,
                     about=a.about,
                     weekly_limit=float(a.weekly_limit)
                     if a.weekly_limit is not None
@@ -4539,7 +4545,8 @@ def admin_update_assistant_by_filter(
             profile_photo=updated.profile_photo,
             profile_video=updated.profile_video,
             desktop_url=updated.desktop_url,
-            user_local_desktop=updated.user_local_desktop,
+            desktop_mode=updated.desktop_mode,
+            is_user_desktop=updated.is_user_desktop,
             about=updated.about,
             phone_country=updated.phone_country,
             weekly_limit=float(updated.weekly_limit)
@@ -4644,7 +4651,8 @@ def admin_list_assistants_for_user(
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
-                    user_local_desktop=a.user_local_desktop,
+                    desktop_mode=a.desktop_mode,
+                    is_user_desktop=a.is_user_desktop,
                     about=a.about,
                     weekly_limit=float(a.weekly_limit)
                     if a.weekly_limit is not None
