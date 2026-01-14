@@ -1690,7 +1690,8 @@ class Assistant(Base):
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
     desktop_url = Column(String, nullable=True)
-    user_local_desktop = Column(String, nullable=True)
+    desktop_mode = Column(String, nullable=True)
+    is_user_desktop = Column(Boolean, nullable=True)
     about = Column(String, nullable=True)
     phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
@@ -1737,8 +1738,8 @@ class Assistant(Base):
             name="uq_org_assistant_name",
         ),
         sa.CheckConstraint(
-            "user_local_desktop IN ('ubuntu', 'windows', 'macos')",
-            name="ck_assistant_user_local_desktop",
+            "desktop_mode IN ('ubuntu', 'windows', 'macos')",
+            name="ck_assistant_desktop_mode",
         ),
         sa.CheckConstraint(
             "voice_mode IN ('tts', 'sts')",
