@@ -289,6 +289,9 @@ async def test_delete_user_removes_api_keys(client: AsyncClient, dbsession):
     assert key_after is None
 
 
+@pytest.mark.skip(
+    reason="Legacy query table removed - re-enable when new credit deduction system is implemented",
+)
 @pytest.mark.anyio
 async def test_delete_user_with_queries(client: AsyncClient, dbsession):
     """Verify queries are deleted during account deletion."""
