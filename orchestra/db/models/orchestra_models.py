@@ -179,7 +179,6 @@ class RechargeType(Base):
     type = Column(String(), primary_key=True)
 
 
-# CLEANUP: Delete this
 class CreditCardFingerprint(Base):
     """Model class for the credit card fingerprint table."""
 

@@ -1116,10 +1116,6 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
 # --------------------------------------------------------------------------- #
 # 8. New billing requirements tests                                           #
 # --------------------------------------------------------------------------- #
-# NOTE: Some tests are skipped because they rely on the legacy
-# `query` table which tracked LLM API usage. The chat completions endpoint has
-# been deleted, making this table obsolete. These tests can be re-enabled once
-# a new credit deduction system is implemented.
 
 
 @pytest.mark.skip(
