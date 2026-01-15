@@ -189,11 +189,12 @@ class UserAccountCleanupService:
         """
         deletion_statements = [
             # REMOVED: Legacy query tracking tables deleted in migration 2026-01-15
+            # Should be replaced by the new credit deduction system when in place.
             # "DELETE FROM query_tag_association WHERE user_id = :uid",
             # "DELETE FROM tags WHERE user_id = :uid",
             # "DELETE FROM query WHERE user_id = :uid",
+            # "DELETE FROM local_endpoint WHERE user_id = :uid",  # Part of legacy LLM tracking
             "DELETE FROM credit_card_fingerprint WHERE user_id = :uid",
-            "DELETE FROM local_endpoint WHERE user_id = :uid",
         ]
 
         for stmt in deletion_statements:
