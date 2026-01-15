@@ -48,8 +48,8 @@ def upgrade() -> None:
     op.drop_table("local_endpoint")
     op.drop_table("custom_endpoint")
     op.drop_table("endpoint")
+    op.drop_table("task")  # FK to modality - drop before modality
     op.drop_table("modality")
-    op.drop_table("task")
     op.drop_table("model")
     op.drop_table("provider")
 
