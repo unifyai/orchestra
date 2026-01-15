@@ -52,6 +52,7 @@ class BucketService:
         # Assistant images bucket
         self.assistant_images_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
+            "hired_assistants_images",
         )
         if not self.assistant_images_bucket_name:
             raise ValueError(
@@ -64,6 +65,7 @@ class BucketService:
         # Assistant call recordings bucket
         self.assistant_recordings_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME",
+            "assistant-call-recordings",
         )
         if not self.assistant_recordings_bucket_name:
             raise ValueError(
