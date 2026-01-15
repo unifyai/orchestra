@@ -16,13 +16,13 @@ depends_on = None
 
 def upgrade() -> None:
     """
-    Drop 24 legacy tables that are no longer in use:
+    Drop 23 legacy tables that are no longer in use:
     - Benchmarking system (7 tables)
     - Model/provider registry (5 tables)
     - Custom routing (3 tables)
     - Query/LLM tracking (3 tables)
     - Custom endpoints/API (3 tables)
-    - Other legacy tables (3 tables)
+    - Other legacy tables (2 tables: beta_list, custom_api_key)
 
     Tables are dropped in dependency order (children before parents).
     """
@@ -61,7 +61,6 @@ def upgrade() -> None:
     op.drop_table("custom_api_key")
 
     # Other legacy tables
-    op.drop_table("temp_interface")
     op.drop_table("beta_list")
 
 

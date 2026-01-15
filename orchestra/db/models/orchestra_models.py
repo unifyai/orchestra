@@ -1954,3 +1954,30 @@ class Plot(Base):
         Index("idx_plot_user_id", "user_id"),
         Index("idx_plot_organization_id", "organization_id"),
     )
+
+
+class TempInterface(Base):
+    """Model class for the temp_interface table (autosave/checkpoint functionality)."""
+
+    __tablename__ = "temp_interface"
+
+    id = Column(String(), primary_key=True)
+    user_id = Column(
+        String(),
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    organization_id = Column(
+        Integer(),
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    new_counter = Column(Integer(), nullable=True)
+    items = Column(String(), nullable=False)
+    project = Column(String(), nullable=True)
+    context = Column(String(), nullable=True)
+    column_context = Column(String(), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    color = Column(String(), nullable=True)
