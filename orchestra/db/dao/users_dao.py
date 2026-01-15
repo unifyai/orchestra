@@ -98,6 +98,8 @@ class UsersDAO:
         # ).scalar()
 
         # return float(result) if result else 0.0
+
+        # ToDo: Replace with new credit deduction system when in place.
         return 0.0
 
     def can_enable_monthly_billing(self, user_id: str) -> bool:
