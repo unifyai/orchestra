@@ -1,7 +1,3 @@
-"""Data Access Object for temp_interface table (autosave/checkpoint functionality)."""
-
-from typing import List, Optional
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -9,134 +5,91 @@ from orchestra.db.models.orchestra_models import TempInterface
 
 
 class TempInterfaceDAO:
-    """Class for accessing temp_interface table."""
-
     def __init__(self, session: Session):
-        """Initialize TempInterfaceDAO with a database session."""
         self.session = session
 
-    def create(
+    def create_interface(
         self,
-        id: str,
+        name: str,
         items: str,
-        user_id: Optional[str] = None,
-        organization_id: Optional[int] = None,
-        new_counter: Optional[int] = None,
-        project: Optional[str] = None,
-        context: Optional[str] = None,
-        column_context: Optional[str] = None,
-        color: Optional[str] = None,
-    ) -> TempInterface:
-        """
-        Create a new temp interface.
-
-        :param id: Unique identifier
-        :param items: JSON string of interface items
-        :param user_id: User who created this (optional)
-        :param organization_id: Organization this belongs to (optional)
-        :param new_counter: Counter for new items
-        :param project: Project identifier
-        :param context: Interface context
-        :param column_context: Column context
-        :param color: Interface color
-        :return: Created TempInterface instance
-        """
-        temp_interface = TempInterface(
-            id=id,
-            items=items,
-            user_id=user_id,
-            organization_id=organization_id,
-            new_counter=new_counter,
-            project=project,
-            context=context,
-            column_context=column_context,
-            color=color,
+        new_counter: int,
+        project_id: int,
+        context: str | None = None,
+        color: str | None = None,
+        icon: str | None = "folder",
+        order: int | None = None,
+    ):
+        self.session.add(
+            TempInterface(
+                name=name,
+                items=items,
+                new_counter=new_counter,
+                project_id=project_id,
+                context=context,
+                color=color,
+                icon=icon,
+                order=order,
+            ),
         )
-        self.session.add(temp_interface)
-        return temp_interface
+        self.session.commit()
 
-    def get_by_id(self, id: str) -> Optional[TempInterface]:
-        """
-        Get temp interface by ID.
-
-        :param id: Temp interface ID
-        :return: TempInterface if found, None otherwise
-        """
-        query = select(TempInterface).where(TempInterface.id == id)
-        return self.session.execute(query).scalar_one_or_none()
-
-    def get_by_user(self, user_id: str) -> List[TempInterface]:
-        """
-        Get all temp interfaces for a user.
-
-        :param user_id: User ID
-        :return: List of TempInterface instances
-        """
-        query = select(TempInterface).where(TempInterface.user_id == user_id)
-        return list(self.session.execute(query).scalars().fetchall())
-
-    def get_by_organization(self, organization_id: int) -> List[TempInterface]:
-        """
-        Get all temp interfaces for an organization.
-
-        :param organization_id: Organization ID
-        :return: List of TempInterface instances
-        """
-        query = select(TempInterface).where(
-            TempInterface.organization_id == organization_id,
-        )
-        return list(self.session.execute(query).scalars().fetchall())
-
-    def delete(self, id: str) -> bool:
-        """
-        Delete temp interface by ID.
-
-        :param id: Temp interface ID
-        :return: True if deleted, False if not found
-        """
-        temp_interface = self.get_by_id(id)
-        if temp_interface:
-            self.session.delete(temp_interface)
-            return True
-        return False
-
-    def update(
+    def update_interface(
         self,
-        id: str,
-        items: Optional[str] = None,
-        new_counter: Optional[int] = None,
-        project: Optional[str] = None,
-        context: Optional[str] = None,
-        column_context: Optional[str] = None,
-        color: Optional[str] = None,
-    ) -> Optional[TempInterface]:
-        """
-        Update temp interface.
+        name: str,
+        project_id: int,
+        items: str,
+        new_counter: int,
+        context: str | None = None,
+        color: str | None = None,
+        icon: str | None = None,
+        order: int | None = None,
+        new_name: str = None,
+    ):
+        query = select(TempInterface)
+        query = query.where(TempInterface.project_id == project_id).where(
+            TempInterface.name == name,
+        )
+        raw = self.session.execute(query)
+        entry = raw.scalars().first()
+        if entry is not None:
+            setattr(entry, "items", items)  # noqa: B010
+            setattr(entry, "new_counter", new_counter)
+            setattr(entry, "project_id", project_id)
+            if new_name is not None:
+                setattr(entry, "name", new_name)
+            setattr(entry, "context", context)
+            setattr(entry, "color", color)
+            if icon is not None:
+                setattr(entry, "icon", icon)
+            if order is not None:
+                setattr(entry, "order", order)
 
-        :param id: Temp interface ID
-        :param items: Updated items JSON
-        :param new_counter: Updated counter
-        :param project: Updated project
-        :param context: Updated context
-        :param column_context: Updated column context
-        :param color: Updated color
-        :return: Updated TempInterface if found, None otherwise
-        """
-        temp_interface = self.get_by_id(id)
-        if not temp_interface:
-            return None
+    def get_interfaces(
+        self,
+        project_id: int = None,
+        name: str = None,
+    ) -> list[TempInterface]:
+        query = select(TempInterface)
+        if project_id is not None:
+            query = query.where(TempInterface.project_id == project_id)
+        if name is not None:
+            query = query.where(TempInterface.name == name)
+        query = query.order_by(TempInterface.created_at.asc())
+        interfaces = self.session.execute(query).scalars().all()
+        return interfaces
 
-        if items is not None:
-            temp_interface.items = items
-        if new_counter is not None:
-            temp_interface.new_counter = new_counter
-        if project is not None:
-            temp_interface.project = project
-        if context is not None:
-            temp_interface.context = context
-        if column_context is not None:
-            temp_interface.column_context = column_context
-        if color is not None:
-            temp_interface.color = color
-
-        return temp_interface
+    def delete_interface(self, project_id: int, name: str):
+        try:
+            interface = (
+                self.session.query(TempInterface)
+                .filter(
+                    TempInterface.project_id == project_id,
+                    TempInterface.name == name,
+                )
+                .first()
+            )
+            self.session.delete(interface)
+            self.session.commit()
+        except:
+            self.session.rollback()
+            raise ValueError

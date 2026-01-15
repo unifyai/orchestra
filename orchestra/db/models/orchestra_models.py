@@ -1283,6 +1283,46 @@ class FieldType(Base):
     )
 
 
+class TempInterface(Base):
+    __tablename__ = "temp_interface"
+
+    id = Column(String, primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        index=True,
+    )
+    name = Column(String(), nullable=False)
+    new_counter = Column(Integer, nullable=False)
+    items = Column(String(), nullable=False)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context = Column(String(), nullable=True)
+    color = Column(String(), nullable=True)
+    created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
+    # Relationships
+    project = relationship("Project", back_populates="temp_interfaces")
+    user = relationship("AuthUser", back_populates="temp_interfaces")
+    organization = relationship("Organization", back_populates="temp_interfaces")
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "project_id",
+            "name",
+            name="temp_it_uq_project_name",
+        ),
+    )
+
+
 class AdminUser(Base):
     """Model class for admin users who have special privileges."""
 
@@ -1954,30 +1994,3 @@ class Plot(Base):
         Index("idx_plot_user_id", "user_id"),
         Index("idx_plot_organization_id", "organization_id"),
     )
-
-
-class TempInterface(Base):
-    """Model class for the temp_interface table (autosave/checkpoint functionality)."""
-
-    __tablename__ = "temp_interface"
-
-    id = Column(String(), primary_key=True)
-    user_id = Column(
-        String(),
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    organization_id = Column(
-        Integer(),
-        ForeignKey("organization.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    new_counter = Column(Integer(), nullable=True)
-    items = Column(String(), nullable=False)
-    project = Column(String(), nullable=True)
-    context = Column(String(), nullable=True)
-    column_context = Column(String(), nullable=True)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    color = Column(String(), nullable=True)
