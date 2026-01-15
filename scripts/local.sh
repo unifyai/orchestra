@@ -201,6 +201,27 @@ is_compatible_db_running() {
   return 1
 }
 
+remove_db_container() {
+  # Remove the container regardless of state (running, stopped, or other)
+  # Returns 0 if container doesn't exist or was successfully removed
+  if ! is_db_container_exists; then
+    return 0
+  fi
+
+  # Stop if running
+  if is_db_container_running; then
+    docker stop "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
+  fi
+
+  # Remove the container (force remove handles edge cases like "removing" state)
+  if ! docker rm -f "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1; then
+    log_error "Failed to remove container '$ORCHESTRA_DB_CONTAINER'"
+    return 1
+  fi
+
+  return 0
+}
+
 start_db_container() {
   log_info "Starting PostgreSQL container with pgvector..."
 
@@ -209,9 +230,12 @@ start_db_container() {
     return 0
   fi
 
+  # Remove any existing container (stopped or in other states)
   if is_db_container_exists; then
-    log_info "Removing stopped container..."
-    docker rm "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
+    log_info "Removing existing container..."
+    if ! remove_db_container; then
+      return 1
+    fi
   fi
 
   # Check if port is already in use by something else
@@ -237,14 +261,17 @@ start_db_container() {
     "-c" "deadlock_timeout=1s"
   )
 
-  docker run -d \
+  if ! docker run -d \
     --name "$ORCHESTRA_DB_CONTAINER" \
     -p "${ORCHESTRA_DB_PORT}:5432" \
     -e POSTGRES_PASSWORD=orchestra \
     -e POSTGRES_USER=orchestra \
     -e POSTGRES_DB=orchestra \
     pgvector/pgvector:pg15 \
-    postgres "${pg_flags[@]}" >/dev/null
+    postgres "${pg_flags[@]}" >/dev/null; then
+    log_error "Failed to start PostgreSQL container"
+    return 1
+  fi
 
   log_info "Waiting for PostgreSQL to be ready..."
 
@@ -264,11 +291,20 @@ start_db_container() {
 }
 
 stop_db_container() {
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${ORCHESTRA_DB_CONTAINER}$"; then
-    log_info "Stopping PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
-    docker stop "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
-    docker rm "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
-    log_success "PostgreSQL container stopped"
+  if is_db_container_exists; then
+    local was_running=false
+    if is_db_container_running; then
+      was_running=true
+    fi
+
+    log_info "Removing PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
+    if remove_db_container; then
+      if [[ "$was_running" == "true" ]]; then
+        log_success "PostgreSQL container stopped and removed"
+      else
+        log_success "PostgreSQL container removed (was not running)"
+      fi
+    fi
   else
     log_info "No PostgreSQL container to stop (container: $ORCHESTRA_DB_CONTAINER)"
   fi
