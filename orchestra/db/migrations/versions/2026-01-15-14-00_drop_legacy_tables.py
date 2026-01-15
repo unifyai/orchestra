@@ -24,7 +24,9 @@ def upgrade() -> None:
     - Custom endpoints/API (3 tables)
     - Other legacy tables (2 tables: beta_list, custom_api_key)
 
-    Tables are dropped in dependency order (children before parents).
+    Tables are dropped in dependency order (children before parents):
+    - endpoint -> model -> task -> modality
+    - endpoint -> provider
     """
 
     # Association/Junction tables first (have FKs to multiple tables)
@@ -44,14 +46,15 @@ def upgrade() -> None:
     op.drop_table("benchmark_region")
     op.drop_table("benchmark_regime")
 
-    # Model/Provider registry tables (local_endpoint and endpoint reference others)
+    # Model/Provider registry tables
+    # Dependency chain: endpoint -> model -> task -> modality
     op.drop_table("local_endpoint")
     op.drop_table("custom_endpoint")
-    op.drop_table("endpoint")
-    op.drop_table("task")  # FK to modality - drop before modality
-    op.drop_table("modality")
-    op.drop_table("model")
-    op.drop_table("provider")
+    op.drop_table("endpoint")  # FK to model and provider
+    op.drop_table("model")  # FK to task
+    op.drop_table("task")  # FK to modality
+    op.drop_table("modality")  # Base table
+    op.drop_table("provider")  # Base table
 
     # Routing tables
     op.drop_table("custom_router")
