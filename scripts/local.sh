@@ -24,6 +24,7 @@
 #   ORCHESTRA_LOG_DIR       Directory for orchestra logs (optional)
 #   ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)
 #   ORCHESTRA_WORKERS       Number of uvicorn workers (default: auto-detect from CPU cores)
+#   ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after N seconds of no requests (default: 600)
 #
 # Test user (always seeded for local development):
 #   ORCHESTRA_TEST_USER_ID  Test user ID (default: "test-user-001")
@@ -49,6 +50,9 @@ ORCHESTRA_PREFIX="${ORCHESTRA_PREFIX:-orchestra}"
 # Ports
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
+
+# Inactivity timeout (seconds) - server shuts down after this period of no requests
+ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-600}"
 
 # Derived names using prefix
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
@@ -470,6 +474,7 @@ start_orchestra_server() {
   export ORCHESTRA_DB_BASE=orchestra
   export ORCHESTRA_RELOAD=false
   export ORCHESTRA_WORKERS_COUNT=1
+  export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="$ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS"
 
   # API keys for embedding and LLM operations
   # Orchestra Python code uses get_env() which checks ORCHESTRA_* prefix first, then
@@ -839,6 +844,7 @@ main() {
       echo "  ORCHESTRA_WORKERS       Number of uvicorn workers (default: CPU cores)"
       echo "  ORCHESTRA_LOG_DIR       Directory for orchestra logs (optional)"
       echo "  ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)"
+      echo "  ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after inactivity (default: 600)"
       echo ""
       echo "Test User (always seeded on start/restart):"
       echo "  ORCHESTRA_TEST_USER_ID  Test user ID (default: 'test-user-001')"
