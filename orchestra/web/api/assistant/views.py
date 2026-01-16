@@ -4388,6 +4388,20 @@ def admin_list_all_assistants(
         secrets_list = [get_secrets_for_assistant(a) for a in assistants]
         user_ids = [a.user_id for a in assistants]
         auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
+
+        # Get unity_branch for each assistant's organization
+        from orchestra.db.dao.organization_dao import OrganizationDAO
+
+        org_dao = OrganizationDAO(session)
+
+        def get_unity_branch_for_assistant(assistant):
+            if assistant.organization_id is None:
+                return None  # Personal assistant - no org branch
+            org = org_dao.get(assistant.organization_id)
+            return org.unity_branch if org else None
+
+        unity_branches = [get_unity_branch_for_assistant(a) for a in assistants]
+
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -4424,6 +4438,7 @@ def admin_list_all_assistants(
                     user_last_name=auth_users[i].last_name,
                     user_email=auth_users[i].email,
                     secrets=secrets_list[i],
+                    unity_branch=unity_branches[i],
                 )
                 for i, a in enumerate(assistants)
             ],

@@ -393,6 +393,11 @@ class Organization(Base):
         server_default="false",
     )
 
+    # === UNITY DEPLOYMENT CONFIG ===
+    # Unity branch for this org's deployments. NULL means use standard main/staging.
+    # Only set for orgs with custom branches (e.g., "client/midland-heart", "colliers").
+    unity_branch = Column(String, nullable=True, index=True)
+
     # Relationships
     interfaces = relationship(
         "Interface",

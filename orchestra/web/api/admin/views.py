@@ -1478,3 +1478,120 @@ def admin_cleanup_expired_invites(
             status_code=500,
             detail=f"Failed to cleanup expired invites: {str(e)}",
         )
+
+
+# === UNITY BRANCH MANAGEMENT ===
+
+
+@router.get(
+    "/organization/{org_id}/unity-branch",
+    summary="Admin: Get Unity branch for organization",
+    description="Get the Unity branch configured for an organization. "
+    "NULL means standard main/staging branches are used.",
+)
+def admin_get_organization_unity_branch(
+    org_id: int,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Get the Unity branch for an organization.
+
+    :param org_id: Organization ID.
+    :param session: Database session.
+    :return: Organization ID and unity_branch (NULL if not set).
+    """
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(org_id)
+
+    if not org:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Organization {org_id} not found",
+        )
+
+    return {
+        "organization_id": org_id,
+        "organization_name": org.name,
+        "unity_branch": org.unity_branch,
+    }
+
+
+@router.put(
+    "/organization/{org_id}/unity-branch",
+    summary="Admin: Set Unity branch for organization",
+    description="Set the Unity branch for an organization's deployments. "
+    "Pass NULL/empty to clear (uses standard main/staging).",
+)
+def admin_set_organization_unity_branch(
+    org_id: int,
+    unity_branch: Optional[str] = Query(
+        None,
+        description="Unity branch name (e.g., 'client/midland-heart', 'colliers'). "
+        "NULL or empty to clear.",
+    ),
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Set the Unity branch for an organization.
+
+    :param org_id: Organization ID.
+    :param unity_branch: Branch name or NULL to clear.
+    :param session: Database session.
+    :return: Updated organization ID and unity_branch.
+    """
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(org_id)
+
+    if not org:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Organization {org_id} not found",
+        )
+
+    # Normalize empty string to None
+    org.unity_branch = unity_branch if unity_branch else None
+    session.commit()
+
+    return {
+        "organization_id": org_id,
+        "organization_name": org.name,
+        "unity_branch": org.unity_branch,
+    }
+
+
+@router.get(
+    "/organizations/unity-branches",
+    summary="Admin: Get all unique Unity branches",
+    description="Get all unique unity_branch values across organizations. "
+    "Used by communication service to manage idle containers for each branch.",
+)
+def admin_get_active_unity_branches(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Get all unique unity_branch values across organizations.
+
+    :param session: Database session.
+    :return: List of unique branch names (excludes NULL).
+    """
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Organization
+
+    # Get distinct non-null unity_branch values
+    query = (
+        select(Organization.unity_branch)
+        .where(Organization.unity_branch.isnot(None))
+        .distinct()
+    )
+    result = session.execute(query)
+    branches = [row[0] for row in result.fetchall()]
+
+    return {
+        "branches": sorted(branches),
+        "count": len(branches),
+    }

@@ -276,6 +276,12 @@ class AssistantRead(AssistantCreate):
         description="Dictionary of secret names to values. Only returned via admin endpoints.",
         example={"openai_api_key": "sk-..."},
     )
+    unity_branch: Optional[str] = Field(
+        None,
+        description="Unity branch for this assistant's org (from org config). "
+        "NULL means use standard main/staging.",
+        example="client/midland-heart",
+    )
 
     class Config:
         orm_mode = True
