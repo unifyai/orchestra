@@ -420,8 +420,8 @@ wait_for_server() {
   log_info "Waiting for Orchestra server to be ready..."
 
   while (( attempt < max_attempts )); do
-    if curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
-       curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
+    if curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
+       curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
       log_success "Orchestra server is ready at $LOCAL_ORCHESTRA_URL"
       return 0
     fi
@@ -742,8 +742,8 @@ cmd_status() {
 }
 
 cmd_check() {
-  if curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
-     curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
+  if curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
+     curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
     echo "$LOCAL_ORCHESTRA_URL"
     return 0
   fi
