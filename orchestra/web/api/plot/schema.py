@@ -78,11 +78,29 @@ class PlotConfigInput(BaseModel):
     )
     x_label: Optional[str] = Field(
         None,
-        description="Label for the x-axis (can be inferred by LLM)",
+        description="Custom label for x-axis and tooltip (overrides field name)",
     )
     y_label: Optional[str] = Field(
         None,
-        description="Label for the y-axis (can be inferred by LLM)",
+        description="Custom label for y-axis and tooltip (overrides field name)",
+    )
+    # Axis visibility options
+    show_x_label: Optional[bool] = Field(
+        True,
+        description="Whether to show the x-axis label",
+    )
+    show_y_label: Optional[bool] = Field(
+        True,
+        description="Whether to show the y-axis label",
+    )
+    # Tick formatting
+    x_tick_format: Optional[str] = Field(
+        None,
+        description="Format string for x-axis ticks (e.g., '$' prefix for currency)",
+    )
+    y_tick_format: Optional[str] = Field(
+        None,
+        description="Format string for y-axis ticks (e.g., '$' prefix for currency)",
     )
 
     # =========================================================================
