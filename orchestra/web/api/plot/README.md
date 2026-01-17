@@ -244,6 +244,9 @@ When using the `description` field instead of explicit `plot_config`:
 | `show_y_label` | bool | true | Whether to show the y-axis label |
 | `x_tick_format` | string | optional | Format string for x-axis ticks (e.g., "$" prefix) |
 | `y_tick_format` | string | optional | Format string for y-axis ticks (e.g., "$" prefix) |
+| `group_by_label` | string | optional | Custom label for group_by field in tooltip/legend |
+| `aggregate_label` | string | optional | Custom label for aggregate field in tooltip |
+| `y_tick_format` | string | optional | Format string for y-axis ticks (e.g., "$" prefix) |
 
 ## Console Integration
 

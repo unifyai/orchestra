@@ -102,6 +102,15 @@ class PlotConfigInput(BaseModel):
         None,
         description="Format string for y-axis ticks (e.g., '$' prefix for currency)",
     )
+    # Group by and aggregate labels
+    group_by_label: Optional[str] = Field(
+        None,
+        description="Custom label for group_by field in tooltip and legend (overrides field name)",
+    )
+    aggregate_label: Optional[str] = Field(
+        None,
+        description="Custom label for aggregate field in tooltip (overrides field name)",
+    )
 
     # =========================================================================
     # Validators
