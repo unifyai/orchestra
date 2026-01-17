@@ -34,9 +34,7 @@ async def test_get_logs_groups_project_not_found(client: AsyncClient):
 @pytest.mark.anyio
 async def test_get_log_groups_by_context(client: AsyncClient):
     """
-    Test grouping by context with entries (dual-mode compatible).
-
-    Uses entries instead of params to ensure compatibility with both EAV and JSONB modes.
+    Test grouping by context with entries.
     """
     project_name = "test-groups-by-context"
     _ = await _create_project(client, project_name)
@@ -321,7 +319,7 @@ async def test_get_log_groups_combined(client: AsyncClient):
 @pytest.mark.anyio
 async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
     """
-    Test comprehensive grouping scenarios in both EAV and JSONB modes:
+    Test comprehensive grouping scenarios:
     - Single-level grouping (entries)
     - Multi-level grouping
     - group_offset / group_limit
@@ -737,7 +735,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
             # With group_depth>=3 all levels are fully expanded to log lists.
             assert "group_count" in version_groups
             assert "count" in version_groups
-            # EAV returns 10, JSONB may return fewer due to different data population
+            # Counts may vary based on data population
             assert (
                 version_groups["count"] >= 3
             ), f"Expected count >= 3, got {version_groups['count']}"
@@ -1412,7 +1410,7 @@ async def test_sort_within_and_across_groups_together(
 
 @pytest.mark.anyio
 async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
-    """Test grouping with various filter parameters in both EAV and JSONB modes."""
+    """Test grouping with various filter parameters."""
     project_name = "test-grouping-with-other-filters"
     _ = await _create_project(client, project_name)
 
@@ -1509,7 +1507,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     assert "count" in group_obj
 
     # The total count should reflect logs matching from_fields *before* grouping
-    # Note: EAV mode returns 9, JSONB mode returns 10 - this is a known behavioral difference
+    # Note: Count may vary based on data population
     assert group_obj["count"] in (
         9,
         10,
@@ -2072,8 +2070,7 @@ async def test_groups_only_both_modes(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_return_timestamps_jsonb_mode(client: AsyncClient):
-    """Test return_timestamps with groups_only returns timestamps in JSONB mode."""
-    # Note: EAV mode has a known issue with return_timestamps, so we only test JSONB
+    """Test return_timestamps with groups_only returns timestamps."""
     project_name = "test-return-timestamps"
     await _create_project(client, project_name)
 
@@ -2180,8 +2177,7 @@ async def test_log_structure_preserved_both_modes(client: AsyncClient):
             # Check entries contain expected non-grouped fields
             assert "name" in log["entries"], f"Missing name in entries"
             assert "value" in log["entries"], f"Missing value in entries"
-            # Note: category might or might not be present depending on mode
-            # EAV mode removes grouped-by fields, JSONB mode may keep them
+            # Note: category might or might not be present depending on grouping configuration
 
 
 # =============================================================================

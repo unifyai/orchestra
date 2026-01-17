@@ -259,7 +259,7 @@ async def test_full_name_filter_expression(client: AsyncClient):
     [
         # Basic comparison
         (
-            "score > 20",
+            "score blue > 20",
             {
                 "lhs": {"type": "identifier", "value": "score"},
                 "operand": ">",
@@ -1163,7 +1163,10 @@ def test_ast_parser(expression, expected_dict):
     Test that the new AST-based parser correctly converts filter expressions
     to the expected dictionary structure.
     """
-    result_dict = str_filter_exp_to_dict_using_ast(expression)
+    result_dict = str_filter_exp_to_dict_using_ast(
+        expression,
+        field_names=["score blue"],
+    )
     assert (
         result_dict == expected_dict
     ), f"AST mismatch.\nGot: {result_dict}\nExpected: {expected_dict}"
@@ -2889,7 +2892,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    # Both JSONB and EAV modes: logs without the field also match (missing field = None)
+    # Logs without the field also match (missing field = None)
     # This is consistent with Python semantics where accessing a missing dict key
     # with .get() returns None, and None == None is True.
     # Just verify that the explicitly updated logs are in the result

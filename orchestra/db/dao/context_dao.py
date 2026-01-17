@@ -14,12 +14,8 @@ from sqlalchemy.orm import Session
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextVersion,
-    JSONLog,
-    Log,
     LogEvent,
     LogEventContext,
-    LogEventJSONLog,
-    LogEventLog,
     LogEventVersion,
     ProjectVersion,
 )
@@ -50,74 +46,7 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
 
     orphaned_ids = [row[0] for row in orphaned_log_event_ids]
 
-    # Delete associated logs via LogEventLog
-    session.execute(
-        text(
-            """
-        DELETE FROM log
-        WHERE id IN (
-            SELECT log_id FROM log_event_log
-            WHERE log_event_id = ANY(:log_event_ids)
-        )
-        """,
-        ),
-        {"log_event_ids": orphaned_ids},
-    )
-
-    # Delete associated JSON logs via LogEventJSONLog
-    session.execute(
-        text(
-            """
-        DELETE FROM json_log
-        WHERE id IN (
-            SELECT json_log_id FROM log_event_json_log
-            WHERE log_event_id = ANY(:log_event_ids)
-        )
-        """,
-        ),
-        {"log_event_ids": orphaned_ids},
-    )
-
-    # Delete associated derived logs via LogEventDerivedLog (if table exists)
-    try:
-        session.execute(
-            text(
-                """
-            DELETE FROM derived_log
-            WHERE id IN (
-                SELECT derived_log_id FROM log_event_derived_log
-                WHERE log_event_id = ANY(:log_event_ids)
-            )
-            """,
-            ),
-            {"log_event_ids": orphaned_ids},
-        )
-    except:
-        # Table might not exist
-        pass
-
-    # Delete associations
-    session.execute(
-        text("DELETE FROM log_event_log WHERE log_event_id = ANY(:log_event_ids)"),
-        {"log_event_ids": orphaned_ids},
-    )
-
-    session.execute(
-        text("DELETE FROM log_event_json_log WHERE log_event_id = ANY(:log_event_ids)"),
-        {"log_event_ids": orphaned_ids},
-    )
-
-    try:
-        session.execute(
-            text(
-                "DELETE FROM log_event_derived_log WHERE log_event_id = ANY(:log_event_ids)",
-            ),
-            {"log_event_ids": orphaned_ids},
-        )
-    except:
-        pass
-
-    # Finally, delete the orphaned log events
+    # Delete the orphaned log events (JSONB-only storage)
     session.execute(
         text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
         {"log_event_ids": orphaned_ids},
@@ -1912,7 +1841,7 @@ class ContextDAO:
         Returns:
             Number of log entries updated (log + json_log)
         """
-        # JSONB mode only - EAV mode has been removed
+        # Legacy mode removed; only current storage is supported
         return self._cascade_update_nested_batch(
             context_id,
             fk_path,
@@ -2061,7 +1990,7 @@ class ContextDAO:
         Returns:
             Number of log entries updated (log + json_log)
         """
-        # JSONB mode only - EAV mode has been removed
+        # Legacy mode removed; only current storage is supported
         return self._set_null_nested_batch(
             context_id,
             fk_path,
@@ -2791,7 +2720,7 @@ class ContextDAO:
             raise ValueError(f"Context with id {id} not found")
 
     def delete(self, id: int) -> None:
-        from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.db.dao.log_event_dao import LogEventDAO
         from orchestra.db.dao.plot_dao import PlotDAO
         from orchestra.db.dao.sibling_context_cleanup import (
             get_assistants_sibling_context_info,
@@ -2845,7 +2774,7 @@ class ContextDAO:
                         self.session.flush()
 
             # Delete associated GCS media BEFORE deleting the context
-            log_dao = LogDAO(self.session, self)
+            log_event_dao = LogEventDAO(self.session, self)
             log_events_subquery = (
                 select(LogEvent.id)
                 .join(LogEventContext)
@@ -2860,7 +2789,7 @@ class ContextDAO:
                 ).fetchall()
             ]
             if log_event_ids:
-                log_dao._bulk_delete_gcs_media(log_event_ids, project.id)
+                log_event_dao._bulk_delete_gcs_media(log_event_ids, project.id)
 
             # Proceed with deleting the context from the database
             self.session.delete(context)
@@ -3305,11 +3234,10 @@ class ContextDAO:
     def add_logs_copy(self, context_id: int, log_ids: List[int]) -> None:
         """Associate copies of LogEvent instances with the specified context.
 
-        This method creates new copies of the specified log events and their associated
-        Log and JSONLog entries, then associates these copies with the context.
+        This method creates new copies of the specified log events and associates
+        these copies with the context.
 
         Copies LogEvent.data and LogEvent.key_order JSONB fields.
-        Also copies Log/JSONLog entries for backward compatibility.
 
         Args:
             context_id: ID of the context to associate logs with
@@ -3359,79 +3287,6 @@ class ContextDAO:
                 new_log_event = LogEvent(**new_log_event_data)
                 self.session.add(new_log_event)
                 self.session.flush()  # Get the new ID
-
-                # Query all associated Log rows for the original log event
-                original_logs = (
-                    self.session.query(Log)
-                    .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(LogEventLog.log_event_id == original_log_id)
-                    .all()
-                )
-
-                # Prepare bulk insert for Log entries
-                new_logs = []
-                for original_log in original_logs:
-                    new_log = Log(
-                        key=original_log.key,
-                        value=original_log.value,
-                        param_version=original_log.param_version,
-                        inferred_type=original_log.inferred_type,
-                    )
-                    new_logs.append(new_log)
-
-                # Bulk insert all new Log entries
-                if new_logs:
-                    self.session.bulk_save_objects(new_logs, return_defaults=True)
-                    self.session.flush()  # Get IDs for new logs
-
-                    # Create LogEventLog associations
-                    for new_log in new_logs:
-                        log_event_log = LogEventLog(
-                            log_event_id=new_log_event.id,
-                            log_id=new_log.id,
-                        )
-                        self.session.add(log_event_log)
-
-                # Check for JSONLog entries (if the model exists)
-                if JSONLog is not None:
-                    try:
-                        # Query JSONLog entries for the original log event via association
-                        original_json_logs = (
-                            self.session.query(JSONLog)
-                            .join(
-                                LogEventJSONLog,
-                                LogEventJSONLog.json_log_id == JSONLog.id,
-                            )
-                            .filter(LogEventJSONLog.log_event_id == original_log_id)
-                            .all()
-                        )
-
-                        # Prepare bulk insert for JSONLog entries
-                        new_json_logs = []
-                        for original_json_log in original_json_logs:
-                            new_json_log = JSONLog(
-                                key=original_json_log.key,
-                                value=original_json_log.value,
-                            )
-                            new_json_logs.append(new_json_log)
-
-                        # Bulk insert all new JSONLog entries
-                        if new_json_logs:
-                            self.session.bulk_save_objects(
-                                new_json_logs,
-                                return_defaults=True,
-                            )
-                            self.session.flush()  # Get IDs for new JSONLogs
-
-                            # Create LogEventJSONLog associations
-                            for new_json_log in new_json_logs:
-                                log_event_json_log = LogEventJSONLog(
-                                    log_event_id=new_log_event.id,
-                                    json_log_id=new_json_log.id,
-                                )
-                                self.session.add(log_event_json_log)
-                    except Exception:
-                        pass
 
                 # Create association between the new log event and context
                 association = LogEventContext(

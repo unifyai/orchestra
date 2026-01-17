@@ -21,18 +21,18 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.derived_log_dao import (
-    DerivedLogDAO,
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_event_dao import (
+    ImmutableFieldError,
+    LogEventDAO,
+    OverwriteError,
     _extract_field_names_from_equation,
 )
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_dao import ImmutableFieldError, LogDAO, OverwriteError
-from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -41,13 +41,9 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
-    DerivedLog,
     Embedding,
-    Log,
     LogEvent,
     LogEventContext,
-    LogEventDerivedLog,
-    LogEventLog,
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
@@ -221,7 +217,7 @@ def create_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     # check if the project exists
     try:
@@ -285,7 +281,6 @@ def create_logs(
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             log_event_dao=log_event_dao,
-            log_dao=log_dao,
             context_dao=context_dao,
         )
 
@@ -511,7 +506,7 @@ def create_from_logs(
     Creates one or more entries based on `body.equation` and `body.referenced_logs`.
 
     When body.derived=True (default):
-      Eagerly computes each derived value and stores it in DerivedLog.value.
+      Eagerly computes each derived value and stores it in LogEvent.data.
 
     When body.derived=False:
       Computes values and stores them directly in the base logs as regular entries.
@@ -525,7 +520,7 @@ def create_from_logs(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -814,7 +809,7 @@ def create_from_logs(
                 )
 
             # Create/update ActiveDerivedLog template only when derived=True
-            inferred_type = LogDAO.infer_type("", non_null_val)
+            inferred_type = LogEventDAO.infer_type("", non_null_val)
 
             if body.derived:
                 existing_template = (
@@ -936,7 +931,7 @@ def update_derived_log(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    derived_log_dao = DerivedLogDAO(session)
+    derived_log_dao = LogEventDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -1168,8 +1163,8 @@ def update_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
-    derived_log_dao = DerivedLogDAO(session)
+    log_dao = LogEventDAO(session, context_dao)
+    derived_log_dao = LogEventDAO(session, context_dao)
 
     return _update_logs(
         request_fastapi=request_fastapi,
@@ -1194,8 +1189,8 @@ def _update_logs(
     project_dao: ProjectDAO,
     field_type_dao: FieldTypeDAO,
     log_event_dao: LogEventDAO,
-    log_dao: LogDAO,
-    derived_log_dao: DerivedLogDAO,
+    log_dao: LogEventDAO,
+    derived_log_dao: LogEventDAO,
 ):
     """
     Log update implementation.
@@ -1668,6 +1663,79 @@ def _update_logs(
 
     # First, handle flat updates using JSONB method
     if all_flat_updates:
+        # Enforce unique field constraints for updated values (JSONB mode)
+        if ctx_id is not None:
+            unique_fields = {
+                k: v
+                for k, v in field_types.items()
+                if isinstance(v, dict) and v.get("unique", False)
+            }
+
+            if unique_fields:
+                unique_checks = []
+                seen_values: Dict[tuple, int] = {}
+                for update in all_flat_updates:
+                    field_name = update.get("key")
+                    if field_name not in unique_fields:
+                        continue
+                    value = update.get("value")
+                    if value is None:
+                        continue
+
+                    value_json = json.dumps({field_name: value})
+                    unique_checks.append(
+                        (update.get("log_event_id"), field_name, value_json),
+                    )
+
+                    dedupe_key = (field_name, value_json)
+                    existing_id = seen_values.get(dedupe_key)
+                    if existing_id is not None and existing_id != update.get(
+                        "log_event_id",
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Duplicate entry for unique field '{field_name}'.",
+                        )
+                    seen_values[dedupe_key] = update.get("log_event_id")
+
+                if unique_checks:
+                    params: Dict[str, Any] = {
+                        "project_id": project_id,
+                        "context_id": ctx_id,
+                        "exclude_ids": list(
+                            {u.get("log_event_id") for u in all_flat_updates},
+                        ),
+                    }
+                    or_conditions = []
+                    case_parts = []
+                    for i, (_, field_name, value_json) in enumerate(unique_checks):
+                        params[f"value_{i}"] = value_json
+                        or_conditions.append(f"le.data @> CAST(:value_{i} AS jsonb)")
+                        case_parts.append(
+                            f"WHEN le.data @> CAST(:value_{i} AS jsonb) THEN {i}",
+                        )
+
+                    jsonb_query = f"""
+                        SELECT DISTINCT CASE {' '.join(case_parts)} END AS match_idx
+                        FROM log_event le
+                        JOIN log_event_context lec ON le.id = lec.log_event_id
+                        WHERE le.project_id = :project_id
+                        AND lec.context_id = :context_id
+                        AND le.id != ALL(:exclude_ids)
+                        AND ({' OR '.join(or_conditions)})
+                    """
+
+                    results = session.execute(text(jsonb_query), params).fetchall()
+                    for (match_idx,) in results:
+                        if match_idx is not None:
+                            _, field_name, _ = unique_checks[match_idx]
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    f"Duplicate entry for unique field '{field_name}'."
+                                ),
+                            )
+
         try:
             # Call bulk_update with all updates
             bulk_result = log_dao.bulk_update(
@@ -1856,7 +1924,7 @@ def _delete_logs(
     context_name: str,
     ids_and_fields: Dict[Optional[int], List[str]],
     body,
-    log_dao: LogDAO,
+    log_dao: LogEventDAO,
     log_event_dao: LogEventDAO,
     field_type_dao: FieldTypeDAO,
     context_dao: ContextDAO,
@@ -1879,7 +1947,7 @@ def _delete_logs(
         context_name: The context name
         ids_and_fields: Dict mapping log_event_id -> list of field names to delete
         body: The DeleteLogEntryRequest body
-        log_dao: LogDAO instance
+        log_dao: LogEventDAO instance
         log_event_dao: LogEventDAO instance
         field_type_dao: FieldTypeDAO instance
         context_dao: ContextDAO instance
@@ -2441,7 +2509,7 @@ def delete_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     if body.source_type not in ("all", "base", "derived"):
         raise HTTPException(
@@ -2984,6 +3052,9 @@ def get_logs(
                     "group_count": total_distinct,
                     "count": field_total,
                 }
+
+            if groups_only:
+                logs_out = []
 
             final_result = {
                 "groups": groups,
@@ -3821,7 +3892,7 @@ def rename_field(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     try:
         # Check if this is the protected Unity/Tasks context
@@ -4172,30 +4243,15 @@ def get_fields(
         raise not_found(f"Project {project_name}")
 
     # For derived entries, get their equations (project-wide)
-    derived_equations = {}
-
-    # Query DerivedLog table (legacy data)
-    derived_fields = (
-        session.query(DerivedLog.key, DerivedLog.equation)
-        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
-        .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-        .filter(LogEvent.project_id == project_obj.id)
-        .distinct()
-        .all()
-    )
-    for key, equation in derived_fields:
-        derived_equations[key] = equation
-
-    # Also query ActiveDerivedLog table (primary storage)
-    # This is where equations are stored in JSONB mode
-    active_derived_fields = (
-        session.query(ActiveDerivedLog.key, ActiveDerivedLog.equation)
+    derived_equations = {
+        key: equation
+        for key, equation in session.query(
+            ActiveDerivedLog.key,
+            ActiveDerivedLog.equation,
+        )
         .filter(ActiveDerivedLog.project_id == project_obj.id)
         .all()
-    )
-    for key, equation in active_derived_fields:
-        if key not in derived_equations:  # DerivedLog takes precedence
-            derived_equations[key] = equation
+    }
 
     # Wildcard: return mapping of context_name -> fields
     if context == "*":
@@ -4381,31 +4437,6 @@ def create_fields(
             if log_event_ids and request.fields:
                 field_names = list(request.fields.keys())
 
-                # Query existing base (log_event_id, key) pairs in one shot
-                existing_base_pairs = (
-                    session.query(LogEventLog.log_event_id, Log.key)
-                    .join(Log, Log.id == LogEventLog.log_id)
-                    .filter(
-                        LogEventLog.log_event_id.in_(log_event_ids),
-                        Log.key.in_(field_names),
-                    )
-                    .all()
-                )
-
-                # Query existing derived (log_event_id, key) pairs in one shot
-                existing_derived_pairs = (
-                    session.query(LogEventDerivedLog.log_event_id, DerivedLog.key)
-                    .join(
-                        DerivedLog,
-                        DerivedLog.id == LogEventDerivedLog.derived_log_id,
-                    )
-                    .filter(
-                        LogEventDerivedLog.log_event_id.in_(log_event_ids),
-                        DerivedLog.key.in_(field_names),
-                    )
-                    .all()
-                )
-
                 # Check for existing fields in LogEvent.data JSONB column
                 # Single query to check all (log_event_id, field_name) pairs
                 existing_jsonb_pairs = []
@@ -4430,11 +4461,7 @@ def create_fields(
                     ).fetchall()
                     existing_jsonb_pairs = [(row[0], row[1]) for row in jsonb_results]
 
-                existing_pairs = (
-                    set(existing_base_pairs)
-                    | set(existing_derived_pairs)
-                    | set(existing_jsonb_pairs)
-                )
+                existing_pairs = set(existing_jsonb_pairs)
 
                 # Prepare entries to create for missing pairs only
                 entries_to_create = []
@@ -4455,9 +4482,9 @@ def create_fields(
                 backfilled_count = len(entries_to_create)
 
                 if entries_to_create:
-                    # Create LogDAO instance for bulk_create
-                    log_dao = LogDAO(session, context_dao)
-                    log_dao.bulk_create(entries_to_create)
+                    # Create LogEventDAO instance for bulk merge
+                    log_dao = LogEventDAO(session, context_dao)
+                    log_dao.bulk_merge_data(entries_to_create)
 
                     # Update LogEvent.data JSONB column with the new fields
                     # Uses a single UPDATE with unnest for all log events
@@ -4541,7 +4568,7 @@ def delete_fields(
 ):
     """
     Deletes one or more fields from a project. This will:
-    1. Delete all Log and DerivedLog entries with the specified field names (not the entire LogEvent)
+    1. Remove the field from LogEvent.data for all matching log events
     2. Delete the field type records for those fields
 
     This operation cannot be undone, so use with caution.
@@ -4551,7 +4578,7 @@ def delete_fields(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     # Check if this is the protected Unity/Tasks context
     if request.project_name == "Unity" and request.context == "Tasks":
@@ -4587,34 +4614,10 @@ def delete_fields(
     context_id = context[0][0].id
 
     deleted_fields = []
-    total_deleted_logs = 0
-    total_deleted_derived_logs = 0
+    total_updated_events = 0
 
     for field_name in request.fields:
         try:
-            # Get all log event IDs that have this field in either base logs or derived logs
-            base_log_events = (
-                session.query(LogEventLog.log_event_id)
-                .join(Log, Log.id == LogEventLog.log_id)
-                .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
-                .filter(
-                    LogEvent.project_id == project_id,
-                    Log.key == field_name,
-                )
-                .distinct()
-            )
-
-            derived_log_events = (
-                session.query(LogEventDerivedLog.log_event_id)
-                .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-                .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-                .filter(
-                    LogEvent.project_id == project_id,
-                    DerivedLog.key == field_name,
-                )
-                .distinct()
-            )
-
             # Get log events where the field exists in LogEvent.data
             jsonb_log_events = (
                 session.query(LogEvent.id)
@@ -4626,70 +4629,11 @@ def delete_fields(
                 )
                 .distinct()
             )
-            # Combine all queries with UNION to get all affected log event IDs
-            all_event_ids = (
-                base_log_events.union(derived_log_events).union(jsonb_log_events).all()
-            )
-            event_ids = [event_id[0] for event_id in all_event_ids]
+            event_ids = [event_id[0] for event_id in jsonb_log_events.all()]
 
             if event_ids:
-                # First, find the Log IDs to delete
-                logs_to_delete_ids = (
-                    session.query(Log.id)
-                    .join(
-                        LogEventLog,
-                        LogEventLog.log_id == Log.id,
-                    )
-                    .filter(
-                        LogEventLog.log_event_id.in_(event_ids),
-                        Log.key == field_name,
-                    )
-                    .all()
-                )
-                log_ids = [log_id[0] for log_id in logs_to_delete_ids]
-
-                if log_ids:
-                    # Query for Log entries to delete (for GCS cleanup)
-                    logs_to_delete_query = session.query(Log).filter(
-                        Log.id.in_(log_ids),
-                    )
-
-                    # Delete GCS media files before deleting database records
-                    log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
-
-                    # Delete the Log entries (not the LogEvents!)
-                    deleted_logs_count = logs_to_delete_query.delete(
-                        synchronize_session=False,
-                    )
-                    total_deleted_logs += deleted_logs_count
-                else:
-                    deleted_logs_count = 0
-
-                # Delete the DerivedLog entries
-                # First, find the DerivedLog IDs to delete
-                derived_logs_to_delete_ids = (
-                    session.query(DerivedLog.id)
-                    .join(
-                        LogEventDerivedLog,
-                        LogEventDerivedLog.derived_log_id == DerivedLog.id,
-                    )
-                    .filter(
-                        LogEventDerivedLog.log_event_id.in_(event_ids),
-                        DerivedLog.key == field_name,
-                    )
-                    .all()
-                )
-                derived_log_ids = [d[0] for d in derived_logs_to_delete_ids]
-
-                # Then delete them
-                deleted_derived_logs_count = 0
-                if derived_log_ids:
-                    deleted_derived_logs_count = (
-                        session.query(DerivedLog)
-                        .filter(DerivedLog.id.in_(derived_log_ids))
-                        .delete(synchronize_session=False)
-                    )
-                total_deleted_derived_logs += deleted_derived_logs_count
+                # Delete GCS media files before updating database records
+                log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
 
                 # Remove the field from LogEvent.data JSONB column
                 # This is a single bulk UPDATE - O(1) query regardless of number of log events
@@ -4710,6 +4654,7 @@ def delete_fields(
                             "event_ids": event_ids,
                         },
                     )
+                total_updated_events += len(event_ids)
 
             # Delete field type record
             field_type_dao.delete_field_type(
@@ -4732,7 +4677,7 @@ def delete_fields(
         }
 
     return {
-        "info": f"Fields deleted successfully. Removed {total_deleted_logs} logs and {total_deleted_derived_logs} derived logs.",
+        "info": f"Fields deleted successfully. Updated {total_updated_events} log events.",
         "deleted_fields": deleted_fields,
     }
 
@@ -4776,8 +4721,9 @@ def update_active_derived_logs(
     for new log events that match the filter criteria.
     This endpoint  is designed to be calledby internal processes (e.g., Cloud Scheduler) or administrators.
     """
-    # Instantiate DAO with shared session
+    # Instantiate DAOs with shared session
     field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
 
     try:
         # Get all active templates
@@ -4791,7 +4737,7 @@ def update_active_derived_logs(
             return {"info": "No active templates found"}
 
         # Materialize active derived log templates (JSONB mode)
-        derived_log_dao = DerivedLogDAO(session)
+        derived_log_dao = LogEventDAO(session, context_dao)
         total_derived_logs_created = 0
 
         for template in active_templates:
@@ -4939,7 +4885,7 @@ def process_traffic_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
     try:
         from google.cloud import pubsub_v1
 
@@ -5013,7 +4959,6 @@ def process_traffic_logs(
                 project_dao=project_dao,
                 field_type_dao=field_type_dao,
                 log_event_dao=log_event_dao,
-                log_dao=log_dao,
                 context_dao=context_dao,
                 context_obj=context_obj,
             )

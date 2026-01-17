@@ -722,10 +722,10 @@ async def test_get_logs_w_pagination(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_logs_nested_dict_ordering(client: AsyncClient):
-    """Test nested dict key ordering is preserved in both EAV and JSONB modes.
+    """Test nested dict key ordering is preserved.
 
-    JSONB mode uses a separate key_order column to store the original insertion order
-    since PostgreSQL JSONB fundamentally alphabetizes keys for performance optimization.
+    key_order stores the original insertion order since PostgreSQL JSONB
+    alphabetizes keys for performance optimization.
     """
     project_name = "nested-dict-order-test"
     _ = await _create_project(client, project_name)

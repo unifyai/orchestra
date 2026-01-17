@@ -27,7 +27,6 @@ from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -224,8 +223,7 @@ async def create_assistant(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_event_dao = LogEventDAO(session, context_dao)
     api_keys = api_key_dao.filter(user_id=user_id)
     if not api_keys:
         raise HTTPException(
@@ -4724,9 +4722,8 @@ def admin_list_contacts(
 
     # Retrieve matching log_event IDs
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, ContextDAO(session))
     if filters:
-        event_ids = log_dao.get_ids_by_filter(
+        event_ids = log_event_dao.get_ids_by_filter(
             project_id=None,
             filters=filters,
             context_ids=ctx_ids,

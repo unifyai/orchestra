@@ -24,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
 from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 
 from . import alias_utils, jsonb_builder
 from .core import build_sql_query
@@ -196,7 +196,7 @@ def _handle_dict_method(
         )
 
     # Check for pre-built src subquery from JSONB wrapper
-    # This supports both wrapped JSONB expressions and existing EAV subqueries
+    # This supports wrapped JSONB expressions and existing subqueries
     if filter_dict.get("_jsonb_src_subq") is not None:
         src = filter_dict["_jsonb_src_subq"]
     else:
@@ -496,7 +496,7 @@ def _handle_if_expr(
             (
                 "bool"
                 if not isinstance(raw_test, BindParameter)
-                else LogDAO.infer_type("", raw_test.value)
+                else LogEventDAO.infer_type("", raw_test.value)
             ),
             ids_subq,
             in_comprehension,
@@ -507,7 +507,7 @@ def _handle_if_expr(
     ):
         raw_body = _inflate_scalar_or_subquery(
             raw_body,
-            LogDAO.infer_type(
+            LogEventDAO.infer_type(
                 "",
                 raw_body if not isinstance(raw_body, BindParameter) else raw_body.value,
             ),
@@ -520,7 +520,7 @@ def _handle_if_expr(
     ):
         raw_else = _inflate_scalar_or_subquery(
             raw_else,
-            LogDAO.infer_type(
+            LogEventDAO.infer_type(
                 "",
                 raw_else if not isinstance(raw_else, BindParameter) else raw_else.value,
             ),
@@ -632,7 +632,7 @@ def _handle_list_comp(
     filter to each element, and finally aggregating back into a list.
     """
     # Check for pre-built iter subquery from JSONB wrapper
-    # This supports both wrapped JSONB expressions and existing EAV subqueries
+    # This supports wrapped JSONB expressions and existing subqueries
     if filter_dict.get("_jsonb_iter_subq") is not None:
         iter_subq = filter_dict["_jsonb_iter_subq"]
     else:
@@ -726,14 +726,14 @@ def _handle_list_comp(
         for i, ident in enumerate(filter_dict["target"]):
             comp_col = func.coalesce(base.c.__comp_var__.op("->")(i), "null")
             # Fix: Include base in FROM clause when executing type inference query
-            comp_type = LogDAO.infer_type(
+            comp_type = LogEventDAO.infer_type(
                 "",
                 session.execute(select(comp_col).select_from(base).limit(1)).scalar(),
             )
             local_scope[ident["value"]] = (comp_col, comp_type)
     else:
         # Fix: Include base in FROM clause when executing type inference query
-        comp_type = LogDAO.infer_type(
+        comp_type = LogEventDAO.infer_type(
             "",
             session.execute(
                 select(base.c.__comp_var__).select_from(base).limit(1),
@@ -1297,7 +1297,7 @@ def _handle_dict_comp(
     filter to each element, and finally aggregating back into a dictionary.
     """
     # Check for pre-built iter subquery from JSONB wrapper
-    # This supports both wrapped JSONB expressions and existing EAV subqueries
+    # This supports wrapped JSONB expressions and existing subqueries
     if filter_dict.get("_jsonb_iter_subq") is not None:
         iter_subq = filter_dict["_jsonb_iter_subq"]
     else:
@@ -1383,13 +1383,13 @@ def _handle_dict_comp(
     base = alias_utils.subquery_with_unique_alias(base_stmt, prefix="base_dict_comp")
 
     # Fix: Include base in FROM clause when executing type inference queries
-    comp_key_type = LogDAO.infer_type(
+    comp_key_type = LogEventDAO.infer_type(
         "",
         session.execute(
             select(base.c.__comp_key__).select_from(base).limit(1),
         ).scalar(),
     )
-    comp_val_type = LogDAO.infer_type(
+    comp_val_type = LogEventDAO.infer_type(
         "",
         session.execute(
             select(base.c.__comp_val__).select_from(base).limit(1),
@@ -1850,7 +1850,7 @@ def _handle_dict_get(
             if isinstance(default_val, BindParameter):
                 from orchestra.web.api.log.utils.type_utils import get_base_storage_type
 
-                inferred = LogDAO.infer_type("", default_val.value)
+                inferred = LogEventDAO.infer_type("", default_val.value)
                 default_type = get_base_storage_type(inferred) or inferred
             elif isinstance(default_val, Subquery):
                 _, default_type = _select_value(default_val, session)
