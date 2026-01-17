@@ -19,7 +19,7 @@ depends_on = None
 
 def upgrade() -> None:
     # Create log_event_version table for JSONB versioning
-    # Unlike log_version (EAV mode), this stores complete JSONB documents per event
+    # This stores complete JSONB documents per event
     op.create_table(
         "log_event_version",
         sa.Column("id", sa.Integer(), nullable=False),

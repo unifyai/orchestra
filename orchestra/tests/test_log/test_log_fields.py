@@ -594,7 +594,7 @@ async def test_delete_fields_endpoint(client: AsyncClient):
     await _create_project(client, project_name)
 
     # Create first log with columns col1, col2, and a keeper field that won't be deleted
-    # (EAV mode requires at least one field to return the log event)
+    # (Logs require at least one field to be returned)
     response1 = await _create_log(
         client,
         project_name,

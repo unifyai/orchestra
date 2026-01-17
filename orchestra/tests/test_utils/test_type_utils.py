@@ -875,7 +875,10 @@ async def test_types_dont_match_with_pydantic_schemas():
 # Integration Tests with LogDAO.infer_type
 # ================================================================================
 
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
+
+# Backward-compat alias for tests that still reference LogDAO
+LogDAO = LogEventDAO
 
 
 @pytest.mark.anyio

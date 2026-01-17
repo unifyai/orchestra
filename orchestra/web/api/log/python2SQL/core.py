@@ -101,7 +101,7 @@ def build_sql_query(
     return result
 
 
-# NOTE: ~270 lines of dead EAV code was removed from here
+# NOTE: ~270 lines of deprecated code were removed from here
 # The _build_sql_query function now calls _build_sql_query directly
 
 

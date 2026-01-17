@@ -268,10 +268,10 @@ class TimedAsyncClient(AsyncClient):
     Captures:
     - Request method and path
     - Response time (duration)
-    - Test name and mode (from CURRENT_TEST_INFO global)
+    - Test name (from CURRENT_TEST_INFO global)
     - Status code
 
-    Used for performance comparison between EAV and JSONB storage modes.
+    Used for performance tracking in tests.
     """
 
     def __init__(self, *args, **kwargs):
@@ -325,13 +325,6 @@ async def client(
         test_name=test_name,
     ) as ac:
         yield ac
-
-
-# ============================================================================
-# Legacy Mode Fixtures (Backward Compatibility)
-# ============================================================================
-# These fixtures exist for backward compatibility during EAV mode removal.
-# They can be removed once all tests are updated to not use them.
 
 
 # ============================================================================
@@ -471,7 +464,7 @@ async def timed_client() -> AsyncGenerator[AsyncClient, None]:
     Fixture that creates a timed client for performance testing.
 
     Uses TimedAsyncClient which automatically records timing for each request,
-    along with test name and mode from CURRENT_TEST_INFO (set by pytest_runtest_setup).
+    along with the test name from CURRENT_TEST_INFO (set by pytest_runtest_setup).
 
     Used for performance tests that need real production data.
     Requires the server to be running at localhost:8000.
@@ -977,7 +970,6 @@ def large_log_dataset(_engine_session: Engine):
     """
     from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.field_type_dao import FieldTypeDAO
-    from orchestra.db.dao.log_dao import LogDAO
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
@@ -995,8 +987,7 @@ def large_log_dataset(_engine_session: Engine):
         context_dao=context_dao,
     )
     field_type_dao = FieldTypeDAO(session=session)
-    log_event_dao = LogEventDAO(session=session)
-    log_dao = LogDAO(session=session, context_dao=context_dao)
+    log_event_dao = LogEventDAO(session=session, context_dao=context_dao)
 
     # Create deterministic random number generator
     rng = random.Random(1234)
@@ -1097,8 +1088,8 @@ def large_log_dataset(_engine_session: Engine):
                             },
                         )
 
-                # Bulk create log entries
-                log_dao.bulk_create(entries)
+                # Bulk merge log entries into JSONB data
+                log_event_dao.bulk_merge_data(entries)
         yield
 
     finally:
