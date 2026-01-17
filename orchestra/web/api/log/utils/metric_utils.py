@@ -488,7 +488,7 @@ def _build_cast_expr(
     null_check = text_value.is_(None)
     json_null_check = text_value == "null"
 
-    # For "Any" type, use jsonb_typeof to determine type dynamically (like EAV's inferred_type)
+    # For "Any" type, use jsonb_typeof to determine type dynamically
     if field_type == "Any" or field_type is None:
         # jsonb_typeof returns: 'number', 'string', 'boolean', 'array', 'object', 'null'
         jsonb_type_expr = func.jsonb_typeof(jsonb_value)
@@ -743,8 +743,6 @@ def _compute_metric_for_key_grouped(
 ) -> Dict[str, Any]:
     """
     JSONB-based implementation of _compute_metric_for_key_grouped.
-
-    Queries LogEvent.data directly instead of joining EAV tables.
     """
     # Handle single string or list of strings for group_by
     if isinstance(group_by, str):
@@ -845,7 +843,7 @@ def _compute_metric_for_key_grouped(
 
     # 4) Build group-by expressions (extract values from JSONB)
     # Use -> operator to get JSONB values (not text) so Python converts them properly
-    # This ensures consistent string formatting with EAV mode (e.g., "True" not "true", "11.0" not "11")
+    # This ensures consistent string formatting (e.g., "True" not "true", "11.0" not "11")
     group_exprs = [
         LogEvent.data.op("->")(field).label(f"group_{i}_val")
         for i, field in enumerate(group_by_fields)
@@ -880,8 +878,7 @@ def _compute_metric_for_key_grouped(
         """
         if val is None:
             return "None"
-        # For numeric values, convert to float first to match EAV behavior
-        # EAV returns "11.0" for integer 11, not "11"
+        # For numeric values, convert to float first for consistent formatting
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             return str(float(val))
         # For booleans, capitalize to match Python's str(True) -> "True"
@@ -899,7 +896,7 @@ def _compute_metric_for_key_grouped(
             agg_value = row[-2]  # Second-to-last column is the aggregated value
             raw_values = row[-1]  # Last column is the array of raw values
 
-            # Normalize the group key to match EAV behavior
+            # Normalize the group key for consistent behavior
             group_key = _normalize_group_key(group_val)
 
             # First check if all values are identical (shared value reduction)
@@ -1011,8 +1008,6 @@ def compute_metric_for_key(
 ) -> Union[float, int, bool, str, None]:
     """
     JSONB-based implementation of compute_metric_for_key.
-
-    Queries LogEvent.data directly instead of joining EAV tables.
     """
     # Build reduction methods dictionary
     reduction_methods = {
@@ -1201,7 +1196,6 @@ def compute_metric_bulk(
     """
     JSONB-based implementation of compute_metric_bulk.
 
-    Queries LogEvent.data directly instead of joining EAV tables.
     Uses a simpler per-key approach to avoid Cartesian product issues.
     """
     if not keys:

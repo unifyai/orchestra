@@ -2182,7 +2182,7 @@ async def test_no_derived_log_rows_jsonb(client: AsyncClient, monkeypatch):
     In JSONB mode, derived values are stored directly in LogEvent.data,
     not in separate DerivedLog rows.
     """
-    # JSONB mode is now always enabled - EAV mode has been removed
+    # Current storage is always enabled
 
     project_name = "test_no_derived_rows"
     await _create_project(client, project_name, user=1)
@@ -2286,10 +2286,10 @@ async def test_referenced_keys_updated_on_template_update(
     """Verify that referenced_keys is updated when modifying derived log templates."""
     from datetime import datetime, timezone
 
-    from orchestra.db.dao.derived_log_dao import _extract_field_names_from_equation
+    from orchestra.db.dao.log_event_dao import _extract_field_names_from_equation
     from orchestra.db.models.orchestra_models import ActiveDerivedLog, Context, Project
 
-    # JSONB mode is now always enabled - EAV mode has been removed
+    # Current storage is always enabled
 
     project_name = "test_referenced_keys_update"
     await _create_project(client, project_name, user=1)
@@ -2381,7 +2381,7 @@ async def test_ripple_effect_jsonb(client: AsyncClient, monkeypatch):
 
     Uses GET /v0/logs API (now JSONB-aware) to verify results.
     """
-    # JSONB mode is now always enabled - EAV mode has been removed
+    # Current storage is always enabled
 
     project_name = "test_ripple_effect"
     await _create_project(client, project_name, user=1)
@@ -2480,7 +2480,7 @@ async def test_active_derived_log_materialization_jsonb(
 
     Uses GET /v0/logs API (now JSONB-aware) to verify results.
     """
-    # JSONB mode is now always enabled - EAV mode has been removed
+    # Current storage is always enabled
 
     project_name = "test_admin_materialization"
     await _create_project(client, project_name, user=1)
@@ -2596,7 +2596,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     3. Filter logs by cosine similarity to a query
     4. Sort logs by similarity (ascending = most similar first)
     """
-    # JSONB mode is now always enabled - EAV mode has been removed
+    # Current storage is always enabled
 
     project_name = "test_embed_filter_sort"
     await _create_project(client, project_name, user=1)
@@ -2757,9 +2757,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
 @pytest.mark.anyio
 async def test_create_derived_entry_both_modes(client: AsyncClient):
     """
-    Test creating derived entries works correctly in both EAV and JSONB modes.
-
-    This parametrized test ensures feature parity between modes.
+    Test creating derived entries works correctly.
     """
     project_name = "test_derived_both_modes"
     await _create_project(client, project_name, user=1)
@@ -2806,9 +2804,7 @@ async def test_create_derived_entry_both_modes(client: AsyncClient):
 @pytest.mark.anyio
 async def test_update_derived_entry_both_modes(client: AsyncClient):
     """
-    Test updating derived entries works correctly in both EAV and JSONB modes.
-
-    This parametrized test ensures feature parity between modes.
+    Test updating derived entries works correctly.
     """
     project_name = "test_update_derived_both"
     await _create_project(client, project_name, user=1)

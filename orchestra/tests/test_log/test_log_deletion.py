@@ -2004,13 +2004,7 @@ async def test_assistants_3tier_with_prefix_and_nested_subcontext(
 async def test_delete_logs_source_type_derived_rejected_in_jsonb(
     client: AsyncClient,
 ):
-    """Test that source_type='derived' returns different errors in JSONB vs EAV mode.
-
-    Both modes reject source_type='derived' when deleting without specifying fields,
-    but the error messages differ:
-    - JSONB: "JSONB mode does not distinguish" (source_type not supported)
-    - EAV: "Cannot delete derived logs without specifying fields" (operation not allowed)
-    """
+    """Test that source_type='derived' is rejected when fields are not specified."""
     project_name = "source-type-derived-test"
     _ = await _create_project(client, project_name)
 

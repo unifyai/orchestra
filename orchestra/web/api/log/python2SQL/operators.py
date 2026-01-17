@@ -33,7 +33,7 @@ from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.expression import Exists, UnaryExpression
 from sqlalchemy.sql.selectable import CTE, Subquery
 
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 
 from . import alias_utils, jsonb_builder
 from .core import build_sql_query
@@ -908,8 +908,8 @@ def _handle_comparison_operator(
     lhs_is_sub = isinstance(lhs_sql, Subquery)
     rhs_is_sub = isinstance(rhs_sql, Subquery)
 
-    # Special handling for EAV mode None equality comparisons (== None, is None)
-    # In EAV mode, each field is a separate row. Missing fields have no row.
+    # Special handling for None equality comparisons (== None, is None)
+    # With row-per-field storage, missing fields have no row.
     # For `field == None`, we need to match BOTH:
     #   1. Logs where field exists with null value (standard subquery)
     #   2. Logs where field doesn't exist at all (use LEFT JOIN)
@@ -1144,7 +1144,7 @@ def _handle_membership_operator(
             if lval_type == "NoneType" and rhs_list:
                 # If the LHS column is all NULLs, its type is ambiguous.
                 # We infer the type from the RHS list and select the corresponding typed column.
-                first_item_type = LogDAO.infer_type("", rhs_list[0])
+                first_item_type = LogEventDAO.infer_type("", rhs_list[0])
 
                 # Based on the inferred type, we select the correct column from the subquery `lhs`.
                 if first_item_type == "str":

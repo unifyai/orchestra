@@ -189,7 +189,7 @@ async def test_create_log_w_image(client: AsyncClient):
     img = base64.b64encode(buffer).decode("utf-8")
 
     # Implicit field creation: types are inferred from values
-    # Note: Type inference ensures consistent behavior between EAV/JSONB modes
+    # Note: Type inference ensures consistent behavior
     response_implicit = await _create_log(
         client,
         project_name,
@@ -1405,7 +1405,7 @@ async def test_implicit_then_explicit_nested_type_creation(
     _ = await _create_project(client, project_name)
 
     # Step 1: Create log implicitly (no explicit types) - type is INFERRED from value
-    # DESIGN NOTE: Type inference was added to ensure consistent behavior between EAV/JSONB
+    # DESIGN NOTE: Type inference was added to ensure consistent behavior
     response = await client.post(
         "/v0/logs",
         json={
