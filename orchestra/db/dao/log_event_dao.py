@@ -519,6 +519,8 @@ class LogEventDAO:
                 all_columns.append(col)
 
         reserved_counters: Dict[tuple, int] = {}
+        reserved_values: Dict[tuple, set[int]] = {}
+        reserved_next: Dict[tuple, int] = {}
 
         def _lock_counter(col_name: str, parent_values: Dict[str, Any]) -> None:
             lock_key = json.dumps(
@@ -540,35 +542,106 @@ class LogEventDAO:
             parent_values: Dict[str, Any],
         ) -> int:
             counter_key = (col_name, tuple(sorted(parent_values.items())))
-            if counter_key not in reserved_counters:
-                _lock_counter(col_name, parent_values)
-                query = (
-                    self.session.query(
-                        func.max(
-                            cast(
-                                func.nullif(LogEvent.data.op("->>")(col_name), "null"),
-                                Integer,
+            if col_name in unique_key_columns:
+                if counter_key not in reserved_counters:
+                    _lock_counter(col_name, parent_values)
+                    query = (
+                        self.session.query(
+                            func.max(
+                                cast(
+                                    func.nullif(
+                                        LogEvent.data.op("->>")(col_name),
+                                        "null",
+                                    ),
+                                    Integer,
+                                ),
                             ),
+                        )
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == LogEvent.id,
+                        )
+                        .filter(LogEventContext.context_id == context_id)
+                    )
+                    for parent_key, parent_value in parent_values.items():
+                        query = query.filter(
+                            LogEvent.data.op("->>")(parent_key) == str(parent_value),
+                        )
+                    max_val = query.scalar()
+                    reserved_counters[counter_key] = (
+                        max_val if max_val is not None else -1
+                    ) + 1
+                else:
+                    reserved_counters[counter_key] += 1
+                return reserved_counters[counter_key]
+
+            if counter_key not in reserved_values:
+                _lock_counter(col_name, parent_values)
+                values_query = (
+                    self.session.query(
+                        cast(
+                            func.nullif(LogEvent.data.op("->>")(col_name), "null"),
+                            Integer,
                         ),
                     )
                     .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
                     .filter(LogEventContext.context_id == context_id)
                 )
                 for parent_key, parent_value in parent_values.items():
-                    query = query.filter(
+                    values_query = values_query.filter(
                         LogEvent.data.op("->>")(parent_key) == str(parent_value),
                     )
-                max_val = query.scalar()
-                reserved_counters[counter_key] = (
-                    max_val if max_val is not None else -1
-                ) + 1
-            else:
-                reserved_counters[counter_key] += 1
-            return reserved_counters[counter_key]
+                existing_values = {
+                    row[0] for row in values_query.all() if row[0] is not None
+                }
+                reserved_values[counter_key] = existing_values
+                reserved_next[counter_key] = 0
+
+            next_value = reserved_next[counter_key]
+            while next_value in reserved_values[counter_key]:
+                next_value += 1
+            reserved_values[counter_key].add(next_value)
+            reserved_next[counter_key] = next_value + 1
+            return next_value
 
         completed = []
+        existing_parent_cache: Dict[tuple, bool] = {}
+
+        def _parent_values_exist(
+            parent_values: Dict[str, Any],
+            completed_rows: List[Dict[str, Any]],
+        ) -> bool:
+            if not parent_values:
+                return True
+
+            cache_key = tuple(sorted(parent_values.items()))
+            cached = existing_parent_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            for row in completed_rows:
+                if all(row.get(k) == v for k, v in parent_values.items()):
+                    existing_parent_cache[cache_key] = True
+                    return True
+
+            existing = (
+                self.session.query(LogEvent.id)
+                .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+                .filter(LogEventContext.context_id == context_id)
+                .filter(
+                    LogEvent.data.op("@>")(
+                        cast(literal(json.dumps(parent_values)), JSONB),
+                    ),
+                )
+                .first()
+            )
+            exists = existing is not None
+            existing_parent_cache[cache_key] = exists
+            return exists
+
         for provided_value in provided_values:
             row_values = dict(provided_value or {})
+            provided_keys = set(row_values.keys())
 
             for key in unique_keys.keys():
                 if key not in auto_counting and key not in row_values:
@@ -594,6 +667,16 @@ class LogEventDAO:
 
                     if missing_parent:
                         continue
+
+                    if parent_values and all(
+                        key in provided_keys for key in parent_values
+                    ):
+                        if not _parent_values_exist(parent_values, completed):
+                            raise ValueError(
+                                "Cannot generate auto-counting value for "
+                                f"'{col_name}' because parent values "
+                                f"{parent_values} does not exist.",
+                            )
 
                     row_values[col_name] = _next_counter_value(
                         col_name,
@@ -647,7 +730,7 @@ class LogEventDAO:
                 )
                 if existing:
                     raise ValueError(
-                        "Composite key already exists for this context.",
+                        "Duplicate composite key already exists for this context.",
                     )
 
         return completed
