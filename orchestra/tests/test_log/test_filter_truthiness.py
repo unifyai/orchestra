@@ -660,9 +660,8 @@ async def test_explicit_json_null_vs_missing_key(
 
     Both should be treated as None for Python comparison semantics.
 
-    KNOWN ISSUE in EAV mode: `== None` only matches explicit null, not missing keys.
-    This is a fundamental limitation of the EAV architecture where each field is
-    a separate row - missing fields have no row to match against.
+    KNOWN ISSUE in legacy row-per-field storage: `== None` only matches explicit null,
+    not missing keys. Missing fields have no row to match against.
     """
     project_name = "test-explicit-null-vs-missing"
     await _create_project(client, project_name)
@@ -759,8 +758,8 @@ async def test_none_comparison_with_is_operator(
     Verify that `is None` and `is not None` still work correctly
     (they were working before, this is a regression test).
 
-    KNOWN ISSUE in EAV mode: `is None` only matches explicit null, not missing keys.
-    Same architectural limitation as `== None`.
+    KNOWN ISSUE in legacy row-per-field storage: `is None` only matches explicit null,
+    not missing keys. Same limitation as `== None`.
     """
     project_name = "test-is-none-operator"
     await _create_project(client, project_name)
@@ -965,8 +964,8 @@ async def test_none_in_list_membership(
 
     This tests whether None is correctly matched when it's part of a list literal.
 
-    KNOWN ISSUE in EAV mode: SQL type error (text = jsonb) when None is in the list.
-    This is a separate bug in the membership operator handling.
+    KNOWN ISSUE in legacy row-per-field storage: SQL type error (text = jsonb) when
+    None is in the list. This is a separate bug in the membership operator handling.
     """
     project_name = "test-none-in-list"
     await _create_project(client, project_name)

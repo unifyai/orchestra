@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.models.orchestra_models import (
     Context,
@@ -192,8 +192,8 @@ class ProjectDAO:
                 ).fetchall()
             ]
             if log_event_ids:
-                log_dao = LogDAO(self.session, self.context_dao)
-                log_dao._bulk_delete_gcs_media(log_event_ids, id)
+                log_event_dao = LogEventDAO(self.session, self.context_dao)
+                log_event_dao._bulk_delete_gcs_media(log_event_ids, id)
 
             # Proceed with deleting the project (DB cascades will handle the rest)
             # Note: CASCADE will delete log_events, which will trigger CASCADE delete

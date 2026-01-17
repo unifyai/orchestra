@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -2108,7 +2107,6 @@ def admin_duplicate_project(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     auth_user_dao = AuthUserDAO(session)
     log_event_dao = LogEventDAO(session)
-    derived_log_dao = DerivedLogDAO(session)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
@@ -2250,8 +2248,7 @@ def admin_duplicate_project(
             stats["field_types_copied"] = len(field_type_values)
 
     # 7. Duplicate Log Events using bulk insert with RETURNING
-    # In JSONB mode: copies data and key_order fields (primary storage)
-    # In EAV mode: only copies metadata (data stored in Log/JSONLog tables)
+    # Copies data and key_order fields (primary storage)
     log_events = (
         session.query(LogEvent).filter(LogEvent.project_id == source_project.id).all()
     )
@@ -2333,8 +2330,8 @@ def admin_duplicate_project(
             stmt = sqlalchemy.insert(LogEventContext).values(lec_values)
             session.execute(stmt)
 
-    # NOTE: EAV table copying (Log, JSONLog, DerivedLog) has been removed.
-    # All log data is now stored in LogEvent.data JSONB column.
+    # NOTE: Legacy table copying has been removed.
+    # All log data is stored in LogEvent.data JSONB column.
 
     # 12. Duplicate Interfaces, Tabs, Tiles and specialized tile types
     # Use the DAO methods to duplicate the hierarchical data

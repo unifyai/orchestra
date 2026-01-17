@@ -2245,7 +2245,7 @@ def _handle_functions_jsonb(
         # datetime, date, time, timedelta, vector, etc.
         if normalized_type in ("any", "none", ""):
             if base_ids:
-                from orchestra.db.dao.log_dao import LogDAO
+                from orchestra.db.dao.log_event_dao import LogEventDAO
                 from orchestra.web.api.log.utils.type_utils import get_base_storage_type
 
                 # Sample ALL base_ids to find the first non-null type
@@ -2278,7 +2278,7 @@ def _handle_functions_jsonb(
                 }
 
                 if json_type == "string":
-                    # For strings, sample the actual value and use LogDAO.infer_type
+                    # For strings, sample the actual value and use LogEventDAO.infer_type
                     # to detect temporal types (datetime, date, time, timedelta)
                     value_sample = session.execute(
                         select(ref_log_event.data.op("->>")(key))
@@ -2289,8 +2289,8 @@ def _handle_functions_jsonb(
                         .limit(1),
                     ).scalar()
                     if value_sample is not None:
-                        # LogDAO.infer_type can detect datetime, date, time, timedelta from strings
-                        inferred = LogDAO.infer_type(key, value_sample)
+                        # LogEventDAO.infer_type can detect datetime, date, time, timedelta from strings
+                        inferred = LogEventDAO.infer_type(key, value_sample)
                         normalized_type = get_base_storage_type(inferred) or inferred
                     else:
                         normalized_type = "str"
@@ -3505,7 +3505,7 @@ def _handle_dict_get_jsonb(
     from sqlalchemy import BindParameter
     from sqlalchemy.sql.selectable import Subquery
 
-    from orchestra.db.dao.log_dao import LogDAO
+    from orchestra.db.dao.log_event_dao import LogEventDAO
 
     from .core import _build_sql_query
     from .functions import _handle_dict_get
@@ -3609,7 +3609,7 @@ def _handle_dict_get_jsonb(
     extracted_type = _infer_expression_type(extracted, session, project_id, context_id)
 
     if isinstance(default, BindParameter):
-        default_type = LogDAO.infer_type("", default.value)
+        default_type = LogEventDAO.infer_type("", default.value)
     elif isinstance(default, Subquery):
         _, default_type = _select_value(default, session)
     else:

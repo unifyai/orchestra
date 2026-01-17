@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
@@ -669,7 +669,6 @@ def add_logs_to_context(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
@@ -800,8 +799,8 @@ def add_logs_to_context(
                 # Default to "entry" field category
                 field_category = "entry"
 
-                # Infer type using LogDAO's static method
-                inferred_type = LogDAO.infer_type(field_name, value)
+                # Infer type using LogEventDAO's static method
+                inferred_type = LogEventDAO.infer_type(field_name, value)
 
                 field_type_dao.create_field_type_if_absent(
                     project_id=project_id,
