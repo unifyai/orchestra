@@ -29,7 +29,12 @@ Create a new shareable plot.
     "y_axis": "cost",
     "group_by": "model",
     "scale_x": "linear",
-    "scale_y": "log"
+    "scale_y": "log",
+    "x_label": "Latency (ms)",
+    "y_label": "Cost ($)",
+    "show_x_label": true,
+    "show_y_label": true,
+    "y_tick_format": "$"
   },
   "project_config": {
     "project_name": "my-project",
@@ -215,6 +220,30 @@ When using the `description` field instead of explicit `plot_config`:
 - `bar`: Requires x_axis (categorical), y_axis (numeric)
 - `histogram`: Requires x_axis (numeric)
 - `line`: Requires x_axis (numeric/datetime), y_axis (numeric)
+
+### Plot Configuration Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | string | inferred | Plot type: scatter, bar, histogram, or line |
+| `x_axis` | string | required | Field name for x-axis |
+| `y_axis` | string | optional | Field name for y-axis (not required for histogram) |
+| `group_by` | string | optional | Field to group data by |
+| `aggregate` | string | optional | Aggregation function: sum, mean, count, min, max |
+| `scale_x` | string | "linear" | X-axis scale: linear or log |
+| `scale_y` | string | "linear" | Y-axis scale: linear or log |
+| `metric` | string | "mean" | Metric for aggregation |
+| `bin_count` | int | 10 | Number of bins for histogram (1-100) |
+| `show_regression` | bool | false | Show regression line (scatter plots) |
+| `colors` | object | optional | Custom colors for groups: {group_value: hex_color} |
+| `sort_order` | string | optional | Sort order: unsorted, asc, or desc |
+| `title` | string | optional | Title for the plot |
+| `x_label` | string | optional | Custom label for x-axis AND tooltip (overrides field name) |
+| `y_label` | string | optional | Custom label for y-axis AND tooltip (overrides field name) |
+| `show_x_label` | bool | true | Whether to show the x-axis label |
+| `show_y_label` | bool | true | Whether to show the y-axis label |
+| `x_tick_format` | string | optional | Format string for x-axis ticks (e.g., "$" prefix) |
+| `y_tick_format` | string | optional | Format string for y-axis ticks (e.g., "$" prefix) |
 
 ## Console Integration
 
