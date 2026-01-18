@@ -1,6 +1,40 @@
-# orchestra
+# Orchestra
 
-This repo includes the code for orchestra, the core API server and database layer used by Unity, Communication, Unify, and Console.
+## System Architecture
+
+Orchestra is the backend API and database layer in a multi-repository system:
+
+```
+         User (Console/Phone/SMS/Email)
+                      │
+    ┌─────────────────┴──────────────────┐
+    │           Communication            │
+    │    (Webhooks, Voice, SMS, Email)   │
+    └────┬───────────────────────────────┘
+         │
+    ┌────┴────┐    ┌─────────┐    ┌─────────┐
+    │  Unity  │    │  Unify  │    │Orchestra│
+    │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
+    │         │    │         │    │  (DB)   │
+    └────┬────┘    └────┬────┘    └────┬────┘
+         │              ▲              ▲
+         │              │              │
+         │    ┌─────────┴─┐       ┌────┴───────┐
+         └───▶│  UniLLM   │       │  Console   │
+              │ (LLM API) │       │(Interfaces)│
+              └───────────┘       └────────────┘
+```
+
+**This repo (Orchestra)** is the source of truth for all persistent data. It provides the REST API at `api.unify.ai/v0` that Unify (Python SDK) and Console (web UI) communicate with.
+
+Related repositories:
+- [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
+- [Console](https://github.com/unifyai/console) — Web UI that reads/writes Orchestra data
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain (persists state via Unify)
+
+---
+
+This repo includes the code for Orchestra, the core API server and database layer used by Unity, Communication, Unify, and Console.
 
 - Orchestra Production API URL: https://api.unify.ai/v0
 - Orchestra Staging API URL: https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0
