@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from orchestra.web.api.plot.validation import (
     VALID_AGGREGATES,
@@ -116,7 +116,8 @@ class PlotConfigInput(BaseModel):
     # Validators
     # =========================================================================
 
-    @validator("type")
+    @field_validator("type")
+    @classmethod
     def validate_type(cls, v: Optional[str]) -> Optional[str]:
         """Validate plot type is one of the allowed values."""
         if v is not None and v not in VALID_PLOT_TYPES:
@@ -125,7 +126,8 @@ class PlotConfigInput(BaseModel):
             )
         return v
 
-    @validator("scale_x", "scale_y")
+    @field_validator("scale_x", "scale_y")
+    @classmethod
     def validate_scale(cls, v: Optional[str]) -> Optional[str]:
         """Validate scale is linear or log."""
         if v is not None and v not in VALID_SCALES:
@@ -134,7 +136,8 @@ class PlotConfigInput(BaseModel):
             )
         return v
 
-    @validator("aggregate")
+    @field_validator("aggregate")
+    @classmethod
     def validate_aggregate(cls, v: Optional[str]) -> Optional[str]:
         """Validate aggregate function is one of the allowed values."""
         if v is not None and v not in VALID_AGGREGATES:
@@ -143,7 +146,8 @@ class PlotConfigInput(BaseModel):
             )
         return v
 
-    @validator("metric")
+    @field_validator("metric")
+    @classmethod
     def validate_metric(cls, v: Optional[str]) -> Optional[str]:
         """Validate metric is one of the allowed values."""
         if v is not None and v not in VALID_METRICS:
@@ -152,7 +156,8 @@ class PlotConfigInput(BaseModel):
             )
         return v
 
-    @validator("sort_order")
+    @field_validator("sort_order")
+    @classmethod
     def validate_sort_order(cls, v: Optional[str]) -> Optional[str]:
         """Validate sort order is one of the allowed values."""
         if v is not None and v not in VALID_SORT_ORDER:
@@ -161,7 +166,8 @@ class PlotConfigInput(BaseModel):
             )
         return v
 
-    @validator("colors")
+    @field_validator("colors")
+    @classmethod
     def validate_colors(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
         """Validate all color values are valid hex colors."""
         if v is not None:
@@ -334,6 +340,7 @@ class PlotMetadata(BaseModel):
     title: Optional[str] = Field(None, description="Plot title")
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the plot was created")
+    updated_at: Optional[datetime] = Field(None, description="When the plot was last updated")
     created_by: str = Field(..., description="User ID of the creator")
 
 
@@ -393,6 +400,7 @@ class PlotListItem(BaseModel):
     title: Optional[str] = Field(None, description="Plot title")
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the plot was created")
+    updated_at: Optional[datetime] = Field(None, description="When the plot was last updated")
     created_by: str = Field(..., description="User ID of the creator")
     url: str = Field(..., description="Shareable URL to view the plot")
 
