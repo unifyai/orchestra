@@ -81,9 +81,7 @@ async def test_table_view_dao_get_by_token(client: AsyncClient, dbsession):
     )
     dbsession.commit()
 
-    projects = project_dao.filter(
-        user_id=user["id"], name="TableViewDAO_Token_Project"
-    )
+    projects = project_dao.filter(user_id=user["id"], name="TableViewDAO_Token_Project")
     project = projects[0][0]
 
     # Create table view
@@ -1329,9 +1327,7 @@ async def test_delete_table_views_by_project_and_context(
         name="delete-me",
         description="To be deleted",
     )
-    context_dao.create(
-        project_id=project.id, name="keep-me", description="To be kept"
-    )
+    context_dao.create(project_id=project.id, name="keep-me", description="To be kept")
     dbsession.commit()
 
     # Create table views with different contexts
@@ -1553,7 +1549,9 @@ async def test_list_table_views_pagination(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_list_table_views_pagination_invalid_params(client: AsyncClient, dbsession):
+async def test_list_table_views_pagination_invalid_params(
+    client: AsyncClient, dbsession
+):
     """Test pagination with invalid parameters."""
     user = await create_test_user(client, "table_view_pagination_invalid@test.com")
 
@@ -1997,7 +1995,10 @@ async def test_table_view_project_name_updates_on_project_rename(
         headers=user["headers"],
     )
     assert get_response.status_code == 200
-    assert get_response.json()["table_view_metadata"]["project_name"] == "original-project-name"
+    assert (
+        get_response.json()["table_view_metadata"]["project_name"]
+        == "original-project-name"
+    )
 
     # Rename the project
     rename_response = await client.patch(
@@ -2014,7 +2015,10 @@ async def test_table_view_project_name_updates_on_project_rename(
     )
     assert get_response.status_code == 200
     # This is the key assertion - project_name should reflect the rename
-    assert get_response.json()["table_view_metadata"]["project_name"] == "renamed-project-name"
+    assert (
+        get_response.json()["table_view_metadata"]["project_name"]
+        == "renamed-project-name"
+    )
 
 
 @pytest.mark.anyio
@@ -2057,7 +2061,9 @@ async def test_table_view_list_shows_current_project_name(
 
     # Find our table view and check project_name
     table_views = list_response.json()["table_views"]
-    matching = [tv for tv in table_views if tv["project_name"] == "list-renamed-project"]
+    matching = [
+        tv for tv in table_views if tv["project_name"] == "list-renamed-project"
+    ]
     assert len(matching) >= 1, "Table view should show renamed project name in list"
 
 
@@ -2089,14 +2095,17 @@ async def test_table_view_project_config_does_not_contain_project_name(
 
     # Check that project_config does NOT contain project_name
     project_config = create_response.json()["project_config"]
-    assert "project_name" not in project_config, \
-        "project_name should not be stored in project_config JSONB"
+    assert (
+        "project_name" not in project_config
+    ), "project_name should not be stored in project_config JSONB"
     # But other fields should be there
     assert project_config.get("limit") == 500
 
 
 @pytest.mark.anyio
-async def test_create_table_view_token_collision_failure(client: AsyncClient, dbsession):
+async def test_create_table_view_token_collision_failure(
+    client: AsyncClient, dbsession
+):
     """Test that token collision returns HTTP 503 with retry message."""
     from unittest.mock import patch
 

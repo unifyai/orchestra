@@ -3503,8 +3503,9 @@ async def test_plot_project_config_does_not_contain_project_name(
 
     # Check that project_config does NOT contain project_name
     project_config = create_response.json()["project_config"]
-    assert "project_name" not in project_config, \
-        "project_name should not be stored in project_config JSONB"
+    assert (
+        "project_name" not in project_config
+    ), "project_name should not be stored in project_config JSONB"
     # But other fields should be there
     assert project_config.get("limit") == 500
 

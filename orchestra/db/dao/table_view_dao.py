@@ -133,9 +133,7 @@ class TableViewDAO:
         # Clamp limit to max 100
         limit = min(limit, 100)
 
-        query = self.session.query(TableView).filter(
-            TableView.project_id == project_id
-        )
+        query = self.session.query(TableView).filter(TableView.project_id == project_id)
 
         # Get total count before pagination
         total_count = query.count()
@@ -197,9 +195,7 @@ class TableViewDAO:
             query = query.filter(TableView.project_id == project_id)
 
         if context is not None:
-            query = query.filter(
-                TableView.project_config["context"].astext == context
-            )
+            query = query.filter(TableView.project_config["context"].astext == context)
 
         # Get total count before pagination
         total_count = query.count()
@@ -310,14 +306,10 @@ class TableViewDAO:
         Returns:
             Number of table views deleted.
         """
-        query = self.session.query(TableView).filter(
-            TableView.project_id == project_id
-        )
+        query = self.session.query(TableView).filter(TableView.project_id == project_id)
 
         if context is not None:
-            query = query.filter(
-                TableView.project_config["context"].astext == context
-            )
+            query = query.filter(TableView.project_config["context"].astext == context)
 
         count = query.delete(synchronize_session="fetch")
         self.session.flush()

@@ -171,7 +171,9 @@ class TableViewMetadata(BaseModel):
     title: Optional[str] = Field(None, description="Table view title")
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the table view was created")
-    updated_at: Optional[datetime] = Field(None, description="When the table view was last updated")
+    updated_at: Optional[datetime] = Field(
+        None, description="When the table view was last updated"
+    )
     created_by: str = Field(..., description="User ID of the creator")
 
 
@@ -205,7 +207,9 @@ class TableViewListItem(BaseModel):
     title: Optional[str] = Field(None, description="Table view title")
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the table view was created")
-    updated_at: Optional[datetime] = Field(None, description="When the table view was last updated")
+    updated_at: Optional[datetime] = Field(
+        None, description="When the table view was last updated"
+    )
     created_by: str = Field(..., description="User ID of the creator")
     url: str = Field(..., description="Shareable URL to view the table")
 
@@ -213,9 +217,7 @@ class TableViewListItem(BaseModel):
 class TableViewListResponse(BaseModel):
     """Response for list table views endpoint."""
 
-    table_views: List[TableViewListItem] = Field(
-        ..., description="List of table views"
-    )
+    table_views: List[TableViewListItem] = Field(..., description="List of table views")
     count: int = Field(..., description="Total count of table views")
 
 

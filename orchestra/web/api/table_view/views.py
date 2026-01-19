@@ -478,7 +478,9 @@ def update_table_view(
         table_config=body.table_config.model_dump(exclude_none=True)
         if body.table_config
         else None,
-        project_config=body.project_config.model_dump(exclude_none=True, exclude={"project_name"})
+        project_config=body.project_config.model_dump(
+            exclude_none=True, exclude={"project_name"}
+        )
         if body.project_config
         else None,
         project_id=target_project.id if project_changed else None,
