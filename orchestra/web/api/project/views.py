@@ -20,6 +20,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.plot_dao import PlotDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.table_view_dao import TableViewDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.tab_dao import TabDAO
@@ -1168,6 +1169,13 @@ def transfer_project_to_organization(
             organization_id=transfer_request.organization_id,
         )
 
+        # Update organization_id for all table views belonging to this project
+        table_view_dao = TableViewDAO(session)
+        table_view_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=transfer_request.organization_id,
+        )
+
         session.commit()
 
         return TransferResponse(
@@ -1306,6 +1314,13 @@ def transfer_project_to_personal(
         # Update organization_id for all plots belonging to this project
         plot_dao = PlotDAO(session)
         plot_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=None,  # Personal project
+        )
+
+        # Update organization_id for all table views belonging to this project
+        table_view_dao = TableViewDAO(session)
+        table_view_dao.update_organization_id(
             project_id=project_id,
             organization_id=None,  # Personal project
         )
