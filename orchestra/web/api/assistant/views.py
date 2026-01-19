@@ -87,9 +87,11 @@ from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_phone_number,
     create_pubsub_topic,
+    create_windows_vm,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
+    delete_windows_vm,
     get_running_jobs,
     get_social_platforms_costs,
     log_pre_hire_chat,
@@ -434,6 +436,7 @@ async def create_assistant(
         created_phone = None
         created_pubsub = None
         assigned_whatsapp = None
+        created_windows_vm = None
 
         if assistant_in.create_infra:
             current_infra_step = "initializing"
@@ -513,6 +516,24 @@ async def create_assistant(
                 created_pubsub = True
                 print(f"PUBSUB CREATED: {assistant_id}")
 
+                # Step 6: Create Windows VM if is_user_desktop=False and desktop_mode="windows"
+                if (
+                    assistant_in.desktop_mode == "windows"
+                    and assistant_in.is_user_desktop is False
+                ):
+                    current_infra_step = "create_windows_vm"
+                    vm_response = await create_windows_vm(
+                        assistant_id=str(assistant_id),
+                        unify_apikey=request.state.api_key,
+                        assistant_name=f"{assistant_in.first_name}{assistant_in.surname}",
+                    )
+                    if "detail" in vm_response or "error" in vm_response:
+                        raise Exception(
+                            f"Windows VM creation failed: {vm_response.get('detail') or vm_response.get('error')}",
+                        )
+                    created_windows_vm = vm_response
+                    print(f"WINDOWS VM CREATED: {assistant_id}")
+
                 # Refresh database session after long infrastructure operations
                 logging.info(
                     f"Refreshing database session after infrastructure setup for assistant {assistant_id}",
@@ -529,6 +550,9 @@ async def create_assistant(
                     "user_whatsapp_number": assistant_in.user_whatsapp_number,
                     "assistant_whatsapp_number": assigned_whatsapp,
                 }
+                # Add desktop_url from VM creation if applicable
+                if created_windows_vm and created_windows_vm.get("desktop_url"):
+                    update_data["desktop_url"] = created_windows_vm["desktop_url"]
                 assistant_dao.update_assistant(
                     user_id=user_id,
                     agent_id=assistant_id,
@@ -571,6 +595,14 @@ async def create_assistant(
 
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
+
+                # Delete Windows VM first (created last)
+                if created_windows_vm:
+                    try:
+                        await delete_windows_vm(str(assistant_id))
+                    except Exception as e:
+                        rollback_errors.append(f"Failed to delete Windows VM: {str(e)}")
+                    print(f"WINDOWS VM DELETED: {assistant_id}")
 
                 if created_pubsub:
                     try:
@@ -1147,6 +1179,19 @@ async def delete_assistant(
         except Exception as e:
             logging.error(f"Failed to stop job: {str(e)}")
             cleanup_errors.append(f"Failed to stop job: {str(e)}")
+
+        # Delete Windows VM if assistant has one (is_user_desktop=False AND desktop_mode="windows")
+        if assistant.desktop_mode == "windows" and assistant.is_user_desktop is False:
+            try:
+                vm_response = await delete_windows_vm(str(assistant_id))
+                if not vm_response.get("vm_deleted"):
+                    cleanup_errors.append(
+                        f"VM deletion reported issues: {vm_response}",
+                    )
+            except Exception as e:
+                logging.error(f"Failed to delete Windows VM: {str(e)}")
+                cleanup_errors.append(f"Failed to delete Windows VM: {str(e)}")
+            print(f"WINDOWS VM DELETED: {assistant_id}")
 
         # Delete the associated chat transcript context from the "Assistants" project
         try:
