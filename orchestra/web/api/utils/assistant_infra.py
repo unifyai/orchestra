@@ -211,6 +211,57 @@ async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
         return response.json()
 
 
+async def create_windows_vm(
+    assistant_id: str,
+    unify_apikey: str,
+    assistant_name: str,
+):
+    """
+    Create a Windows VM for the assistant via the infra service.
+
+    Args:
+        assistant_id: Numeric assistant ID (e.g., "12345")
+        unify_apikey: API key used for VNC/Windows password
+        assistant_name: Used for Windows username
+
+    Returns:
+        JSON response with vm_name, ip_address, hostname, desktop_url, status
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COMMS_URL}/infra/vm/create",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "assistant_id": assistant_id,
+                "unify_apikey": unify_apikey,
+                "assistant_name": assistant_name,
+            },
+            timeout=60,
+        )
+        return response.json()
+
+
+async def delete_windows_vm(assistant_id: str):
+    """
+    Delete a Windows VM and associated resources (DNS, static IP).
+
+    Args:
+        assistant_id: Numeric assistant ID (e.g., "12345")
+
+    Returns:
+        JSON response with vm_deleted, dns_deleted, ip_released flags
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.request(
+            "DELETE",
+            f"{COMMS_URL}/infra/vm/delete",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"assistant_id": assistant_id},
+            timeout=60,
+        )
+        return response.json()
+
+
 async def get_social_platforms_costs():
     """
     Fetch available social platforms and their costs.
