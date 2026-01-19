@@ -2,13 +2,19 @@
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from orchestra.db.models.orchestra_models import Plot
 
 logger = logging.getLogger(__name__)
+
+
+class TokenGenerationError(Exception):
+    """Raised when unable to generate a unique token after max retries."""
+
+    pass
 
 
 class PlotDAO:
@@ -22,12 +28,15 @@ class PlotDAO:
         Generate a unique 12-character hex token.
 
         Retries up to 3 times in case of collision.
+
+        Raises:
+            TokenGenerationError: If unable to generate unique token after retries.
         """
         for _ in range(3):
             token = uuid.uuid4().hex[:12]
             if not self.get_by_token(token):
                 return token
-        raise ValueError("Failed to generate unique token after 3 attempts")
+        raise TokenGenerationError("Failed to generate unique token after 3 attempts")
 
     def create(
         self,
@@ -80,7 +89,12 @@ class PlotDAO:
         Returns:
             The Plot if found, None otherwise.
         """
-        return self.session.query(Plot).filter(Plot.token == token).first()
+        return (
+            self.session.query(Plot)
+            .options(joinedload(Plot.project))
+            .filter(Plot.token == token)
+            .first()
+        )
 
     def get_by_id(self, plot_id: int) -> Optional[Plot]:
         """
@@ -92,24 +106,48 @@ class PlotDAO:
         Returns:
             The Plot if found, None otherwise.
         """
-        return self.session.query(Plot).filter(Plot.id == plot_id).first()
+        return (
+            self.session.query(Plot)
+            .options(joinedload(Plot.project))
+            .filter(Plot.id == plot_id)
+            .first()
+        )
 
-    def list_by_project(self, project_id: int) -> List[Plot]:
+    def list_by_project(
+        self,
+        project_id: int,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[Plot], int]:
         """
         List all plots for a project.
 
         Args:
             project_id: ID of the project.
+            limit: Maximum number of results to return (default 50, max 100).
+            offset: Number of results to skip for pagination.
 
         Returns:
-            List of plots for the project.
+            Tuple of (list of plots, total count).
         """
-        return (
-            self.session.query(Plot)
-            .filter(Plot.project_id == project_id)
+        # Clamp limit to max 100
+        limit = min(limit, 100)
+
+        query = self.session.query(Plot).filter(Plot.project_id == project_id)
+
+        # Get total count before pagination
+        total_count = query.count()
+
+        # Eager load project relationship
+        results = (
+            query.options(joinedload(Plot.project))
             .order_by(Plot.created_at.desc())
+            .offset(offset)
+            .limit(limit)
             .all()
         )
+
+        return results, total_count
 
     def list_by_user_context(
         self,
@@ -117,7 +155,9 @@ class PlotDAO:
         organization_id: Optional[int],
         project_id: Optional[int] = None,
         context: Optional[str] = None,
-    ) -> List[Plot]:
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[Plot], int]:
         """
         List plots accessible to a user based on API key context.
 
@@ -132,15 +172,21 @@ class PlotDAO:
             organization_id: Organization ID from API key context (None for personal).
             project_id: Optional project ID to filter by.
             context: Optional context to filter by (stored in project_config JSONB).
+            limit: Maximum number of results to return (default 50, max 100).
+            offset: Number of results to skip for pagination.
 
         Returns:
-            List of plots matching the criteria.
+            Tuple of (list of plots, total count).
         """
+        # Clamp limit to max 100
+        limit = min(limit, 100)
+
         query = self.session.query(Plot)
 
         if organization_id is None:
-            # Personal context - plots with no organization
+            # Personal context - filter by BOTH org_id AND user_id
             query = query.filter(Plot.organization_id.is_(None))
+            query = query.filter(Plot.user_id == user_id)
         else:
             # Organization context - plots for that organization
             query = query.filter(Plot.organization_id == organization_id)
@@ -151,7 +197,19 @@ class PlotDAO:
         if context is not None:
             query = query.filter(Plot.project_config["context"].astext == context)
 
-        return query.order_by(Plot.created_at.desc()).all()
+        # Get total count before pagination
+        total_count = query.count()
+
+        # Eager load project relationship to avoid N+1 queries
+        results = (
+            query.options(joinedload(Plot.project))
+            .order_by(Plot.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+        return results, total_count
 
     def update(
         self,
@@ -159,6 +217,8 @@ class PlotDAO:
         title: Optional[str] = None,
         plot_config: Optional[Dict[str, Any]] = None,
         project_config: Optional[Dict[str, Any]] = None,
+        project_id: Optional[int] = None,
+        organization_id: Optional[int] = ...,  # Use ... as sentinel for "not provided"
     ) -> Optional[Plot]:
         """
         Update a plot's fields.
@@ -168,6 +228,8 @@ class PlotDAO:
             title: New title (if provided).
             plot_config: New plot config (if provided).
             project_config: New project config (if provided).
+            project_id: New project ID (if project changed).
+            organization_id: New organization ID (if project changed). Use ... to skip.
 
         Returns:
             The updated Plot, or None if not found.
@@ -182,6 +244,10 @@ class PlotDAO:
             plot.plot_config = plot_config
         if project_config is not None:
             plot.project_config = project_config
+        if project_id is not None:
+            plot.project_id = project_id
+        if organization_id is not ...:
+            plot.organization_id = organization_id
 
         self.session.flush()
         logger.info(f"Updated plot {plot_id}")
