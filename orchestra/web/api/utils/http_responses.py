@@ -1,5 +1,4 @@
 import hashlib
-from typing import List
 
 from fastapi import HTTPException
 from starlette import status
@@ -12,62 +11,6 @@ class OutOfCreditError(RuntimeError):
 class AccountSuspendedError(RuntimeError):
     """Raised when a user's account is suspended due to billing issues."""
 
-
-invalid_model_id = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail="Invalid input. model-id doesn't match any entry in the model hub.",
-)
-
-invalid_model_str = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=(
-        "Invalid model. The expected format is <model-id>@<provider>. "
-        "See https://unify.ai/docs/hub/reference/endpoints.html#post-chat-completions "
-        "for more information."
-    ),
-)
-
-invalid_provider_str = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=(
-        "Invalid provider. It must be a valid provider name or a valid metric "
-        "configuration for dynamic routing."
-        "See https://unify.ai/docs/hub/concepts/endpoints.html and "
-        "https://unify.ai/docs/hub/concepts/runtime_routing.html "
-        "for more information."
-    ),
-)
-
-invalid_messages = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail="Invalid input. Messages not in input.",
-)
-
-invalid_price_threshold = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=(
-        "Invalid price threshold. Format needs to be config<[float][ic|oc]. "
-        "See https://unify.ai/docs/hub/concepts/runtime_routing.html#thresholds for more details."
-    ),
-)
-
-
-def invalid_optimisation_goal(performance_rules: List[str]):
-    return HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Invalid input. Provider has to be one of {performance_rules} when doing performance routing.",
-    )
-
-
-model_not_found = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=("Model not found"),
-)
-
-overspecified_model_provider = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=("You can only specify at most one of (model, provider)"),
-)
 
 invalid_api_key = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -106,18 +49,6 @@ def not_found(item):
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"{item} not found.",
     )
-
-
-provider_not_found_under_conditions = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="No providers found within the specified thresholds.",
-)
-
-
-internal_endpoint_not_found = HTTPException(
-    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    detail="Endpoint not found",
-)
 
 
 # TODO: Test this

@@ -1,7 +1,7 @@
 """
 Shared truthiness logic for Python-to-SQL filter translation.
 
-This module provides unified truthiness handling for both EAV and JSONB modes,
+This module provides unified truthiness handling for the current storage model,
 implementing Python's truthiness semantics in SQL:
     - None/null: False
     - False: False

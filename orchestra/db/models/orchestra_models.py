@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSON, JSONB
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import backref, relationship
 
 from orchestra.db.base import Base
@@ -48,121 +48,6 @@ class RechargeStatus(StrEnum):
 RECHARGE_TYPE_AUTO = "auto"
 RECHARGE_TYPE_PAYMENT = "payment"
 RECHARGE_TYPE_PROMO = "promo"
-
-
-class Model(Base):
-    """Model class for the model table."""
-
-    __tablename__ = "model"
-
-    id = Column(Integer(), primary_key=True)
-    mdl_code = Column(String())
-    uploaded_at = Column(TIMESTAMP, nullable=False)
-    task = Column(String(), ForeignKey("task.name"), nullable=False)
-    active = Column(Boolean(), server_default="f", nullable=False)  # type: ignore
-
-
-class Task(Base):
-    """Model class for the task table."""
-
-    __tablename__ = "task"
-
-    name = Column(String(), primary_key=True)
-    modality = Column(String(), ForeignKey("modality.name"), nullable=False)
-
-
-class Modality(Base):
-    """Model class for the modality table."""
-
-    __tablename__ = "modality"
-
-    name = Column(String(), primary_key=True)
-
-
-class Endpoint(Base):
-    """Model class for the endpoint table."""
-
-    __tablename__ = "endpoint"
-
-    id = Column(Integer(), primary_key=True)
-    mdl_id = Column(Integer(), ForeignKey("model.id"), nullable=False)
-    provider_id = Column(Integer(), ForeignKey("provider.id"), nullable=False)
-    created_at = Column(TIMESTAMP, nullable=False)
-    active = Column(Boolean(), server_default="f", nullable=False)  # type: ignore
-
-
-class Provider(Base):
-    """Model class for the provider table."""
-
-    __tablename__ = "provider"
-
-    id = Column(Integer(), primary_key=True)
-    name = Column(String(), nullable=False)
-    display_name = Column(String(), nullable=False)
-    image_url = Column(String(), nullable=False)
-
-
-class Datapoint(Base):
-    """Model class for the datapoint table."""
-
-    __tablename__ = "datapoint"
-
-    id = Column(Integer(), primary_key=True)
-    benchmark_run_id = Column(Integer(), ForeignKey("benchmark_run.id"), nullable=False)
-    metric_name = Column(String(), ForeignKey("metric.name"), nullable=False)
-    value = Column(Numeric(), nullable=False)
-    tooltip = Column(String())
-    measured_at = Column(TIMESTAMP, nullable=False)
-
-
-class BenchmarkRegime(Base):
-    """Model class for the benchmark_regime table."""
-
-    __tablename__ = "benchmark_regime"
-
-    name = Column(String(), primary_key=True)
-
-
-class BenchmarkRegion(Base):
-    """Model class for the benchmark_region table."""
-
-    __tablename__ = "benchmark_region"
-
-    name = Column(String(), primary_key=True)
-
-
-class BenchmarkSeqLen(Base):
-    """Model class for the seq_len table."""
-
-    __tablename__ = "benchmark_seq_len"
-
-    name = Column(String(), primary_key=True)
-
-
-class BenchmarkRun(Base):
-    """Model class for the benchmark_run table."""
-
-    __tablename__ = "benchmark_run"
-
-    id = Column(Integer(), primary_key=True)
-    endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), nullable=False)
-    regime = Column(String(), ForeignKey("benchmark_regime.name"), nullable=False)
-    region = Column(String(), ForeignKey("benchmark_region.name"), nullable=False)
-    seq_len = Column(String(), ForeignKey("benchmark_seq_len.name"), nullable=False)
-    measured_at = Column(TIMESTAMP, nullable=False)
-
-
-class Metric(Base):
-    """Model class for the metric table."""
-
-    __tablename__ = "metric"
-
-    name = Column(String(), primary_key=True)
-    units = Column(String(), nullable=False)
-    display_name = Column(String(), nullable=False)
-    tooltip = Column(String())
-    priority = Column(Integer(), nullable=False)
-    plottable = Column(Boolean(), nullable=False)  # type: ignore
 
 
 class Users(Base):
@@ -294,52 +179,6 @@ class RechargeType(Base):
     type = Column(String(), primary_key=True)
 
 
-# CLEANUP: Delete this
-class BetaList(Base):
-    """Model class for the beta list table."""
-
-    __tablename__ = "beta_list"
-
-    id = Column(Integer(), primary_key=True)
-    email = Column(String(), nullable=False)
-    type = Column(String(), nullable=False)
-
-
-class CustomApiKey(Base):
-    """Model class for the custom api keys table."""
-
-    __tablename__ = "custom_api_key"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
-    key = Column(String(), nullable=False)
-    value = Column(String(), nullable=False)
-
-
-class CustomEndpoint(Base):
-    """Model class for the custom endpoints table."""
-
-    __tablename__ = "custom_endpoint"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
-    name = Column(String(), nullable=False)
-    model_arg = Column(String())
-    url = Column(String(), nullable=False)
-    key_id = Column(Integer(), ForeignKey("custom_api_key.id"), nullable=False)
-
-
-class CustomRouter(Base):
-    """Model class for the custom router table."""
-
-    __tablename__ = "custom_router"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"))
-    router_name = Column(String(), nullable=False)
-    router_id = Column(String(), nullable=False)
-
-
 class CreditCardFingerprint(Base):
     """Model class for the credit card fingerprint table."""
 
@@ -348,141 +187,6 @@ class CreditCardFingerprint(Base):
     id = Column(Integer(), primary_key=True)
     user_id = Column(String(), ForeignKey("users.id"), nullable=False)
     fingerprint = Column(String(), nullable=False)
-
-
-class LatestBenchmark(Base):
-    """Model class for latest benchmark data table."""
-
-    __tablename__ = "latest_benchmark"
-
-    endpoint_id = Column(
-        Integer(),
-        ForeignKey("endpoint.id"),
-        primary_key=True,
-        nullable=False,
-    )
-    regime = Column(String(), primary_key=True)
-    region = Column(String(), primary_key=True)
-    seq_len = Column(String(), primary_key=True)
-    input_cost = Column(Numeric())
-    output_cost = Column(Numeric())
-    ttft = Column(Numeric())
-    itl = Column(Numeric())
-    measured_at = Column(TIMESTAMP, nullable=False)
-
-
-class CustomEndpointBenchmark(Base):
-    """Model class for custom endpoint runtime benchmark table."""
-
-    __tablename__ = "custom_endpoint_benchmark"
-
-    id = Column(Integer(), primary_key=True)
-    custom_endpoint_id = Column(
-        Integer(),
-        ForeignKey("custom_endpoint.id"),
-        nullable=False,
-    )
-    metric_name = Column(String(), nullable=False)
-    value = Column(Numeric(), nullable=False)
-    measured_at = Column(TIMESTAMP, nullable=False)
-
-
-class Tag(Base):
-    """Model class for query tags table"""
-
-    __tablename__ = "tags"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), index=True, nullable=False)
-    tag_name = Column(String(), nullable=False)
-    queries = relationship("QueryTagAssociation", back_populates="tag")
-    __table_args__ = (UniqueConstraint("user_id", "tag_name", name="uq_user_tag"),)
-
-
-class QueryTagAssociation(Base):
-    """Model class for map between tags and queries"""
-
-    __tablename__ = "query_tag_association"
-    user_id = Column(String(), ForeignKey("users.id"), primary_key=True, index=True)
-    query_id = Column(Integer(), ForeignKey("query.id"), primary_key=True, index=True)
-    tag_id = Column(Integer(), ForeignKey("tags.id"), primary_key=True, index=True)
-    tag = relationship("Tag", back_populates="queries")
-    query = relationship("Query", back_populates="tags")
-
-    sa.ForeignKeyConstraint(
-        ["user_id", "tag_id"],
-        ["tags.user_id", "tags.id"],
-        name="fk_user_tag_association",
-    )
-
-
-class LocalEndpoint(Base):
-    """Model class for the local endpoints table."""
-
-    __tablename__ = "local_endpoint"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
-    name = Column(String(), nullable=False)
-    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_endpoint"),)
-
-
-class Query(Base):
-    """Model class for the query table."""
-
-    __tablename__ = "query"
-
-    id = Column(Integer(), primary_key=True)
-    user_id = Column(
-        String(),
-        ForeignKey("users.id"),
-        nullable=False,
-        index=True,
-    )
-    organization_id = Column(
-        Integer(),
-        ForeignKey("organization.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
-    at = Column(sa.TIMESTAMP(), nullable=False)
-    model_provider_str = Column(String(), nullable=False)
-    endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), index=True)
-    custom_endpoint_id = Column(
-        Integer(),
-        ForeignKey("custom_endpoint.id"),
-        index=True,
-    )
-    local_endpoint_id = Column(
-        Integer(),
-        ForeignKey("local_endpoint.id"),
-        index=True,
-    )
-    credits = Column(Numeric(), nullable=False)
-    query_body = Column(String(), nullable=False)
-    response_body = Column(String(), nullable=False)
-    signature = Column(String())
-    used_router = Column(Boolean())
-    router = Column(String())
-    status_code = Column(Integer(), nullable=False)
-    tags = relationship("QueryTagAssociation", back_populates="query")
-    __table_args__ = (Index("ix_user_endpoint", "user_id", "endpoint_id"),)
-
-
-class Router(Base):
-    """Model class for the router table."""
-
-    __tablename__ = "router"
-
-    id = sa.Column(sa.Integer(), primary_key=True)
-    user_id = sa.Column(sa.String(), sa.ForeignKey("users.id"), nullable=True)
-    name = sa.Column(sa.String(), nullable=False)
-    endpoints = sa.Column(sa.String(), nullable=False)
-    trained = sa.Column(sa.Boolean(), default=False, nullable=False)
-    gcp_router_id = sa.Column(sa.String(), nullable=True)
-    deployed = sa.Column(sa.Boolean(), default=False, nullable=False)
-
-    __table_args__ = (sa.UniqueConstraint("user_id", "name", name="uq_router_name"),)
 
 
 class AuthUser(Base):
@@ -1099,12 +803,6 @@ class ContextVersion(Base):
 
     # Relationship to its ProjectVersion
     project_version = relationship("ProjectVersion", back_populates="context_versions")
-    # Relationship to its LogVersion snapshots (EAV mode)
-    log_versions = relationship(
-        "LogVersion",
-        back_populates="context_version",
-        cascade="all, delete-orphan",
-    )
     # Relationship to its LogEventVersion snapshots (JSONB mode)
     log_event_versions = relationship(
         "LogEventVersion",
@@ -1136,149 +834,12 @@ class LogEvent(Base):
         back_populates="log_events",
         passive_deletes=True,
     )
-    derived_logs = relationship(
-        "DerivedLog",
-        secondary="log_event_derived_log",
-        back_populates="log_events",
-        passive_deletes=True,
-    )
-    logs = relationship(
-        "Log",
-        secondary="log_event_log",
-        back_populates="log_events",
-        passive_deletes=True,
-    )
-    json_logs = relationship(
-        "JSONLog",
-        secondary="log_event_json_log",
-        back_populates="log_events",
-        passive_deletes=True,
-    )
-    json_log_histories = relationship(
-        "JSONLogHistory",
-        secondary="log_event_json_log_history",
-        back_populates="log_events",
-        passive_deletes=True,
-    )
 
     __table_args__ = (
         Index("idx_log_event_project_id_id", "project_id", "id"),
         # GIN index for JSON field filtering
         Index("idx_log_event_data", "data", postgresql_using="gin"),
     )
-
-
-class LogEventJSONLog(Base):
-    """Association table for the many-to-many relationship between LogEvent and JSONLog.
-
-    This table enables a JSONLog (single JSON value) to belong to multiple LogEvent instances,
-    allowing for efficient pass-by-reference for JSON data.
-    """
-
-    __tablename__ = "log_event_json_log"
-
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    json_log_id = Column(
-        Integer,
-        ForeignKey("json_log.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    __table_args__ = (
-        Index("idx_log_event_json_log_event_id", "log_event_id"),
-        Index("idx_log_event_json_log_json_log_id", "json_log_id"),
-    )
-
-
-class JSONLog(Base):
-    __tablename__ = "json_log"
-
-    id = Column(Integer, primary_key=True)
-    key = Column(String, nullable=False)
-    value = Column(JSON)
-
-    # Relationships
-    log_events = relationship(
-        "LogEvent",
-        secondary="log_event_json_log",
-        back_populates="json_logs",
-        passive_deletes=True,
-    )
-
-
-class LogEventLog(Base):
-    """Association table for the many-to-many relationship between LogEvent and Log.
-
-    This table enables a Log (single cell) to belong to multiple LogEvent instances,
-    allowing for efficient pass-by-reference in operations like join_logs.
-    """
-
-    __tablename__ = "log_event_log"
-
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    log_id = Column(
-        Integer,
-        ForeignKey("log.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-
-    __table_args__ = (
-        Index("idx_log_event_log_event_id", "log_event_id"),
-        Index("idx_log_event_log_log_id", "log_id"),
-    )
-
-
-class Log(Base):
-    __tablename__ = "log"
-
-    id = Column(Integer, primary_key=True)
-    key = Column(String, nullable=False, index=True)
-    value = Column(JSONB)
-    param_version = Column(Integer)
-    inferred_type = Column(String)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, onupdate=func.now())
-    # Relationships
-    log_events = relationship(
-        "LogEvent",
-        secondary="log_event_log",
-        back_populates="logs",
-        passive_deletes=True,
-    )
-
-    __table_args__ = (Index("idx_log_key_param_version", "key", "param_version"),)
-
-
-class LogVersion(Base):
-    """Model class for storing historical versions of logs (snapshots)."""
-
-    __tablename__ = "log_version"
-
-    id = Column(Integer, primary_key=True)
-    context_version_id = Column(
-        Integer,
-        ForeignKey("context_version.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    # --- Snapshot fields (a copy of the Log table's data) ---
-    log_event_id = Column(Integer, nullable=False, index=True)
-    key = Column(String, nullable=False)
-    value = Column(JSONB)
-    param_version = Column(Integer)
-    inferred_type = Column(String)
-    created_at = Column(TIMESTAMP)
-    updated_at = Column(TIMESTAMP)
-
-    # Relationship back to the ContextVersion
-    context_version = relationship("ContextVersion", back_populates="log_versions")
 
 
 class LogEventVersion(Base):
@@ -1310,122 +871,6 @@ class LogEventVersion(Base):
     context_version = relationship(
         "ContextVersion",
         back_populates="log_event_versions",
-    )
-
-
-class ParamVersion(Base):
-    """Model class for tracking parameter versions."""
-
-    __tablename__ = "param_version"
-
-    project_id = Column(
-        Integer,
-        ForeignKey("project.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    context_id = Column(
-        Integer,
-        ForeignKey("context.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    param_key = Column(String, primary_key=True)
-    last_version = Column(Integer, nullable=False)
-
-    __table_args__ = (
-        Index("idx_param_version_project_key", "project_id", "context_id", "param_key"),
-    )
-
-
-class LogEventJSONLogHistory(Base):
-    """Association table for the many-to-many relationship between LogEvent and JSONLogHistory.
-
-    This table enables a JSONLogHistory (versioned JSON log) to belong to multiple LogEvent instances,
-    allowing for efficient historical tracking of JSON data across different log events.
-    """
-
-    __tablename__ = "log_event_json_log_history"
-
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    json_log_history_id = Column(
-        Integer,
-        ForeignKey("json_log_history.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    __table_args__ = (
-        Index("idx_log_event_json_log_history_event_id", "log_event_id"),
-        Index(
-            "idx_log_event_json_log_history_json_log_history_id",
-            "json_log_history_id",
-        ),
-    )
-
-
-class JSONLogHistory(Base):
-    __tablename__ = "json_log_history"
-
-    id = Column(Integer, primary_key=True)
-    key = Column(String, nullable=False)
-    value = Column(JSON)
-    version = Column(Integer, nullable=False)
-    description = Column(String)
-    archived_at = Column(TIMESTAMP, server_default=func.now())
-
-    # Relationships
-    log_events = relationship(
-        "LogEvent",
-        secondary="log_event_json_log_history",
-        back_populates="json_log_histories",
-        passive_deletes=True,
-    )
-
-
-class LogEventDerivedLog(Base):
-    """Association table for the many-to-many relationship between LogEvent and DerivedLog.
-
-    This table enables a DerivedLog to belong to multiple LogEvent instances,
-    allowing for efficient pass-by-reference in operations similar to Log.
-    """
-
-    __tablename__ = "log_event_derived_log"
-
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    derived_log_id = Column(
-        Integer,
-        ForeignKey("derived_log.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    __table_args__ = (
-        Index("idx_log_event_derived_log_event_id", "log_event_id"),
-        Index("idx_log_event_derived_log_derived_log_id", "derived_log_id"),
-    )
-
-
-class DerivedLog(Base):
-    __tablename__ = "derived_log"
-
-    id = Column(Integer, primary_key=True)
-    key = Column(String, nullable=False, index=True)
-    equation = Column(String)
-    referenced_logs = Column(JSONB)
-    value = Column(JSONB)
-    inferred_type = Column(String)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, onupdate=func.now())
-
-    # Relationships
-    log_events = relationship(
-        "LogEvent",
-        secondary="log_event_derived_log",
-        back_populates="derived_logs",
-        passive_deletes=True,
     )
 
 
@@ -1690,7 +1135,8 @@ class Assistant(Base):
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
     desktop_url = Column(String, nullable=True)
-    user_local_desktop = Column(String, nullable=True)
+    desktop_mode = Column(String, nullable=True)
+    is_user_desktop = Column(Boolean, nullable=True)
     about = Column(String, nullable=True)
     phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
@@ -1737,8 +1183,8 @@ class Assistant(Base):
             name="uq_org_assistant_name",
         ),
         sa.CheckConstraint(
-            "user_local_desktop IN ('ubuntu', 'windows', 'macos')",
-            name="ck_assistant_user_local_desktop",
+            "desktop_mode IN ('ubuntu', 'windows', 'macos')",
+            name="ck_assistant_desktop_mode",
         ),
         sa.CheckConstraint(
             "voice_mode IN ('tts', 'sts')",

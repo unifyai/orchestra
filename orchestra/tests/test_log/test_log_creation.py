@@ -5,15 +5,12 @@ import cv2
 import pytest
 from httpx import AsyncClient
 
-from orchestra.conftest import requires_eav_mode
-
 from . import HEADERS, _create_log, _create_project
 
 
 @pytest.mark.anyio
 async def test_batch_create_partial_success_with_failed_logs(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     project_name = "batch-partial-success-with-failed-logs"
     _ = await _create_project(client, project_name)
@@ -40,7 +37,6 @@ async def test_batch_create_partial_success_with_failed_logs(
             {"name": "bad", "age": "thirty"},  # invalid
             {"name": "ok-2", "age": 25},  # valid
         ],
-        "params": {},
     }
 
     response = await client.post("/v0/logs", json=payload, headers=HEADERS)
@@ -67,7 +63,7 @@ async def test_batch_create_partial_success_with_failed_logs(
 
 
 @pytest.mark.anyio
-async def test_create_logs(client: AsyncClient, use_jsonb_mode):
+async def test_create_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
@@ -80,20 +76,26 @@ async def test_create_logs(client: AsyncClient, use_jsonb_mode):
 
     # Test batch log creation with multiple entries
     batch_entries = [
-        {"a/b/c/input": "Batch input 1", "a/b/c/numeric_input": 1.5},
-        {"a/b/c/input": "Batch input 2", "a/b/c/numeric_input": 2.5},
-        {"a/b/c/input": "Batch input 3", "a/b/c/numeric_input": 3.5},
-    ]
-    batch_params = [
-        {"a/b/param1": "test"},
-        {"a/b/param2": "test"},
-        {"a/b/param3": "test"},
+        {
+            "a/b/c/input": "Batch input 1",
+            "a/b/c/numeric_input": 1.5,
+            "a/b/param1": "test",
+        },
+        {
+            "a/b/c/input": "Batch input 2",
+            "a/b/c/numeric_input": 2.5,
+            "a/b/param2": "test",
+        },
+        {
+            "a/b/c/input": "Batch input 3",
+            "a/b/c/numeric_input": 3.5,
+            "a/b/param3": "test",
+        },
     ]
     response = await client.post(
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": batch_params,
             "entries": batch_entries,
         },
         headers=HEADERS,
@@ -112,7 +114,7 @@ async def test_create_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_batch_create_partial_success(client: AsyncClient, use_jsonb_mode):
+async def test_batch_create_partial_success(client: AsyncClient):
     """Batch create should not fail the entire batch when one entry is invalid."""
     project_name = "batch-partial-success"
     _ = await _create_project(client, project_name)
@@ -171,7 +173,7 @@ async def test_batch_create_partial_success(client: AsyncClient, use_jsonb_mode)
 
 @pytest.mark.anyio
 @pytest.mark.xdist_group(name="gcs_serial")
-async def test_create_log_w_image(client: AsyncClient, use_jsonb_mode):
+async def test_create_log_w_image(client: AsyncClient):
     """
     Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
@@ -187,7 +189,7 @@ async def test_create_log_w_image(client: AsyncClient, use_jsonb_mode):
     img = base64.b64encode(buffer).decode("utf-8")
 
     # Implicit field creation: types are inferred from values
-    # Note: Type inference ensures consistent behavior between EAV/JSONB modes
+    # Note: Type inference ensures consistent behavior
     response_implicit = await _create_log(
         client,
         project_name,
@@ -246,7 +248,7 @@ async def test_create_log_w_image(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_create_log_w_audio(client: AsyncClient, use_jsonb_mode):
+async def test_create_log_w_audio(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
@@ -315,47 +317,9 @@ async def test_create_log_w_audio(client: AsyncClient, use_jsonb_mode):
     assert fields["sound_effect"]["created_at"] is not None
 
 
-@requires_eav_mode
-@pytest.mark.anyio
-async def test_create_logs_autoincrement_version(client: AsyncClient, use_jsonb_mode):
-    """Test param version auto-increment when param value changes (EAV mode only).
-
-    This test specifically tests ParamVersion table behavior where changing
-    a param's value triggers a version increment. JSONB mode doesn't support
-    param versioning - params are stored directly in LogEvent.data.
-    """
-    project_name = "non-matching-versions"
-    _ = await _create_project(client, project_name)
-
-    # This should work fine
-    response = await client.post(
-        "/v0/logs",
-        json={"project_name": project_name, "params": {"p1": "test"}},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-
-    # same version and value
-    response = await client.post(
-        "/v0/logs",
-        json={"project_name": project_name, "params": {"p1": "test"}},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-
-    # same version and different value -> autoincrement
-    response = await client.post(
-        "/v0/logs",
-        json={"project_name": project_name, "params": {"p1": "test_v1"}},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-
-
 @pytest.mark.anyio
 async def test_create_logs_returns_auto_counting_columns_and_values(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Ensure response includes auto_counting dict with column names -> values."""
     project_name = "auto-counts-response-project"
@@ -420,7 +384,6 @@ async def test_create_logs_returns_auto_counting_columns_and_values(
 @pytest.mark.anyio
 async def test_create_logs_with_batch_auto_counting(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test batch log creation returns correct auto_counting values for multiple logs."""
     project_name = "batch-auto-count-project"
@@ -468,7 +431,6 @@ async def test_create_logs_with_batch_auto_counting(
 @pytest.mark.anyio
 async def test_create_logs_with_independent_auto_counting_columns(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test multiple independent auto-counting columns increment separately."""
     project_name = "independent-counters-project"
@@ -513,7 +475,6 @@ async def test_create_logs_with_independent_auto_counting_columns(
 @pytest.mark.anyio
 async def test_create_logs_with_hierarchical_auto_counting(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test hierarchical auto-counting where child counter depends on parent."""
     project_name = "hierarchical-counter-project"
@@ -605,7 +566,6 @@ async def test_create_logs_with_hierarchical_auto_counting(
 @pytest.mark.anyio
 async def test_create_logs_with_mixed_unique_and_auto_counting(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test context with both unique keys and separate auto-counting columns."""
     project_name = "mixed-config-project"
@@ -650,7 +610,6 @@ async def test_create_logs_with_mixed_unique_and_auto_counting(
 @pytest.mark.anyio
 async def test_create_logs_with_user_provided_auto_counting_values(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that explicitly provided auto-counting values are returned correctly."""
     project_name = "explicit-counter-project"
@@ -701,7 +660,6 @@ async def test_create_logs_with_user_provided_auto_counting_values(
 @pytest.mark.anyio
 async def test_create_logs_with_composite_unique_keys(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test composite unique keys with auto-counting on one of them."""
     project_name = "composite-keys-project"
@@ -744,7 +702,6 @@ async def test_create_logs_with_composite_unique_keys(
 @pytest.mark.anyio
 async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counters(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Comprehensive test covering:
@@ -1036,7 +993,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
 
 
 @pytest.mark.anyio
-async def test_create_logs_project_not_found(client: AsyncClient, use_jsonb_mode):
+async def test_create_logs_project_not_found(client: AsyncClient):
     project_name = "non_existent_project"
 
     response = await _create_log(client, project_name)
@@ -1048,7 +1005,6 @@ async def test_create_logs_project_not_found(client: AsyncClient, use_jsonb_mode
 @pytest.mark.anyio
 async def test_create_log_with_explicit_nested_list_type(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test creating a log with List[int] explicit type."""
     project_name = "test-nested-list-creation"
@@ -1099,7 +1055,6 @@ async def test_create_log_with_explicit_nested_list_type(
 @pytest.mark.anyio
 async def test_create_log_with_explicit_nested_dict_type(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test creating a log with Dict[str, float] explicit type."""
     project_name = "test-nested-dict-creation"
@@ -1136,7 +1091,6 @@ async def test_create_log_with_explicit_nested_dict_type(
 @pytest.mark.anyio
 async def test_create_log_explicit_type_overrides_field_name_inference(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that explicit types override field name-based inference."""
     project_name = "test-override-name-inference"
@@ -1178,7 +1132,6 @@ async def test_create_log_explicit_type_overrides_field_name_inference(
 @pytest.mark.anyio
 async def test_create_log_explicit_type_overrides_value_inference(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that explicit types override value-based inference."""
     project_name = "test-override-value-inference"
@@ -1218,7 +1171,7 @@ async def test_create_log_explicit_type_overrides_value_inference(
 
 
 @pytest.mark.anyio
-async def test_batch_create_logs_with_nested_types(client: AsyncClient, use_jsonb_mode):
+async def test_batch_create_logs_with_nested_types(client: AsyncClient):
     """Test batch creation with nested explicit types."""
     project_name = "test-batch-nested-creation"
     _ = await _create_project(client, project_name)
@@ -1272,7 +1225,6 @@ async def test_batch_create_logs_with_nested_types(client: AsyncClient, use_json
 @pytest.mark.anyio
 async def test_create_field_then_log_with_matching_base_types(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test creating fields first, then logs with matching base types."""
     project_name = "test-field-first-base-types"
@@ -1325,7 +1277,6 @@ async def test_create_field_then_log_with_matching_base_types(
 @pytest.mark.anyio
 async def test_create_field_then_log_with_mismatching_base_types(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test creating fields first, then logs with mismatching base types - should fail."""
     project_name = "test-field-mismatch-base"
@@ -1363,7 +1314,6 @@ async def test_create_field_then_log_with_mismatching_base_types(
 @pytest.mark.anyio
 async def test_create_field_then_log_with_matching_nested_types(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test creating fields with nested types first, then logs with matching nested types."""
     project_name = "test-field-first-nested"
@@ -1414,7 +1364,6 @@ async def test_create_field_then_log_with_matching_nested_types(
 @pytest.mark.anyio
 async def test_create_field_then_log_with_mismatching_nested_types(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test nested type mismatch - should fail."""
     project_name = "test-nested-mismatch"
@@ -1450,14 +1399,13 @@ async def test_create_field_then_log_with_mismatching_nested_types(
 @pytest.mark.anyio
 async def test_implicit_then_explicit_nested_type_creation(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test creating log implicitly, then with explicit nested type."""
     project_name = "test-implicit-explicit-nested"
     _ = await _create_project(client, project_name)
 
     # Step 1: Create log implicitly (no explicit types) - type is INFERRED from value
-    # DESIGN NOTE: Type inference was added to ensure consistent behavior between EAV/JSONB
+    # DESIGN NOTE: Type inference was added to ensure consistent behavior
     response = await client.post(
         "/v0/logs",
         json={
@@ -1506,7 +1454,7 @@ async def test_implicit_then_explicit_nested_type_creation(
 
 
 @pytest.mark.anyio
-async def test_heterogeneous_list_types(client: AsyncClient, use_jsonb_mode):
+async def test_heterogeneous_list_types(client: AsyncClient):
     """Test creating fields with heterogeneous list types."""
     project_name = "test-hetero-lists"
     _ = await _create_project(client, project_name)
@@ -1543,7 +1491,7 @@ async def test_heterogeneous_list_types(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_deeply_nested_types(client: AsyncClient, use_jsonb_mode):
+async def test_deeply_nested_types(client: AsyncClient):
     """Test creating fields with deeply nested types."""
     project_name = "test-deep-nested"
     _ = await _create_project(client, project_name)
@@ -1586,7 +1534,7 @@ async def test_deeply_nested_types(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_create_with_pydantic_schema(client: AsyncClient, use_jsonb_mode):
+async def test_create_with_pydantic_schema(client: AsyncClient):
     """Test creating field with Pydantic JSON schema."""
     pytest.importorskip("pydantic")
     from pydantic import BaseModel
@@ -1644,7 +1592,6 @@ async def test_create_with_pydantic_schema(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_create_with_pydantic_schema_validation_failure(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test Pydantic schema validation failure."""
     pytest.importorskip("pydantic")
@@ -1679,7 +1626,6 @@ async def test_create_with_pydantic_schema_validation_failure(
 @pytest.mark.anyio
 async def test_create_with_nested_pydantic_schema_and_nullable_fields(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test creating field with nested Pydantic schema."""
     pytest.importorskip("pydantic")

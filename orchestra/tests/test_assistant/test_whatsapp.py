@@ -129,6 +129,8 @@ async def _get_conflict_whatsapp_number(
 async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncClient):
     # Create two assistants under the same user with distinct phone and user_phone
     user_phone = "+2000000001"
+    phone1 = "+1000000001"
+    phone2 = "+1000000002"
     assistant_payload1 = {
         "first_name": "Agent",
         "surname": "One",
@@ -137,7 +139,6 @@ async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncCli
         "max_parallel": 2,
         "nationality": "Nationality1",
         "about": "First test assistant",
-        "phone": "+1000000001",
         "user_phone": user_phone,
         "create_infra": False,
     }
@@ -157,7 +158,6 @@ async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncCli
         "max_parallel": 3,
         "nationality": "Nationality2",
         "about": "Second test assistant",
-        "phone": "+1000000002",
         "user_phone": user_phone,
         "create_infra": False,
     }
@@ -169,12 +169,26 @@ async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncCli
     assert resp2.status_code == status.HTTP_200_OK
     aid2 = resp2.json()["info"]["agent_id"]
 
+    # Set phone numbers via PATCH (phone is set via update, not create)
+    patch1 = await client.patch(
+        f"/v0/assistant/{aid1}/config",
+        json={"phone": phone1, "create_infra": False},
+        headers=HEADERS,
+    )
+    patch2 = await client.patch(
+        f"/v0/assistant/{aid2}/config",
+        json={"phone": phone2, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch1.status_code == status.HTTP_200_OK
+    assert patch2.status_code == status.HTTP_200_OK
+
     # Patch both assistants to the same WhatsApp number via admin endpoint filtering by phone
     user_whatsapp = "+3000000001"
     assigned_whatsapp_numbers = []
-    for payload, aid in [(assistant_payload1, aid1), (assistant_payload2, aid2)]:
+    for phone, aid in [(phone1, aid1), (phone2, aid2)]:
         patch_resp = await client.patch(
-            f"/v0/admin/assistant?phone={payload['phone']}&new_user_whatsapp_number={user_whatsapp}",
+            f"/v0/admin/assistant?phone={phone}&new_user_whatsapp_number={user_whatsapp}",
             headers=ADMIN_HEADERS,
         )
         assert patch_resp.status_code == status.HTTP_200_OK
@@ -185,7 +199,7 @@ async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncCli
         ws_number = await _assign_whatsapp_sender(client, user_whatsapp)
         assigned_whatsapp_numbers.append(ws_number)
         patch_resp = await client.patch(
-            f"/v0/admin/assistant?phone={payload['phone']}&new_assistant_whatsapp_number={ws_number}",
+            f"/v0/admin/assistant?phone={phone}&new_assistant_whatsapp_number={ws_number}",
             headers=ADMIN_HEADERS,
         )
         assert patch_resp.status_code == status.HTTP_200_OK
@@ -200,6 +214,8 @@ async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncCli
 @pytest.mark.anyio
 async def test_assistant_whatsapp_number_assignment_multiple_users(client: AsyncClient):
     # Create two assistants under the same user with distinct phone and user_phone
+    phone1 = "+1000000001"
+    phone2 = "+1000000002"
     assistant_payload1 = {
         "first_name": "Agent",
         "surname": "One",
@@ -208,7 +224,6 @@ async def test_assistant_whatsapp_number_assignment_multiple_users(client: Async
         "max_parallel": 2,
         "nationality": "Nationality1",
         "about": "First test assistant",
-        "phone": "+1000000001",
         "user_phone": "+2000000001",
         "create_infra": False,
     }
@@ -228,7 +243,6 @@ async def test_assistant_whatsapp_number_assignment_multiple_users(client: Async
         "max_parallel": 3,
         "nationality": "Nationality2",
         "about": "Second test assistant",
-        "phone": "+1000000002",
         "user_phone": "+2000000002",
         "create_infra": False,
     }
@@ -240,14 +254,28 @@ async def test_assistant_whatsapp_number_assignment_multiple_users(client: Async
     assert resp2.status_code == status.HTTP_200_OK
     aid2 = resp2.json()["info"]["agent_id"]
 
+    # Set phone numbers via PATCH (phone is set via update, not create)
+    patch1 = await client.patch(
+        f"/v0/assistant/{aid1}/config",
+        json={"phone": phone1, "create_infra": False},
+        headers=HEADERS,
+    )
+    patch2 = await client.patch(
+        f"/v0/assistant/{aid2}/config",
+        json={"phone": phone2, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch1.status_code == status.HTTP_200_OK
+    assert patch2.status_code == status.HTTP_200_OK
+
     # Patch both assistants to the same WhatsApp number via admin endpoint filtering by phone
     assigned_whatsapp_numbers = []
-    for payload, aid, user_whatsapp in [
-        (assistant_payload1, aid1, "+3000000001"),
-        (assistant_payload2, aid2, "+3000000002"),
+    for phone, aid, user_whatsapp in [
+        (phone1, aid1, "+3000000001"),
+        (phone2, aid2, "+3000000002"),
     ]:
         patch_resp = await client.patch(
-            f"/v0/admin/assistant?phone={payload['phone']}&new_user_whatsapp_number={user_whatsapp}",
+            f"/v0/admin/assistant?phone={phone}&new_user_whatsapp_number={user_whatsapp}",
             headers=ADMIN_HEADERS,
         )
         assert patch_resp.status_code == status.HTTP_200_OK
@@ -258,7 +286,7 @@ async def test_assistant_whatsapp_number_assignment_multiple_users(client: Async
         ws_number = await _assign_whatsapp_sender(client, user_whatsapp)
         assigned_whatsapp_numbers.append(ws_number)
         patch_resp = await client.patch(
-            f"/v0/admin/assistant?phone={payload['phone']}&new_assistant_whatsapp_number={ws_number}",
+            f"/v0/admin/assistant?phone={phone}&new_assistant_whatsapp_number={ws_number}",
             headers=ADMIN_HEADERS,
         )
         assert patch_resp.status_code == status.HTTP_200_OK
@@ -273,6 +301,8 @@ async def test_assistant_whatsapp_number_assignment_multiple_users(client: Async
 @pytest.mark.anyio
 async def test_assistant_whatsapp_conflict_both(client: AsyncClient):
     # Create two assistants under the same user with distinct phone and user_phone
+    phone1 = "+1000000001"
+    phone2 = "+1000000002"
     assistant_payload1 = {
         "first_name": "Agent",
         "surname": "One",
@@ -281,7 +311,6 @@ async def test_assistant_whatsapp_conflict_both(client: AsyncClient):
         "max_parallel": 2,
         "nationality": "Nationality1",
         "about": "First test assistant",
-        "phone": "+1000000001",
         "user_phone": "+2000000001",
         "create_infra": False,
     }
@@ -301,7 +330,6 @@ async def test_assistant_whatsapp_conflict_both(client: AsyncClient):
         "max_parallel": 3,
         "nationality": "Nationality2",
         "about": "Second test assistant",
-        "phone": "+1000000002",
         "user_phone": "+2000000002",
         "create_infra": False,
     }
@@ -313,14 +341,28 @@ async def test_assistant_whatsapp_conflict_both(client: AsyncClient):
     assert resp2.status_code == status.HTTP_200_OK
     aid2 = resp2.json()["info"]["agent_id"]
 
+    # Set phone numbers via PATCH (phone is set via update, not create)
+    patch1 = await client.patch(
+        f"/v0/assistant/{aid1}/config",
+        json={"phone": phone1, "create_infra": False},
+        headers=HEADERS,
+    )
+    patch2 = await client.patch(
+        f"/v0/assistant/{aid2}/config",
+        json={"phone": phone2, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch1.status_code == status.HTTP_200_OK
+    assert patch2.status_code == status.HTTP_200_OK
+
     # Patch both assistants to the same WhatsApp number via admin endpoint filtering by phone
     assigned_whatsapp_numbers = []
-    for payload, aid, user_whatsapp in [
-        (assistant_payload1, aid1, "+3000000001"),
-        (assistant_payload2, aid2, "+3000000002"),
+    for phone, aid, user_whatsapp in [
+        (phone1, aid1, "+3000000001"),
+        (phone2, aid2, "+3000000002"),
     ]:
         patch_resp = await client.patch(
-            f"/v0/admin/assistant?phone={payload['phone']}&new_user_whatsapp_number={user_whatsapp}",
+            f"/v0/admin/assistant?phone={phone}&new_user_whatsapp_number={user_whatsapp}",
             headers=ADMIN_HEADERS,
         )
         assert patch_resp.status_code == status.HTTP_200_OK
@@ -331,7 +373,7 @@ async def test_assistant_whatsapp_conflict_both(client: AsyncClient):
         ws_number = await _assign_whatsapp_sender(client, user_whatsapp)
         assigned_whatsapp_numbers.append(ws_number)
         patch_resp = await client.patch(
-            f"/v0/admin/assistant?phone={payload['phone']}&new_assistant_whatsapp_number={ws_number}",
+            f"/v0/admin/assistant?phone={phone}&new_assistant_whatsapp_number={ws_number}",
             headers=ADMIN_HEADERS,
         )
         assert patch_resp.status_code == status.HTTP_200_OK
@@ -370,6 +412,7 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
 ):
     # Create a single assistant under the default test user
     user_phone = "+2000000001"
+    phone = "+1000000001"
     assistant_payload = {
         "first_name": "Agent",
         "surname": "Conflict",
@@ -378,7 +421,6 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
         "max_parallel": 1,
         "nationality": "ConflictNationality",
         "about": "Testing conflict assistant",
-        "phone": "+1000000001",
         "user_phone": user_phone,
         "create_infra": False,
     }
@@ -390,9 +432,17 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
     assert resp.status_code == status.HTTP_200_OK
     aid = resp.json()["info"]["agent_id"]
 
+    # Set phone number via PATCH (phone is set via update, not create)
+    patch_phone = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json={"phone": phone, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch_phone.status_code == status.HTTP_200_OK
+
     # Assign an available WhatsApp number and update assistant
     patch_resp = await client.patch(
-        f"/v0/admin/assistant?phone={assistant_payload['phone']}&new_user_whatsapp_number={user_phone}",
+        f"/v0/admin/assistant?phone={phone}&new_user_whatsapp_number={user_phone}",
         headers=ADMIN_HEADERS,
     )
     assert patch_resp.status_code == status.HTTP_200_OK
@@ -405,7 +455,7 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
 
     # Assign the WhatsApp number to the assistant
     patch_resp = await client.patch(
-        f"/v0/admin/assistant?phone={assistant_payload['phone']}&new_assistant_whatsapp_number={assigned_ws}",
+        f"/v0/admin/assistant?phone={phone}&new_assistant_whatsapp_number={assigned_ws}",
         headers=ADMIN_HEADERS,
     )
     assert patch_resp.status_code == status.HTTP_200_OK
@@ -436,7 +486,6 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
         json={
             "project_name": project,
             "context": "Contacts",
-            "params": {},
             "entries": [contact],
         },
         headers=HEADERS,
@@ -460,6 +509,7 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
 async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncClient):
     # Create a single assistant under the default test user
     user_phone = "+2000000001"
+    phone = "+1000000001"
     assistant_payload = {
         "first_name": "Agent",
         "surname": "Conflict",
@@ -468,7 +518,6 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
         "max_parallel": 1,
         "nationality": "ConflictNationality",
         "about": "Testing conflict assistant",
-        "phone": "+1000000001",
         "user_phone": user_phone,
         "create_infra": False,
     }
@@ -480,9 +529,17 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
     assert resp.status_code == status.HTTP_200_OK
     aid = resp.json()["info"]["agent_id"]
 
+    # Set phone number via PATCH (phone is set via update, not create)
+    patch_phone = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json={"phone": phone, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch_phone.status_code == status.HTTP_200_OK
+
     # Assign an available WhatsApp number and update assistant
     patch_resp = await client.patch(
-        f"/v0/admin/assistant?phone={assistant_payload['phone']}&new_user_whatsapp_number={user_phone}",
+        f"/v0/admin/assistant?phone={phone}&new_user_whatsapp_number={user_phone}",
         headers=ADMIN_HEADERS,
     )
     assert patch_resp.status_code == status.HTTP_200_OK
@@ -494,7 +551,7 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
     assert assigned_ws == "+5000000000"
 
     patch_resp = await client.patch(
-        f"/v0/admin/assistant?phone={assistant_payload['phone']}&new_assistant_whatsapp_number={assigned_ws}",
+        f"/v0/admin/assistant?phone={phone}&new_assistant_whatsapp_number={assigned_ws}",
         headers=ADMIN_HEADERS,
     )
     assert patch_resp.status_code == status.HTTP_200_OK
@@ -525,7 +582,6 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
         json={
             "project_name": project,
             "context": "Contacts",
-            "params": {},
             "entries": [contact],
         },
         headers=HEADERS,

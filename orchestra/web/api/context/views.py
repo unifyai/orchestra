@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
@@ -669,7 +669,6 @@ def add_logs_to_context(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
@@ -711,56 +710,29 @@ def add_logs_to_context(
         if hasattr(request, "log_ids") and request.log_ids:
             log_ids = request.log_ids
         elif hasattr(request, "log_args") and request.log_args:
-            from orchestra.settings import settings
-            from orchestra.web.api.log.utils.logging_utils import (
-                _get_logs_query,
-                _get_logs_query_jsonb,
-            )
+            from orchestra.web.api.log.utils.logging_utils import _get_logs_query
 
             # Use log_args to query for matching logs
             log_args = request.log_args
 
-            if settings.use_jsonb_queries:
-                # JSONB mode: returns (rows, count) where rows are (id, data, created_at)
-                rows, _ = _get_logs_query_jsonb(
-                    request_fastapi=request_fastapi,
-                    project_name=project_name,
-                    context=log_args.get("context"),
-                    filter_expr=log_args.get("filter_expr"),
-                    sorting=log_args.get("sorting"),
-                    from_ids=log_args.get("from_ids"),
-                    exclude_ids=log_args.get("exclude_ids"),
-                    from_fields=log_args.get("from_fields"),
-                    exclude_fields=log_args.get("exclude_fields"),
-                    limit=log_args.get("limit"),
-                    offset=log_args.get("offset", 0),
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    session=session,
-                )
-                log_ids = list({row[0] for row in rows})  # row[0] is log_event_id
-            else:
-                # EAV mode: returns (raw_rows, _, count)
-                raw_rows, _, _ = _get_logs_query(
-                    request_fastapi=request_fastapi,
-                    project_name=project_name,
-                    column_context=log_args.get("column_context"),
-                    context=log_args.get("context"),
-                    filter_expr=log_args.get("filter_expr"),
-                    sorting=log_args.get("sorting"),
-                    from_ids=log_args.get("from_ids"),
-                    exclude_ids=log_args.get("exclude_ids"),
-                    from_fields=log_args.get("from_fields"),
-                    exclude_fields=log_args.get("exclude_fields"),
-                    limit=log_args.get("limit"),
-                    offset=log_args.get("offset", 0),
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    session=session,
-                )
-                log_ids = list({row[7] for row in raw_rows})  # row[7] is log_event_id
+            rows, _ = _get_logs_query(
+                request_fastapi=request_fastapi,
+                project_name=project_name,
+                context=log_args.get("context"),
+                filter_expr=log_args.get("filter_expr"),
+                sorting=log_args.get("sorting"),
+                from_ids=log_args.get("from_ids"),
+                exclude_ids=log_args.get("exclude_ids"),
+                from_fields=log_args.get("from_fields"),
+                exclude_fields=log_args.get("exclude_fields"),
+                limit=log_args.get("limit"),
+                offset=log_args.get("offset", 0),
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
+            )
+            log_ids = list({row[0] for row in rows})  # row[0] is log_event_id
 
             if not log_ids:
                 raise HTTPException(
@@ -804,79 +776,43 @@ def add_logs_to_context(
         )
         existing_field_names = set(existing_fields)
 
-        from orchestra.settings import settings
+        from orchestra.db.models.orchestra_models import LogEvent
 
-        if settings.use_jsonb_queries:
-            # JSONB mode: query LogEvent.data directly
-            from orchestra.db.models.orchestra_models import LogEvent
-
-            log_events = (
-                session.query(LogEvent.id, LogEvent.data, LogEvent.key_order)
-                .filter(
-                    LogEvent.id.in_(log_ids),
-                    LogEvent.project_id == project_id,
-                )
-                .all()
+        log_events = (
+            session.query(LogEvent.id, LogEvent.data, LogEvent.key_order)
+            .filter(
+                LogEvent.id.in_(log_ids),
+                LogEvent.project_id == project_id,
             )
-            # Create field types for each field found in LogEvent.data
-            for log_event_id, data, key_order in log_events:
-                if not data:
+            .all()
+        )
+        # Create field types for each field found in LogEvent.data
+        for log_event_id, data, key_order in log_events:
+            if not data:
+                continue
+
+            for field_name, value in data.items():
+                # Skip if field already exists in this context
+                if field_name in existing_field_names:
                     continue
 
-                for field_name, value in data.items():
-                    # Skip if field already exists in this context
-                    if field_name in existing_field_names:
-                        continue
+                # Default to "entry" field category
+                field_category = "entry"
 
-                    # In JSONB mode, we can't determine param vs entry from stored data
-                    # (unlike EAV mode which uses Log.param_version).
-                    # Default to "entry" which matches the typical use case.
-                    # If logs were originally created with a context, field types
-                    # would already exist from that creation.
-                    field_category = "entry"
+                # Infer type using LogEventDAO's static method
+                inferred_type = LogEventDAO.infer_type(field_name, value)
 
-                    # Infer type using LogDAO's static method
-                    inferred_type = LogDAO.infer_type(field_name, value)
-
-                    field_type_dao.create_field_type_if_absent(
-                        project_id=project_id,
-                        field_name=field_name,
-                        value=value,
-                        context_id=context_id,
-                        mutable=False,
-                        field_category=field_category,
-                        field_type=inferred_type,
-                    )
-                    # Add to set to prevent duplicate creation in this batch
-                    existing_field_names.add(field_name)
-        else:
-            # EAV mode: query Log table
-            logs = log_dao.filter(
-                project_id=project_id,
-                log_event_id=log_ids,
-            )
-
-            # Create field types for each field found, but only if not already existing
-            for row in logs:
-                field_name = row[0].key
-                value = row[0].value
-                param_version = row[0].param_version
-                inferred_type = row[0].inferred_type
-                field_category = "param" if param_version is not None else "entry"
-
-                # Skip if field already exists in this context
-                if field_name not in existing_field_names:
-                    field_type_dao.create_field_type_if_absent(
-                        project_id=project_id,
-                        field_name=field_name,
-                        value=value,
-                        context_id=context_id,
-                        mutable=False,
-                        field_category=field_category,
-                        field_type=inferred_type,
-                    )
-                    # Add to set to prevent duplicate creation in this batch
-                    existing_field_names.add(field_name)
+                field_type_dao.create_field_type_if_absent(
+                    project_id=project_id,
+                    field_name=field_name,
+                    value=value,
+                    context_id=context_id,
+                    mutable=False,
+                    field_category=field_category,
+                    field_type=inferred_type,
+                )
+                # Add to set to prevent duplicate creation in this batch
+                existing_field_names.add(field_name)
 
         return {"info": "Logs added to context successfully!"}
     except IndexError as e:

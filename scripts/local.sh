@@ -24,9 +24,9 @@
 #   ORCHESTRA_LOG_DIR       Directory for orchestra logs (optional)
 #   ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)
 #   ORCHESTRA_WORKERS       Number of uvicorn workers (default: auto-detect from CPU cores)
+#   ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after N seconds of no requests (default: 600)
 #
-# Seeding (optional):
-#   ORCHESTRA_SEED_USER     Set to "1" to seed a test user
+# Test user (always seeded for local development):
 #   ORCHESTRA_TEST_USER_ID  Test user ID (default: "test-user-001")
 #   ORCHESTRA_TEST_EMAIL    Test user email (default: "test@debug.local")
 #   UNIFY_KEY               API key for test user (default: "local-test-api-key")
@@ -50,6 +50,9 @@ ORCHESTRA_PREFIX="${ORCHESTRA_PREFIX:-orchestra}"
 # Ports
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
+
+# Inactivity timeout (seconds) - server shuts down after this period of no requests
+ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-600}"
 
 # Derived names using prefix
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
@@ -202,6 +205,27 @@ is_compatible_db_running() {
   return 1
 }
 
+remove_db_container() {
+  # Remove the container regardless of state (running, stopped, or other)
+  # Returns 0 if container doesn't exist or was successfully removed
+  if ! is_db_container_exists; then
+    return 0
+  fi
+
+  # Stop if running
+  if is_db_container_running; then
+    docker stop "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
+  fi
+
+  # Remove the container (force remove handles edge cases like "removing" state)
+  if ! docker rm -f "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1; then
+    log_error "Failed to remove container '$ORCHESTRA_DB_CONTAINER'"
+    return 1
+  fi
+
+  return 0
+}
+
 start_db_container() {
   log_info "Starting PostgreSQL container with pgvector..."
 
@@ -210,32 +234,18 @@ start_db_container() {
     return 0
   fi
 
-  if is_compatible_db_running; then
-    return 0
-  fi
-
+  # Remove any existing container (stopped or in other states)
   if is_db_container_exists; then
-    log_info "Removing stopped container..."
-    docker rm "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
+    log_info "Removing existing container..."
+    if ! remove_db_container; then
+      return 1
+    fi
   fi
 
-  # Check if port is already in use
+  # Check if port is already in use by something else
   if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then
-    log_warn "Port $ORCHESTRA_DB_PORT is already in use"
-
-    if docker run --rm --network host pgvector/pgvector:pg15 \
-         pg_isready -h localhost -p "$ORCHESTRA_DB_PORT" -U orchestra &>/dev/null 2>&1; then
-      log_success "PostgreSQL already available on port $ORCHESTRA_DB_PORT"
-      return 0
-    fi
-
-    if PGPASSWORD=orchestra psql -h localhost -p "$ORCHESTRA_DB_PORT" -U orchestra -d orchestra -c "SELECT 1" &>/dev/null 2>&1; then
-      log_success "PostgreSQL with orchestra database available on port $ORCHESTRA_DB_PORT"
-      return 0
-    fi
-
-    log_error "Port $ORCHESTRA_DB_PORT is in use but not by a compatible PostgreSQL"
-    log_info "Try: docker stop <container> or use ORCHESTRA_DB_PORT=5433"
+    log_error "Port $ORCHESTRA_DB_PORT is already in use by another process"
+    log_info "Stop the conflicting service or use ORCHESTRA_DB_PORT=5433"
     return 1
   fi
 
@@ -255,14 +265,17 @@ start_db_container() {
     "-c" "deadlock_timeout=1s"
   )
 
-  docker run -d \
+  if ! docker run -d \
     --name "$ORCHESTRA_DB_CONTAINER" \
     -p "${ORCHESTRA_DB_PORT}:5432" \
     -e POSTGRES_PASSWORD=orchestra \
     -e POSTGRES_USER=orchestra \
     -e POSTGRES_DB=orchestra \
     pgvector/pgvector:pg15 \
-    postgres "${pg_flags[@]}" >/dev/null
+    postgres "${pg_flags[@]}" >/dev/null; then
+    log_error "Failed to start PostgreSQL container"
+    return 1
+  fi
 
   log_info "Waiting for PostgreSQL to be ready..."
 
@@ -282,11 +295,20 @@ start_db_container() {
 }
 
 stop_db_container() {
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${ORCHESTRA_DB_CONTAINER}$"; then
-    log_info "Stopping PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
-    docker stop "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
-    docker rm "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
-    log_success "PostgreSQL container stopped"
+  if is_db_container_exists; then
+    local was_running=false
+    if is_db_container_running; then
+      was_running=true
+    fi
+
+    log_info "Removing PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
+    if remove_db_container; then
+      if [[ "$was_running" == "true" ]]; then
+        log_success "PostgreSQL container stopped and removed"
+      else
+        log_success "PostgreSQL container removed (was not running)"
+      fi
+    fi
   else
     log_info "No PostgreSQL container to stop (container: $ORCHESTRA_DB_CONTAINER)"
   fi
@@ -402,8 +424,8 @@ wait_for_server() {
   log_info "Waiting for Orchestra server to be ready..."
 
   while (( attempt < max_attempts )); do
-    if curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
-       curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
+    if curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
+       curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
       log_success "Orchestra server is ready at $LOCAL_ORCHESTRA_URL"
       return 0
     fi
@@ -452,15 +474,15 @@ start_orchestra_server() {
   export ORCHESTRA_DB_BASE=orchestra
   export ORCHESTRA_RELOAD=false
   export ORCHESTRA_WORKERS_COUNT=1
-
-  # GCP credentials for BucketService
-  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
-    export ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON="$GOOGLE_APPLICATION_CREDENTIALS"
-  fi
+  export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="$ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS"
 
   # API keys for embedding and LLM operations
+  # Orchestra Python code uses get_env() which checks ORCHESTRA_* prefix first, then
+  # falls back to standard names (OPENAI_API_KEY, ANTHROPIC_API_KEY).
+  # litellm uses the standard names directly, so we export them if set.
   [[ -n "${OPENAI_API_KEY:-}" ]] && export OPENAI_API_KEY
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && export ANTHROPIC_API_KEY
+  [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && export GOOGLE_APPLICATION_CREDENTIALS
 
   # Optional logging directories
   if [[ -n "${ORCHESTRA_LOG_DIR:-}" ]]; then
@@ -632,11 +654,9 @@ cmd_start() {
     return 1
   fi
 
-  # Optional: seed test user if requested
-  if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-    if ! seed_test_user; then
-      log_warn "Failed to seed test user (tests may fail without auth)"
-    fi
+  # Always seed test user for local development (required for authentication)
+  if ! seed_test_user; then
+    log_warn "Failed to seed test user (tests may fail without auth)"
   fi
 
   if ! start_orchestra_server "$ORCHESTRA_REPO_PATH"; then
@@ -655,18 +675,14 @@ cmd_start() {
   echo ""
   echo "To use in your shell:"
   echo "  export UNIFY_BASE_URL='$LOCAL_ORCHESTRA_URL'"
-  if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-    echo "  export UNIFY_KEY='$test_api_key'"
-  fi
+  echo "  export UNIFY_KEY='$test_api_key'"
   echo ""
   echo "Or source this script:"
   echo "  eval \"\$(./local_orchestra.sh)\""
   echo ""
 
   echo "export UNIFY_BASE_URL='$LOCAL_ORCHESTRA_URL'"
-  if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-    echo "export UNIFY_KEY='$test_api_key'"
-  fi
+  echo "export UNIFY_KEY='$test_api_key'"
 
   return 0
 }
@@ -731,8 +747,8 @@ cmd_status() {
 }
 
 cmd_check() {
-  if curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
-     curl -s "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
+  if curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/v0" &>/dev/null || \
+     curl -s --connect-timeout 5 --max-time 10 "http://127.0.0.1:${ORCHESTRA_PORT}/docs" &>/dev/null; then
     echo "$LOCAL_ORCHESTRA_URL"
     return 0
   fi
@@ -745,9 +761,7 @@ cmd_env() {
 
   if cmd_check &>/dev/null; then
     echo "export UNIFY_BASE_URL='$LOCAL_ORCHESTRA_URL'"
-    if [[ "${ORCHESTRA_SEED_USER:-}" == "1" ]]; then
-      echo "export UNIFY_KEY='$test_api_key'"
-    fi
+    echo "export UNIFY_KEY='$test_api_key'"
   else
     echo "# Local orchestra not running, using staging"
     echo "export UNIFY_BASE_URL='$STAGING_URL'"
@@ -830,8 +844,9 @@ main() {
       echo "  ORCHESTRA_WORKERS       Number of uvicorn workers (default: CPU cores)"
       echo "  ORCHESTRA_LOG_DIR       Directory for orchestra logs (optional)"
       echo "  ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)"
+      echo "  ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after inactivity (default: 600)"
       echo ""
-      echo "User Seeding (set ORCHESTRA_SEED_USER=1 to enable):"
+      echo "Test User (always seeded on start/restart):"
       echo "  ORCHESTRA_TEST_USER_ID  Test user ID (default: 'test-user-001')"
       echo "  ORCHESTRA_TEST_EMAIL    Test user email (default: 'test@debug.local')"
       echo "  UNIFY_KEY               API key for test user (default: 'local-test-api-key')"
@@ -839,7 +854,6 @@ main() {
       echo "Examples:"
       echo "  $0 start                              # Start orchestra"
       echo "  ORCHESTRA_PREFIX=myapp $0 start       # Start with custom prefix"
-      echo "  ORCHESTRA_SEED_USER=1 $0 start        # Start and seed test user"
       echo "  eval \"\$($0 env)\"                     # Set env vars"
       ;;
     *)

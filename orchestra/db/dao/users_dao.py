@@ -1,10 +1,10 @@
 import decimal
 from typing import List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Query, Users
+from orchestra.db.models.orchestra_models import Users
 from orchestra.web.api.utils.http_responses import not_found
 
 # Constants for billing requirements
@@ -91,13 +91,16 @@ class UsersDAO:
         :param user_id: id of the user
         :return: total spending in credits (equivalent to dollars since 1 credit = $1)
         """
-        result = self.session.execute(
-            select(func.sum(Query.credits)).where(
-                Query.user_id == user_id,
-            ),  # Count all queries since providers charge for failed requests too
-        ).scalar()
+        # result = self.session.execute(
+        #     select(func.sum(Query.credits)).where(
+        #         Query.user_id == user_id,
+        #     ),  # Count all queries since providers charge for failed requests too
+        # ).scalar()
 
-        return float(result) if result else 0.0
+        # return float(result) if result else 0.0
+
+        # ToDo: Replace with new credit deduction system when in place.
+        return 0.0
 
     def can_enable_monthly_billing(self, user_id: str) -> bool:
         """

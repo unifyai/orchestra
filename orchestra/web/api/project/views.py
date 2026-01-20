@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -28,16 +27,10 @@ from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
-    DerivedLog,
     FavoriteProject,
     FieldType,
-    JSONLog,
-    Log,
     LogEvent,
     LogEventContext,
-    LogEventDerivedLog,
-    LogEventJSONLog,
-    LogEventLog,
     Organization,
     Project,
     ResourceAccess,
@@ -2114,7 +2107,6 @@ def admin_duplicate_project(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     auth_user_dao = AuthUserDAO(session)
     log_event_dao = LogEventDAO(session)
-    derived_log_dao = DerivedLogDAO(session)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
@@ -2256,8 +2248,7 @@ def admin_duplicate_project(
             stats["field_types_copied"] = len(field_type_values)
 
     # 7. Duplicate Log Events using bulk insert with RETURNING
-    # In JSONB mode: copies data and key_order fields (primary storage)
-    # In EAV mode: only copies metadata (data stored in Log/JSONLog tables)
+    # Copies data and key_order fields (primary storage)
     log_events = (
         session.query(LogEvent).filter(LogEvent.project_id == source_project.id).all()
     )
@@ -2274,10 +2265,9 @@ def admin_duplicate_project(
             "updated_at": datetime.now(timezone.utc),
         }
 
-        # Conditionally add JSONB fields in JSONB mode
-        if settings.use_jsonb_queries:
-            new_event_data["data"] = le.data
-            new_event_data["key_order"] = le.key_order
+        # Add JSONB fields
+        new_event_data["data"] = le.data
+        new_event_data["key_order"] = le.key_order
 
         log_event_values.append(new_event_data)
 
@@ -2295,25 +2285,22 @@ def admin_duplicate_project(
 
         stats["log_events_copied"] = len(log_event_values)
 
-        # In JSONB mode, all log data (logs, json_logs, derived_logs) is in LogEvent.data
-        # Set these stats to reflect that the data was copied via LogEvent
-        if settings.use_jsonb_queries:
-            stats["logs_copied"] = len(log_event_values)
-            stats["json_logs_copied"] = 0  # Data is in LogEvent.data
-            # Count derived_entry fields in source to estimate derived logs copied
-            # In JSONB mode, derived values are stored in LogEvent.data
-            derived_field_count = (
-                session.query(func.count(FieldType.id))
-                .filter(
-                    FieldType.project_id == source_project.id,
-                    FieldType.field_category == "derived_entry",
-                )
-                .scalar()
+        # All log data is in LogEvent.data JSONB column
+        stats["logs_copied"] = len(log_event_values)
+        stats["json_logs_copied"] = 0  # Data is in LogEvent.data
+        # Count derived_entry fields in source to estimate derived logs copied
+        derived_field_count = (
+            session.query(func.count(FieldType.id))
+            .filter(
+                FieldType.project_id == source_project.id,
+                FieldType.field_category == "derived_entry",
             )
-            # If derived fields exist, derived values were copied with LogEvent.data
-            stats["derived_logs_copied"] = (
-                len(log_event_values) if derived_field_count > 0 else 0
-            )
+            .scalar()
+        )
+        # If derived fields exist, derived values were copied with LogEvent.data
+        stats["derived_logs_copied"] = (
+            len(log_event_values) if derived_field_count > 0 else 0
+        )
 
     # 8. Duplicate Log Event Context relationships using bulk insert
     if log_event_id_map and context_id_map:
@@ -2343,205 +2330,8 @@ def admin_duplicate_project(
             stmt = sqlalchemy.insert(LogEventContext).values(lec_values)
             session.execute(stmt)
 
-    # 9. Duplicate Logs using batched bulk insert
-    # In JSONB mode, log data is stored in LogEvent.data, so we skip EAV table copying
-    if log_event_id_map and not settings.use_jsonb_queries:
-        # Query for Log objects directly
-        logs = (
-            session.query(Log, LogEventLog.log_event_id)
-            .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(
-                LogEventLog.log_event_id.in_(list(log_event_id_map.keys())),
-            )
-            .all()
-        )
-
-        log_values = []
-        log_id_map = {}  # Map old log id to new log id for LogEventLog associations
-        for log, log_event_id in logs:
-            log_values.append(
-                {
-                    "key": log.key,
-                    "value": log.value,
-                    "param_version": log.param_version,
-                    "inferred_type": log.inferred_type,
-                    "created_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
-                },
-            )
-            log_id_map[log.id] = log_event_id_map[
-                log_event_id
-            ]  # Store mapping for later use
-
-        # Process logs in batches to avoid memory issues
-        batch_size = 5000
-        new_log_ids = []
-        for i in range(0, len(log_values), batch_size):
-            batch = log_values[i : i + batch_size]
-            if batch:
-                stmt = sqlalchemy.insert(Log).values(batch).returning(Log.id)
-                result = session.execute(stmt)
-                new_log_ids.extend([row[0] for row in result])
-
-        # Create LogEventLog associations
-        log_event_log_values = []
-        old_log_ids = list(log_id_map.keys())
-        for i, new_log_id in enumerate(new_log_ids):
-            if i < len(old_log_ids):
-                old_log_id = old_log_ids[i]
-                new_log_event_id = log_id_map[old_log_id]
-                log_event_log_values.append(
-                    {
-                        "log_event_id": new_log_event_id,
-                        "log_id": new_log_id,
-                    },
-                )
-
-        # Bulk insert LogEventLog associations
-        for i in range(0, len(log_event_log_values), batch_size):
-            batch = log_event_log_values[i : i + batch_size]
-            if batch:
-                stmt = sqlalchemy.insert(LogEventLog).values(batch)
-                session.execute(stmt)
-
-        stats["logs_copied"] = len(log_values)
-
-    # 10. Duplicate JSON Logs using batched bulk insert
-    # In JSONB mode, JSON log data is stored in LogEvent.data, so we skip EAV table copying
-    if log_event_id_map and not settings.use_jsonb_queries:
-        # Query for JSONLog objects via LogEventJSONLog association
-        json_logs_with_event_ids = (
-            session.query(JSONLog, LogEventJSONLog.log_event_id)
-            .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-            .filter(
-                LogEventJSONLog.log_event_id.in_(list(log_event_id_map.keys())),
-            )
-            .all()
-        )
-
-        # Prepare JSONLog values and associations
-        json_log_values = []
-        json_log_associations = []  # Track (old_log_event_id, key) -> new_log_event_id
-
-        for jl, old_log_event_id in json_logs_with_event_ids:
-            new_log_event_id = log_event_id_map[old_log_event_id]
-            json_log_values.append(
-                {
-                    "key": jl.key,
-                    "value": jl.value,
-                },
-            )
-            json_log_associations.append((old_log_event_id, jl.key, new_log_event_id))
-
-        # Process JSON logs in batches to avoid memory issues
-        batch_size = 5000
-        all_new_json_log_ids = []
-
-        for i in range(0, len(json_log_values), batch_size):
-            batch = json_log_values[i : i + batch_size]
-            if batch:
-                # Insert JSONLogs and get their IDs
-                stmt = sqlalchemy.insert(JSONLog).values(batch).returning(JSONLog.id)
-                result = session.execute(stmt)
-                batch_ids = [row[0] for row in result]
-                all_new_json_log_ids.extend(batch_ids)
-
-        # Create LogEventJSONLog associations
-        log_event_json_log_values = []
-        for i, (old_log_event_id, key, new_log_event_id) in enumerate(
-            json_log_associations,
-        ):
-            if i < len(all_new_json_log_ids):
-                log_event_json_log_values.append(
-                    {
-                        "log_event_id": new_log_event_id,
-                        "json_log_id": all_new_json_log_ids[i],
-                    },
-                )
-
-        # Insert associations in batches
-        for i in range(0, len(log_event_json_log_values), batch_size):
-            batch = log_event_json_log_values[i : i + batch_size]
-            if batch:
-                stmt = sqlalchemy.insert(LogEventJSONLog).values(batch)
-                session.execute(stmt)
-
-        stats["json_logs_copied"] = len(json_log_values)
-
-    # 11. Duplicate Derived Logs using bulk insert
-    # In JSONB mode, derived log values are stored in LogEvent.data, so we skip EAV table copying
-    if log_event_id_map and not settings.use_jsonb_queries:
-        derived_log_values = []
-        derived_log_associations = (
-            []
-        )  # Track (old_log_event_id, new_log_event_id) for associations
-
-        for old_log_event_id, new_log_event_id in log_event_id_map.items():
-            derived_logs = derived_log_dao.filter(log_event_id=old_log_event_id)
-
-            for dl_tuple in derived_logs:
-                dl = dl_tuple[0]
-
-                # Update referenced_logs to use new log_event IDs
-                referenced_logs = dl.referenced_logs
-                new_referenced_logs = {}
-
-                for ref_key, ref_log in referenced_logs.items():
-                    if isinstance(ref_log, list):
-                        new_referenced_logs[ref_key] = [
-                            log_event_id_map.get(lg_id, lg_id) for lg_id in ref_log
-                        ]
-                    else:
-                        new_referenced_logs[ref_key] = ref_log
-
-                derived_log_values.append(
-                    {
-                        "key": dl.key,
-                        "equation": dl.equation,
-                        "referenced_logs": new_referenced_logs,
-                        "value": dl.value,
-                        "inferred_type": dl.inferred_type,
-                        "created_at": datetime.now(timezone.utc),
-                        "updated_at": datetime.now(timezone.utc),
-                    },
-                )
-                derived_log_associations.append((old_log_event_id, new_log_event_id))
-
-        # Process derived logs in batches and collect their IDs
-        batch_size = 1000
-        all_new_derived_log_ids = []
-
-        for i in range(0, len(derived_log_values), batch_size):
-            batch = derived_log_values[i : i + batch_size]
-            if batch:
-                stmt = (
-                    sqlalchemy.insert(DerivedLog).values(batch).returning(DerivedLog.id)
-                )
-                result = session.execute(stmt)
-                batch_ids = [row[0] for row in result]
-                all_new_derived_log_ids.extend(batch_ids)
-
-        # Create LogEventDerivedLog associations
-        log_event_derived_log_values = []
-        for i, (old_log_event_id, new_log_event_id) in enumerate(
-            derived_log_associations,
-        ):
-            if i < len(all_new_derived_log_ids):
-                log_event_derived_log_values.append(
-                    {
-                        "log_event_id": new_log_event_id,
-                        "derived_log_id": all_new_derived_log_ids[i],
-                    },
-                )
-
-        # Bulk insert LogEventDerivedLog associations
-        for i in range(0, len(log_event_derived_log_values), batch_size):
-            batch = log_event_derived_log_values[i : i + batch_size]
-            if batch:
-                stmt = sqlalchemy.insert(LogEventDerivedLog).values(batch)
-                session.execute(stmt)
-
-        stats["derived_logs_copied"] = len(derived_log_values)
+    # NOTE: Legacy table copying has been removed.
+    # All log data is stored in LogEvent.data JSONB column.
 
     # 12. Duplicate Interfaces, Tabs, Tiles and specialized tile types
     # Use the DAO methods to duplicate the hierarchical data

@@ -9,8 +9,8 @@ __all__ = [
     "get_default_value_for_type",
 ]
 
-# Type mapping used by both EAV and JSONB query builders.
-# In JSONB mode, these types are used to cast extracted JSON text values
+# Type mapping used by the query builder.
+# These types are used to cast extracted JSON text values
 # (e.g., data->>'field') to the appropriate SQL type for comparisons and arithmetic.
 # Example: STR_TO_SQL_TYPES['float'] -> Float, used for cast(data->>'score', Float)
 STR_TO_SQL_TYPES = {

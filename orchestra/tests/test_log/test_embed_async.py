@@ -20,7 +20,6 @@ from . import _create_derived_entry, _create_log, _create_project
 async def test_embed_default_sync_behavior(
     client: AsyncClient,
     dbsession,
-    use_jsonb_mode,
 ):
     """
     Test that embed() without async_embeddings kwarg generates embeddings synchronously.
@@ -30,8 +29,7 @@ async def test_embed_default_sync_behavior(
     """
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
 
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_embed_default_sync_{mode_suffix}"
+    project_name = "test_embed_default_sync"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -77,14 +75,13 @@ async def test_embed_default_sync_behavior(
 
 
 @pytest.mark.anyio
-async def test_embed_explicit_sync(client: AsyncClient, dbsession, use_jsonb_mode):
+async def test_embed_explicit_sync(client: AsyncClient, dbsession):
     """
     Test that embed(..., async_embeddings=False) generates embeddings synchronously.
     """
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
 
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_embed_explicit_sync_{mode_suffix}"
+    project_name = "test_embed_explicit_sync"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -133,7 +130,6 @@ async def test_embed_explicit_sync(client: AsyncClient, dbsession, use_jsonb_mod
 async def test_embed_async_queues_for_background(
     client: AsyncClient,
     dbsession,
-    use_jsonb_mode,
 ):
     """
     Test that embed(..., async_embeddings=True) queues embeddings for background processing.
@@ -143,8 +139,7 @@ async def test_embed_async_queues_for_background(
     """
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
 
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_embed_async_{mode_suffix}"
+    project_name = "test_embed_async"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -197,15 +192,13 @@ async def test_embed_async_queues_for_background(
 async def test_embed_async_with_model_arg(
     client: AsyncClient,
     dbsession,
-    use_jsonb_mode,
 ):
     """
     Test that embed() with model argument and async_embeddings=True works correctly.
     """
     from orchestra.db.models.orchestra_models import EmbeddingQueue
 
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_embed_async_model_{mode_suffix}"
+    project_name = "test_embed_async_model"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -249,15 +242,13 @@ async def test_embed_async_with_model_arg(
 async def test_embed_sync_with_model_and_dimensions(
     client: AsyncClient,
     dbsession,
-    use_jsonb_mode,
 ):
     """
     Test that embed() with model, dimensions, and async_embeddings=False works correctly.
     """
     from orchestra.db.models.orchestra_models import Embedding
 
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_embed_sync_full_{mode_suffix}"
+    project_name = "test_embed_sync_full"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content
@@ -299,15 +290,13 @@ async def test_embed_sync_with_model_and_dimensions(
 @pytest.mark.anyio
 async def test_embed_invalid_async_embeddings_value(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """
     Test that embed(..., async_embeddings="invalid") raises an error.
 
     The async_embeddings parameter must be a boolean literal.
     """
-    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
-    project_name = f"test_embed_invalid_async_{mode_suffix}"
+    project_name = "test_embed_invalid_async"
     await _create_project(client, project_name, user=1)
 
     # Create a log with text content

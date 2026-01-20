@@ -24,6 +24,10 @@ from sqlalchemy.orm import sessionmaker
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import register_db_listeners
 from orchestra.settings import settings
+from orchestra.web.api.utils.inactivity_shutdown import (
+    start_inactivity_monitor,
+    stop_inactivity_monitor,
+)
 from orchestra.web.api.utils.resource_limits_instrumentation import instrument_db_pool
 
 logger = logging.getLogger(__name__)
@@ -485,7 +489,7 @@ def register_startup_event(
         )
         app.middleware_stack = app.build_middleware_stack()
         # ensure_production_traffic_project_exists(app)
-        pass  # noqa: WPS420
+        start_inactivity_monitor()
 
     return _startup
 
@@ -502,9 +506,8 @@ def register_shutdown_event(
 
     @app.on_event("shutdown")
     def _shutdown() -> None:  # noqa: WPS430
+        stop_inactivity_monitor()
         app.state.db_engine.dispose()
-
         stop_opentelemetry(app)
-        pass  # noqa: WPS420
 
     return _shutdown
