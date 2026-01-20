@@ -58,54 +58,6 @@ steps:
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - run
-  - jobs
-  - update
-  - $_BENCHMARK_JOB_US
-  - >-
-    --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
-  - >-
-    --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
-  - '--region=$_BENCHMARK_JOB_REGION_US'
-  - '--quiet'
-  id: Update bench US image
-  entrypoint: gcloud
-  waitFor:
-  - 'Migrate'
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  args:
-  - run
-  - jobs
-  - update
-  - $_BENCHMARK_JOB_EU
-  - >-
-    --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
-  - >-
-    --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
-  - '--region=$_BENCHMARK_JOB_REGION_EU'
-  - '--quiet'
-  id: Update bench EU image
-  entrypoint: gcloud
-  waitFor:
-  - 'Migrate'
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  args:
-  - run
-  - jobs
-  - update
-  - $_BENCHMARK_JOB_AS
-  - >-
-    --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
-  - >-
-    --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
-  - '--region=$_BENCHMARK_JOB_REGION_AS'
-  - '--quiet'
-  id: Update bench ASIA image
-  entrypoint: gcloud
-  waitFor:
-  - 'Migrate'
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  args:
-  - run
   - services
   - update
   - $_SERVICE_NAME
@@ -132,9 +84,6 @@ options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 substitutions:
   _JOB_REGION: europe-west3
-  _BENCHMARK_JOB_REGION_US: us-central1
-  _BENCHMARK_JOB_REGION_EU: europe-west1
-  _BENCHMARK_JOB_REGION_AS: asia-east2
   _SERVICE_NAME: orchestra
   _TRIGGER_ID: 0bfee4b7-25c8-453a-8484-fca72480864c
   REPO_NAME: orchestra
@@ -142,10 +91,6 @@ substitutions:
   _AR_HOSTNAME: europe-west3-docker.pkg.dev
   _PLATFORM: managed
   _JOB_NAME: orchestra-migrator
-  _BENCHMARK_JOB_US: bench-us-central1
-  _BENCHMARK_JOB_EU: bench-europe-west1
-  _BENCHMARK_JOB_AS: bench-asia-east2
-  _RECHARGING_JOB_NAME: orchestra-recharging
   _FIXED_COMMIT_HASH: 8f98f587e9081412d4570356c3e43441d0ff1705
 tags:
 - gcp-cloud-build-deploy-cloud-run
