@@ -144,13 +144,14 @@ async def test_plot_dao_list_by_user_context(client: AsyncClient, dbsession):
     dbsession.commit()
 
     # List plots (personal context)
-    plots = plot_dao.list_by_user_context(
+    plots, count = plot_dao.list_by_user_context(
         user_id=user["id"],
         organization_id=None,
     )
 
     # At least our 3 plots should be returned
     assert len(plots) >= 3
+    assert count >= 3
 
 
 @pytest.mark.anyio
@@ -292,9 +293,99 @@ async def test_plot_dao_update_organization_id(client: AsyncClient, dbsession):
     assert count == 2
 
     # Verify plots are updated
-    plots = plot_dao.list_by_project(project.id)
+    plots, count = plot_dao.list_by_project(project.id)
+    assert count == 2
     for plot in plots:
         assert plot.organization_id == org_id
+
+
+@pytest.mark.anyio
+async def test_plot_dao_list_by_project_pagination(client: AsyncClient, dbsession):
+    """Test PlotDAO list_by_project with pagination."""
+    user = await create_test_user(client, "plot_dao_list_proj@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="PlotDAO_ListByProject",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="PlotDAO_ListByProject")
+    project = projects[0][0]
+
+    # Create 5 plots
+    plot_dao = PlotDAO(dbsession)
+    for i in range(5):
+        plot_dao.create(
+            project_id=project.id,
+            user_id=user["id"],
+            organization_id=None,
+            plot_config={"type": "scatter", "x_axis": f"x{i}", "y_axis": f"y{i}"},
+            project_config={},
+        )
+    dbsession.commit()
+
+    # Test with limit
+    results, total = plot_dao.list_by_project(project.id, limit=2)
+    assert len(results) == 2
+    assert total == 5
+
+    # Test with offset
+    results2, total2 = plot_dao.list_by_project(project.id, limit=2, offset=2)
+    assert len(results2) == 2
+    assert total2 == 5
+    # Should be different items
+    assert results[0].id != results2[0].id
+
+    # Test project relationship is loaded (joinedload)
+    for plot in results:
+        assert plot.project is not None
+        assert plot.project.name == "PlotDAO_ListByProject"
+
+
+@pytest.mark.anyio
+async def test_plot_dao_get_by_id_loads_project(client: AsyncClient, dbsession):
+    """Test PlotDAO get_by_id eager-loads project relationship."""
+    user = await create_test_user(client, "plot_dao_get_id@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="PlotDAO_GetById",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="PlotDAO_GetById")
+    project = projects[0][0]
+
+    # Create plot
+    plot_dao = PlotDAO(dbsession)
+    plot = plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "histogram", "x_axis": "duration"},
+        project_config={},
+    )
+    dbsession.commit()
+
+    # Fetch by ID
+    fetched = plot_dao.get_by_id(plot.id)
+    assert fetched is not None
+    # Project should be loaded via joinedload
+    assert fetched.project is not None
+    assert fetched.project.name == "PlotDAO_GetById"
 
 
 # ==================== Plot Endpoint Tests ====================
@@ -484,6 +575,63 @@ async def test_list_plots_by_project(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
+async def test_list_plots_only_returns_own_personal_plots(
+    client: AsyncClient, dbsession
+):
+    """Test that listing personal plots only returns the user's own plots.
+
+    This is a regression test for a security bug where the user_id filter
+    was missing from the personal context query.
+    """
+    user1 = await create_test_user(client, "plot_list_own_user1@test.com")
+    user2 = await create_test_user(client, "plot_list_own_user2@test.com")
+
+    # User1 creates a project and plot
+    await client.post(
+        "/v0/project",
+        json={"name": "user1-plot-list-project"},
+        headers=user1["headers"],
+    )
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "user1-plot-list-project"},
+        },
+        headers=user1["headers"],
+    )
+
+    # User2 creates a project and plot
+    await client.post(
+        "/v0/project",
+        json={"name": "user2-plot-list-project"},
+        headers=user2["headers"],
+    )
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "user2-plot-list-project"},
+        },
+        headers=user2["headers"],
+    )
+
+    # User1 lists their plots - should NOT see User2's
+    response = await client.get("/v0/logs/plots", headers=user1["headers"])
+    assert response.status_code == 200
+
+    for plot in response.json()["plots"]:
+        assert plot["project_name"] == "user1-plot-list-project"
+
+    # User2 lists their plots - should NOT see User1's
+    response = await client.get("/v0/logs/plots", headers=user2["headers"])
+    assert response.status_code == 200
+
+    for plot in response.json()["plots"]:
+        assert plot["project_name"] == "user2-plot-list-project"
+
+
+@pytest.mark.anyio
 async def test_get_plot_by_token(client: AsyncClient, dbsession):
     """Test getting a plot by token."""
     user = await create_test_user(client, "plot_get_token@test.com")
@@ -605,7 +753,9 @@ async def test_delete_plot(client: AsyncClient, dbsession):
         headers=user["headers"],
     )
 
-    assert delete_response.status_code == status.HTTP_204_NO_CONTENT
+    assert delete_response.status_code == status.HTTP_200_OK
+    assert delete_response.json()["deleted"] is True
+    assert delete_response.json()["token"] == token
 
     # Verify it's gone
     get_response = await client.get(
@@ -1993,7 +2143,7 @@ async def test_plot_dao_list_by_user_context_with_context_filter(
     dbsession.commit()
 
     # Filter by ctx1
-    plots = plot_dao.list_by_user_context(
+    plots, count = plot_dao.list_by_user_context(
         user_id=user["id"],
         organization_id=None,
         project_id=project.id,
@@ -2001,6 +2151,7 @@ async def test_plot_dao_list_by_user_context_with_context_filter(
     )
 
     assert len(plots) == 2
+    assert count == 2
     for plot in plots:
         assert plot.project_config.get("context") == "ctx1"
 
@@ -2255,7 +2406,8 @@ async def test_plot_dao_delete_by_project(client: AsyncClient, dbsession):
     dbsession.commit()
 
     # Verify plots exist
-    plots = plot_dao.list_by_project(project.id)
+    plots, count = plot_dao.list_by_project(project.id)
+    assert count == 4
     assert len(plots) == 4
 
     # Delete all plots for project
@@ -2265,7 +2417,8 @@ async def test_plot_dao_delete_by_project(client: AsyncClient, dbsession):
     assert deleted_count == 4
 
     # Verify plots are gone
-    plots = plot_dao.list_by_project(project.id)
+    plots, count = plot_dao.list_by_project(project.id)
+    assert count == 0
     assert len(plots) == 0
 
 
@@ -2321,7 +2474,8 @@ async def test_plot_dao_delete_by_project_with_context(client: AsyncClient, dbse
     dbsession.commit()
 
     # Verify all plots exist
-    all_plots = plot_dao.list_by_project(project.id)
+    all_plots, count = plot_dao.list_by_project(project.id)
+    assert count == 5
     assert len(all_plots) == 5
 
     # Delete only ctx-to-delete
@@ -2331,7 +2485,8 @@ async def test_plot_dao_delete_by_project_with_context(client: AsyncClient, dbse
     assert deleted_count == 3
 
     # Verify only ctx-to-keep plots remain
-    remaining_plots = plot_dao.list_by_project(project.id)
+    remaining_plots, count = plot_dao.list_by_project(project.id)
+    assert count == 2
     assert len(remaining_plots) == 2
     for plot in remaining_plots:
         assert plot.project_config.get("context") == "ctx-to-keep"
@@ -2944,3 +3099,445 @@ def test_plot_config_input_axis_customization():
     assert config.show_x_label is False
     assert config.show_y_label is True
     assert config.y_tick_format == "$"
+
+
+# =============================================================================
+# Pagination Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_list_plots_pagination(client: AsyncClient, dbsession):
+    """Test listing plots with pagination parameters."""
+    user = await create_test_user(client, "plot_pagination@test.com")
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-pagination-project"},
+        headers=user["headers"],
+    )
+
+    # Create 5 plots
+    for i in range(5):
+        await client.post(
+            "/v0/logs/plot",
+            json={
+                "plot_config": {"type": "histogram", "x_axis": "duration"},
+                "project_config": {"project_name": "plot-pagination-project"},
+                "title": f"Plot {i}",
+            },
+            headers=user["headers"],
+        )
+
+    # Test with limit
+    response = await client.get(
+        "/v0/logs/plots?limit=2",
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["plots"]) == 2
+    assert data["count"] == 5  # Total count
+
+    # Test with offset
+    response = await client.get(
+        "/v0/logs/plots?limit=2&offset=2",
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["plots"]) == 2
+    assert data["count"] == 5
+
+
+@pytest.mark.anyio
+async def test_list_plots_pagination_invalid_params(client: AsyncClient, dbsession):
+    """Test that invalid pagination params are rejected."""
+    user = await create_test_user(client, "plot_pagination_invalid@test.com")
+
+    # Negative offset
+    response = await client.get(
+        "/v0/logs/plots?offset=-1",
+        headers=user["headers"],
+    )
+    assert response.status_code == 422
+
+    # Zero limit
+    response = await client.get(
+        "/v0/logs/plots?limit=0",
+        headers=user["headers"],
+    )
+    assert response.status_code == 422
+
+
+# =============================================================================
+# Updated_at Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_plot_updated_at_changes_on_update(client: AsyncClient, dbsession):
+    """Test that updated_at timestamp changes when plot is updated."""
+    import time
+
+    user = await create_test_user(client, "plot_updated_at@test.com")
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-updated-at-project"},
+        headers=user["headers"],
+    )
+
+    # Create plot
+    create_response = await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "plot-updated-at-project"},
+            "title": "Initial Title",
+        },
+        headers=user["headers"],
+    )
+    token = create_response.json()["token"]
+    initial_updated_at = create_response.json()["plot_metadata"].get("updated_at")
+
+    # Wait a bit
+    time.sleep(0.1)
+
+    # Update plot
+    await client.patch(
+        f"/v0/logs/plots/{token}",
+        json={"title": "Updated Title"},
+        headers=user["headers"],
+    )
+
+    # Get plot and check updated_at changed
+    get_response = await client.get(
+        f"/v0/logs/plots/{token}",
+        headers=user["headers"],
+    )
+    new_updated_at = get_response.json()["plot_metadata"]["updated_at"]
+
+    # updated_at should have changed (or been set if initially None)
+    if initial_updated_at is not None:
+        assert new_updated_at != initial_updated_at
+
+
+# =============================================================================
+# Update Project Validation Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_update_plot_validates_project_name(client: AsyncClient, dbsession):
+    """Test that updating project_name validates the new project exists."""
+    user = await create_test_user(client, "plot_update_project@test.com")
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-update-project"},
+        headers=user["headers"],
+    )
+
+    # Create plot
+    create_response = await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "plot-update-project"},
+        },
+        headers=user["headers"],
+    )
+    token = create_response.json()["token"]
+
+    # Try to update to non-existent project
+    response = await client.patch(
+        f"/v0/logs/plots/{token}",
+        json={
+            "project_config": {"project_name": "non-existent-project"},
+        },
+        headers=user["headers"],
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_update_plot_to_different_project_requires_access(
+    client: AsyncClient, dbsession
+):
+    """Test that updating to a different project requires write access."""
+    user1 = await create_test_user(client, "plot_update_access_user1@test.com")
+    user2 = await create_test_user(client, "plot_update_access_user2@test.com")
+
+    # User1 creates a project and plot
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-update-access-project1"},
+        headers=user1["headers"],
+    )
+    create_response = await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "plot-update-access-project1"},
+        },
+        headers=user1["headers"],
+    )
+    token = create_response.json()["token"]
+
+    # User2 creates their own project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-update-access-project2"},
+        headers=user2["headers"],
+    )
+
+    # User1 tries to move plot to User2's project - should fail
+    response = await client.patch(
+        f"/v0/logs/plots/{token}",
+        json={
+            "project_config": {"project_name": "plot-update-access-project2"},
+        },
+        headers=user1["headers"],
+    )
+    # User1 doesn't have access to User2's project
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_update_plot_project_id_changes_with_project_name(
+    client: AsyncClient, dbsession
+):
+    """Test that project_id is updated when project_name changes."""
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.plot_dao import PlotDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+
+    user = await create_test_user(client, "plot_update_project_id@test.com")
+
+    # Create two projects
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-project-a"},
+        headers=user["headers"],
+    )
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-project-b"},
+        headers=user["headers"],
+    )
+
+    # Create plot in project A
+    create_response = await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "plot-project-a"},
+        },
+        headers=user["headers"],
+    )
+    token = create_response.json()["token"]
+
+    # Get project IDs
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    plot_dao = PlotDAO(dbsession)
+
+    projects_a = project_dao.filter(user_id=user["id"], name="plot-project-a")
+    project_a = projects_a[0][0]
+    projects_b = project_dao.filter(user_id=user["id"], name="plot-project-b")
+    project_b = projects_b[0][0]
+
+    # Verify initial project_id
+    plot = plot_dao.get_by_token(token)
+    assert plot.project_id == project_a.id
+
+    # Update to project B
+    await client.patch(
+        f"/v0/logs/plots/{token}",
+        json={
+            "project_config": {"project_name": "plot-project-b"},
+        },
+        headers=user["headers"],
+    )
+
+    # Verify project_id changed
+    dbsession.refresh(plot)
+    assert plot.project_id == project_b.id
+
+
+# =============================================================================
+# Project Rename Tests - Verify project_name comes from FK, not stale JSONB
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_plot_project_name_updates_on_project_rename(
+    client: AsyncClient, dbsession
+):
+    """Test that plot shows updated project name after project is renamed.
+
+    This is a critical test to verify project_name comes from the FK relationship,
+    not from stale JSONB data.
+    """
+    user = await create_test_user(client, "plot_rename_test@test.com")
+
+    # Create project with original name
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-original-name"},
+        headers=user["headers"],
+    )
+
+    # Create plot
+    create_response = await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "plot-original-name"},
+        },
+        headers=user["headers"],
+    )
+    assert create_response.status_code == status.HTTP_201_CREATED
+    token = create_response.json()["token"]
+
+    # Verify initial project_name
+    get_response = await client.get(
+        f"/v0/logs/plots/{token}",
+        headers=user["headers"],
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["plot_metadata"]["project_name"] == "plot-original-name"
+
+    # Rename the project
+    rename_response = await client.patch(
+        "/v0/project/plot-original-name",
+        json={"name": "plot-renamed"},
+        headers=user["headers"],
+    )
+    assert rename_response.status_code == 200
+
+    # Get plot again - should show NEW project name
+    get_response = await client.get(
+        f"/v0/logs/plots/{token}",
+        headers=user["headers"],
+    )
+    assert get_response.status_code == 200
+    # This is the key assertion - project_name should reflect the rename
+    assert get_response.json()["plot_metadata"]["project_name"] == "plot-renamed"
+
+
+@pytest.mark.anyio
+async def test_plot_list_shows_current_project_name(client: AsyncClient, dbsession):
+    """Test that list endpoint shows current project name after rename."""
+    user = await create_test_user(client, "plot_list_rename@test.com")
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-list-rename-proj"},
+        headers=user["headers"],
+    )
+
+    # Create plot
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "plot-list-rename-proj"},
+        },
+        headers=user["headers"],
+    )
+
+    # Rename project
+    await client.patch(
+        "/v0/project/plot-list-rename-proj",
+        json={"name": "plot-list-renamed"},
+        headers=user["headers"],
+    )
+
+    # List plots - should show new name
+    list_response = await client.get(
+        "/v0/logs/plots",
+        headers=user["headers"],
+    )
+    assert list_response.status_code == 200
+
+    # Find our plot and check project_name
+    plots = list_response.json()["plots"]
+    matching = [p for p in plots if p["project_name"] == "plot-list-renamed"]
+    assert len(matching) >= 1, "Plot should show renamed project name in list"
+
+
+@pytest.mark.anyio
+async def test_plot_project_config_does_not_contain_project_name(
+    client: AsyncClient, dbsession
+):
+    """Test that project_name is NOT stored in project_config JSONB.
+
+    This ensures we're using the FK as the single source of truth.
+    """
+    user = await create_test_user(client, "plot_no_jsonb_name@test.com")
+
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-no-jsonb-name"},
+        headers=user["headers"],
+    )
+
+    create_response = await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "duration"},
+            "project_config": {"project_name": "plot-no-jsonb-name", "limit": 500},
+        },
+        headers=user["headers"],
+    )
+    assert create_response.status_code == status.HTTP_201_CREATED
+
+    # Check that project_config does NOT contain project_name
+    project_config = create_response.json()["project_config"]
+    assert (
+        "project_name" not in project_config
+    ), "project_name should not be stored in project_config JSONB"
+    # But other fields should be there
+    assert project_config.get("limit") == 500
+
+
+@pytest.mark.anyio
+async def test_create_plot_token_collision_failure(client: AsyncClient, dbsession):
+    """Test that token collision returns HTTP 503 with retry message."""
+    from unittest.mock import patch
+
+    from orchestra.db.dao.plot_dao import TokenGenerationError
+
+    user = await create_test_user(client, "plot_token_collision@test.com")
+
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-token-collision-proj"},
+        headers=user["headers"],
+    )
+
+    # Mock the DAO to always raise TokenGenerationError
+    with patch(
+        "orchestra.db.dao.plot_dao.PlotDAO._generate_token",
+        side_effect=TokenGenerationError("Failed to generate unique token"),
+    ):
+        create_response = await client.post(
+            "/v0/logs/plot",
+            json={
+                "plot_config": {"type": "histogram", "x_axis": "duration"},
+                "project_config": {"project_name": "plot-token-collision-proj"},
+            },
+            headers=user["headers"],
+        )
+
+    assert create_response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert "token" in create_response.json()["detail"].lower()

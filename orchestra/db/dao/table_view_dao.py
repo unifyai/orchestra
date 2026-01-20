@@ -1,4 +1,4 @@
-"""DAO for Plot model operations."""
+"""DAO for TableView model operations."""
 
 import logging
 import uuid
@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, joinedload
 
-from orchestra.db.models.orchestra_models import Plot
+from orchestra.db.models.orchestra_models import Project, TableView
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ class TokenGenerationError(Exception):
     pass
 
 
-class PlotDAO:
-    """Data access object for Plot operations."""
+class TableViewDAO:
+    """Data access object for TableView operations."""
 
     def __init__(self, session: Session):
         self.session = session
@@ -43,73 +43,73 @@ class PlotDAO:
         project_id: int,
         user_id: str,
         organization_id: Optional[int],
-        plot_config: Dict[str, Any],
+        table_config: Dict[str, Any],
         project_config: Dict[str, Any],
         title: Optional[str] = None,
-    ) -> Plot:
+    ) -> TableView:
         """
-        Create a new plot.
+        Create a new table view.
 
         Args:
-            project_id: ID of the project this plot belongs to.
-            user_id: ID of the user creating the plot.
-            organization_id: ID of the organization (None for personal plots).
-            plot_config: Plot configuration (type, axes, etc.).
+            project_id: ID of the project this table view belongs to.
+            user_id: ID of the user creating the table view.
+            organization_id: ID of the organization (None for personal table views).
+            table_config: Table configuration (columns, visibility, etc.).
             project_config: Project/logs configuration (filters, limits, etc.).
-            title: Optional title for the plot.
+            title: Optional title for the table view.
 
         Returns:
-            The created Plot object.
+            The created TableView object.
         """
         token = self._generate_token()
 
-        plot = Plot(
+        table_view = TableView(
             token=token,
             project_id=project_id,
             user_id=user_id,
             organization_id=organization_id,
             title=title,
-            plot_config=plot_config,
+            table_config=table_config,
             project_config=project_config,
         )
 
-        self.session.add(plot)
+        self.session.add(table_view)
         self.session.flush()
 
-        logger.info(f"Created plot with token {token} for project {project_id}")
-        return plot
+        logger.info(f"Created table_view with token {token} for project {project_id}")
+        return table_view
 
-    def get_by_token(self, token: str) -> Optional[Plot]:
+    def get_by_token(self, token: str) -> Optional[TableView]:
         """
-        Get a plot by its token.
+        Get a table view by its token.
 
         Args:
             token: The 12-character hex token.
 
         Returns:
-            The Plot if found, None otherwise.
+            The TableView if found, None otherwise.
         """
         return (
-            self.session.query(Plot)
-            .options(joinedload(Plot.project))
-            .filter(Plot.token == token)
+            self.session.query(TableView)
+            .options(joinedload(TableView.project))
+            .filter(TableView.token == token)
             .first()
         )
 
-    def get_by_id(self, plot_id: int) -> Optional[Plot]:
+    def get_by_id(self, table_view_id: int) -> Optional[TableView]:
         """
-        Get a plot by its ID.
+        Get a table view by its ID.
 
         Args:
-            plot_id: The plot ID.
+            table_view_id: The table view ID.
 
         Returns:
-            The Plot if found, None otherwise.
+            The TableView if found, None otherwise.
         """
         return (
-            self.session.query(Plot)
-            .options(joinedload(Plot.project))
-            .filter(Plot.id == plot_id)
+            self.session.query(TableView)
+            .options(joinedload(TableView.project))
+            .filter(TableView.id == table_view_id)
             .first()
         )
 
@@ -118,9 +118,9 @@ class PlotDAO:
         project_id: int,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[Plot], int]:
+    ) -> Tuple[List[TableView], int]:
         """
-        List all plots for a project.
+        List all table views for a project.
 
         Args:
             project_id: ID of the project.
@@ -128,20 +128,20 @@ class PlotDAO:
             offset: Number of results to skip for pagination.
 
         Returns:
-            Tuple of (list of plots, total count).
+            Tuple of (list of table views, total count).
         """
         # Clamp limit to max 100
         limit = min(limit, 100)
 
-        query = self.session.query(Plot).filter(Plot.project_id == project_id)
+        query = self.session.query(TableView).filter(TableView.project_id == project_id)
 
         # Get total count before pagination
         total_count = query.count()
 
         # Eager load project relationship
         results = (
-            query.options(joinedload(Plot.project))
-            .order_by(Plot.created_at.desc())
+            query.options(joinedload(TableView.project))
+            .order_by(TableView.created_at.desc())
             .offset(offset)
             .limit(limit)
             .all()
@@ -157,15 +157,15 @@ class PlotDAO:
         context: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[Plot], int]:
+    ) -> Tuple[List[TableView], int]:
         """
-        List plots accessible to a user based on API key context.
+        List table views accessible to a user based on API key context.
 
         For personal API keys (organization_id is None):
-            Returns plots for personal projects (org_id is NULL).
+            Returns table views for personal projects (org_id is NULL).
 
         For organization API keys:
-            Returns plots for that organization's projects.
+            Returns table views for that organization's projects.
 
         Args:
             user_id: The user ID.
@@ -176,34 +176,34 @@ class PlotDAO:
             offset: Number of results to skip for pagination.
 
         Returns:
-            Tuple of (list of plots, total count).
+            Tuple of (list of table views, total count).
         """
         # Clamp limit to max 100
         limit = min(limit, 100)
 
-        query = self.session.query(Plot)
+        query = self.session.query(TableView)
 
         if organization_id is None:
             # Personal context - filter by BOTH org_id AND user_id
-            query = query.filter(Plot.organization_id.is_(None))
-            query = query.filter(Plot.user_id == user_id)
+            query = query.filter(TableView.organization_id.is_(None))
+            query = query.filter(TableView.user_id == user_id)
         else:
-            # Organization context - plots for that organization
-            query = query.filter(Plot.organization_id == organization_id)
+            # Organization context - table views for that organization
+            query = query.filter(TableView.organization_id == organization_id)
 
         if project_id is not None:
-            query = query.filter(Plot.project_id == project_id)
+            query = query.filter(TableView.project_id == project_id)
 
         if context is not None:
-            query = query.filter(Plot.project_config["context"].astext == context)
+            query = query.filter(TableView.project_config["context"].astext == context)
 
         # Get total count before pagination
         total_count = query.count()
 
         # Eager load project relationship to avoid N+1 queries
         results = (
-            query.options(joinedload(Plot.project))
-            .order_by(Plot.created_at.desc())
+            query.options(joinedload(TableView.project))
+            .order_by(TableView.created_at.desc())
             .offset(offset)
             .limit(limit)
             .all()
@@ -213,68 +213,68 @@ class PlotDAO:
 
     def update(
         self,
-        plot_id: int,
+        table_view_id: int,
         title: Optional[str] = None,
-        plot_config: Optional[Dict[str, Any]] = None,
+        table_config: Optional[Dict[str, Any]] = None,
         project_config: Optional[Dict[str, Any]] = None,
         project_id: Optional[int] = None,
         organization_id: Optional[int] = ...,  # Use ... as sentinel for "not provided"
-    ) -> Optional[Plot]:
+    ) -> Optional[TableView]:
         """
-        Update a plot's fields.
+        Update a table view's fields.
 
         Args:
-            plot_id: ID of the plot to update.
+            table_view_id: ID of the table view to update.
             title: New title (if provided).
-            plot_config: New plot config (if provided).
+            table_config: New table config (if provided).
             project_config: New project config (if provided).
             project_id: New project ID (if project changed).
             organization_id: New organization ID (if project changed). Use ... to skip.
 
         Returns:
-            The updated Plot, or None if not found.
+            The updated TableView, or None if not found.
         """
-        plot = self.get_by_id(plot_id)
-        if not plot:
+        table_view = self.get_by_id(table_view_id)
+        if not table_view:
             return None
 
         if title is not None:
-            plot.title = title
-        if plot_config is not None:
-            plot.plot_config = plot_config
+            table_view.title = title
+        if table_config is not None:
+            table_view.table_config = table_config
         if project_config is not None:
-            plot.project_config = project_config
+            table_view.project_config = project_config
         if project_id is not None:
-            plot.project_id = project_id
+            table_view.project_id = project_id
         if organization_id is not ...:
-            plot.organization_id = organization_id
+            table_view.organization_id = organization_id
 
         self.session.flush()
-        logger.info(f"Updated plot {plot_id}")
-        return plot
+        logger.info(f"Updated table_view {table_view_id}")
+        return table_view
 
-    def delete(self, plot_id: int) -> bool:
+    def delete(self, table_view_id: int) -> bool:
         """
-        Delete a plot by ID.
+        Delete a table view by ID.
 
         Args:
-            plot_id: ID of the plot to delete.
+            table_view_id: ID of the table view to delete.
 
         Returns:
             True if deleted, False if not found.
         """
-        plot = self.get_by_id(plot_id)
-        if not plot:
+        table_view = self.get_by_id(table_view_id)
+        if not table_view:
             return False
 
-        self.session.delete(plot)
+        self.session.delete(table_view)
         self.session.flush()
-        logger.info(f"Deleted plot {plot_id}")
+        logger.info(f"Deleted table_view {table_view_id}")
         return True
 
     def delete_by_token(self, token: str) -> bool:
         """
-        Delete a plot by token.
+        Delete a table view by token.
 
         Args:
             token: The 12-character hex token.
@@ -282,13 +282,13 @@ class PlotDAO:
         Returns:
             True if deleted, False if not found.
         """
-        plot = self.get_by_token(token)
-        if not plot:
+        table_view = self.get_by_token(token)
+        if not table_view:
             return False
 
-        self.session.delete(plot)
+        self.session.delete(table_view)
         self.session.flush()
-        logger.info(f"Deleted plot with token {token}")
+        logger.info(f"Deleted table_view with token {token}")
         return True
 
     def delete_by_project(
@@ -297,25 +297,25 @@ class PlotDAO:
         context: Optional[str] = None,
     ) -> int:
         """
-        Delete all plots for a project, optionally filtered by context.
+        Delete all table views for a project, optionally filtered by context.
 
         Args:
             project_id: ID of the project.
             context: Optional context stored in project_config to filter by.
 
         Returns:
-            Number of plots deleted.
+            Number of table views deleted.
         """
-        query = self.session.query(Plot).filter(Plot.project_id == project_id)
+        query = self.session.query(TableView).filter(TableView.project_id == project_id)
 
         if context is not None:
-            query = query.filter(Plot.project_config["context"].astext == context)
+            query = query.filter(TableView.project_config["context"].astext == context)
 
         count = query.delete(synchronize_session="fetch")
         self.session.flush()
 
         logger.info(
-            f"Deleted {count} plots for project {project_id}"
+            f"Deleted {count} table_views for project {project_id}"
             + (f" with context '{context}'" if context else ""),
         )
         return count
@@ -326,7 +326,7 @@ class PlotDAO:
         organization_id: Optional[int],
     ) -> int:
         """
-        Update organization_id for all plots belonging to a project.
+        Update organization_id for all table views belonging to a project.
 
         Used when a project is transferred between personal and organization ownership.
 
@@ -335,19 +335,19 @@ class PlotDAO:
             organization_id: New organization ID (None for personal).
 
         Returns:
-            Number of plots updated.
+            Number of table views updated.
         """
         result = (
-            self.session.query(Plot)
-            .filter(Plot.project_id == project_id)
+            self.session.query(TableView)
+            .filter(TableView.project_id == project_id)
             .update(
-                {Plot.organization_id: organization_id},
+                {TableView.organization_id: organization_id},
                 synchronize_session="fetch",
             )
         )
         self.session.flush()
         logger.info(
-            f"Updated organization_id to {organization_id} for {result} plots "
+            f"Updated organization_id to {organization_id} for {result} table_views "
             f"in project {project_id}",
         )
         return result
