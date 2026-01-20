@@ -88,7 +88,7 @@ class FieldTypeDAO:
             return
 
         # Determine the field type based on priority
-        from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.db.dao.log_event_dao import LogEventDAO
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
             is_pydantic_schema,
@@ -108,7 +108,7 @@ class FieldTypeDAO:
                 normalized_type = normalize_type_string(str(field_type))
         elif infer_type and value is not None:
             # Priority 2: No explicit type, but infer_type=True → infer from value
-            inferred = LogDAO.infer_type(field_name, value, explicit_type=None)
+            inferred = LogEventDAO.infer_type(field_name, value, explicit_type=None)
             normalized_type = normalize_type_string(inferred)
         else:
             # Priority 3: No explicit type and infer_type=False → default to "Any"
@@ -598,7 +598,7 @@ class FieldTypeDAO:
             self.session.commit()
 
     # Valid field categories for validation
-    VALID_FIELD_CATEGORIES = {"entry", "param", "derived_entry"}
+    VALID_FIELD_CATEGORIES = {"entry", "derived_entry"}
 
     def bulk_create_field_types(
         self,
@@ -616,7 +616,6 @@ class FieldTypeDAO:
                 - mutable: Optional, defaults to False
                 - field_category: Optional, defaults to "entry". Valid values are:
                     - "entry": Regular entry fields
-                    - "param": Parameter fields
                     - "derived_entry": Derived field values
                 - unique: Optional, defaults to False
                 - field_type: Optional, the explicit type for this field
@@ -655,7 +654,7 @@ class FieldTypeDAO:
             project_id = data["project_id"]
             field_name = data["field_name"]
             context_id = data["context_id"]
-            mutable = data.get("mutable", False)
+            mutable = data.get("mutable", True)
             field_category = data.get("field_category", "entry")
             unique = data.get("unique", False)
             field_description = data.get("description", description)
@@ -672,7 +671,7 @@ class FieldTypeDAO:
 
             # Type precedence:
             # 1. Explicit type (from explicit_types) → Use it (strict typing)
-            # 2. No explicit type → Infer from value using LogDAO.infer_type
+            # 2. No explicit type → Infer from value using LogEventDAO.infer_type
             # 3. Inference fails or no value → Fall back to "Any"
 
             field_type_raw = data.get("field_type")
@@ -691,10 +690,14 @@ class FieldTypeDAO:
                     field_type = DEFAULT_FIELD_TYPE
             elif value is not None:
                 # Priority 2: Infer type from value
-                from orchestra.db.dao.log_dao import LogDAO
+                from orchestra.db.dao.log_event_dao import LogEventDAO
 
                 try:
-                    inferred = LogDAO.infer_type(field_name, value, explicit_type=None)
+                    inferred = LogEventDAO.infer_type(
+                        field_name,
+                        value,
+                        explicit_type=None,
+                    )
                     field_type = normalize_type_string(inferred)
                 except Exception:
                     # Fall back to Any if inference fails

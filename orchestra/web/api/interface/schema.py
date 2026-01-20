@@ -361,22 +361,6 @@ class Item(BaseModel):
     content: Optional[str] = None
 
 
-class LegacyInterfaceConfig(BaseModel):
-    """Legacy Interface configuration schema for backward compatibility"""
-
-    # Project and interface name are required for creation but optional for updates
-    name: Optional[str] = None
-    project_name: Optional[str] = None
-    items: List[Item] = []
-    new_counter: int = 0
-    temporary: bool = False
-    new_name: Optional[str] = None
-    context: Optional[str] = None
-    color: Optional[str] = None
-    icon: Optional[str] = None
-    order: Optional[int] = None
-
-
 # Reference schemas for API responses
 class TileReference(BaseModel):
     """Simple reference to a tile in a tab"""

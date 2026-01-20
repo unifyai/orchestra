@@ -21,18 +21,18 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.derived_log_dao import (
-    DerivedLogDAO,
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_event_dao import (
+    ImmutableFieldError,
+    LogEventDAO,
+    OverwriteError,
     _extract_field_names_from_equation,
 )
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_dao import ImmutableFieldError, LogDAO, OverwriteError
-from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -41,15 +41,10 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
-    DerivedLog,
     Embedding,
-    Log,
     LogEvent,
     LogEventContext,
-    LogEventDerivedLog,
-    LogEventLog,
 )
-from orchestra.settings import settings
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
     CreateDerivedEntriesConfig,
@@ -81,13 +76,11 @@ from .utils import (
     _fetch_logs_for_event_ids,
     _flatten_fields,
     _format_flat_logs,
-    _format_jsonb_logs,
+    _format_logs,
     _get_all_filtered_log_event_ids,
     _get_distinct_group_values,
     _get_log_event_ids_for_group_value,
     _get_logs_query,
-    _get_logs_query_jsonb,
-    _get_params_for_log_events,
     _join_logs,
     _resolve_key_specific_filters,
     apply_group_threshold,
@@ -100,34 +93,6 @@ router = APIRouter()
 
 # Admin router for protected endpoints
 admin_router = APIRouter()
-
-
-@router.post(
-    "/_debug/jsonb_mode",
-    include_in_schema=False,  # Hide from OpenAPI docs
-)
-def set_jsonb_mode_endpoint(enabled: bool):
-    """
-    Toggle query mode at runtime for development and testing.
-    """
-    from orchestra.settings import set_jsonb_mode
-
-    set_jsonb_mode(enabled)
-    return {
-        "jsonb_mode": enabled,
-        "message": f"JSONB mode {'enabled' if enabled else 'disabled'}",
-    }
-
-
-@router.get(
-    "/_debug/jsonb_mode",
-    include_in_schema=False,  # Hide from OpenAPI docs
-)
-def get_jsonb_mode_endpoint():
-    """Get current query mode status."""
-    from orchestra.settings import settings
-
-    return {"jsonb_mode": settings.use_jsonb_queries}
 
 
 def _sanitize_sql_error(error: Exception) -> str:
@@ -252,7 +217,7 @@ def create_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     # check if the project exists
     try:
@@ -316,7 +281,6 @@ def create_logs(
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             log_event_dao=log_event_dao,
-            log_dao=log_dao,
             context_dao=context_dao,
         )
 
@@ -415,51 +379,27 @@ def prepare_resolved_ids(
 
     alias_id_sets: Dict[str, Set[int]] = {}
 
-    # Helper to extract log IDs from query results based on mode
+    # Helper to extract log IDs from query results
     def _extract_log_ids(query_dict: dict) -> Set[int]:
-        """Run query and extract log IDs, using JSONB or EAV path as appropriate."""
-        if settings.use_jsonb_queries:
-            # JSONB mode: _get_logs_query_jsonb returns (rows, count) where rows are (id, data, created_at)
-            # Note: column_context is a formatting parameter, not used in query
-            rows, _count = _get_logs_query_jsonb(
-                request_fastapi=request_fastapi,
-                project_name=project_name,
-                context=query_dict.get("context"),
-                filter_expr=query_dict.get("filter_expr"),
-                sorting=query_dict.get("sorting"),
-                from_ids=query_dict.get("from_ids"),
-                exclude_ids=query_dict.get("exclude_ids"),
-                from_fields=query_dict.get("from_fields"),
-                exclude_fields=query_dict.get("exclude_fields"),
-                limit=query_dict.get("limit"),
-                offset=query_dict.get("offset", 0),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-            )
-            return {r[0] for r in rows}  # r[0] is log_event_id
-        else:
-            # EAV mode: _get_logs_query returns (raw_rows, params, count)
-            raw_rows, _, _count = _get_logs_query(
-                request_fastapi=request_fastapi,
-                project_name=project_name,
-                column_context=query_dict.get("column_context"),
-                context=query_dict.get("context"),
-                filter_expr=query_dict.get("filter_expr"),
-                sorting=query_dict.get("sorting"),
-                from_ids=query_dict.get("from_ids"),
-                exclude_ids=query_dict.get("exclude_ids"),
-                from_fields=query_dict.get("from_fields"),
-                exclude_fields=query_dict.get("exclude_fields"),
-                limit=query_dict.get("limit"),
-                offset=query_dict.get("offset", 0),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-            )
-            return {r[7] for r in raw_rows}  # r[7] is log_event_id
+        """Run query and extract log IDs."""
+        rows, _count = _get_logs_query(
+            request_fastapi=request_fastapi,
+            project_name=project_name,
+            context=query_dict.get("context"),
+            filter_expr=query_dict.get("filter_expr"),
+            sorting=query_dict.get("sorting"),
+            from_ids=query_dict.get("from_ids"),
+            exclude_ids=query_dict.get("exclude_ids"),
+            from_fields=query_dict.get("from_fields"),
+            exclude_fields=query_dict.get("exclude_fields"),
+            limit=query_dict.get("limit"),
+            offset=query_dict.get("offset", 0),
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
+        return {r[0] for r in rows}  # r[0] is log_event_id
 
     # Step 2: For each alias, figure out the set of IDs
     for alias, subfields in alias_to_subfields.items():
@@ -566,7 +506,7 @@ def create_from_logs(
     Creates one or more entries based on `body.equation` and `body.referenced_logs`.
 
     When body.derived=True (default):
-      Eagerly computes each derived value and stores it in DerivedLog.value.
+      Eagerly computes each derived value and stores it in LogEvent.data.
 
     When body.derived=False:
       Computes values and stores them directly in the base logs as regular entries.
@@ -580,7 +520,7 @@ def create_from_logs(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -688,20 +628,13 @@ def create_from_logs(
                     },
                 )
 
-            # 5) Perform bulk update - use JSONB or EAV method based on mode
+            # 5) Perform bulk update
             if updates:
-                if settings.use_jsonb_queries:
-                    log_dao.bulk_update_jsonb(
-                        updates,
-                        overwrite=True,
-                        field_types=field_types,
-                    )
-                else:
-                    log_dao.bulk_update(
-                        updates,
-                        overwrite=True,
-                        field_types=field_types,
-                    )
+                log_dao.bulk_update(
+                    updates,
+                    overwrite=True,
+                    field_types=field_types,
+                )
 
                 # 6) Create or update field type record
                 # Use infer_type=True to infer type from value (no explicit_types here)
@@ -730,266 +663,41 @@ def create_from_logs(
             )
     else:
         # Materialize derived values into LogEvent.data
-        if settings.use_jsonb_queries:
-            try:
-                # Check if this is a filter-based derived log
-                is_filter_based = False
-                filter_expression = None
-                if isinstance(body.referenced_logs, dict):
-                    for key, value in body.referenced_logs.items():
-                        if isinstance(value, dict) and "filter_expr" in value:
-                            is_filter_based = True
-                            filter_expression = body.referenced_logs
-                            break
-
-                # Build filter_dict and compute values
-                filter_expr, alias_to_key_map = _substitute_placeholders(
-                    body.equation,
-                    resolved_ids,
-                )
-
-                field_types = field_type_dao.get_field_types(
-                    project_obj.id,
-                    context_id=context_id,
-                )
-
-                filter_dict = str_filter_exp_to_dict(
-                    filter_expr,
-                    field_names=list(field_types.keys()),
-                )
-
-                resolved_ids_dict = {}
-                for key, ids in resolved_ids.items():
-                    resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
-
-                # Flatten all referenced log_event_ids
-                filtered_log_ids = list(
-                    {int(i) for ids in resolved_ids_dict.values() for i in ids},
-                )
-
-                # Get filtered log events
-                log_event_ids_subq = (
-                    session.query(LogEvent.id)
-                    .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-                    .filter(LogEvent.project_id == project_obj.id)
-                    .filter(
-                        LogEventContext.context_id == context_id,
-                        LogEvent.id.in_(filtered_log_ids),
-                    )
-                    .subquery(name="log_event_ids_subq")
-                )
-
-                computed_values = _compute_expression(
-                    filter_dict,
-                    LogEvent,
-                    session,
-                    log_event_ids=log_event_ids_subq,
-                    project_id=project_obj.id,
-                    context_id=context_id,
-                )
-
-                if not computed_values:
-                    return {"info": "No values computed. Nothing to create."}
-
-                # Create index mappings for each alias
-                alias_to_id_list = {}
-                alias_to_index_map = {}
-                for alias, id_list in resolved_ids.items():
-                    alias_to_id_list[alias] = id_list
-                    alias_to_index_map[alias] = {
-                        log_id: idx for idx, log_id in enumerate(id_list)
-                    }
-
-                # Prepare bulk update data for JSONB
-                updates = []
-                embedding_objects = []  # Collect embeddings for bulk insertion
-                non_null_val = None
-                placeholders = _extract_placeholders(body.equation)
-                referenced_logs = {
-                    ph.split(":")[1]: v
-                    for ph in placeholders
-                    for k, v in body.referenced_logs.items()
-                    if k in ph
-                }
-
-                for computed_log_id, value in computed_values:
-                    source_index = None
-                    for alias, index_map in alias_to_index_map.items():
-                        if computed_log_id in index_map:
-                            source_index = index_map[computed_log_id]
-                            break
-
-                    if source_index is not None:
-                        for alias, id_list in alias_to_id_list.items():
-                            if source_index < len(id_list):
-                                log_event_id = id_list[source_index]
-
-                                # Check for vector FIRST to skip expensive JSON serialization
-                                if isinstance(value, np.ndarray):
-                                    # Vectors are stored in Embedding table, not in LogEvent.data
-                                    # Set val to None to avoid storing redundant vector data
-                                    val = None
-                                    # Track sample for field type inference (use .tolist() - fast)
-                                    non_null_val = value.tolist()
-
-                                    is_image_embedding = "embed_image(" in body.equation
-                                    if is_image_embedding:
-                                        from orchestra.web.api.log.python2SQL.helpers import (
-                                            DEFAULT_IMAGE_EMBEDDING_MODEL,
-                                        )
-
-                                        model_name = DEFAULT_IMAGE_EMBEDDING_MODEL
-                                    else:
-                                        model_name = DEFAULT_EMBEDDING_MODEL
-
-                                    embeddings = Embedding(
-                                        ref_id=log_event_id,
-                                        key=body.key,
-                                        model=model_name,
-                                        vector=value,
-                                    )
-                                    embedding_objects.append(embeddings)
-                                else:
-                                    # Standard path for non-vector data
-                                    val = json.loads(
-                                        json.dumps(value, cls=CustomEncoder),
-                                    )
-                                    if val is not None:
-                                        non_null_val = val
-
-                                # Add to bulk update list
-                                updates.append(
-                                    {
-                                        "log_event_id": log_event_id,
-                                        "key": body.key,
-                                        "value": val,
-                                        "context_id": context_id,
-                                        "overwrite": True,
-                                    },
-                                )
-
-                # Bulk insert embeddings in a single operation
-                if embedding_objects:
-                    session.bulk_save_objects(embedding_objects)
-
-                # Execute bulk update using JSONB method
-                if updates:
-                    log_dao.bulk_update_jsonb(
-                        updates,
-                        field_types=field_types,
-                        overwrite=True,
-                    )
-
-                # In JSONB mode, create/update ActiveDerivedLog template only when derived=True
-                # When derived=False, values are stored as regular entries (not derived)
-                inferred_type = LogDAO.infer_type("", non_null_val)
-
-                if body.derived:
-                    # Create or update ActiveDerivedLog template for derived=True (default)
-                    existing_template = (
-                        session.query(ActiveDerivedLog)
-                        .filter(
-                            ActiveDerivedLog.project_id == project_obj.id,
-                            ActiveDerivedLog.key == body.key,
-                            ActiveDerivedLog.context_id == context_id,
-                        )
-                        .first()
-                    )
-
-                    # Extract field names from equation for dependency tracking
-                    referenced_keys = _extract_field_names_from_equation(body.equation)
-
-                    if not existing_template:
-                        template = ActiveDerivedLog(
-                            project_id=project_obj.id,
-                            context_id=context_id,
-                            key=body.key,
-                            equation=body.equation,
-                            referenced_logs=referenced_logs,
-                            filter_expression=filter_expression,
-                            inferred_type=inferred_type,
-                            referenced_keys=referenced_keys,
-                            is_active=True,
-                            created_at=datetime.now(timezone.utc),
-                            updated_at=datetime.now(timezone.utc),
-                        )
-                        session.add(template)
-                    else:
-                        existing_template.equation = body.equation
-                        existing_template.referenced_logs = referenced_logs
-                        existing_template.filter_expression = filter_expression
-                        existing_template.inferred_type = inferred_type
-                        existing_template.referenced_keys = referenced_keys
-                        existing_template.is_active = True
-                        existing_template.updated_at = datetime.now(timezone.utc)
-
-                session.commit()
-
-                # Create field type with appropriate category
-                # When derived=False, use "entry" category so values appear in entries
-                # When derived=True (default), use "derived_entry" category
-                # For embeddings, explicitly set field_type="vector" instead of inferring
-                # from the list of floats (which would incorrectly infer as "List[float]")
-                is_embedding = len(embedding_objects) > 0
-                field_category = "derived_entry" if body.derived else "entry"
-                field_type_dao.create_field_type_if_absent(
-                    project_id=project_obj.id,
-                    field_name=body.key,
-                    value=non_null_val,
-                    field_category=field_category,
-                    context_id=context_id,
-                    field_type="vector" if is_embedding else None,
-                    infer_type=not is_embedding,
-                )
-                session.commit()  # Commit the FieldType creation
-
-                return {
-                    "info": f"Created {len(updates)} derived logs with key='{body.key}'.",
-                }
-
-            except Exception as e:
-                session.rollback()
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
-                )
-
-        # EAV Mode: Original derived log creation logic
         try:
-            # Check if this is a filter-based derived log
-            is_filter_based = False
+            # Check if this is a filter-based derived log and extract filter_expression
             filter_expression = None
             if isinstance(body.referenced_logs, dict):
-                # Check if any value in referenced_logs is a dict with filter_expr
                 for key, value in body.referenced_logs.items():
                     if isinstance(value, dict) and "filter_expr" in value:
-                        is_filter_based = True
                         filter_expression = body.referenced_logs
                         break
 
-            # 5) Build a filter_dict that references those base logs. Then compute
+            # Build filter_dict and compute values
             filter_expr, alias_to_key_map = _substitute_placeholders(
                 body.equation,
                 resolved_ids,
             )
+
             field_types = field_type_dao.get_field_types(
                 project_obj.id,
                 context_id=context_id,
             )
+
             filter_dict = str_filter_exp_to_dict(
                 filter_expr,
                 field_names=list(field_types.keys()),
             )
+
             resolved_ids_dict = {}
             for key, ids in resolved_ids.items():
                 resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
 
-            # Flatten all referenced log_event_ids across aliases
+            # Flatten all referenced log_event_ids
             filtered_log_ids = list(
                 {int(i) for ids in resolved_ids_dict.values() for i in ids},
             )
 
-            # Get the filtered log events scoped to provided IDs
+            # Get filtered log events
             log_event_ids_subq = (
                 session.query(LogEvent.id)
                 .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
@@ -1000,19 +708,32 @@ def create_from_logs(
                 )
                 .subquery(name="log_event_ids_subq")
             )
+
             computed_values = _compute_expression(
                 filter_dict,
                 LogEvent,
                 session,
                 log_event_ids=log_event_ids_subq,
+                project_id=project_obj.id,
+                context_id=context_id,
             )
 
             if not computed_values:
                 return {"info": "No values computed. Nothing to create."}
 
-            # Create a new derived log entry for each computed value
-            new_derived_logs = []
-            derived_log_associations = []  # Track (log_event_id, derived_log_index)
+            # Create index mappings for each alias
+            alias_to_id_list = {}
+            alias_to_index_map = {}
+            for alias, id_list in resolved_ids.items():
+                alias_to_id_list[alias] = id_list
+                alias_to_index_map[alias] = {
+                    log_id: idx for idx, log_id in enumerate(id_list)
+                }
+
+            # Prepare bulk update data
+            updates = []
+            embedding_objects = []  # Collect embeddings for bulk insertion
+            non_null_val = None
             placeholders = _extract_placeholders(body.equation)
             referenced_logs = {
                 ph.split(":")[1]: v
@@ -1020,50 +741,26 @@ def create_from_logs(
                 for k, v in body.referenced_logs.items()
                 if k in ph
             }
-            # Create index mappings for each alias to track position of log_event_ids
-            # This helps us find corresponding log_event_ids across different aliases
-            alias_to_id_list = {}
-            alias_to_index_map = {}
 
-            for alias, id_list in resolved_ids.items():
-                alias_to_id_list[alias] = id_list
-                # Create a mapping from log_event_id to its index position for this alias
-                alias_to_index_map[alias] = {
-                    log_id: idx for idx, log_id in enumerate(id_list)
-                }
-
-            # Process each computed value
-            non_null_val = None
             for computed_log_id, value in computed_values:
-                # Find which alias and index this computed_log_id belongs to
-                source_alias = None
                 source_index = None
-
                 for alias, index_map in alias_to_index_map.items():
                     if computed_log_id in index_map:
-                        source_alias = alias
                         source_index = index_map[computed_log_id]
                         break
 
-                # If we found the source, create derived logs for all corresponding log_event_ids
                 if source_index is not None:
-                    # For each alias, get the log_event_id at the same index position
                     for alias, id_list in alias_to_id_list.items():
                         if source_index < len(id_list):
                             log_event_id = id_list[source_index]
 
-                            # Store vectors in DerivedLog.value for retrieval by GET /v0/logs.
+                            # Check for vector FIRST to skip expensive JSON serialization
                             if isinstance(value, np.ndarray):
-                                # Use .tolist() directly - much faster than json.dumps/loads
-                                val = value.tolist()
-                                non_null_val = val  # Track for field type inference
-                                inferred_type = "vector"
+                                # Vectors are stored in Embedding table, not in LogEvent.data
+                                val = None
+                                non_null_val = value.tolist()
 
-                                # Determine if this is an image embedding or text embedding
-                                # by checking if the equation contains embed_image()
                                 is_image_embedding = "embed_image(" in body.equation
-
-                                # Use appropriate model name based on embedding type
                                 if is_image_embedding:
                                     from orchestra.web.api.log.python2SQL.helpers import (
                                         DEFAULT_IMAGE_EMBEDDING_MODEL,
@@ -1073,67 +770,61 @@ def create_from_logs(
                                 else:
                                     model_name = DEFAULT_EMBEDDING_MODEL
 
-                                # add the embedding to the vector index table
                                 embeddings = Embedding(
                                     ref_id=log_event_id,
                                     key=body.key,
                                     model=model_name,
                                     vector=value,
                                 )
-                                session.add(embeddings)
+                                embedding_objects.append(embeddings)
                             else:
                                 # Standard path for non-vector data
-                                val = json.loads(json.dumps(value, cls=CustomEncoder))
-                                non_null_val = val if val is not None else non_null_val
-                                inferred_type = LogDAO.infer_type("", val)
+                                val = json.loads(
+                                    json.dumps(value, cls=CustomEncoder),
+                                )
+                                if val is not None:
+                                    non_null_val = val
 
-                            # Create DerivedLog without log_event_id
-                            new_derived_logs.append(
-                                DerivedLog(
-                                    key=body.key,
-                                    equation=body.equation,
-                                    referenced_logs=referenced_logs,
-                                    value=val,
-                                    inferred_type=inferred_type,
-                                    created_at=datetime.now(timezone.utc),
-                                    updated_at=datetime.now(timezone.utc),
-                                ),
-                            )
-                            # Track the association
-                            derived_log_associations.append(
-                                (log_event_id, len(new_derived_logs) - 1),
+                            # Add to bulk update list
+                            updates.append(
+                                {
+                                    "log_event_id": log_event_id,
+                                    "key": body.key,
+                                    "value": val,
+                                    "context_id": context_id,
+                                    "overwrite": True,
+                                },
                             )
 
-            # Bulk insert all new derived logs in one go
-            session.bulk_save_objects(new_derived_logs, return_defaults=True)
-            session.flush()  # Get IDs for the new derived logs
+            # Bulk insert embeddings in a single operation
+            if embedding_objects:
+                session.bulk_save_objects(embedding_objects)
 
-            # Create LogEventDerivedLog associations
-            for log_event_id, derived_log_index in derived_log_associations:
-                if derived_log_index < len(new_derived_logs):
-                    association = LogEventDerivedLog(
-                        log_event_id=log_event_id,
-                        derived_log_id=new_derived_logs[derived_log_index].id,
-                    )
-                    session.add(association)
+            # Execute bulk update
+            if updates:
+                log_dao.bulk_update(
+                    updates,
+                    field_types=field_types,
+                    overwrite=True,
+                )
 
-            # If this is a filter-based derived log, create an ActiveDerivedLog
-            if is_filter_based:
-                # Check if a template already exists for this project and key
+            # Create/update ActiveDerivedLog template only when derived=True
+            inferred_type = LogEventDAO.infer_type("", non_null_val)
+
+            if body.derived:
                 existing_template = (
                     session.query(ActiveDerivedLog)
                     .filter(
                         ActiveDerivedLog.project_id == project_obj.id,
                         ActiveDerivedLog.key == body.key,
+                        ActiveDerivedLog.context_id == context_id,
                     )
                     .first()
                 )
 
-                # Extract field names from equation for dependency tracking
                 referenced_keys = _extract_field_names_from_equation(body.equation)
 
                 if not existing_template:
-                    # Create a new template
                     template = ActiveDerivedLog(
                         project_id=project_obj.id,
                         context_id=context_id,
@@ -1149,7 +840,6 @@ def create_from_logs(
                     )
                     session.add(template)
                 else:
-                    # Update existing template
                     existing_template.equation = body.equation
                     existing_template.referenced_logs = referenced_logs
                     existing_template.filter_expression = filter_expression
@@ -1160,19 +850,23 @@ def create_from_logs(
 
             session.commit()
 
-            # Create or update field type record for derived entry
-            # For embeddings, explicitly set field_type="vector" instead of inferring
-            # from the list of floats (which would incorrectly infer as "List[float]")
-            is_embedding = inferred_type == "vector"
+            # Create field type with appropriate category
+            is_embedding = len(embedding_objects) > 0
+            field_category = "derived_entry" if body.derived else "entry"
             field_type_dao.create_field_type_if_absent(
                 project_id=project_obj.id,
                 field_name=body.key,
                 value=non_null_val,
-                field_category="derived_entry",
+                field_category=field_category,
                 context_id=context_id,
                 field_type="vector" if is_embedding else None,
                 infer_type=not is_embedding,
             )
+            session.commit()
+
+            return {
+                "info": f"Created {len(updates)} derived logs with key='{body.key}'.",
+            }
 
         except Exception as e:
             session.rollback()
@@ -1180,9 +874,6 @@ def create_from_logs(
                 status_code=500,
                 detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
             )
-        return {
-            "info": f"Created {len(computed_values)} derived logs with key='{body.key}'.",
-        }
 
 
 @router.put(
@@ -1240,7 +931,7 @@ def update_derived_log(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    derived_log_dao = DerivedLogDAO(session)
+    derived_log_dao = LogEventDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -1284,370 +975,137 @@ def update_derived_log(
     new_refs = body.referenced_logs  # can be None
 
     # Update derived log templates and recompute
-    if settings.use_jsonb_queries:
-        try:
-            # Query ActiveDerivedLog templates matching the update criteria
-            template_query = session.query(ActiveDerivedLog).filter(
-                ActiveDerivedLog.project_id == project_id,
-                ActiveDerivedLog.context_id == context_id,
+    try:
+        # Query ActiveDerivedLog templates matching the update criteria
+        template_query = session.query(ActiveDerivedLog).filter(
+            ActiveDerivedLog.project_id == project_id,
+            ActiveDerivedLog.context_id == context_id,
+        )
+
+        # Filter by key if provided
+        if updated_key:
+            template_query = template_query.filter(
+                ActiveDerivedLog.key == updated_key,
             )
 
-            # Filter by key if provided
-            if updated_key:
-                template_query = template_query.filter(
-                    ActiveDerivedLog.key == updated_key,
-                )
+        templates = template_query.all()
 
-            templates = template_query.all()
-
-            if not templates:
-                return {
-                    "info": "No templates found matching criteria. Nothing to update.",
-                }
-
-            updated_count = 0
-            removed_count = 0
-            for template in templates:
-                # Track old referenced logs before updating (for removal logic)
-                old_referenced_log_ids = set()
-                if template.referenced_logs:
-                    for ref_ids in template.referenced_logs.values():
-                        if isinstance(ref_ids, list):
-                            old_referenced_log_ids.update(ref_ids)
-                        elif isinstance(ref_ids, int):
-                            old_referenced_log_ids.add(ref_ids)
-
-                # Update template properties if provided
-                if updated_equation:
-                    template.equation = updated_equation
-                    # Update referenced_keys when equation changes
-                    template.referenced_keys = _extract_field_names_from_equation(
-                        updated_equation,
-                    )
-
-                # Track new referenced log IDs
-                new_referenced_log_ids = set()
-                if new_refs:
-                    # Parse new referenced_logs structure
-                    placeholders = _extract_placeholders(
-                        updated_equation or template.equation,
-                    )
-                    referenced_logs = {
-                        ph.split(":")[1]: v
-                        for ph in placeholders
-                        for k, v in new_refs.items()
-                        if k in ph
-                    }
-                    template.referenced_logs = referenced_logs
-
-                    # Collect new referenced log IDs
-                    for ref_ids in new_refs.values():
-                        if isinstance(ref_ids, list):
-                            new_referenced_log_ids.update(ref_ids)
-                        elif isinstance(ref_ids, int):
-                            new_referenced_log_ids.add(ref_ids)
-
-                    # Update filter_expression if new_refs contains filter_expr
-                    if isinstance(new_refs, dict):
-                        for ref_key, ref_val in new_refs.items():
-                            if isinstance(ref_val, dict) and "filter_expr" in ref_val:
-                                template.filter_expression = new_refs
-                                break
-
-                # Remove derived field from logs that are no longer referenced
-                logs_to_remove_from = old_referenced_log_ids - new_referenced_log_ids
-                if logs_to_remove_from and template.key:
-                    # Use JSONB - operator to remove the key from data
-                    # data = data - 'key_name'
-                    from sqlalchemy import update as sql_update
-
-                    remove_stmt = (
-                        sql_update(LogEvent)
-                        .where(LogEvent.id.in_(logs_to_remove_from))
-                        .values(
-                            data=LogEvent.data.op("-")(template.key),
-                            updated_at=datetime.now(timezone.utc),
-                        )
-                    )
-                    result = session.execute(remove_stmt)
-                    removed_count += result.rowcount
-
-                template.updated_at = datetime.now(timezone.utc)
-                updated_count += 1
-
-            session.commit()
-
-            # Recompute if requested (default behavior)
-            # Only recompute for logs that are in the template's referenced_logs
-            recomputed_count = 0
-            for template in templates:
-                # Get log IDs from the template's referenced_logs
-                log_ids = []
-                if template.referenced_logs:
-                    for ref_ids in template.referenced_logs.values():
-                        if isinstance(ref_ids, list):
-                            log_ids.extend(ref_ids)
-                        elif isinstance(ref_ids, int):
-                            log_ids.append(ref_ids)
-                    log_ids = list(set(log_ids))  # Remove duplicates
-
-                if log_ids:
-                    try:
-                        count = derived_log_dao.recompute_derived_logs_jsonb(
-                            template=template,
-                            log_ids=log_ids,
-                            json_encoder=CustomEncoder,
-                            field_type_dao=field_type_dao,
-                        )
-                        recomputed_count += count
-                    except Exception as recompute_error:
-                        logging.warning(
-                            f"Failed to recompute JSONB derived logs for template "
-                            f"'{template.key}': {recompute_error}",
-                        )
-
+        if not templates:
             return {
-                "info": f"Updated {updated_count} templates, removed {removed_count} obsolete values, and recomputed {recomputed_count} derived values.",
+                "info": "No templates found matching criteria. Nothing to update.",
             }
 
-        except Exception as e:
-            session.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to update derived logs. Error: {e}",
-            )
+        updated_count = 0
+        removed_count = 0
+        for template in templates:
+            # Track old referenced logs before updating (for removal logic)
+            old_referenced_log_ids = set()
+            if template.referenced_logs:
+                for ref_ids in template.referenced_logs.values():
+                    if isinstance(ref_ids, list):
+                        old_referenced_log_ids.update(ref_ids)
+                    elif isinstance(ref_ids, int):
+                        old_referenced_log_ids.add(ref_ids)
 
-    # EAV Mode: Original update_derived_log logic
-    # 2) Resolve which DerivedLog IDs to update
-    resolved_ids = prepare_resolved_ids(
-        equation=updated_equation,
-        referenced_logs=body.target_derived_logs,
-        request_fastapi=request_fastapi,
-        project_name=body.project_name,
-        project_dao=project_dao,
-        field_type_dao=field_type_dao,
-        context_dao=context_dao,
-        session=session,
-    )
-
-    # If none found, short-circuit
-    if not any(len(v) for v in resolved_ids.values()):
-        return {"info": "No references found. Nothing to update."}
-    # Assumes referenced logs are of equal length
-    derived_log_ids = [dlog_id for dlog_id in resolved_ids.values()][0]
-    existing_derived_logs = (
-        session.query(DerivedLog)
-        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
-        .filter(
-            LogEventDerivedLog.log_event_id.in_(derived_log_ids),
-            DerivedLog.key == updated_key,
-        )
-        .all()
-    )
-    # If user *did not* pass new referenced_logs, do a simple "update in place"
-    if not new_refs:
-        # just update existing rows for new key/equation, then recompute
-        # bulk update
-        try:
-            stmt = (
-                update(DerivedLog)
-                .where(DerivedLog.id.in_([dlog.id for dlog in existing_derived_logs]))
-                .values(key=updated_key, equation=updated_equation)
-            )
-            session.execute(stmt)
-            session.commit()
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
-        # recompute
-        derived_log_dao.recompute_derived_logs(
-            logs_to_recompute=existing_derived_logs,
-            session=session,
-            json_encoder=CustomEncoder,
-        )
-        return {
-            "info": f"Updated {len(existing_derived_logs)} derived logs successfully.",
-        }
-
-    # 3) If new_refs *is* provided, do the "compute & insert" approach
-    if new_refs:
-        # Use updated_key/equation if provided; otherwise, take them from one of the matched logs.
-        valid_logs = (
-            session.query(DerivedLog)
-            .join(
-                LogEventDerivedLog,
-                LogEventDerivedLog.derived_log_id == DerivedLog.id,
-            )
-            .filter(
-                LogEventDerivedLog.log_event_id.in_(derived_log_ids),
-                DerivedLog.key == updated_key,
-            )
-            .first()
-        )
-        final_key = updated_key if updated_key else valid_logs.key
-        final_equation = updated_equation if updated_equation else valid_logs.equation
-        # Delete all derived logs that were matched by the update filter.
-        derived_logs_to_delete = (
-            session.query(DerivedLog.id)
-            .join(
-                LogEventDerivedLog,
-                LogEventDerivedLog.derived_log_id == DerivedLog.id,
-            )
-            .filter(
-                LogEventDerivedLog.log_event_id.in_(derived_log_ids),
-                DerivedLog.key == valid_logs.key,
-            )
-            .all()
-        )
-        derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
-        if derived_log_ids_to_delete:
-            session.query(DerivedLog).filter(
-                DerivedLog.id.in_(derived_log_ids_to_delete),
-            ).delete(synchronize_session=False)
-
-        # Also delete the field type records for these derived logs
-        field_type_dao.delete_field_type(
-            project_id=project_id,
-            field_name=valid_logs.key,
-            context_id=context_id,
-        )
-        session.flush()  # flush the deletion so that new insertions do not conflict
-
-        # Resolve the new referenced logs
-        new_resolved_ids = prepare_resolved_ids(
-            equation=final_equation,
-            referenced_logs=new_refs,  # use the new referenced logs
-            request_fastapi=request_fastapi,
-            project_name=body.project_name,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-        )
-        # Assumes referenced logs are of equal length
-        new_derived_log_ids = [dlog_id for dlog_id in new_resolved_ids.values()][0]
-        # If none found, short-circuit
-        if not any(len(v) for v in new_resolved_ids.values()):
-            return {"info": "No references found. Nothing to update."}
-
-        # Get the common length of all resolved ID lists
-        lengths = [len(lst) for lst in new_resolved_ids.values()]
-        if lengths and len(set(lengths)) != 1:
-            raise HTTPException(
-                status_code=400,
-                detail=f"All referenced log lists must have the same length. Found lengths: {lengths}",
-            )
-
-        # Compute derived values directly instead of creating empty logs and recomputing later
-        # 1. Substitute placeholders to get filter expression and alias mapping
-        filter_expr, alias_to_key_map = _substitute_placeholders(
-            final_equation,
-            new_resolved_ids,
-        )
-
-        # 2. Get field types for the project
-        field_types = field_type_dao.get_field_types(
-            project_id,
-            context_id=context_id,
-        )
-
-        # 3. Build filter dictionary from the filter expression
-        filter_dict = str_filter_exp_to_dict(
-            filter_expr,
-            field_names=list(field_types.keys()),
-        )
-
-        # 4. Create a dictionary mapping field keys to their resolved IDs
-        resolved_ids_dict = {}
-        for key, ids in new_resolved_ids.items():
-            resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
-
-        # 5. Get the filtered log events for this project
-        log_event_ids_subq = (
-            session.query(LogEvent.id)
-            .filter(project_id == LogEvent.project_id)
-            .filter(LogEvent.id.in_(new_derived_log_ids))
-            .subquery(name="log_event_ids_subq")
-        )
-
-        # 6. Compute the values directly using the filter dictionary
-        computed_values = _compute_expression(
-            filter_dict,
-            LogEvent,
-            session,
-            log_event_ids=log_event_ids_subq,
-        )
-
-        # Create new derived logs with computed values
-        new_derived_logs = []
-        derived_log_associations = []  # Track (log_event_id, derived_log_index)
-        now = datetime.now(timezone.utc)
-        placeholders = _extract_placeholders(body.equation)
-        referenced_logs = {
-            ph.split(":")[1]: v
-            for ph in placeholders
-            for k, v in body.referenced_logs.items()
-            if k in ph
-        }
-        # Iterate over the computed values and resolved IDs
-        non_null_value = None
-        for i, (_, value) in enumerate(computed_values):
-            # Get all log IDs involved in this specific computation
-            involved_log_ids = list(set(ids[i] for ids in new_resolved_ids.values()))
-
-            # Create a derived entry for each log ID involved in this computation
-            for log_event_id in involved_log_ids:
-                # Convert value using CustomEncoder for proper JSON serialization
-                val = json.loads(json.dumps(value, cls=CustomEncoder))
-                non_null_val = val if val is not None else non_null_value
-                inferred_type = LogDAO.infer_type("", non_null_val)
-
-                # Create DerivedLog without log_event_id
-                new_derived_logs.append(
-                    DerivedLog(
-                        key=final_key,
-                        equation=final_equation,
-                        referenced_logs=referenced_logs,
-                        value=non_null_val,
-                        inferred_type=inferred_type,
-                        created_at=now,
-                        updated_at=now,
-                    ),
-                )
-                # Track the association
-                derived_log_associations.append(
-                    (log_event_id, len(new_derived_logs) - 1),
+            # Update template properties if provided
+            if updated_equation:
+                template.equation = updated_equation
+                # Update referenced_keys when equation changes
+                template.referenced_keys = _extract_field_names_from_equation(
+                    updated_equation,
                 )
 
-        # Bulk insert all new derived logs in one go
-        session.bulk_save_objects(new_derived_logs, return_defaults=True)
-        session.flush()  # Get IDs for the new derived logs
-
-        # Create LogEventDerivedLog associations
-        for log_event_id, derived_log_index in derived_log_associations:
-            if derived_log_index < len(new_derived_logs):
-                association = LogEventDerivedLog(
-                    log_event_id=log_event_id,
-                    derived_log_id=new_derived_logs[derived_log_index].id,
+            # Track new referenced log IDs
+            new_referenced_log_ids = set()
+            if new_refs:
+                # Parse new referenced_logs structure
+                placeholders = _extract_placeholders(
+                    updated_equation or template.equation,
                 )
-                session.add(association)
+                referenced_logs = {
+                    ph.split(":")[1]: v
+                    for ph in placeholders
+                    for k, v in new_refs.items()
+                    if k in ph
+                }
+                template.referenced_logs = referenced_logs
+
+                # Collect new referenced log IDs
+                for ref_ids in new_refs.values():
+                    if isinstance(ref_ids, list):
+                        new_referenced_log_ids.update(ref_ids)
+                    elif isinstance(ref_ids, int):
+                        new_referenced_log_ids.add(ref_ids)
+
+                # Update filter_expression if new_refs contains filter_expr
+                if isinstance(new_refs, dict):
+                    for ref_key, ref_val in new_refs.items():
+                        if isinstance(ref_val, dict) and "filter_expr" in ref_val:
+                            template.filter_expression = new_refs
+                            break
+
+            # Remove derived field from logs that are no longer referenced
+            logs_to_remove_from = old_referenced_log_ids - new_referenced_log_ids
+            if logs_to_remove_from and template.key:
+                # Use JSONB - operator to remove the key from data
+                # data = data - 'key_name'
+                from sqlalchemy import update as sql_update
+
+                remove_stmt = (
+                    sql_update(LogEvent)
+                    .where(LogEvent.id.in_(logs_to_remove_from))
+                    .values(
+                        data=LogEvent.data.op("-")(template.key),
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+                result = session.execute(remove_stmt)
+                removed_count += result.rowcount
+
+            template.updated_at = datetime.now(timezone.utc)
+            updated_count += 1
 
         session.commit()
 
-        # Update the field type record for the derived entry
-        # Use infer_type=True to infer type from value (no explicit_types here)
-        field_type_dao.create_field_type_if_absent(
-            project_id=project_id,
-            context_id=context_id,
-            field_name=final_key,
-            mutable=True,
-            value=non_null_val,
-            field_category="derived_entry",
-            infer_type=True,  # Infer type from value for derived entries
-        )
+        # Recompute if requested (default behavior)
+        # Only recompute for logs that are in the template's referenced_logs
+        recomputed_count = 0
+        for template in templates:
+            # Get log IDs from the template's referenced_logs
+            log_ids = []
+            if template.referenced_logs:
+                for ref_ids in template.referenced_logs.values():
+                    if isinstance(ref_ids, list):
+                        log_ids.extend(ref_ids)
+                    elif isinstance(ref_ids, int):
+                        log_ids.append(ref_ids)
+                log_ids = list(set(log_ids))  # Remove duplicates
+
+            if log_ids:
+                try:
+                    count = derived_log_dao.recompute_derived_logs(
+                        template=template,
+                        log_ids=log_ids,
+                        json_encoder=CustomEncoder,
+                        field_type_dao=field_type_dao,
+                    )
+                    recomputed_count += count
+                except Exception as recompute_error:
+                    logging.warning(
+                        f"Failed to recompute JSONB derived logs for template "
+                        f"'{template.key}': {recompute_error}",
+                    )
 
         return {
-            "info": f"Updated references and replaced {len(new_derived_logs)} old derived logs with {len(new_derived_logs)} new ones.",
+            "info": f"Updated {updated_count} templates, removed {removed_count} obsolete values, and recomputed {recomputed_count} derived values.",
         }
+
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update derived logs. Error: {e}",
+        )
 
 
 @router.put(
@@ -1705,794 +1163,24 @@ def update_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
-    derived_log_dao = DerivedLogDAO(session)
+    log_dao = LogEventDAO(session, context_dao)
+    derived_log_dao = LogEventDAO(session, context_dao)
 
-    # JSONB Mode: When use_jsonb_queries is enabled, use the new JSONB-based update path
-    if settings.use_jsonb_queries:
-        return _update_logs_jsonb(
-            request_fastapi=request_fastapi,
-            body=body,
-            session=session,
-            organization_member_dao=organization_member_dao,
-            context_dao=context_dao,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            log_event_dao=log_event_dao,
-            log_dao=log_dao,
-            derived_log_dao=derived_log_dao,
-        )
-
-    # Get user ID for permission checks
-    user_id = request_fastapi.state.user_id
-
-    # Normalize the logs parameter to get IDs to update
-    ids_to_update = []
-
-    # Use body.logs to determine which logs to update
-    if hasattr(body, "logs") and body.logs is not None:
-        # Check if it's a filter dict and validate required fields
-        if isinstance(body.logs, dict):
-            if not body.project_name:
-                raise HTTPException(
-                    status_code=400,
-                    detail="When passing a filter dict in `logs`, you must supply `project`.",
-                )
-
-            # Get project ID first for filtering
-            organization_id = getattr(request_fastapi.state, "organization_id", None)
-            try:
-                project_obj = project_dao.get_by_user_and_name(
-                    name=body.project_name,
-                    user_id=user_id,
-                    organization_id=organization_id,
-                )
-                project_id = project_obj.id
-            except (IndexError, AttributeError):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Project '{body.project_name}' not found.",
-                )
-
-            # It's a filter dict, use log_dao.get_ids_by_filter to get matching IDs
-            try:
-                # Get context ID if provided
-                context_ids = None
-                if body.context:
-                    if isinstance(body.context, str):
-                        ctx = context_dao.filter(
-                            project_id=project_id,
-                            name=body.context,
-                        )
-                        if ctx:
-                            context_ids = [ctx[0][0].id]
-                    elif isinstance(body.context, list):
-                        context_ids = []
-                        for ctx_name in body.context:
-                            if isinstance(ctx_name, str):
-                                ctx = context_dao.filter(
-                                    project_id=project_id,
-                                    name=ctx_name,
-                                )
-                                if ctx:
-                                    context_ids.append(ctx[0][0].id)
-                else:
-                    # get the default context
-                    context_ids = [context_dao.get_or_create(project_id, name="")]
-                # Use log_dao.get_ids_by_filter to get matching log IDs
-                ids_to_update = log_dao.get_ids_by_filter(
-                    project_id=project_id,
-                    filters=body.logs,
-                    context_ids=context_ids,
-                )
-
-                if not ids_to_update:
-                    # No matching logs found
-                    raise HTTPException(
-                        status_code=404,
-                        detail="No logs found matching the provided filter criteria.",
-                    )
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid filter criteria: {str(e)}",
-                )
-        else:
-            # Assume it's a list of IDs
-            ids_to_update = body.logs
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="The 'logs' parameter is required and must be either a list of log IDs or a filter dictionary.",
-        )
-
-    # Validate all log IDs upfront
-    not_found_logs = []
-    log_id_to_project = {}  # Maps log_id -> project_id
-    updated_ids = set()
-
-    for log_id in ids_to_update:
-        try:
-            project_user_id, project_id = log_event_dao.get_user_and_project_id(
-                id=log_id,
-            )
-            if (
-                project_user_id != request_fastapi.state.user_id
-            ):  # user is not the owner of the project
-                # check if the user is a member of the organization this project belongs to
-                project_obj = project_dao.filter_by_user_access(
-                    user_id=request_fastapi.state.user_id,
-                    id=project_id,
-                )
-                if not project_obj:
-                    raise IndexError(
-                        f"User {request_fastapi.state.user_id} does not have permission for log id {log_id}.",
-                    )
-            log_id_to_project[log_id] = project_id
-        except IndexError:
-            not_found_logs.append(log_id)
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Unexpected error retrieving project info for log id {log_id}: {e}",
-            )
-
-    if not_found_logs:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"The following log ids were not found or permission was denied: {not_found_logs}. "
-                "No updates were applied."
-            ),
-        )
-
-    # Determine common context and fetch field types
-    if len(set(log_id_to_project.values())) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail="All log IDs must belong to the same project for batch update.",
-        )
-
-    # Get the common project_id for all logs
-    project_id = next(iter(log_id_to_project.values()))
-
-    # Get or create context - support string, object, or list of strings
-    if body.context:
-        # Case 1: context is a list of strings
-        if isinstance(body.context, list):
-            # Create a list of context IDs
-            ctx_ids = []
-            for ctx in body.context:
-                if isinstance(ctx, str):
-                    # String context - get or create with default values
-                    ctx_id = context_dao.get_or_create(
-                        project_id,
-                        name=ctx,
-                        description=None,
-                        is_versioned=False,
-                    )
-                    ctx_ids.append(ctx_id)
-                else:
-                    # Object context - use provided values
-                    ctx_id = context_dao.get_or_create(
-                        project_id,
-                        name=ctx.name,
-                        description=ctx.description,
-                        is_versioned=ctx.is_versioned,
-                    )
-                    ctx_ids.append(ctx_id)
-
-            # Use the first context for field types, but we'll update all contexts
-            ctx_id = ctx_ids[0] if ctx_ids else None
-        # Case 2: context is a string
-        elif isinstance(body.context, str):
-            ctx_id = context_dao.get_or_create(
-                project_id,
-                name=body.context,
-                description=None,
-                is_versioned=False,
-            )
-        # Case 3: context is an object (original behavior)
-        else:
-            ctx_id = context_dao.get_or_create(
-                project_id,
-                name=body.context.name,
-                description=body.context.description,
-                is_versioned=body.context.is_versioned,
-            )
-    else:
-        # get the default context
-        ctx_id = context_dao.get_or_create(project_id, name="")
-        ctx_ids = [ctx_id] if ctx_id else []
-
-    # Fetch field types once
-    try:
-        field_types = field_type_dao.get_field_types(
-            project_id,
-            return_mutable=True,
-            context_id=ctx_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve field types for project {project_id}: {e}",
-        )
-
-    # Check RESTRICT constraints before update
-    if ctx_id:
-        # Determine which columns are being updated
-        columns_being_updated = set()
-        if body.entries:
-            if isinstance(body.entries, dict):
-                columns_being_updated.update(body.entries.keys())
-            elif isinstance(body.entries, list) and body.entries:
-                # Take union of all keys from all entries
-                for entry in body.entries:
-                    if isinstance(entry, dict):
-                        columns_being_updated.update(entry.keys())
-
-        if body.params:
-            if isinstance(body.params, dict):
-                columns_being_updated.update(body.params.keys())
-            elif isinstance(body.params, list) and body.params:
-                for param in body.params:
-                    if isinstance(param, dict):
-                        columns_being_updated.update(param.keys())
-
-        # Remove metadata keys
-        columns_being_updated.discard("explicit_types")
-
-        if columns_being_updated:
-            # Get OLD values for these columns from logs being updated
-            columns_values_map = {}  # {column_name: [old_values...]}
-
-            if settings.use_jsonb_queries:
-                # JSONB mode: Query LogEvent.data directly
-                for log_id in ids_to_update:
-                    log_event = (
-                        session.query(LogEvent.data)
-                        .filter(LogEvent.id == log_id)
-                        .one_or_none()
-                    )
-                    if log_event and log_event.data:
-                        for key in columns_being_updated:
-                            if (
-                                key in log_event.data
-                                and log_event.data[key] is not None
-                            ):
-                                columns_values_map.setdefault(key, []).append(
-                                    log_event.data[key],
-                                )
-            else:
-                # EAV mode: Query Log and LogEventLog tables
-                from orchestra.db.models.orchestra_models import Log, LogEventLog
-
-                for log_id in ids_to_update:
-                    # Query current log values for columns being updated
-                    old_values_query = (
-                        session.query(Log.key, Log.value)
-                        .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(
-                            LogEventLog.log_event_id == log_id,
-                            Log.key.in_(columns_being_updated),
-                        )
-                    )
-
-                    for key, value in old_values_query.all():
-                        if value is not None:
-                            columns_values_map.setdefault(key, []).append(value)
-
-            # Check for RESTRICT constraint violations
-            # DISABLED: RESTRICT and NO ACTION are not currently supported
-            # if columns_values_map:
-            #     violations = context_dao.check_restrict_constraints(
-            #         project_id=project_id,
-            #         context_id=ctx_id,
-            #         columns_values=columns_values_map,
-            #         action="UPDATE",
-            #     )
-            #
-            #     if violations:
-            #         error_msg = format_fk_violation_error(violations)
-            #         raise HTTPException(status_code=400, detail=error_msg)
-
-            # Apply CASCADE and SET NULL actions
-            # Extract new values for CASCADE UPDATE
-            if columns_values_map:
-                new_values = {}
-                if body.entries:
-                    if isinstance(body.entries, dict):
-                        new_values.update(body.entries)
-
-                context_dao.apply_fk_actions(
-                    project_id=project_id,
-                    context_id=ctx_id,
-                    columns_values=columns_values_map,
-                    action="UPDATE",
-                    new_values=new_values,
-                )
-
-    # Prepare collections for bulk operations
-    all_flat_updates = []
-    # Create a separate list for nested updates (using dot or bracket notation)
-    all_nested_updates = []
-    new_field_types = []
-    updates_by_log_id = {}  # For context versioning
-    updated_entry_keys = set()  # Track which entry keys are being updated
-    failed_updates: list[
-        dict
-    ] = []  # Collect per-log failures without aborting the batch
-
-    # Process both params and entries
-    for data_type in ("params", "entries"):
-        data = getattr(body, data_type)
-
-        for i, log_id in enumerate(ids_to_update):
-            # Extract the data for this log. Support both dict and list formats.
-            try:
-                this_data = data if isinstance(data, dict) else data[i]
-            except IndexError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
-                        f"{data_type} (got {len(data)}) at log id {log_id}."
-                    ),
-                )
-
-            # Remove explicit types if provided, which override inferred types.
-            explicit_types = this_data.pop("explicit_types", {})
-
-            # Track this log for context versioning
-            updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
-
-            # If only explicit_types are provided, update mutability.
-            if not this_data:
-                for k, v in explicit_types.items():
-                    mutable_setting = v.get("mutable", False)
-                    try:
-                        field_type_dao.update_field_mutability(
-                            project_id,
-                            k,
-                            mutable=mutable_setting,
-                            context_id=ctx_id,
-                        )
-                    except Exception as e:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Failed to update mutability for field '{k}' in log id {log_id}: {e}",
-                        )
-
-            # Process each field in the provided data.
-            flat_data = {}
-
-            # First pass: separate nested updates from flat updates
-            for k, v in this_data.items():
-                # Check if this is a nested path (contains dots or brackets)
-                if "." in k or "[" in k:
-                    # Extract base key and path segments
-                    parts = k.split(".", 1) if "." in k else k.split("[", 1)
-                    base_key = parts[0]
-                    path_segments = k[len(base_key) :]  # Everything after the base key
-
-                    # Process nested field update with type enforcement
-                    try:
-                        field_result = log_dao.check_field_update(
-                            field_key=base_key,
-                            field_types=field_types,
-                            explicit_types_dict=explicit_types,
-                            is_nested=True,
-                        )
-                    except ValueError as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": f"{str(e)} (in batch entry {i})",
-                            },
-                        )
-                        continue
-
-                    # ToDo: Need to `enforce_types` here by merging the partial update with the
-                    # existing value and then enforcing/checking if the full updated value satsifies
-                    # the type constraints or not
-
-                    # If field doesn't exist, create it
-                    if not field_result["exists"]:
-                        category = "entry" if data_type == "entries" else "param"
-                        new_field_types.append(
-                            {
-                                "project_id": project_id,
-                                "field_name": base_key,
-                                "value": v,
-                                "mutable": field_result["mutable"],
-                                "unique": field_result["unique"],
-                                "field_category": category,
-                                "context_id": ctx_id,
-                                "field_type": field_result["field_type"],
-                                "enum_values": field_result["enum_values"],
-                                "enum_restrict": field_result["enum_restrict"],
-                            },
-                        )
-
-                    # Add to nested updates
-                    all_nested_updates.append(
-                        {
-                            "log_event_id": log_id,
-                            "base_key": base_key,
-                            "path_segments": path_segments,
-                            "new_value": v,
-                            "context_id": ctx_id if "ctx_ids" not in locals() else None,
-                            "context_ids": ctx_ids if "ctx_ids" in locals() else None,
-                            "overwrite": body.overwrite,
-                            "explicit_types": explicit_types,
-                        },
-                    )
-
-                    # Track this update for context versioning
-                    updated_ids.add((base_key, log_id))
-                    if data_type == "entries":
-                        updated_entry_keys.add(base_key)
-                else:
-                    # This is a flat update, keep it for normal processing
-                    flat_data[k] = v
-                    if data_type == "entries":
-                        updated_entry_keys.add(k)
-
-            # Process flat updates normally
-            for k, v in flat_data.items():
-                # Process flat field update with type enforcement
-                try:
-                    field_result = log_dao.check_field_update(
-                        field_key=k,
-                        field_types=field_types,
-                        explicit_types_dict=explicit_types,
-                        is_nested=False,
-                    )
-                except ValueError as e:
-                    failed_updates.append(
-                        {
-                            "log_event_id": log_id,
-                            "error": f"{str(e)} (in batch entry {i})",
-                        },
-                    )
-                    continue
-
-                # Enforce types if field exists
-                if field_result["exists"]:
-                    from orchestra.web.api.log.utils.logging_utils import enforce_types
-
-                    try:
-                        enforce_types(
-                            k,
-                            v,
-                            field_types=field_types,
-                            field_type_dao=field_type_dao,
-                            context_dao=context_dao,
-                            project_id=project_id,
-                            batch_index=i,
-                            explicit_types=explicit_types,
-                            context_id=ctx_id,
-                            is_param=(data_type == "params"),
-                        )
-                    except HTTPException as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": getattr(e, "detail", str(e)),
-                            },
-                        )
-                        continue
-
-                # If field doesn't exist, create it
-                if not field_result["exists"]:
-                    category = "entry" if data_type == "entries" else "param"
-                    new_field_types.append(
-                        {
-                            "project_id": project_id,
-                            "field_name": k,
-                            "value": v,
-                            "mutable": field_result["mutable"],
-                            "unique": field_result["unique"],
-                            "field_category": category,
-                            "context_id": ctx_id,
-                            "field_type": field_result["field_type"],
-                            "enum_values": field_result["enum_values"],
-                            "enum_restrict": field_result["enum_restrict"],
-                        },
-                    )
-
-                # Compute the version based on whether we're handling params or entries.
-                param_version = None
-                if data_type == "params":
-                    existing = log_dao.filter(
-                        key=k,
-                        value=json.dumps(v),
-                        project_id=project_id,
-                    )
-                    if existing:
-                        param_version = existing[0][0].param_version
-                    else:
-                        param_version = log_dao.get_next_param_version(
-                            project_id,
-                            ctx_id,
-                            k,
-                        )
-
-                # Add to the batch update list
-                # If we have multiple contexts, create an update for each context
-                if "ctx_ids" in locals() and ctx_ids:
-                    for context_id in ctx_ids:
-                        all_flat_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "key": k,
-                                "value": v,
-                                "param_version": param_version,
-                                "explicit_types": explicit_types,
-                                "field_types": field_types,
-                                "context_id": context_id,
-                                "project_id": project_id,
-                                "overwrite": body.overwrite,
-                            },
-                        )
-                else:
-                    all_flat_updates.append(
-                        {
-                            "log_event_id": log_id,
-                            "key": k,
-                            "value": v,
-                            "param_version": param_version,
-                            "explicit_types": explicit_types,
-                            "field_types": field_types,
-                            "context_id": ctx_id,
-                            "project_id": project_id,
-                            "overwrite": body.overwrite,
-                        },
-                    )
-                updated_ids.add((k, log_id))
-
-    # Bulk create any new field types
-    if new_field_types:
-        field_type_dao.bulk_create_field_types(new_field_types)
-
-    successful_update_ids: set[int] = set()
-
-    # First, handle flat updates
-    if all_flat_updates:
-        try:
-            # Call bulk_update once with all updates
-            bulk_result = log_dao.bulk_update(
-                all_flat_updates,
-                field_types=field_types,
-                overwrite=body.overwrite,
-            )
-
-            # Add bulk_update failures to our failed_updates list
-            failed_updates.extend(bulk_result["failed"])
-
-            # For each successful ID from bulk_update, check for duplicates
-            for le_id in bulk_result["successful_update_ids"]:
-                duplicate_found = False
-                if "ctx_ids" in locals() and ctx_ids:
-                    for context_id in ctx_ids:
-                        if context_id is not None:
-                            ctx_obj = (
-                                context_dao.session.query(Context)
-                                .filter_by(id=context_id)
-                                .first()
-                            )
-                            if ctx_obj and not ctx_obj.allow_duplicates:
-                                duplicate = context_dao.check_for_duplicates_subset(
-                                    context_id=context_id,
-                                    log_event_id=le_id,
-                                    keys_to_check=list(updated_entry_keys),
-                                )
-                                if duplicate:
-                                    failed_updates.append(
-                                        {
-                                            "log_event_id": le_id,
-                                            "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
-                                        },
-                                    )
-                                    duplicate_found = True
-                                    break
-                elif ctx_id is not None:
-                    ctx_obj = (
-                        context_dao.session.query(Context).filter_by(id=ctx_id).first()
-                    )
-                    if ctx_obj and not ctx_obj.allow_duplicates:
-                        duplicate = context_dao.check_for_duplicates_subset(
-                            context_id=ctx_id,
-                            log_event_id=le_id,
-                            keys_to_check=list(updated_entry_keys),
-                        )
-                        if duplicate:
-                            failed_updates.append(
-                                {
-                                    "log_event_id": le_id,
-                                    "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
-                                },
-                            )
-                            duplicate_found = True
-
-                if not duplicate_found:
-                    successful_update_ids.add(le_id)
-        except ValueError as e:
-            detail = e.detail if isinstance(e, HTTPException) else str(e)
-            failed_updates.append(
-                {
-                    "log_event_id": le_id,
-                    "error": f"Found differing log param value with the same version: {detail}",
-                },
-            )
-        except OverwriteError as e:
-            detail = e.detail if isinstance(e, HTTPException) else str(e)
-            failed_updates.append(
-                {
-                    "log_event_id": le_id,
-                    "error": f"Existing value cannot be overwritten because overwrite is set to False: {detail}",
-                },
-            )
-        except ImmutableFieldError as e:
-            detail = e.detail if isinstance(e, HTTPException) else str(e)
-            failed_updates.append(
-                {
-                    "log_event_id": le_id,
-                    "error": f"Field is immutable and cannot be modified: {detail}",
-                },
-            )
-
-    # Then, handle nested updates if any exist (grouped per log/key for partial success)
-    if all_nested_updates:
-        # Group by (log_event_id, base_key)
-        ngroups: dict[tuple[int, str], list[dict]] = {}
-        for patch in all_nested_updates:
-            le_id = patch.get("log_event_id")
-            base_key = patch.get("base_key")
-            if le_id is None or base_key is None:
-                continue
-            ngroups.setdefault((le_id, base_key), []).append(patch)
-
-        for (le_id, _base), group in ngroups.items():
-            try:
-                log_dao.apply_jsonb_patch(
-                    group,
-                    field_types=field_types,
-                )
-                # Inline duplicate checks for this log id; only mark success if it passes
-                duplicate_found = False
-                if "ctx_ids" in locals() and ctx_ids:
-                    for context_id in ctx_ids:
-                        if context_id is not None:
-                            ctx_obj = (
-                                context_dao.session.query(Context)
-                                .filter_by(id=context_id)
-                                .first()
-                            )
-                            if ctx_obj and not ctx_obj.allow_duplicates:
-                                duplicate = context_dao.check_for_duplicates_subset(
-                                    context_id=context_id,
-                                    log_event_id=le_id,
-                                    keys_to_check=list(updated_entry_keys),
-                                )
-                                if duplicate:
-                                    failed_updates.append(
-                                        {
-                                            "log_event_id": le_id,
-                                            "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
-                                        },
-                                    )
-                                    duplicate_found = True
-                elif ctx_id is not None:
-                    ctx_obj = (
-                        context_dao.session.query(Context).filter_by(id=ctx_id).first()
-                    )
-                    if ctx_obj and not ctx_obj.allow_duplicates:
-                        duplicate = context_dao.check_for_duplicates_subset(
-                            context_id=ctx_id,
-                            log_event_id=le_id,
-                            keys_to_check=list(updated_entry_keys),
-                        )
-                        if duplicate:
-                            failed_updates.append(
-                                {
-                                    "log_event_id": le_id,
-                                    "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
-                                },
-                            )
-                            duplicate_found = True
-
-                if not duplicate_found:
-                    successful_update_ids.add(le_id)
-            except ValueError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                failed_updates.append(
-                    {
-                        "log_event_id": le_id,
-                        "error": f"Error applying nested updates: {detail}",
-                    },
-                )
-            except OverwriteError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                failed_updates.append(
-                    {
-                        "log_event_id": le_id,
-                        "error": f"Existing nested value cannot be overwritten because overwrite is set to False: {detail}",
-                    },
-                )
-            except ImmutableFieldError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                failed_updates.append(
-                    {
-                        "log_event_id": le_id,
-                        "error": f"Field or nested path is immutable and cannot be modified: {detail}",
-                    },
-                )
-            except (IndexError, Exception) as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                failed_updates.append({"log_event_id": le_id, "error": detail})
-
-    # Update context version if needed
-    if "ctx_ids" in locals() and ctx_ids:
-        # Handle multiple contexts if we have a list
-        for context_id in ctx_ids:
-            if context_id is not None:
-                ctx_obj = (
-                    context_dao.session.query(Context).filter_by(id=context_id).first()
-                )
-                if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
-                    ctx_obj.updated_at = datetime.now(timezone.utc)
-        # Commit all changes at once
-        if updates_by_log_id:
-            context_dao.session.commit()
-    elif ctx_id is not None:
-        # Original single context behavior
-        ctx_obj = context_dao.session.query(Context).filter_by(id=ctx_id).first()
-        if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
-            ctx_obj.updated_at = datetime.now(timezone.utc)
-            context_dao.session.commit()
-
-    # Final sanity: if everything failed, surface an error instead of returning 200
-    if not successful_update_ids and failed_updates:
-        first_error = failed_updates[0].get("error", "Update failed")
-        raise HTTPException(status_code=400, detail=first_error)
-
-    # Recompute derived logs that reference any updated base logs (only successes).
-    if updated_ids:
-        updated_ids = {
-            (k, le_id) for (k, le_id) in updated_ids if le_id in successful_update_ids
-        }
-        try:
-            event_ids = [value for (_, value) in updated_ids]
-            derived_logs_to_recompute = (
-                session.query(DerivedLog)
-                .join(
-                    LogEventDerivedLog,
-                    LogEventDerivedLog.derived_log_id == DerivedLog.id,
-                )
-                .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-                .filter(
-                    LogEvent.project_id == project_id,
-                    LogEventDerivedLog.log_event_id.in_(event_ids),
-                )
-                .all()
-            )
-            if derived_logs_to_recompute:
-                derived_log_dao.recompute_derived_logs(
-                    logs_to_recompute=derived_logs_to_recompute,
-                    session=session,
-                    json_encoder=CustomEncoder,
-                )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error recomputing derived logs for project id {project_id}: {e}",
-            )
-
-    return {"info": "Logs updated successfully!", "failed": failed_updates}
+    return _update_logs(
+        request_fastapi=request_fastapi,
+        body=body,
+        session=session,
+        organization_member_dao=organization_member_dao,
+        context_dao=context_dao,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        log_event_dao=log_event_dao,
+        log_dao=log_dao,
+        derived_log_dao=derived_log_dao,
+    )
 
 
-def _update_logs_jsonb(
+def _update_logs(
     request_fastapi: Request,
     body: UpdateLogRequest,
     session,
@@ -2501,18 +1189,17 @@ def _update_logs_jsonb(
     project_dao: ProjectDAO,
     field_type_dao: FieldTypeDAO,
     log_event_dao: LogEventDAO,
-    log_dao: LogDAO,
-    derived_log_dao: DerivedLogDAO,
+    log_dao: LogEventDAO,
+    derived_log_dao: LogEventDAO,
 ):
     """
-    JSONB-based log update implementation.
+    Log update implementation.
 
-    This function updates logs by modifying the LogEvent.data JSONB column directly,
-    instead of using the EAV model with separate Log/LogEventLog/JSONLog tables.
+    This function updates logs by modifying the LogEvent.data JSONB column directly.
 
-    Key differences from EAV path:
-    - No param versioning (updates overwrite current values directly)
-    - No Log table operations (all data in LogEvent.data)
+    Key behaviors:
+    - Updates overwrite current values directly (no param versioning)
+    - All data stored in LogEvent.data JSONB column
     - No LogEventLog associations
     - Returns modified_keys for derived log recomputation
 
@@ -2740,122 +1427,61 @@ def _update_logs_jsonb(
     failed_updates: List[Dict] = []  # Collect per-log failures
     pending_mutability_updates: Dict[str, bool] = {}  # Batch mutability changes
 
-    # Process both params and entries
-    for data_type in ("params", "entries"):
-        data = getattr(body, data_type)
+    # Process entries
+    data = body.entries
 
-        for i, log_id in enumerate(ids_to_update):
-            # Extract the data for this log. Support both dict and list formats.
-            try:
-                this_data = data if isinstance(data, dict) else data[i]
-            except (IndexError, TypeError):
-                if data is None:
-                    this_data = {}
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
-                            f"{data_type} (got {len(data)}) at log id {log_id}."
-                        ),
-                    )
+    for i, log_id in enumerate(ids_to_update):
+        # Extract the data for this log. Support both dict and list formats.
+        try:
+            this_data = data if isinstance(data, dict) else data[i]
+        except (IndexError, TypeError):
+            if data is None:
+                this_data = {}
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
+                        f"entries (got {len(data)}) at log id {log_id}."
+                    ),
+                )
 
-            if not this_data:
-                continue
+        if not this_data:
+            continue
 
-            # Remove explicit types if provided, which override inferred types.
-            this_data = dict(this_data)  # Make a copy to avoid modifying original
-            explicit_types = this_data.pop("explicit_types", {})
+        # Remove explicit types if provided, which override inferred types.
+        this_data = dict(this_data)  # Make a copy to avoid modifying original
+        explicit_types = this_data.pop("explicit_types", {})
 
-            # Track this log for context versioning
-            updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
+        # Track this log for context versioning
+        updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
 
-            # If only explicit_types are provided, collect mutability updates for batch
-            if not this_data:
-                for k, v in explicit_types.items():
-                    mutable_setting = v.get("mutable", False)
-                    # Accumulate for batch update (will be executed after loop)
-                    pending_mutability_updates[k] = mutable_setting
+        # If only explicit_types are provided, collect mutability updates for batch
+        if not this_data:
+            for k, v in explicit_types.items():
+                mutable_setting = v.get("mutable", True)
+                # Accumulate for batch update (will be executed after loop)
+                pending_mutability_updates[k] = mutable_setting
 
-            # Process each field in the provided data.
-            flat_data = {}
+        # Process each field in the provided data.
+        flat_data = {}
 
-            # First pass: separate nested updates from flat updates
-            for k, v in this_data.items():
-                # Check if this is a nested path (contains dots or brackets)
-                if "." in k or "[" in k:
-                    # Extract base key and path segments
-                    parts = k.split(".", 1) if "." in k else k.split("[", 1)
-                    base_key = parts[0]
-                    path_segments = k[len(base_key) :]  # Everything after the base key
+        # First pass: separate nested updates from flat updates
+        for k, v in this_data.items():
+            # Check if this is a nested path (contains dots or brackets)
+            if "." in k or "[" in k:
+                # Extract base key and path segments
+                parts = k.split(".", 1) if "." in k else k.split("[", 1)
+                base_key = parts[0]
+                path_segments = k[len(base_key) :]  # Everything after the base key
 
-                    # Process nested field update with type enforcement
-                    try:
-                        field_result = log_dao.check_field_update(
-                            field_key=base_key,
-                            field_types=field_types,
-                            explicit_types_dict=explicit_types,
-                            is_nested=True,
-                        )
-                    except ValueError as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": f"{str(e)} (in batch entry {i})",
-                            },
-                        )
-                        continue
-
-                    # If field doesn't exist, create it
-                    if not field_result["exists"]:
-                        category = "entry" if data_type == "entries" else "param"
-                        new_field_types.append(
-                            {
-                                "project_id": project_id,
-                                "field_name": base_key,
-                                "value": v,
-                                "mutable": field_result["mutable"],
-                                "unique": field_result["unique"],
-                                "field_category": category,
-                                "context_id": ctx_id,
-                                "field_type": field_result["field_type"],
-                                "enum_values": field_result["enum_values"],
-                                "enum_restrict": field_result["enum_restrict"],
-                            },
-                        )
-
-                    # Add to nested updates
-                    all_nested_updates.append(
-                        {
-                            "log_event_id": log_id,
-                            "base_key": base_key,
-                            "path_segments": path_segments,
-                            "new_value": v,
-                            "context_id": ctx_id,
-                            "overwrite": body.overwrite,
-                            "explicit_types": explicit_types,
-                        },
-                    )
-
-                    # Track this update for context versioning
-                    updated_ids.add((base_key, log_id))
-                    if data_type == "entries":
-                        updated_entry_keys.add(base_key)
-                else:
-                    # This is a flat update, keep it for normal processing
-                    flat_data[k] = v
-                    if data_type == "entries":
-                        updated_entry_keys.add(k)
-
-            # Process flat updates
-            for k, v in flat_data.items():
-                # Process flat field update with type enforcement
+                # Process nested field update with type enforcement
                 try:
                     field_result = log_dao.check_field_update(
-                        field_key=k,
+                        field_key=base_key,
                         field_types=field_types,
                         explicit_types_dict=explicit_types,
-                        is_nested=False,
+                        is_nested=True,
                     )
                 except ValueError as e:
                     failed_updates.append(
@@ -2866,41 +1492,16 @@ def _update_logs_jsonb(
                     )
                     continue
 
-                # Enforce types if field exists
-                if field_result["exists"]:
-                    try:
-                        enforce_types(
-                            k,
-                            v,
-                            field_types=field_types,
-                            field_type_dao=field_type_dao,
-                            context_dao=context_dao,
-                            project_id=project_id,
-                            batch_index=i,
-                            explicit_types=explicit_types,
-                            context_id=ctx_id,
-                            is_param=(data_type == "params"),
-                        )
-                    except HTTPException as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": getattr(e, "detail", str(e)),
-                            },
-                        )
-                        continue
-
                 # If field doesn't exist, create it
                 if not field_result["exists"]:
-                    category = "entry" if data_type == "entries" else "param"
                     new_field_types.append(
                         {
                             "project_id": project_id,
-                            "field_name": k,
+                            "field_name": base_key,
                             "value": v,
                             "mutable": field_result["mutable"],
                             "unique": field_result["unique"],
-                            "field_category": category,
+                            "field_category": "entry",
                             "context_id": ctx_id,
                             "field_type": field_result["field_type"],
                             "enum_values": field_result["enum_values"],
@@ -2908,21 +1509,102 @@ def _update_logs_jsonb(
                         },
                     )
 
-                # JSONB mode: No param versioning - skip get_next_param_version() calls
-                # Add to the batch update list
-                all_flat_updates.append(
+                # Add to nested updates
+                all_nested_updates.append(
                     {
                         "log_event_id": log_id,
-                        "key": k,
-                        "value": v,
-                        "explicit_types": explicit_types,
-                        "field_types": field_types,
+                        "base_key": base_key,
+                        "path_segments": path_segments,
+                        "new_value": v,
                         "context_id": ctx_id,
-                        "project_id": project_id,
                         "overwrite": body.overwrite,
+                        "explicit_types": explicit_types,
                     },
                 )
-                updated_ids.add((k, log_id))
+
+                # Track this update for context versioning
+                updated_ids.add((base_key, log_id))
+                updated_entry_keys.add(base_key)
+            else:
+                # This is a flat update, keep it for normal processing
+                flat_data[k] = v
+                updated_entry_keys.add(k)
+
+        # Process flat updates
+        for k, v in flat_data.items():
+            # Process flat field update with type enforcement
+            try:
+                field_result = log_dao.check_field_update(
+                    field_key=k,
+                    field_types=field_types,
+                    explicit_types_dict=explicit_types,
+                    is_nested=False,
+                )
+            except ValueError as e:
+                failed_updates.append(
+                    {
+                        "log_event_id": log_id,
+                        "error": f"{str(e)} (in batch entry {i})",
+                    },
+                )
+                continue
+
+            # Enforce types if field exists
+            if field_result["exists"]:
+                try:
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=explicit_types,
+                        context_id=ctx_id,
+                        is_param=False,
+                    )
+                except HTTPException as e:
+                    failed_updates.append(
+                        {
+                            "log_event_id": log_id,
+                            "error": getattr(e, "detail", str(e)),
+                        },
+                    )
+                    continue
+
+            # If field doesn't exist, create it
+            if not field_result["exists"]:
+                new_field_types.append(
+                    {
+                        "project_id": project_id,
+                        "field_name": k,
+                        "value": v,
+                        "mutable": field_result["mutable"],
+                        "unique": field_result["unique"],
+                        "field_category": "entry",
+                        "context_id": ctx_id,
+                        "field_type": field_result["field_type"],
+                        "enum_values": field_result["enum_values"],
+                        "enum_restrict": field_result["enum_restrict"],
+                    },
+                )
+
+            # JSONB mode: No param versioning - skip get_next_param_version() calls
+            # Add to the batch update list
+            all_flat_updates.append(
+                {
+                    "log_event_id": log_id,
+                    "key": k,
+                    "value": v,
+                    "explicit_types": explicit_types,
+                    "field_types": field_types,
+                    "context_id": ctx_id,
+                    "project_id": project_id,
+                    "overwrite": body.overwrite,
+                },
+            )
+            updated_ids.add((k, log_id))
 
     # Bulk create any new field types
     if new_field_types:
@@ -2981,9 +1663,82 @@ def _update_logs_jsonb(
 
     # First, handle flat updates using JSONB method
     if all_flat_updates:
+        # Enforce unique field constraints for updated values (JSONB mode)
+        if ctx_id is not None:
+            unique_fields = {
+                k: v
+                for k, v in field_types.items()
+                if isinstance(v, dict) and v.get("unique", False)
+            }
+
+            if unique_fields:
+                unique_checks = []
+                seen_values: Dict[tuple, int] = {}
+                for update in all_flat_updates:
+                    field_name = update.get("key")
+                    if field_name not in unique_fields:
+                        continue
+                    value = update.get("value")
+                    if value is None:
+                        continue
+
+                    value_json = json.dumps({field_name: value})
+                    unique_checks.append(
+                        (update.get("log_event_id"), field_name, value_json),
+                    )
+
+                    dedupe_key = (field_name, value_json)
+                    existing_id = seen_values.get(dedupe_key)
+                    if existing_id is not None and existing_id != update.get(
+                        "log_event_id",
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Duplicate entry for unique field '{field_name}'.",
+                        )
+                    seen_values[dedupe_key] = update.get("log_event_id")
+
+                if unique_checks:
+                    params: Dict[str, Any] = {
+                        "project_id": project_id,
+                        "context_id": ctx_id,
+                        "exclude_ids": list(
+                            {u.get("log_event_id") for u in all_flat_updates},
+                        ),
+                    }
+                    or_conditions = []
+                    case_parts = []
+                    for i, (_, field_name, value_json) in enumerate(unique_checks):
+                        params[f"value_{i}"] = value_json
+                        or_conditions.append(f"le.data @> CAST(:value_{i} AS jsonb)")
+                        case_parts.append(
+                            f"WHEN le.data @> CAST(:value_{i} AS jsonb) THEN {i}",
+                        )
+
+                    jsonb_query = f"""
+                        SELECT DISTINCT CASE {' '.join(case_parts)} END AS match_idx
+                        FROM log_event le
+                        JOIN log_event_context lec ON le.id = lec.log_event_id
+                        WHERE le.project_id = :project_id
+                        AND lec.context_id = :context_id
+                        AND le.id != ALL(:exclude_ids)
+                        AND ({' OR '.join(or_conditions)})
+                    """
+
+                    results = session.execute(text(jsonb_query), params).fetchall()
+                    for (match_idx,) in results:
+                        if match_idx is not None:
+                            _, field_name, _ = unique_checks[match_idx]
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    f"Duplicate entry for unique field '{field_name}'."
+                                ),
+                            )
+
         try:
-            # Call bulk_update_jsonb with all updates
-            bulk_result = log_dao.bulk_update_jsonb(
+            # Call bulk_update with all updates
+            bulk_result = log_dao.bulk_update(
                 all_flat_updates,
                 field_types=field_types,
                 overwrite=body.overwrite,
@@ -3036,9 +1791,9 @@ def _update_logs_jsonb(
 
     # Then, handle nested updates if any exist using JSONB method
     if all_nested_updates:
-        # Call apply_jsonb_patch_jsonb once with all patches - O(1) SELECT/UPDATE
+        # Call apply_jsonb_patch once with all patches - O(1) SELECT/UPDATE
         # The method now handles grouping internally and returns results
-        nested_result = log_dao.apply_jsonb_patch_jsonb(
+        nested_result = log_dao.apply_jsonb_patch(
             all_nested_updates,
             field_types=field_types,
         )
@@ -3093,81 +1848,59 @@ def _update_logs_jsonb(
         try:
             event_ids = [value for (_, value) in updated_ids]
 
-            if settings.use_jsonb_queries:
-                # JSONB Mode: Ripple Effect for derived logs using indexed referenced_keys
-                if updated_entry_keys:  # Only process if there are modified keys
-                    try:
-                        from sqlalchemy import cast
-                        from sqlalchemy.dialects.postgresql import JSONB
+            # Ripple Effect for derived logs using indexed referenced_keys (JSONB mode)
+            if updated_entry_keys:  # Only process if there are modified keys
+                try:
+                    from sqlalchemy import cast
+                    from sqlalchemy.dialects.postgresql import JSONB
 
-                        # Build OR conditions for all modified keys at once
-                        key_conditions = [
-                            ActiveDerivedLog.referenced_keys.op("@>")(
-                                cast([key], JSONB),
-                            )
-                            for key in updated_entry_keys
-                        ]
-
-                        # Single batch query to find ALL templates referencing ANY modified key
-                        dependent_templates = (
-                            session.query(ActiveDerivedLog)
-                            .filter(
-                                ActiveDerivedLog.project_id == project_id,
-                                ActiveDerivedLog.context_id == ctx_id,
-                                ActiveDerivedLog.is_active == True,
-                                or_(*key_conditions),
-                            )
-                            .all()
+                    # Build OR conditions for all modified keys at once
+                    key_conditions = [
+                        ActiveDerivedLog.referenced_keys.op("@>")(
+                            cast([key], JSONB),
                         )
+                        for key in updated_entry_keys
+                    ]
 
-                        # Track processed templates to avoid duplicates
-                        processed_template_ids: Set[int] = set()
-
-                        for template in dependent_templates:
-                            # Skip if already processed (multiple modified keys may reference same template)
-                            if template.id in processed_template_ids:
-                                continue
-                            processed_template_ids.add(template.id)
-
-                            # Recompute derived values for affected logs
-                            try:
-                                derived_log_dao.recompute_derived_logs_jsonb(
-                                    template=template,
-                                    log_ids=event_ids,
-                                    json_encoder=CustomEncoder,
-                                    field_type_dao=field_type_dao,
-                                )
-                            except Exception as template_error:
-                                # Log error but don't fail the update
-                                logging.warning(
-                                    f"Failed to recompute JSONB derived logs for template "
-                                    f"'{template.key}': {template_error}",
-                                )
-                    except Exception as ripple_error:
-                        # Ripple effect is best-effort; log error but don't fail update
-                        logging.warning(
-                            f"Error in JSONB ripple effect for project {project_id}: {ripple_error}",
+                    # Single batch query to find ALL templates referencing ANY modified key
+                    dependent_templates = (
+                        session.query(ActiveDerivedLog)
+                        .filter(
+                            ActiveDerivedLog.project_id == project_id,
+                            ActiveDerivedLog.context_id == ctx_id,
+                            ActiveDerivedLog.is_active == True,
+                            or_(*key_conditions),
                         )
-            else:
-                # EAV Mode: Recompute derived logs using traditional method
-                derived_logs_to_recompute = (
-                    session.query(DerivedLog)
-                    .join(
-                        LogEventDerivedLog,
-                        LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                        .all()
                     )
-                    .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-                    .filter(
-                        LogEvent.project_id == project_id,
-                        LogEventDerivedLog.log_event_id.in_(event_ids),
-                    )
-                    .all()
-                )
-                if derived_logs_to_recompute:
-                    derived_log_dao.recompute_derived_logs(
-                        logs_to_recompute=derived_logs_to_recompute,
-                        session=session,
-                        json_encoder=CustomEncoder,
+
+                    # Track processed templates to avoid duplicates
+                    processed_template_ids: Set[int] = set()
+
+                    for template in dependent_templates:
+                        # Skip if already processed (multiple modified keys may reference same template)
+                        if template.id in processed_template_ids:
+                            continue
+                        processed_template_ids.add(template.id)
+
+                        # Recompute derived values for affected logs
+                        try:
+                            derived_log_dao.recompute_derived_logs(
+                                template=template,
+                                log_ids=event_ids,
+                                json_encoder=CustomEncoder,
+                                field_type_dao=field_type_dao,
+                            )
+                        except Exception as template_error:
+                            # Log error but don't fail the update
+                            logging.warning(
+                                f"Failed to recompute JSONB derived logs for template "
+                                f"'{template.key}': {template_error}",
+                            )
+                except Exception as ripple_error:
+                    # Ripple effect is best-effort; log error but don't fail update
+                    logging.warning(
+                        f"Error in JSONB ripple effect for project {project_id}: {ripple_error}",
                     )
         except Exception as e:
             raise HTTPException(
@@ -3183,7 +1916,7 @@ def _update_logs_jsonb(
     }
 
 
-def _delete_logs_jsonb(
+def _delete_logs(
     session,
     user_id: int,
     project_id: int,
@@ -3191,17 +1924,16 @@ def _delete_logs_jsonb(
     context_name: str,
     ids_and_fields: Dict[Optional[int], List[str]],
     body,
-    log_dao: LogDAO,
+    log_dao: LogEventDAO,
     log_event_dao: LogEventDAO,
     field_type_dao: FieldTypeDAO,
     context_dao: ContextDAO,
     is_assistants_dual_context: bool = False,
 ):
     """
-    JSONB-based log deletion helper function.
+    Log deletion helper function.
 
-    This function handles log deletions when settings.use_jsonb_queries is True.
-    It operates directly on LogEvent.data JSONB column instead of the EAV tables.
+    This function handles log deletions by modifying LogEvent.data JSONB column directly.
 
     For Assistants/UnityTests projects with 3-tier context hierarchies, this function
     also handles cascading deletions across sibling contexts (All/X, User/All/X,
@@ -3215,7 +1947,7 @@ def _delete_logs_jsonb(
         context_name: The context name
         ids_and_fields: Dict mapping log_event_id -> list of field names to delete
         body: The DeleteLogEntryRequest body
-        log_dao: LogDAO instance
+        log_dao: LogEventDAO instance
         log_event_dao: LogEventDAO instance
         field_type_dao: FieldTypeDAO instance
         context_dao: ContextDAO instance
@@ -3322,7 +2054,7 @@ def _delete_logs_jsonb(
             )
 
         # Delete GCS files BEFORE any DB operations
-        log_dao._bulk_delete_gcs_media_jsonb(
+        log_dao._bulk_delete_gcs_media(
             log_event_ids=context_log_ids,
             project_id=project_id,
             field_names=fields,
@@ -3383,7 +2115,7 @@ def _delete_logs_jsonb(
         )
 
         # Delete GCS files for entire log deletions
-        log_dao._bulk_delete_gcs_media_jsonb(
+        log_dao._bulk_delete_gcs_media(
             log_event_ids=entire_log_deletions,
             project_id=project_id,
             field_names=None,  # Check all media fields
@@ -3580,7 +2312,7 @@ def _delete_logs_jsonb(
                 )
 
             # Delete GCS files BEFORE any DB operations - SINGLE BULK CALL
-            log_dao._bulk_delete_gcs_media_jsonb(
+            log_dao._bulk_delete_gcs_media(
                 log_event_ids=potential_empty_logs,
                 project_id=project_id,
                 field_names=list(all_partial_fields),
@@ -3777,7 +2509,7 @@ def delete_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     if body.source_type not in ("all", "base", "derived"):
         raise HTTPException(
@@ -3851,669 +2583,21 @@ def delete_logs(
     # Use the processed list instead of the original
     ids_and_fields = _flatten_fields(processed_ids_and_fields)
 
-    # =========================================================================
-    # JSONB Mode: Use JSONB-based deletion path
-    # =========================================================================
-    if settings.use_jsonb_queries:
-        return _delete_logs_jsonb(
-            session=session,
-            user_id=user_id,
-            project_id=project_id,
-            context_id=context_id,
-            context_name=context_name,
-            ids_and_fields=ids_and_fields,
-            body=body,
-            log_dao=log_dao,
-            log_event_dao=log_event_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            is_assistants_dual_context=is_assistants_dual_context,
-        )
-
-    # =========================================================================
-    # EAV Mode: Existing deletion logic
-    # =========================================================================
-
-    # Check RESTRICT constraints before deletion
-    if body.source_type in ("all", "base"):
-        # Extract column-value pairs being deleted
-        columns_values_to_delete = {}  # {column_name: [values...]}
-
-        # Handle global field deletions (log_id is None)
-        global_fields = ids_and_fields.get(None, [])
-        if global_fields:
-            # Get all values for these fields in the context
-            for field in global_fields:
-                values_query = (
-                    session.query(Log.value)
-                    .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
-                    .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-                    .filter(
-                        LogEvent.project_id == project_id,
-                        LogEventContext.context_id == context_id,
-                        Log.key == field,
-                    )
-                    .distinct()
-                )
-                values = [row[0] for row in values_query.all() if row[0] is not None]
-                if values:
-                    columns_values_to_delete[field] = values
-
-        # Handle specific log deletions
-        specific_log_ids = [k for k in ids_and_fields.keys() if k is not None]
-        if specific_log_ids:
-            # Group fields by log_event_id for efficiency
-            for log_id, fields in ids_and_fields.items():
-                if log_id is None:
-                    continue
-
-                # If no fields specified, we're deleting the entire log event
-                if not fields:
-                    # Get all fields for this log event
-                    all_fields_query = (
-                        session.query(Log.key, Log.value)
-                        .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(LogEventLog.log_event_id == log_id)
-                    )
-                    for key, value in all_fields_query.all():
-                        if value is not None:
-                            columns_values_to_delete.setdefault(key, []).append(value)
-                else:
-                    # Get values for specific fields
-                    fields_values_query = (
-                        session.query(Log.key, Log.value)
-                        .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(
-                            LogEventLog.log_event_id == log_id,
-                            Log.key.in_(fields),
-                        )
-                    )
-                    for key, value in fields_values_query.all():
-                        if value is not None:
-                            columns_values_to_delete.setdefault(key, []).append(value)
-
-        # Check for RESTRICT constraint violations
-        # DISABLED: RESTRICT and NO ACTION are not currently supported
-        # if columns_values_to_delete:
-        #     violations = context_dao.check_restrict_constraints(
-        #         project_id=project_id,
-        #         context_id=context_id,
-        #         columns_values=columns_values_to_delete,
-        #         action="DELETE",
-        #     )
-        #
-        #     if violations:
-        #         error_msg = format_fk_violation_error(violations)
-        #         raise HTTPException(status_code=400, detail=error_msg)
-
-        # Apply CASCADE and SET NULL actions
-        if columns_values_to_delete:
-            context_dao.apply_fk_actions(
-                project_id=project_id,
-                context_id=context_id,
-                columns_values=columns_values_to_delete,
-                action="DELETE",
-            )
-
-    # Track if we need to update the versioned context
-    context_obj = None
-    context_updated = False
-    context_description = []
-
-    # Group 1: Global field deletions (log_id is None)
-    global_field_deletions = {k: v for k, v in ids_and_fields.items() if k is None}
-    for log_id, fields in global_field_deletions.items():
-        if len(fields) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot delete all logs without specifying fields.",
-            )
-
-        # Get all log events for this project
-        all_log_events_subq = select(
-            session.query(LogEvent.id)
-            .filter(LogEvent.project_id == project_id)
-            .subquery(name="all_log_events"),
-        )
-
-        # Add fields to the deleted_fields set
-        deleted_fields.update(fields)
-
-        # Bulk delete from base logs with a single query
-        if body.source_type in ("all", "base"):
-            # Find log IDs to delete using a subquery
-            log_ids_to_delete = (
-                session.query(Log.id)
-                .join(
-                    LogEventLog,
-                    LogEventLog.log_id == Log.id,
-                )
-                .filter(
-                    LogEventLog.log_event_id.in_(all_log_events_subq),
-                    Log.key.in_(fields),
-                )
-                .subquery()
-            )
-
-            # Delete GCS files BEFORE deleting DB records
-            deletion_query = session.query(Log).filter(
-                Log.id.in_(select(log_ids_to_delete)),
-            )
-            log_dao._bulk_delete_gcs_media(deletion_query)
-
-            # Now delete the logs without joins
-            deleted_count = (
-                session.query(Log)
-                .filter(
-                    Log.id.in_(select(log_ids_to_delete)),
-                )
-                .delete(synchronize_session=False)
-            )
-            if deleted_count > 0:
-                context_description.append(
-                    f"Deleted {len(fields)} fields from {deleted_count} base logs",
-                )
-
-        # Bulk delete from derived logs with a single query
-        if body.source_type in ("all", "derived"):
-            # Use a single DELETE statement for all fields
-            # Find derived logs to delete
-            derived_logs_to_delete = (
-                session.query(DerivedLog.id)
-                .join(
-                    LogEventDerivedLog,
-                    LogEventDerivedLog.derived_log_id == DerivedLog.id,
-                )
-                .filter(
-                    LogEventDerivedLog.log_event_id.in_(all_log_events_subq),
-                    DerivedLog.key.in_(fields),
-                )
-                .all()
-            )
-            derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
-            deleted_count = 0
-            if derived_log_ids_to_delete:
-                deleted_count = (
-                    session.query(DerivedLog)
-                    .filter(DerivedLog.id.in_(derived_log_ids_to_delete))
-                    .delete(synchronize_session=False)
-                )
-            if deleted_count > 0:
-                context_description.append(
-                    f"Deleted {len(fields)} fields from {deleted_count} derived logs",
-                )
-
-        # Mark that we need to update the context
-        if context_description:
-            context_updated = True
-
-    # Group 2: Entire log event deletions (fields is empty i.e. passed in as None)
-    entire_log_deletions = []
-    for log_id, fields in ids_and_fields.items():
-        if log_id is not None and len(fields) == 0:
-            # Verify if the log belongs to the user
-            try:
-                if log_event_dao.get_user_id(id=log_id) != user_id:
-                    raise IndexError
-                entire_log_deletions.append(log_id)
-            except IndexError:
-                not_found_logs.append(log_id)
-
-    if entire_log_deletions:
-        if body.source_type == "derived":
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot delete derived logs without specifying fields.",
-            )
-
-        # Get all field types and add to deleted_fields set
-        deleted_fields.update(
-            field_type_dao.get_field_types(
-                project_id,
-                context_id=context_id,
-                return_mutable=True,
-            ).keys(),
-        )
-
-        # For Assistants project, get sibling context IDs for 3-tier context removal
-        sibling_context_map: Dict[int, List[int]] = {}
-        if is_assistants_dual_context:
-            sibling_context_map = _get_assistants_sibling_context_info(
-                session=session,
-                project_id=project_id,
-                context_id=context_id,
-                context_name=context_name,
-                log_event_ids=entire_log_deletions,
-                context_dao=context_dao,
-            )
-
-        # Check which logs exist in other contexts (excluding sibling for Assistants)
-        logs_in_other_contexts = []
-        logs_to_delete = []
-
-        for log_id in entire_log_deletions:
-            # Build list of context IDs to exclude when checking for "other" contexts
-            # For Assistants project, exclude current and all sibling contexts
-            exclude_context_ids = [context_id]
-            sibling_ctx_ids = sibling_context_map.get(log_id, [])
-            exclude_context_ids.extend(sibling_ctx_ids)
-
-            # Check if this log exists in any other context (besides current and siblings)
-            other_contexts = (
-                session.query(LogEventContext.context_id)
-                .filter(
-                    LogEventContext.log_event_id == log_id,
-                    LogEventContext.context_id.notin_(exclude_context_ids),
-                )
-                .all()
-            )
-
-            if other_contexts:
-                # Log exists in other contexts, just remove from this context (and siblings)
-                logs_in_other_contexts.append(log_id)
-            else:
-                # Log doesn't exist in other contexts, delete it entirely
-                logs_to_delete.append(log_id)
-
-        # Remove logs from this context only
-        if logs_in_other_contexts:
-            removed_count = (
-                session.query(LogEventContext)
-                .filter(
-                    LogEventContext.log_event_id.in_(logs_in_other_contexts),
-                    LogEventContext.context_id == context_id,
-                )
-                .delete(synchronize_session=False)
-            )
-            if removed_count > 0:
-                context_description.append(
-                    f"Removed {removed_count} log events from context '{context_name}'",
-                )
-                context_updated = True
-
-        # For Assistants project, also remove from sibling contexts
-        if is_assistants_dual_context and sibling_context_map:
-            sibling_removals = [
-                log_id
-                for log_id in logs_in_other_contexts
-                if log_id in sibling_context_map
-            ]
-            if sibling_removals:
-                # Group by sibling context ID for efficient deletion
-                sibling_ctx_to_logs: Dict[int, List[int]] = {}
-                for log_id in sibling_removals:
-                    for sib_ctx_id in sibling_context_map[log_id]:
-                        sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(log_id)
-
-                for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
-                    sibling_removed = (
-                        session.query(LogEventContext)
-                        .filter(
-                            LogEventContext.log_event_id.in_(log_ids),
-                            LogEventContext.context_id == sib_ctx_id,
-                        )
-                        .delete(synchronize_session=False)
-                    )
-                    if sibling_removed > 0:
-                        # Get sibling context name for logging
-                        sib_ctx = context_dao.filter(
-                            project_id=project_id,
-                            id=sib_ctx_id,
-                        )
-                        sib_ctx_name = (
-                            sib_ctx[0][0].name if sib_ctx else f"id={sib_ctx_id}"
-                        )
-                        context_description.append(
-                            f"Removed {sibling_removed} log events from sibling context '{sib_ctx_name}'",
-                        )
-
-        # Delete logs that don't exist in other contexts
-        if logs_to_delete:
-            deleted_count = (
-                session.query(LogEvent)
-                .filter(LogEvent.id.in_(logs_to_delete))
-                .delete(synchronize_session=False)
-            )
-            if deleted_count > 0:
-                context_description.append(
-                    f"Deleted {deleted_count} log events completely",
-                )
-                context_updated = True
-
-    # Group 3: Partial field deletions (specific fields for specific log events)
-    partial_deletions = {
-        k: v for k, v in ids_and_fields.items() if k is not None and len(v) > 0
-    }
-
-    # Collect all log_event_id, field pairs for bulk deletion
-    base_log_deletions = []
-    derived_log_deletions = []
-    potential_empty_logs = []
-
-    for log_id, fields in partial_deletions.items():
-        # Verify if the log belongs to the user
-        try:
-            if log_event_dao.get_user_id(id=log_id) != user_id:
-                raise IndexError
-        except IndexError:
-            not_found_logs.append(log_id)
-            continue
-
-        # Add to potential empty logs list for later checking
-        potential_empty_logs.append(log_id)
-
-        # Add fields to the deleted_fields set
-        deleted_fields.update(fields)
-
-        # Add all field/log_id combinations directly without querying
-        for field in fields:
-            if body.source_type in ("all", "base"):
-                base_log_deletions.append((log_id, field))
-            if body.source_type in ("all", "derived"):
-                derived_log_deletions.append((log_id, field))
-
-        # Mark that we need to update the context
-        context_updated = True
-        context_description.append(f"Deleted fields from log_event_id={log_id}")
-
-    # Perform bulk deletions for base logs
-    if base_log_deletions and body.source_type in ("all", "base"):
-
-        # Delete GCS files BEFORE deleting DB records
-        # Build a query to find logs by their log_event_id and key
-        logs_to_delete_query = session.query(Log).join(
-            LogEventLog,
-            LogEventLog.log_id == Log.id,
-        )
-
-        # Build filter for each (event_id, key) pair
-        combined_filter = or_(
-            *[
-                and_(LogEventLog.log_event_id == eid, Log.key == k)
-                for eid, k in base_log_deletions
-            ],
-        )
-        logs_to_delete_query = logs_to_delete_query.filter(combined_filter)
-        log_dao._bulk_delete_gcs_media(logs_to_delete_query)
-
-        # Group by key for more efficient deletion
-        key_to_event_ids = defaultdict(list)
-        for event_id, key in base_log_deletions:
-            key_to_event_ids[key].append(event_id)
-
-        for key, event_ids in key_to_event_ids.items():
-            try:
-                # First find the logs to delete
-                logs_to_delete = (
-                    session.query(Log.id)
-                    .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(
-                        Log.key == key,
-                        LogEventLog.log_event_id.in_(event_ids),
-                    )
-                    .all()
-                )
-
-                # Delete them if found
-                if logs_to_delete:
-                    log_ids_to_delete = [log_id[0] for log_id in logs_to_delete]
-                    deleted_count = (
-                        session.query(Log)
-                        .filter(Log.id.in_(log_ids_to_delete))
-                        .delete(synchronize_session=False)
-                    )
-                else:
-                    deleted_count = 0
-            except:
-                not_found_entries.append((event_ids, key))
-                continue
-
-            if deleted_count > 0:
-                context_description.append(
-                    f"Deleted field '{key}' from {deleted_count} base logs",
-                )
-
-    # Perform bulk deletions for derived logs
-    if derived_log_deletions and body.source_type in ("all", "derived"):
-        # Group by key for more efficient deletion
-        key_to_event_ids = defaultdict(list)
-        for event_id, key in derived_log_deletions:
-            key_to_event_ids[key].append(event_id)
-
-        for key, event_ids in key_to_event_ids.items():
-            try:
-                # Find derived logs to delete
-                derived_logs_to_delete = (
-                    session.query(DerivedLog.id)
-                    .join(
-                        LogEventDerivedLog,
-                        LogEventDerivedLog.derived_log_id == DerivedLog.id,
-                    )
-                    .filter(
-                        DerivedLog.key == key,
-                        LogEventDerivedLog.log_event_id.in_(event_ids),
-                    )
-                    .all()
-                )
-                derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
-                if derived_log_ids_to_delete:
-                    deleted_count = (
-                        session.query(DerivedLog)
-                        .filter(DerivedLog.id.in_(derived_log_ids_to_delete))
-                        .delete(synchronize_session=False)
-                    )
-                else:
-                    deleted_count = 0
-            except:
-                not_found_entries.append((event_ids, key))
-                continue
-
-            if deleted_count > 0:
-                context_description.append(
-                    f"Deleted field '{key}' from {deleted_count} derived logs",
-                )
-
-    # Delete empty log events if requested
-    if body.delete_empty_logs and potential_empty_logs:
-        # Get all log_event_ids that still have logs in a single query
-        still_used_base_ids = set(
-            row[0]
-            for row in session.query(LogEventLog.log_event_id)
-            .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(potential_empty_logs))
-            .distinct()
-        )
-
-        still_used_derived_ids = set(
-            row[0]
-            for row in session.query(LogEventDerivedLog.log_event_id)
-            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(potential_empty_logs))
-            .distinct()
-        )
-
-        # Combine both sets
-        still_used_ids = still_used_base_ids.union(still_used_derived_ids)
-
-        # Find truly empty log events
-        empty_log_ids = set(potential_empty_logs) - still_used_ids
-
-        # For empty logs, check which ones exist in other contexts
-        if empty_log_ids:
-            # For Assistants project, get sibling context IDs for empty logs
-            empty_sibling_context_map: Dict[int, List[int]] = {}
-            if is_assistants_dual_context:
-                empty_sibling_context_map = _get_assistants_sibling_context_info(
-                    session=session,
-                    project_id=project_id,
-                    context_id=context_id,
-                    context_name=context_name,
-                    log_event_ids=list(empty_log_ids),
-                    context_dao=context_dao,
-                )
-
-            logs_in_other_contexts = []
-            logs_to_delete = []
-
-            for log_id in empty_log_ids:
-                # Build list of context IDs to exclude when checking for "other" contexts
-                # For Assistants project, exclude current and all sibling contexts
-                exclude_context_ids = [context_id]
-                sibling_ctx_ids = empty_sibling_context_map.get(log_id, [])
-                exclude_context_ids.extend(sibling_ctx_ids)
-
-                # Check if this log exists in any other context (besides current and siblings)
-                other_contexts = (
-                    session.query(LogEventContext.context_id)
-                    .filter(
-                        LogEventContext.log_event_id == log_id,
-                        LogEventContext.context_id.notin_(exclude_context_ids),
-                    )
-                    .all()
-                )
-
-                if other_contexts:
-                    # Log exists in other contexts, just remove from this context (and siblings)
-                    logs_in_other_contexts.append(log_id)
-                else:
-                    # Log doesn't exist in other contexts, delete it entirely
-                    logs_to_delete.append(log_id)
-
-            # Remove logs from this context only
-            if logs_in_other_contexts:
-                removed_count = (
-                    session.query(LogEventContext)
-                    .filter(
-                        LogEventContext.log_event_id.in_(logs_in_other_contexts),
-                        LogEventContext.context_id == context_id,
-                    )
-                    .delete(synchronize_session=False)
-                )
-                if removed_count > 0:
-                    context_description.append(
-                        f"Removed {removed_count} empty log events from context '{context_name}'",
-                    )
-                    context_updated = True
-
-            # For Assistants project, also remove empty logs from sibling contexts
-            if is_assistants_dual_context and empty_sibling_context_map:
-                sibling_removals = [
-                    log_id
-                    for log_id in logs_in_other_contexts
-                    if log_id in empty_sibling_context_map
-                ]
-                if sibling_removals:
-                    # Group by sibling context ID for efficient deletion
-                    sibling_ctx_to_logs: Dict[int, List[int]] = {}
-                    for log_id in sibling_removals:
-                        for sib_ctx_id in empty_sibling_context_map[log_id]:
-                            sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(
-                                log_id,
-                            )
-
-                    for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
-                        sibling_removed = (
-                            session.query(LogEventContext)
-                            .filter(
-                                LogEventContext.log_event_id.in_(log_ids),
-                                LogEventContext.context_id == sib_ctx_id,
-                            )
-                            .delete(synchronize_session=False)
-                        )
-                        if sibling_removed > 0:
-                            # Get sibling context name for logging
-                            sib_ctx = context_dao.filter(
-                                project_id=project_id,
-                                id=sib_ctx_id,
-                            )
-                            sib_ctx_name = (
-                                sib_ctx[0][0].name if sib_ctx else f"id={sib_ctx_id}"
-                            )
-                            context_description.append(
-                                f"Removed {sibling_removed} empty log events from sibling context '{sib_ctx_name}'",
-                            )
-
-            # Delete logs that don't exist in other contexts
-            if logs_to_delete:
-                deleted_count = (
-                    session.query(LogEvent)
-                    .filter(LogEvent.id.in_(logs_to_delete))
-                    .delete(synchronize_session=False)
-                )
-                if deleted_count > 0:
-                    context_description.append(
-                        f"Deleted {deleted_count} empty log events completely",
-                    )
-                    context_updated = True
-
-    # Handle versioned contexts - do this only once after all deletions
-    if context_updated and context_id:
-        context_obj = (
-            context_dao.session.query(Context).filter_by(id=context_id).first()
-        )
-        context_obj.updated_at = datetime.now(timezone.utc)
-
-    # Handle cases where some logs or entries were not found
-    if not_found_logs:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Logs with ids {not_found_logs} not found or you don't have permission to delete them.",
-        )
-
-    if not_found_entries:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Specified fields not found in logs with ids {not_found_entries}.",
-        )
-
-    # Cascading deletion: check if any deleted fields no longer exist in any logs
-    if deleted_fields and body.delete_empty_fields:
-        # Get all fields that still exist in any logs with two efficient queries
-        existing_base_fields = (
-            session.query(Log.key)
-            .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
-            .filter(LogEvent.project_id == project_id)
-            .distinct()
-            .all()
-        )
-        existing_derived_fields = (
-            session.query(DerivedLog.key)
-            .join(
-                LogEventDerivedLog,
-                LogEventDerivedLog.derived_log_id == DerivedLog.id,
-            )
-            .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-            .filter(LogEvent.project_id == project_id)
-            .distinct()
-            .all()
-        )
-
-        # Combine all existing fields in one set operation
-        all_existing_fields = set(
-            [f[0] for f in existing_base_fields + existing_derived_fields],
-        )
-
-        # Find fields that no longer exist with a set difference operation
-        fields_to_delete = deleted_fields - all_existing_fields
-
-        # Bulk delete field types that are no longer used
-        if fields_to_delete:
-            for field in fields_to_delete:
-                try:
-                    field_type_dao.delete_field_type(
-                        project_id=project_id,
-                        field_name=field,
-                        context_id=context_id,
-                    )
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Error deleting field type {field}: {str(e)}",
-                    )
-
-    return {"info": "Logs and fields deleted successfully!"}
+    # Use JSONB-based deletion path
+    return _delete_logs(
+        session=session,
+        user_id=user_id,
+        project_id=project_id,
+        context_id=context_id,
+        context_name=context_name,
+        ids_and_fields=ids_and_fields,
+        body=body,
+        log_dao=log_dao,
+        log_event_dao=log_event_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        is_assistants_dual_context=is_assistants_dual_context,
+    )
 
 
 @router.get(
@@ -4524,7 +2608,6 @@ def delete_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "params": {},
                         "logs": [
                             {
                                 "id": "0",
@@ -4534,7 +2617,6 @@ def delete_logs(
                                     "key2": 1.0,
                                 },
                                 "derived_entries": {},
-                                "params": {},
                             },
                             {
                                 "id": "1",
@@ -4544,7 +2626,6 @@ def delete_logs(
                                     "key2": 2.0,
                                 },
                                 "derived_entries": {},
-                                "params": {},
                             },
                         ],
                         "count": 2,
@@ -4735,168 +2816,94 @@ def get_logs(
     # Stage 1: Monolithic (non-grouped) Case
     # -----------------------------------------------------------
     if not group_by:
-        # Check feature flag for JSONB query path
-        if settings.use_jsonb_queries:
-            # JSONB query path
-            try:
-                import time
+        # JSONB query path
+        try:
+            import time
 
-                start_time = time.time()
-                rows, total_count = _get_logs_query_jsonb(
-                    request_fastapi,
-                    project_name=project_name,
-                    context=context,
-                    filter_expr=filter_expr,
-                    sorting=sorting,
-                    from_ids=from_ids,
-                    exclude_ids=exclude_ids,
-                    from_fields=from_fields,
-                    exclude_fields=exclude_fields,
-                    limit=limit,
-                    offset=offset,
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    session=session,
-                    randomize=randomize,
-                    seed=seed,
+            start_time = time.time()
+            rows, total_count = _get_logs_query(
+                request_fastapi,
+                project_name=project_name,
+                context=context,
+                filter_expr=filter_expr,
+                sorting=sorting,
+                from_ids=from_ids,
+                exclude_ids=exclude_ids,
+                from_fields=from_fields,
+                exclude_fields=exclude_fields,
+                limit=limit,
+                offset=offset,
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
+                randomize=randomize,
+                seed=seed,
+            )
+
+            # Handle return_ids_only mode
+            if return_ids_only:
+                return [
+                    row[0] for row in rows
+                ]  # Extract IDs from (id, data, created_at) tuples
+
+            # Get field metadata for formatting
+            field_types = field_type_dao.get_field_types(
+                project_id,
+                context_id=context_id,
+                return_mutable=True,
+            )
+            field_order_map = field_type_dao.get_ordered_field_names(
+                project_id,
+                context_id=context_id,
+            )
+
+            # Format JSONB results
+            logs_out, _ = _format_logs(
+                rows=rows,
+                field_types=field_types,
+                value_limit=value_limit,
+                column_context=column_context,
+                field_order_map=field_order_map,
+                from_fields=from_fields,
+                exclude_fields=exclude_fields,
+            )
+
+            # Apply grouping of repeated fields if group_threshold is set
+            grouped_entries = {}
+            if group_threshold is not None and group_threshold > 0:
+                logs_out, grouped_entries = apply_group_threshold(
+                    logs_out,
+                    group_threshold,
                 )
 
-                # Handle return_ids_only mode
-                if return_ids_only:
-                    return [
-                        row[0] for row in rows
-                    ]  # Extract IDs from (id, data, created_at) tuples
+            # When field filters are applied, some logs may be filtered out
+            # Use actual log count in that case
+            actual_count = (
+                len(logs_out) if (from_fields or exclude_fields) else total_count
+            )
 
-                # Get field metadata for formatting
-                field_types = field_type_dao.get_field_types(
-                    project_id,
-                    context_id=context_id,
-                    return_mutable=True,
-                )
-                field_order_map = field_type_dao.get_ordered_field_names(
-                    project_id,
-                    context_id=context_id,
-                )
+            response = {
+                "logs": logs_out,
+                "count": actual_count,
+            }
+            if grouped_entries:
+                response["grouped_entries"] = grouped_entries
 
-                # Format JSONB results
-                logs_out, params_out = _format_jsonb_logs(
-                    rows=rows,
-                    field_types=field_types,
-                    value_limit=value_limit,
-                    column_context=column_context,
-                    field_order_map=field_order_map,
-                    from_fields=from_fields,
-                    exclude_fields=exclude_fields,
-                )
+            return response
 
-                # Apply grouping of repeated fields if group_threshold is set
-                grouped_entries = {}
-                if group_threshold is not None and group_threshold > 0:
-                    logs_out, grouped_entries = apply_group_threshold(
-                        logs_out,
-                        group_threshold,
-                    )
-
-                # When field filters are applied, some logs may be filtered out
-                # Use actual log count in that case
-                actual_count = (
-                    len(logs_out) if (from_fields or exclude_fields) else total_count
-                )
-
-                response = {
-                    "params": params_out,
-                    "logs": logs_out,
-                    "count": actual_count,
-                }
-                if grouped_entries:
-                    response["grouped_entries"] = grouped_entries
-
-                return response
-
-            except DataError as e:
-                error_msg = _sanitize_sql_error(e)
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid data format in filter: {error_msg}",
-                )
-            except SQLAlchemyError as e:
-                error_msg = _sanitize_sql_error(e)
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Database error: {error_msg}",
-                )
-        else:
-            # EAV query path (existing code)
-            try:
-                all_rows, context_len, total_count = _get_logs_query(
-                    request_fastapi,
-                    project_name=project_name,
-                    column_context=column_context,
-                    context=context,
-                    filter_expr=filter_expr,
-                    sorting=sorting,
-                    from_ids=from_ids,
-                    exclude_ids=exclude_ids,
-                    from_fields=from_fields,
-                    exclude_fields=exclude_fields,
-                    limit=limit,
-                    offset=offset,
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    session=session,
-                    randomize=randomize,
-                    seed=seed,
-                )
-                if return_ids_only:
-                    return list(
-                        dict.fromkeys(row[7] for row in all_rows),
-                    )  # Return unique log_event_ids
-
-                # Format logs into flat structure.
-                field_order_map = field_type_dao.get_ordered_field_names(
-                    project_id,
-                    context_id=context_id,
-                )
-                logs_out, params_out = _format_flat_logs(
-                    all_rows,
-                    context_len,
-                    value_limit,
-                    field_order_map,
-                )
-
-                # Apply grouping of repeated fields if group_threshold is set.
-                grouped_entries = {}
-                if group_threshold is not None and group_threshold > 0:
-                    logs_out, grouped_entries = apply_group_threshold(
-                        logs_out,
-                        group_threshold,
-                    )
-
-                response = {
-                    "params": params_out,
-                    "logs": logs_out,
-                    "count": total_count,
-                }
-                if grouped_entries:
-                    response["grouped_entries"] = grouped_entries
-
-                return response
-            except DataError as e:
-                # Handle data format errors (e.g., invalid datetime casts)
-                error_msg = _sanitize_sql_error(e)
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid data format in filter: {error_msg}",
-                )
-            except SQLAlchemyError as e:
-                # Handle other SQLAlchemy errors
-                error_msg = _sanitize_sql_error(e)
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Database error: {error_msg}",
-                )
+        except DataError as e:
+            error_msg = _sanitize_sql_error(e)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid data format in filter: {error_msg}",
+            )
+        except SQLAlchemyError as e:
+            error_msg = _sanitize_sql_error(e)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database error: {error_msg}",
+            )
 
     # -----------------------------------------------------------
     # Stage 2: Grouping Case
@@ -4928,11 +2935,6 @@ def get_logs(
             all_ids = session.query(event_ids_subq).all()  # each row is a tuple (id,)
             event_ids = [r[0] for r in all_ids]
             return list(dict.fromkeys(event_ids))
-
-        # -----------------------------------------------------------
-        # Stage 3: Get Parameter Versions for the Log Events
-        # -----------------------------------------------------------
-        params_out = _get_params_for_log_events(event_ids_subq, session)
 
         # -----------------------------------------------------------
         # Stage 4: Build Grouped Structure
@@ -4967,7 +2969,6 @@ def get_logs(
             )
 
             final_result = {
-                "params": params_out,
                 "logs": grouped_result,
                 "count": total_count,
             }
@@ -5010,12 +3011,12 @@ def get_logs(
 
             for group_field in group_by:
                 prefix, raw_key = parse_group_key(group_field)
-                is_param = prefix == "params"
+                # Note: params prefix is no longer used, all fields are entries now
                 distinct_values = _get_distinct_group_values(
                     log_event_ids=event_ids_subq,
                     group_key=raw_key,
                     session=session,
-                    is_param=is_param,
+                    field_types={},
                 )
                 value_to_ids = {}
                 used_ids = set()
@@ -5025,7 +3026,7 @@ def get_logs(
                         group_key=raw_key,
                         group_value=val,
                         session=session,
-                        is_param=is_param,
+                        field_types={},
                     )
                     value_to_ids[val] = subset_ids
                     used_ids.update(subset_ids)
@@ -5052,8 +3053,10 @@ def get_logs(
                     "count": field_total,
                 }
 
+            if groups_only:
+                logs_out = []
+
             final_result = {
-                "params": params_out,
                 "groups": groups,
                 "logs": logs_out,
                 "count": total_count,
@@ -5087,7 +3090,6 @@ def get_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "params": {},
                         "logs": [
                             {
                                 "id": "0",
@@ -5097,7 +3099,6 @@ def get_logs(
                                     "key2": 1.0,
                                 },
                                 "derived_entries": {},
-                                "params": {},
                             },
                         ],
                         "count": 1,
@@ -5170,127 +3171,69 @@ def query_logs_post(
 
     # Handle non-grouped case (same as GET /logs)
     if not body.group_by:
-        # Check feature flag for JSONB query path (same as GET /logs)
-        if settings.use_jsonb_queries:
-            # JSONB query path
-            rows, total_count = _get_logs_query_jsonb(
-                request_fastapi,
-                project_name=body.project_name,
-                context=body.context,
-                filter_expr=body.filter_expr,
-                sorting=body.sorting,
-                from_ids=body.from_ids,
-                exclude_ids=body.exclude_ids,
-                from_fields=body.from_fields,
-                exclude_fields=body.exclude_fields,
-                limit=body.limit,
-                offset=body.offset,
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-                randomize=body.randomize,
-                seed=body.seed,
-            )
+        # JSONB query path
+        rows, total_count = _get_logs_query(
+            request_fastapi,
+            project_name=body.project_name,
+            context=body.context,
+            filter_expr=body.filter_expr,
+            sorting=body.sorting,
+            from_ids=body.from_ids,
+            exclude_ids=body.exclude_ids,
+            from_fields=body.from_fields,
+            exclude_fields=body.exclude_fields,
+            limit=body.limit,
+            offset=body.offset,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            randomize=body.randomize,
+            seed=body.seed,
+        )
 
-            # Handle return_ids_only mode
-            if body.return_ids_only:
-                return {
-                    "params": {},
-                    "logs": [row[0] for row in rows],
-                    "count": total_count,
-                }
-
-            # Get field metadata for formatting
-            field_types = field_type_dao.get_field_types(
-                project_id,
-                context_id=context_id,
-                return_mutable=True,
-            )
-            field_order_map = field_type_dao.get_ordered_field_names(
-                project_id,
-                context_id=context_id,
-            )
-
-            # Format JSONB results
-            logs_out, params_out = _format_jsonb_logs(
-                rows=rows,
-                field_types=field_types,
-                value_limit=body.value_limit,
-                column_context=body.column_context,
-                field_order_map=field_order_map,
-                from_fields=body.from_fields,
-                exclude_fields=body.exclude_fields,
-            )
-
-            # Apply group threshold if needed
-            if body.group_threshold:
-                logs_out = apply_group_threshold(logs_out, body.group_threshold)
-
-            # When field filters are applied, some logs may be filtered out
-            actual_count = (
-                len(logs_out)
-                if (body.from_fields or body.exclude_fields)
-                else total_count
-            )
-
+        # Handle return_ids_only mode
+        if body.return_ids_only:
             return {
-                "params": params_out,
-                "logs": logs_out,
-                "count": actual_count,
-            }
-        else:
-            # EAV query path (original code)
-            all_rows, context_len, total_count = _get_logs_query(
-                request_fastapi,
-                project_name=body.project_name,
-                column_context=body.column_context,
-                context=body.context,
-                filter_expr=body.filter_expr,
-                sorting=body.sorting,
-                from_ids=body.from_ids,
-                exclude_ids=body.exclude_ids,
-                from_fields=body.from_fields,
-                exclude_fields=body.exclude_fields,
-                limit=body.limit,
-                offset=body.offset,
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-                randomize=body.randomize,
-                seed=body.seed,
-            )
-
-            # Get field order
-            field_order_map = field_type_dao.get_ordered_field_names(
-                project_id=project_id,
-                context_id=context_id,
-            )
-
-            # Format logs
-            logs_out, params_out = _format_flat_logs(
-                all_rows,
-                context_len,
-                body.value_limit,
-                field_order_map,
-            )
-
-            # Apply group threshold if needed
-            if body.group_threshold:
-                logs_out = apply_group_threshold(logs_out, body.group_threshold)
-
-            response = {
-                "params": params_out,
-                "logs": logs_out,
+                "logs": [row[0] for row in rows],
                 "count": total_count,
             }
 
-            # Return IDs only if requested
-            if body.return_ids_only:
-                response["logs"] = [log["id"] for log in logs_out]
+        # Get field metadata for formatting
+        field_types = field_type_dao.get_field_types(
+            project_id,
+            context_id=context_id,
+            return_mutable=True,
+        )
+        field_order_map = field_type_dao.get_ordered_field_names(
+            project_id,
+            context_id=context_id,
+        )
 
-            return response
+        # Format JSONB results
+        logs_out, _ = _format_logs(
+            rows=rows,
+            field_types=field_types,
+            value_limit=body.value_limit,
+            column_context=body.column_context,
+            field_order_map=field_order_map,
+            from_fields=body.from_fields,
+            exclude_fields=body.exclude_fields,
+        )
+
+        # Apply group threshold if needed
+        if body.group_threshold:
+            logs_out = apply_group_threshold(logs_out, body.group_threshold)
+
+        # When field filters are applied, some logs may be filtered out
+        actual_count = (
+            len(logs_out) if (body.from_fields or body.exclude_fields) else total_count
+        )
+
+        return {
+            "logs": logs_out,
+            "count": actual_count,
+        }
     else:
         # Handle grouped case - similar to GET /logs grouped logic
         all_rows, context_len, total_count = _get_all_filtered_log_event_ids(
@@ -5356,7 +3299,6 @@ def query_logs_post(
             "content": {
                 "application/json": {
                     "example": {
-                        "params": {},
                         "logs": [
                             {
                                 "id": "0",
@@ -5365,7 +3307,6 @@ def query_logs_post(
                                     "key1": "a",
                                     "key2": 1.0,
                                 },
-                                "params": {},
                             },
                             {
                                 "id": "1",
@@ -5374,7 +3315,6 @@ def query_logs_post(
                                     "key1": "b",
                                     "key2": 2.0,
                                 },
-                                "params": {},
                             },
                         ],
                         "count": 2,
@@ -5474,47 +3414,25 @@ def get_logs_latest_timestamp(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
 
-    if settings.use_jsonb_queries:
-        return _get_logs_query_jsonb(
-            request_fastapi,
-            project_name=project_name,
-            context=context,
-            filter_expr=filter_expr,
-            sorting=sorting,
-            from_ids=from_ids,
-            exclude_ids=exclude_ids,
-            from_fields=from_fields,
-            exclude_fields=exclude_fields,
-            limit=limit,
-            offset=offset,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            latest_timestamp=True,
-            randomize=randomize,
-        )
-    else:
-        return _get_logs_query(
-            request_fastapi,
-            project_name=project_name,
-            column_context=column_context,
-            context=context,
-            filter_expr=filter_expr,
-            sorting=sorting,
-            from_ids=from_ids,
-            exclude_ids=exclude_ids,
-            from_fields=from_fields,
-            exclude_fields=exclude_fields,
-            limit=limit,
-            offset=offset,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            latest_timestamp=True,
-            randomize=randomize,
-        )
+    return _get_logs_query(
+        request_fastapi,
+        project_name=project_name,
+        context=context,
+        filter_expr=filter_expr,
+        sorting=sorting,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        limit=limit,
+        offset=offset,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+        latest_timestamp=True,
+        randomize=randomize,
+    )
 
 
 @router.get(
@@ -5870,101 +3788,51 @@ def get_log_groups(
 
     groups = dict()
 
-    if settings.use_jsonb_queries:
-        # JSONB mode: returns (id, data_dict, key_order, created_at) tuples
-        rows, _ = _get_logs_query_jsonb(
-            request_fastapi=request_fastapi,
-            project_name=project_name,
-            context=context,
-            filter_expr=filter_expr,
-            sorting=None,
-            from_ids=from_ids,
-            exclude_ids=exclude_ids,
-            from_fields=key,  # Filter to logs containing this key
-            exclude_fields=None,
-            limit=None,
-            offset=0,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-        )
+    # JSONB mode: returns (id, data_dict, key_order, created_at) tuples
+    rows, _ = _get_logs_query(
+        request_fastapi=request_fastapi,
+        project_name=project_name,
+        context=context,
+        filter_expr=filter_expr,
+        sorting=None,
+        from_ids=from_ids,
+        exclude_ids=exclude_ids,
+        from_fields=key,  # Filter to logs containing this key
+        exclude_fields=None,
+        limit=None,
+        offset=0,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+    )
 
-        # Extract values from JSONB data dict
-        for row in rows:
-            # row is (id, data_dict, key_order, created_at)
-            data_dict = row[1]
+    # Extract values from JSONB data dict
+    for row in rows:
+        # row is (id, data_dict, key_order, created_at)
+        data_dict = row[1]
 
-            # Try entries first, then params, then top-level
-            value = None
-            if "entries" in data_dict and key in data_dict["entries"]:
-                value = data_dict["entries"][key]
-            elif "params" in data_dict and key in data_dict["params"]:
-                value = data_dict["params"][key]
-            elif key in data_dict:
-                value = data_dict[key]
+        # Try entries first, then top-level
+        value = None
+        if "entries" in data_dict and key in data_dict["entries"]:
+            value = data_dict["entries"][key]
+        elif key in data_dict:
+            value = data_dict[key]
 
-            if value is None:
-                continue
+        if value is None:
+            continue
 
-            # JSONB has no param versioning - always assign sequential by unique value
-            found_match = False
-            for k, v in groups.items():
-                if value in v:
-                    found_match = True
-                    groups[k].add(value)
-                    break
-            if not found_match:
-                version = str(len(groups))
-                groups[version] = set()
-                groups[version].add(value)
-    else:
-        # EAV mode: returns (key, value, type, param_version, ...) tuples
-        # raw_rows is a list of:
-        # - row_key
-        # - row_value
-        # - row_inferred_type
-        # - row_version (param_version)
-        # - row_context_version
-        # - row_source_type
-        # - row_created_at
-        # - row_event_id
-        raw_rows, _, _ = _get_logs_query(
-            request_fastapi=request_fastapi,
-            project_name=project_name,
-            column_context=None,
-            context=context,
-            filter_expr=filter_expr,
-            sorting=None,
-            from_ids=from_ids,
-            exclude_ids=exclude_ids,
-            from_fields=key,  # Only get entries for the specified key
-            exclude_fields=None,
-            limit=None,
-            offset=0,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-        )
-
-        for row in raw_rows:
-            # Extract version and value from raw row
-            version = row[3]  # param_version
-            value = row[1]  # value
-
-            if version is None:
-                found_match = False
-                for k, v in groups.items():
-                    if value in v:
-                        version = k
-                        found_match = True
-                        break
-                if not found_match:
-                    version = str(len(groups))
-            if version not in groups:
-                groups[str(version)] = set()
-            groups[str(version)].add(value)
+        # Assign sequential version by unique value
+        found_match = False
+        for k, v in groups.items():
+            if value in v:
+                found_match = True
+                groups[k].add(value)
+                break
+        if not found_match:
+            version = str(len(groups))
+            groups[version] = set()
+            groups[version].add(value)
 
     assert all(
         len(v) == 1 for v in groups.values()
@@ -6024,7 +3892,7 @@ def rename_field(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     try:
         # Check if this is the protected Unity/Tasks context
@@ -6375,30 +4243,15 @@ def get_fields(
         raise not_found(f"Project {project_name}")
 
     # For derived entries, get their equations (project-wide)
-    derived_equations = {}
-
-    # Query DerivedLog table (EAV mode)
-    derived_fields = (
-        session.query(DerivedLog.key, DerivedLog.equation)
-        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
-        .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-        .filter(LogEvent.project_id == project_obj.id)
-        .distinct()
-        .all()
-    )
-    for key, equation in derived_fields:
-        derived_equations[key] = equation
-
-    # Also query ActiveDerivedLog table (JSONB mode)
-    # This is where equations are stored in JSONB mode
-    active_derived_fields = (
-        session.query(ActiveDerivedLog.key, ActiveDerivedLog.equation)
+    derived_equations = {
+        key: equation
+        for key, equation in session.query(
+            ActiveDerivedLog.key,
+            ActiveDerivedLog.equation,
+        )
         .filter(ActiveDerivedLog.project_id == project_obj.id)
         .all()
-    )
-    for key, equation in active_derived_fields:
-        if key not in derived_equations:  # DerivedLog takes precedence
-            derived_equations[key] = equation
+    }
 
     # Wildcard: return mapping of context_name -> fields
     if context == "*":
@@ -6584,36 +4437,10 @@ def create_fields(
             if log_event_ids and request.fields:
                 field_names = list(request.fields.keys())
 
-                # Query existing base (log_event_id, key) pairs in one shot
-                existing_base_pairs = (
-                    session.query(LogEventLog.log_event_id, Log.key)
-                    .join(Log, Log.id == LogEventLog.log_id)
-                    .filter(
-                        LogEventLog.log_event_id.in_(log_event_ids),
-                        Log.key.in_(field_names),
-                    )
-                    .all()
-                )
-
-                # Query existing derived (log_event_id, key) pairs in one shot
-                existing_derived_pairs = (
-                    session.query(LogEventDerivedLog.log_event_id, DerivedLog.key)
-                    .join(
-                        DerivedLog,
-                        DerivedLog.id == LogEventDerivedLog.derived_log_id,
-                    )
-                    .filter(
-                        LogEventDerivedLog.log_event_id.in_(log_event_ids),
-                        DerivedLog.key.in_(field_names),
-                    )
-                    .all()
-                )
-
-                # JSONB Mode: Also check for existing fields in LogEvent.data JSONB column
+                # Check for existing fields in LogEvent.data JSONB column
                 # Single query to check all (log_event_id, field_name) pairs
-                # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
                 existing_jsonb_pairs = []
-                if settings.use_jsonb_queries and log_event_ids and field_names:
+                if log_event_ids and field_names:
                     from sqlalchemy import text as sql_text
 
                     # Build a single batch query using JSONB ? operator with UNNEST
@@ -6634,11 +4461,7 @@ def create_fields(
                     ).fetchall()
                     existing_jsonb_pairs = [(row[0], row[1]) for row in jsonb_results]
 
-                existing_pairs = (
-                    set(existing_base_pairs)
-                    | set(existing_derived_pairs)
-                    | set(existing_jsonb_pairs)
-                )
+                existing_pairs = set(existing_jsonb_pairs)
 
                 # Prepare entries to create for missing pairs only
                 entries_to_create = []
@@ -6659,48 +4482,44 @@ def create_fields(
                 backfilled_count = len(entries_to_create)
 
                 if entries_to_create:
-                    # Create LogDAO instance for bulk_create
-                    log_dao = LogDAO(session, context_dao)
-                    log_dao.bulk_create(entries_to_create)
+                    # Create LogEventDAO instance for bulk merge
+                    log_dao = LogEventDAO(session, context_dao)
+                    log_dao.bulk_merge_data(entries_to_create)
 
-                    # JSONB Mode: Also update LogEvent.data JSONB column with the new fields
+                    # Update LogEvent.data JSONB column with the new fields
                     # Uses a single UPDATE with unnest for all log events
-                    # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
-                    if settings.use_jsonb_queries:
-                        from collections import defaultdict
+                    from collections import defaultdict
 
-                        from sqlalchemy import text
+                    from sqlalchemy import text
 
-                        entries_by_log_event = defaultdict(dict)
-                        for entry in entries_to_create:
-                            entries_by_log_event[entry["log_event_id"]][
-                                entry["key"]
-                            ] = None
+                    entries_by_log_event = defaultdict(dict)
+                    for entry in entries_to_create:
+                        entries_by_log_event[entry["log_event_id"]][entry["key"]] = None
 
-                        # BATCH UPDATE: Use a single query with VALUES clause
-                        # Build values list for the UPDATE
-                        if entries_by_log_event:
-                            update_values = [
-                                (le_id, json.dumps(fields_to_add))
-                                for le_id, fields_to_add in entries_by_log_event.items()
-                            ]
+                    # BATCH UPDATE: Use a single query with VALUES clause
+                    # Build values list for the UPDATE
+                    if entries_by_log_event:
+                        update_values = [
+                            (le_id, json.dumps(fields_to_add))
+                            for le_id, fields_to_add in entries_by_log_event.items()
+                        ]
 
-                            # Use a CTE with VALUES to perform batch update in a single query
-                            # This is O(1) query instead of O(N) queries
-                            session.execute(
-                                text(
-                                    """
-                                    UPDATE log_event le
-                                    SET data = COALESCE(le.data, '{}'::jsonb) || v.fields_json::jsonb
-                                    FROM (SELECT unnest(:ids) AS id, unnest(:fields) AS fields_json) AS v
-                                    WHERE le.id = v.id
-                                """,
-                                ),
-                                {
-                                    "ids": [v[0] for v in update_values],
-                                    "fields": [v[1] for v in update_values],
-                                },
-                            )
+                        # Use a CTE with VALUES to perform batch update in a single query
+                        # This is O(1) query instead of O(N) queries
+                        session.execute(
+                            text(
+                                """
+                                UPDATE log_event le
+                                SET data = COALESCE(le.data, '{}'::jsonb) || v.fields_json::jsonb
+                                FROM (SELECT unnest(:ids) AS id, unnest(:fields) AS fields_json) AS v
+                                WHERE le.id = v.id
+                            """,
+                            ),
+                            {
+                                "ids": [v[0] for v in update_values],
+                                "fields": [v[1] for v in update_values],
+                            },
+                        )
 
                     session.commit()
         except Exception as e:
@@ -6749,7 +4568,7 @@ def delete_fields(
 ):
     """
     Deletes one or more fields from a project. This will:
-    1. Delete all Log and DerivedLog entries with the specified field names (not the entire LogEvent)
+    1. Remove the field from LogEvent.data for all matching log events
     2. Delete the field type records for those fields
 
     This operation cannot be undone, so use with caution.
@@ -6759,7 +4578,7 @@ def delete_fields(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
 
     # Check if this is the protected Unity/Tasks context
     if request.project_name == "Unity" and request.context == "Tasks":
@@ -6795,121 +4614,30 @@ def delete_fields(
     context_id = context[0][0].id
 
     deleted_fields = []
-    total_deleted_logs = 0
-    total_deleted_derived_logs = 0
+    total_updated_events = 0
 
     for field_name in request.fields:
         try:
-            # Get all log event IDs that have this field in either base logs or derived logs
-            base_log_events = (
-                session.query(LogEventLog.log_event_id)
-                .join(Log, Log.id == LogEventLog.log_id)
-                .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
+            # Get log events where the field exists in LogEvent.data
+            jsonb_log_events = (
+                session.query(LogEvent.id)
+                .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
                 .filter(
                     LogEvent.project_id == project_id,
-                    Log.key == field_name,
+                    LogEventContext.context_id == context_id,
+                    LogEvent.data.has_key(field_name),
                 )
                 .distinct()
             )
-
-            derived_log_events = (
-                session.query(LogEventDerivedLog.log_event_id)
-                .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-                .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-                .filter(
-                    LogEvent.project_id == project_id,
-                    DerivedLog.key == field_name,
-                )
-                .distinct()
-            )
-
-            # JSONB Mode: Also get log events where the field exists in LogEvent.data
-            # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
-            if settings.use_jsonb_queries:
-                jsonb_log_events = (
-                    session.query(LogEvent.id)
-                    .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-                    .filter(
-                        LogEvent.project_id == project_id,
-                        LogEventContext.context_id == context_id,
-                        LogEvent.data.has_key(field_name),
-                    )
-                    .distinct()
-                )
-                # Combine all queries with UNION to get all affected log event IDs
-                all_event_ids = (
-                    base_log_events.union(derived_log_events)
-                    .union(jsonb_log_events)
-                    .all()
-                )
-            else:
-                # EAV Mode: Only query Log and DerivedLog tables
-                all_event_ids = base_log_events.union(derived_log_events).all()
-            event_ids = [event_id[0] for event_id in all_event_ids]
+            event_ids = [event_id[0] for event_id in jsonb_log_events.all()]
 
             if event_ids:
-                # First, find the Log IDs to delete
-                logs_to_delete_ids = (
-                    session.query(Log.id)
-                    .join(
-                        LogEventLog,
-                        LogEventLog.log_id == Log.id,
-                    )
-                    .filter(
-                        LogEventLog.log_event_id.in_(event_ids),
-                        Log.key == field_name,
-                    )
-                    .all()
-                )
-                log_ids = [log_id[0] for log_id in logs_to_delete_ids]
+                # Delete GCS media files before updating database records
+                log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
 
-                if log_ids:
-                    # Query for Log entries to delete (for GCS cleanup)
-                    logs_to_delete_query = session.query(Log).filter(
-                        Log.id.in_(log_ids),
-                    )
-
-                    # Delete GCS media files before deleting database records
-                    log_dao._bulk_delete_gcs_media(logs_to_delete_query)
-
-                    # Delete the Log entries (not the LogEvents!)
-                    deleted_logs_count = logs_to_delete_query.delete(
-                        synchronize_session=False,
-                    )
-                    total_deleted_logs += deleted_logs_count
-                else:
-                    deleted_logs_count = 0
-
-                # Delete the DerivedLog entries
-                # First, find the DerivedLog IDs to delete
-                derived_logs_to_delete_ids = (
-                    session.query(DerivedLog.id)
-                    .join(
-                        LogEventDerivedLog,
-                        LogEventDerivedLog.derived_log_id == DerivedLog.id,
-                    )
-                    .filter(
-                        LogEventDerivedLog.log_event_id.in_(event_ids),
-                        DerivedLog.key == field_name,
-                    )
-                    .all()
-                )
-                derived_log_ids = [d[0] for d in derived_logs_to_delete_ids]
-
-                # Then delete them
-                deleted_derived_logs_count = 0
-                if derived_log_ids:
-                    deleted_derived_logs_count = (
-                        session.query(DerivedLog)
-                        .filter(DerivedLog.id.in_(derived_log_ids))
-                        .delete(synchronize_session=False)
-                    )
-                total_deleted_derived_logs += deleted_derived_logs_count
-
-                # JSONB Mode: Also remove the field from LogEvent.data JSONB column
-                # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
+                # Remove the field from LogEvent.data JSONB column
                 # This is a single bulk UPDATE - O(1) query regardless of number of log events
-                if settings.use_jsonb_queries and event_ids:
+                if event_ids:
                     from sqlalchemy import text
 
                     session.execute(
@@ -6926,6 +4654,7 @@ def delete_fields(
                             "event_ids": event_ids,
                         },
                     )
+                total_updated_events += len(event_ids)
 
             # Delete field type record
             field_type_dao.delete_field_type(
@@ -6948,7 +4677,7 @@ def delete_fields(
         }
 
     return {
-        "info": f"Fields deleted successfully. Removed {total_deleted_logs} logs and {total_deleted_derived_logs} derived logs.",
+        "info": f"Fields deleted successfully. Updated {total_updated_events} log events.",
         "deleted_fields": deleted_fields,
     }
 
@@ -6992,8 +4721,9 @@ def update_active_derived_logs(
     for new log events that match the filter criteria.
     This endpoint  is designed to be calledby internal processes (e.g., Cloud Scheduler) or administrators.
     """
-    # Instantiate DAO with shared session
+    # Instantiate DAOs with shared session
     field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
 
     try:
         # Get all active templates
@@ -7006,204 +4736,60 @@ def update_active_derived_logs(
         if not active_templates:
             return {"info": "No active templates found"}
 
-        # Materialize active derived log templates
-        if settings.use_jsonb_queries:
-            derived_log_dao = DerivedLogDAO(session)
-            total_derived_logs_created = 0
-
-            for template in active_templates:
-                try:
-                    # Use JSONB '?' operator to find log events that don't have this derived field
-                    # SELECT id FROM log_event WHERE project_id = :pid AND context_id = :cid
-                    #   AND NOT (data ? :key)
-                    pass
-
-                    # Get log events in this template's project/context that don't have the field
-                    new_log_events_query = (
-                        session.query(LogEvent.id)
-                        .join(
-                            LogEventContext,
-                            LogEventContext.log_event_id == LogEvent.id,
-                        )
-                        .filter(
-                            LogEvent.project_id == template.project_id,
-                            LogEventContext.context_id == template.context_id,
-                            # Use JSONB '?' operator: NOT (data ? 'key')
-                            ~LogEvent.data.has_key(template.key),
-                        )
-                    )
-
-                    # Apply filter expression if present
-                    if template.filter_expression:
-                        field_types = field_type_dao.get_field_types(
-                            template.project_id,
-                            context_id=template.context_id,
-                        )
-
-                        for alias, filter_config in template.filter_expression.items():
-                            if (
-                                isinstance(filter_config, dict)
-                                and "filter_expr" in filter_config
-                                and filter_config["filter_expr"]
-                            ):
-                                try:
-                                    filter_dict = str_filter_exp_to_dict(
-                                        filter_config["filter_expr"],
-                                        field_names=list(field_types.keys()),
-                                    )
-                                    condition = build_sql_query(
-                                        filter_dict,
-                                        LogEvent,
-                                        session,
-                                        log_event_ids=new_log_events_query.subquery(),
-                                    )
-
-                                    if isinstance(condition, Subquery):
-                                        new_log_events_query = session.query(
-                                            LogEvent.id,
-                                        ).filter(
-                                            LogEvent.id.in_(
-                                                select(
-                                                    new_log_events_query.subquery().c.id,
-                                                ),
-                                            ),
-                                            exists(
-                                                select(1)
-                                                .select_from(condition)
-                                                .where(
-                                                    and_(
-                                                        condition.c.log_event_id
-                                                        == LogEvent.id,
-                                                        condition.c.value.is_(True),
-                                                    ),
-                                                ),
-                                            ),
-                                        )
-                                except Exception as filter_error:
-                                    logging.warning(
-                                        f"Failed to apply filter for template '{template.key}': {filter_error}",
-                                    )
-
-                    # Get the log event IDs
-                    matching_log_events = new_log_events_query.all()
-                    matching_log_event_ids = [row[0] for row in matching_log_events]
-
-                    if not matching_log_event_ids:
-                        continue
-
-                    # Recompute derived values for these log events
-                    count = derived_log_dao.recompute_derived_logs_jsonb(
-                        template=template,
-                        log_ids=matching_log_event_ids,
-                        json_encoder=CustomEncoder,
-                        field_type_dao=field_type_dao,
-                    )
-                    total_derived_logs_created += count
-
-                except Exception as template_error:
-                    logging.warning(
-                        f"Error processing JSONB template {template.id}: {template_error}",
-                    )
-                    continue
-
-            session.commit()
-
-            return {
-                "info": f"Created {total_derived_logs_created} new derived logs",
-            }
-
-        # EAV Mode: Original processing logic
+        # Materialize active derived log templates (JSONB mode)
+        derived_log_dao = LogEventDAO(session, context_dao)
         total_derived_logs_created = 0
 
-        # Process each template
         for template in active_templates:
-            # Get field types for the project
-            field_types = field_type_dao.get_field_types(
-                template.project_id,
-                context_id=template.context_id,
-            )
-
-            # Find log events that don't already have this derived log
-            # First, get all log events for this project
-            all_log_events = (
-                session.query(LogEvent.id)
-                .filter(LogEvent.project_id == template.project_id)
-                .subquery(name="all_log_events")
-            )
-
-            # Then, get log events that already have this derived log
-            existing_derived_logs = (
-                session.query(LogEventDerivedLog.log_event_id)
-                .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-                .filter(
-                    DerivedLog.key == template.key,
-                    LogEventDerivedLog.log_event_id.in_(select(all_log_events.c.id)),
-                )
-                .subquery(name="existing_derived_logs")
-            )
-
-            # Find log events that don't have this derived log yet
-            new_log_events = (
-                session.query(LogEvent.id)
-                .filter(
-                    LogEvent.id.in_(select(all_log_events.c.id)),
-                    ~LogEvent.id.in_(select(existing_derived_logs.c.log_event_id)),
-                )
-                .subquery(name="new_log_events")
-            )
-
-            # If there are no new log events, skip this template
-            if session.query(new_log_events).count() == 0:
-                continue
-
-            # Prepare the filter expression
             try:
-                # Get all log events that match the filter expression
-                log_event_ids_subq = (
+                # Get log events in this template's project/context that don't have the field
+                new_log_events_query = (
                     session.query(LogEvent.id)
+                    .join(
+                        LogEventContext,
+                        LogEventContext.log_event_id == LogEvent.id,
+                    )
                     .filter(
                         LogEvent.project_id == template.project_id,
-                        LogEvent.id.in_(select(new_log_events.c.id)),
+                        LogEventContext.context_id == template.context_id,
+                        # Use JSONB '?' operator: NOT (data ? 'key')
+                        ~LogEvent.data.has_key(template.key),
                     )
-                    .subquery(name="log_event_ids_subq")
                 )
 
-                # Apply the filter expression to find matching log events
-                filter_dict = None
-                resolved_ids = {}
-                matching_log_event_ids = log_event_ids_subq
-                # If we have a filter expression in the template
+                # Apply filter expression if present
                 if template.filter_expression:
-                    # For each alias in the filter expression
+                    field_types = field_type_dao.get_field_types(
+                        template.project_id,
+                        context_id=template.context_id,
+                    )
+
                     for alias, filter_config in template.filter_expression.items():
                         if (
                             isinstance(filter_config, dict)
                             and "filter_expr" in filter_config
+                            and filter_config["filter_expr"]
                         ):
                             try:
-                                # Convert the filter expression to a filter dict
                                 filter_dict = str_filter_exp_to_dict(
                                     filter_config["filter_expr"],
                                     field_names=list(field_types.keys()),
                                 )
-
-                                # Apply the filter to find matching log events
                                 condition = build_sql_query(
                                     filter_dict,
                                     LogEvent,
                                     session,
-                                    log_event_ids=log_event_ids_subq,
+                                    log_event_ids=new_log_events_query.subquery(),
                                 )
-                            except Exception as e:
-                                condition = None  # If the filter expression is empty (eg: filter_expr: '')
 
-                            # Get the log event IDs that match the filter
-                            if isinstance(condition, Subquery):
-                                matching_log_events = (
-                                    session.query(LogEvent.id)
-                                    .filter(
+                                if isinstance(condition, Subquery):
+                                    new_log_events_query = session.query(
+                                        LogEvent.id,
+                                    ).filter(
                                         LogEvent.id.in_(
-                                            select(log_event_ids_subq.c.id),
+                                            select(
+                                                new_log_events_query.subquery().c.id,
+                                            ),
                                         ),
                                         exists(
                                             select(1)
@@ -7217,96 +4803,33 @@ def update_active_derived_logs(
                                             ),
                                         ),
                                     )
-                                    .all()
+                            except Exception as filter_error:
+                                logging.warning(
+                                    f"Failed to apply filter for template '{template.key}': {filter_error}",
                                 )
-                            else:
-                                matching_log_events = session.query(
-                                    log_event_ids_subq.c.id,
-                                ).all()
 
-                            # Extract the log event IDs
-                            matching_log_event_ids = [
-                                row[0] for row in matching_log_events
-                            ]
+                # Get the log event IDs
+                matching_log_events = new_log_events_query.all()
+                matching_log_event_ids = [row[0] for row in matching_log_events]
 
-                            # If no matching log events, skip this template
-                            if not matching_log_event_ids:
-                                continue
+                if not matching_log_event_ids:
+                    continue
 
-                            resolved_ids[alias] = matching_log_event_ids
-                    # Compute the derived values for each matching log event
-                    filter_expr, alias_to_key_map = _substitute_placeholders(
-                        template.equation,
-                        resolved_ids,
-                    )
-                    filter_dict = str_filter_exp_to_dict(
-                        filter_expr,
-                        field_names=list(field_types.keys()),
-                    )
-                    computed_values = _compute_expression(
-                        filter_dict,
-                        LogEvent,
-                        session,
-                        log_event_ids=matching_log_event_ids,
-                    )
-
-                    # Create derived logs for each matching log event
-                    new_derived_logs = []
-                    derived_log_associations = (
-                        []
-                    )  # Track (log_event_id, derived_log_index)
-
-                    for log_event_id, (_, value) in zip(
-                        matching_log_event_ids,
-                        computed_values,
-                    ):
-                        val = json.loads(json.dumps(value, cls=CustomEncoder))
-                        inferred_type = LogDAO.infer_type("", val)
-
-                        # Create DerivedLog without log_event_id
-                        new_derived_logs.append(
-                            DerivedLog(
-                                key=template.key,
-                                equation=template.equation,
-                                referenced_logs=template.referenced_logs,
-                                value=val,
-                                inferred_type=inferred_type,
-                                created_at=datetime.now(timezone.utc),
-                                updated_at=datetime.now(timezone.utc),
-                            ),
-                        )
-                        # Track the association
-                        derived_log_associations.append(
-                            (log_event_id, len(new_derived_logs) - 1),
-                        )
-
-                    # Bulk insert the new derived logs
-                    if new_derived_logs:
-                        session.bulk_save_objects(
-                            new_derived_logs,
-                            return_defaults=True,
-                        )
-                        session.flush()  # Get IDs for the new derived logs
-
-                        # Create LogEventDerivedLog associations
-                        for log_event_id, derived_log_index in derived_log_associations:
-                            if derived_log_index < len(new_derived_logs):
-                                association = LogEventDerivedLog(
-                                    log_event_id=log_event_id,
-                                    derived_log_id=new_derived_logs[
-                                        derived_log_index
-                                    ].id,
-                                )
-                                session.add(association)
-
-                        total_derived_logs_created += len(new_derived_logs)
-
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error processing template {template.id}: {str(e)}",
+                # Recompute derived values for these log events
+                count = derived_log_dao.recompute_derived_logs(
+                    template=template,
+                    log_ids=matching_log_event_ids,
+                    json_encoder=CustomEncoder,
+                    field_type_dao=field_type_dao,
                 )
-        # Commit all changes
+                total_derived_logs_created += count
+
+            except Exception as template_error:
+                logging.warning(
+                    f"Error processing template {template.id}: {template_error}",
+                )
+                continue
+
         session.commit()
 
         return {
@@ -7362,7 +4885,7 @@ def process_traffic_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = LogEventDAO(session, context_dao)
     try:
         from google.cloud import pubsub_v1
 
@@ -7424,33 +4947,21 @@ def process_traffic_logs(
             return {"message": "No new traffic-log messages", "status": "success"}
 
         try:
-            # Force EAV mode for Production Traffic project since it has existing
-            # EAV data that hasn't been backfilled to JSONB yet.
-            # TODO(yusha): Remove this override after data backfill is complete.
-            from orchestra.settings import set_jsonb_mode
-
-            original_mode = settings.use_jsonb_queries
-            set_jsonb_mode(False)
-            try:
-                # batch ingestion
-                create_logs_internal(
-                    project_id=project_id,
-                    context_id=context_id,
-                    request=CreateLogConfig(
-                        entries=entries,
-                        project_name=PROJ_NAME,
-                        context=None,
-                    ),
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    log_event_dao=log_event_dao,
-                    log_dao=log_dao,
-                    context_dao=context_dao,
-                    context_obj=context_obj,
-                )
-            finally:
-                # Restore original mode
-                set_jsonb_mode(original_mode if original_mode else None)
+            # batch ingestion
+            create_logs_internal(
+                project_id=project_id,
+                context_id=context_id,
+                request=CreateLogConfig(
+                    entries=entries,
+                    project_name=PROJ_NAME,
+                    context=None,
+                ),
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                log_event_dao=log_event_dao,
+                context_dao=context_dao,
+                context_obj=context_obj,
+            )
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to insert batch of traffic logs: {e}")

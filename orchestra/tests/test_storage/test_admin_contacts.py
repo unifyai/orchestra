@@ -6,7 +6,7 @@ from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_empty(client: AsyncClient, use_jsonb_mode):
+async def test_admin_list_contacts_empty(client: AsyncClient):
     # When no contact logs exist, the endpoint should return an empty list
     resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
     assert resp.status_code == status.HTTP_200_OK
@@ -14,7 +14,7 @@ async def test_admin_list_contacts_empty(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_basic(client: AsyncClient, use_jsonb_mode):
+async def test_admin_list_contacts_basic(client: AsyncClient):
     # 1) Create a test user and project
     user = await create_test_user(client, "contacts@example.com")
     project_name = "contacts_proj"
@@ -49,7 +49,6 @@ async def test_admin_list_contacts_basic(client: AsyncClient, use_jsonb_mode):
     payload = {
         "project_name": project_name,
         "context": "Contacts",
-        "params": {},
         "entries": [contact1, contact2],
     }
     create_logs_resp = await client.post(
@@ -85,7 +84,7 @@ async def test_admin_list_contacts_basic(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_jsonb_mode):
+async def test_admin_list_contacts_across_contexts(client: AsyncClient):
     # Create a test user and project
     user = await create_test_user(client, "multi@example.com")
     project_name = "multi_proj"
@@ -118,7 +117,6 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_json
     payload1 = {
         "project_name": project_name,
         "context": "Contacts",
-        "params": {},
         "entries": [contact1],
     }
     resp1 = await client.post(
@@ -132,7 +130,6 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_json
     payload2 = {
         "project_name": project_name,
         "context": "Friend/Contacts",
-        "params": {},
         "entries": [contact2],
     }
     resp2 = await client.post(
@@ -152,7 +149,7 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb_mode):
+async def test_admin_list_contacts_multiple_users(client: AsyncClient):
     # Create two users and separate projects
     user1 = await create_test_user(client, "user1@example.com")
     user2 = await create_test_user(client, "user2@example.com")
@@ -193,7 +190,6 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb
     payload1 = {
         "project_name": project1,
         "context": "Contacts",
-        "params": {},
         "entries": [contact1],
     }
     resp1 = await client.post(
@@ -207,7 +203,6 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb
     payload2 = {
         "project_name": project2,
         "context": "Contacts",
-        "params": {},
         "entries": [contact2],
     }
     resp2 = await client.post(

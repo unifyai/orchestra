@@ -461,8 +461,8 @@ async def test_update_desktop_url_only(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_user_local_desktop_only(client: AsyncClient):
-    # Create an assistant with some initial data, leaving user_local_desktop as default (None)
+async def test_update_desktop_mode_only(client: AsyncClient):
+    # Create an assistant with some initial data, leaving desktop_mode as default (None)
     payload = {
         "first_name": "Desktop",
         "surname": "Tester",
@@ -477,11 +477,12 @@ async def test_update_user_local_desktop_only(client: AsyncClient):
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
     agent_id = created_data["agent_id"]
-    assert created_data["user_local_desktop"] is None
+    assert created_data["desktop_mode"] is None
+    assert created_data["is_user_desktop"] is None
 
-    # Now, update only the user_local_desktop field
-    new_desktop = "macos"
-    update_payload = {"user_local_desktop": new_desktop, "create_infra": False}
+    # Now, update only the desktop_mode field
+    new_desktop_mode = "macos"
+    update_payload = {"desktop_mode": new_desktop_mode, "create_infra": False}
     patch_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json=update_payload,
@@ -491,10 +492,66 @@ async def test_update_user_local_desktop_only(client: AsyncClient):
     # Assert that the update was successful and only the intended field changed
     assert patch_resp.status_code == 200
     updated_data = patch_resp.json()["info"]
-    assert updated_data["user_local_desktop"] == new_desktop
+    assert updated_data["desktop_mode"] == new_desktop_mode
+    assert updated_data["is_user_desktop"] is None
     assert updated_data["first_name"] == payload["first_name"]
     assert updated_data["nationality"] == payload["nationality"]
     assert updated_data["weekly_limit"] == payload["weekly_limit"]
+
+
+@pytest.mark.anyio
+async def test_update_is_user_desktop_only(client: AsyncClient):
+    # Create an assistant with default values
+    payload = {
+        "first_name": "DesktopBool",
+        "surname": "Tester",
+        "age": 32,
+        "weekly_limit": 12.0,
+        "max_parallel": 2,
+        "nationality": "Germany",
+        "about": "An assistant for testing is_user_desktop.",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    created_data = create_resp.json()["info"]
+    agent_id = created_data["agent_id"]
+    assert created_data["is_user_desktop"] is None
+
+    # Update only is_user_desktop field
+    update_payload = {"is_user_desktop": True, "create_infra": False}
+    patch_resp = await client.patch(
+        f"/v0/assistant/{agent_id}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+
+    assert patch_resp.status_code == 200
+    updated_data = patch_resp.json()["info"]
+    assert updated_data["is_user_desktop"] is True
+    assert updated_data["desktop_mode"] is None
+
+
+@pytest.mark.anyio
+async def test_create_assistant_with_desktop_fields(client: AsyncClient):
+    # Create an assistant with both desktop fields set
+    payload = {
+        "first_name": "FullDesktop",
+        "surname": "Tester",
+        "age": 33,
+        "weekly_limit": 15.0,
+        "max_parallel": 3,
+        "nationality": "Canada",
+        "about": "An assistant with full desktop configuration.",
+        "desktop_mode": "ubuntu",
+        "is_user_desktop": False,
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    created_data = create_resp.json()["info"]
+    assert created_data["desktop_mode"] == "ubuntu"
+    assert created_data["is_user_desktop"] is False
 
 
 @pytest.mark.anyio
@@ -609,68 +666,10 @@ async def test_assistant_recordings_audio_lifecycle(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistant_emails(client: AsyncClient):
-    # Create two assistants
-    payload1 = {
-        "first_name": "Laura",
-        "surname": "Wilson",
-        "age": 33,
-        "weekly_limit": 25.0,
-        "max_parallel": 3,
-        "nationality": "Germany",
-        "profile_photo": "https://example.com/photos/laura.jpg",
-        "about": "AI ethics researcher with focus on fairness in algorithms",
-        "create_infra": False,
-    }
-    payload2 = {
-        "first_name": "Michael",
-        "surname": "Taylor",
-        "age": 41,
-        "weekly_limit": 30.0,
-        "max_parallel": 4,
-        "nationality": "United States",
-        "profile_photo": "https://example.com/photos/michael.jpg",
-        "about": "Cloud architecture specialist with expertise in distributed systems",
-        "create_infra": False,
-    }
-
-    # Create the assistants
-    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
-    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
-    assert resp1.status_code == 200 and resp2.status_code == 200
-
-    # Get the assistant IDs
-    aid1 = resp1.json()["info"]["agent_id"]
-    aid2 = resp2.json()["info"]["agent_id"]
-
-    # Set unique emails for each assistant
-    email1 = "laura.wilson@example.com"
-    email2 = "michael.taylor@example.com"
-
-    # Update the assistants with emails
-    update1 = await client.patch(
-        f"/v0/assistant/{aid1}/config",
-        json={"email": email1, "create_infra": False},
-        headers=HEADERS,
-    )
-    update2 = await client.patch(
-        f"/v0/assistant/{aid2}/config",
-        json={"email": email2, "create_infra": False},
-        headers=HEADERS,
-    )
-    assert update1.status_code == 200 and update2.status_code == 200
-
-    # Test the admin endpoint for listing all assistant emails
-    resp = await client.get("/v0/admin/assistant/emails", headers=ADMIN_HEADERS)
-    assert resp.status_code == 200
-    data = resp.json().get("info")
-    assert isinstance(data, list)
-    assert set(data) == {email1, email2}
-
-
-@pytest.mark.anyio
 async def test_search_assistants_by_phone(client: AsyncClient):
-    # Create two assistants with distinct phone values, search by phone
+    # Create two assistants, then update them with distinct phone values, search by phone
+    phone1 = "+15551112222"
+    phone2 = "+15553334444"
     payload1 = {
         "first_name": "Paul",
         "surname": "Anderson",
@@ -680,7 +679,6 @@ async def test_search_assistants_by_phone(client: AsyncClient):
         "nationality": "Germany",
         "profile_photo": "https://example.com/photos/paul.jpg",
         "about": "Mobile app developer",
-        "phone": "+15551112222",
         "create_infra": False,
     }
     payload2 = {
@@ -692,7 +690,6 @@ async def test_search_assistants_by_phone(client: AsyncClient):
         "nationality": "China",
         "profile_photo": "https://example.com/photos/quinn.jpg",
         "about": "UX designer",
-        "phone": "+15553334444",
         "create_infra": False,
     }
 
@@ -701,17 +698,31 @@ async def test_search_assistants_by_phone(client: AsyncClient):
     assert resp1.status_code == 200 and resp2.status_code == 200
 
     aid1 = resp1.json()["info"]["agent_id"]
+    aid2 = resp2.json()["info"]["agent_id"]
+
+    # Update assistants with phone numbers (phone is set via PATCH, not create)
+    patch1 = await client.patch(
+        f"/v0/assistant/{aid1}/config",
+        json={"phone": phone1, "create_infra": False},
+        headers=HEADERS,
+    )
+    patch2 = await client.patch(
+        f"/v0/assistant/{aid2}/config",
+        json={"phone": phone2, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch1.status_code == 200 and patch2.status_code == 200
 
     # Search by first assistant's phone
     search_resp = await client.get(
-        f"/v0/assistant?phone={payload1['phone']}",
+        f"/v0/assistant?phone={phone1}",
         headers=HEADERS,
     )
     assert search_resp.status_code == 200
     results = search_resp.json()["info"]
     assert len(results) == 1
     assert results[0]["agent_id"] == aid1
-    assert results[0]["phone"] == payload1["phone"]
+    assert results[0]["phone"] == phone1
 
 
 @pytest.mark.anyio
@@ -762,7 +773,9 @@ async def test_search_assistants_by_email(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_admin_list_assistants_filter_phone(client: AsyncClient):
-    # Create assistants with different phone values, filter by phone
+    # Create assistants, then update them with different phone values, filter by phone
+    phone1 = "+15551111111"
+    phone2 = "+15552222222"
     payload1 = {
         "first_name": "Phone",
         "surname": "Test1",
@@ -772,7 +785,6 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
         "nationality": "China",
         "profile_photo": "https://example.com/photos/phone1.jpg",
         "about": "Phone test assistant 1",
-        "phone": "+15551111111",
         "create_infra": False,
     }
     payload2 = {
@@ -784,7 +796,6 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
         "nationality": "Australia",
         "profile_photo": "https://example.com/photos/phone2.jpg",
         "about": "Phone test assistant 2",
-        "phone": "+15552222222",
         "create_infra": False,
     }
 
@@ -793,10 +804,24 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
     assert resp1.status_code == 200 and resp2.status_code == 200
 
     aid1 = resp1.json()["info"]["agent_id"]
+    aid2 = resp2.json()["info"]["agent_id"]
+
+    # Update assistants with phone numbers (phone is set via PATCH, not create)
+    patch1 = await client.patch(
+        f"/v0/assistant/{aid1}/config",
+        json={"phone": phone1, "create_infra": False},
+        headers=HEADERS,
+    )
+    patch2 = await client.patch(
+        f"/v0/assistant/{aid2}/config",
+        json={"phone": phone2, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch1.status_code == 200 and patch2.status_code == 200
 
     # Test admin endpoint with phone filter
     admin_resp = await client.get(
-        f"/v0/admin/assistant?phone={payload1['phone']}",
+        f"/v0/admin/assistant?phone={phone1}",
         headers=ADMIN_HEADERS,
     )
     assert admin_resp.status_code == 200
@@ -806,7 +831,7 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
     assert isinstance(results, list)
     assert len(results) == 1
     assert results[0]["agent_id"] == aid1
-    assert results[0]["phone"] == payload1["phone"]
+    assert results[0]["phone"] == phone1
 
 
 @pytest.mark.anyio
@@ -961,7 +986,7 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
 async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     client: AsyncClient,
 ):
-    # Create two assistants with distinct phone, user_phone, and user_whatsapp_number for filtering
+    # Create two assistants, then set phone via PATCH (phone is no longer set on create)
     initial_phone1 = "+15550000001"
     initial_phone2 = "+15550000002"
 
@@ -974,7 +999,6 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
         "nationality": "Testland",
         "profile_photo": "https://example.com/a1.jpg",
         "about": "First assistant",
-        "phone": initial_phone1,
         "create_infra": False,
     }
     resp1 = await client.post(
@@ -994,7 +1018,6 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
         "nationality": "Testland",
         "profile_photo": "https://example.com/a2.jpg",
         "about": "Second assistant",
-        "phone": initial_phone2,
         "create_infra": False,
     }
     resp2 = await client.post(
@@ -1004,6 +1027,19 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     )
     assert resp2.status_code == 200
     aid2 = resp2.json()["info"]["agent_id"]
+
+    # Set phone numbers via PATCH (phone is set via update, not create)
+    patch1 = await client.patch(
+        f"/v0/assistant/{aid1}/config",
+        json={"phone": initial_phone1, "create_infra": False},
+        headers=HEADERS,
+    )
+    patch2 = await client.patch(
+        f"/v0/assistant/{aid2}/config",
+        json={"phone": initial_phone2, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch1.status_code == 200 and patch2.status_code == 200
 
     # Now test admin_update_assistant filtering
     new_assistant_whatsapp = "+15551234567"

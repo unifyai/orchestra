@@ -63,6 +63,7 @@ def auth_api_key(
             request_fastapi.state.first_name = db_response[0][2]
             request_fastapi.state.last_name = db_response[0][3]
             request_fastapi.state.organization_id = db_response[0][4]
+            request_fastapi.state.api_key = apikey
 
             # Update the user context for logging/tracing
             set_user_context(

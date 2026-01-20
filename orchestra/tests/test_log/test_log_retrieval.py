@@ -19,7 +19,7 @@ from . import (
 
 
 @pytest.mark.anyio
-async def test_get_log(client: AsyncClient, use_jsonb_mode):
+async def test_get_log(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
     log_response = await _create_log(client, project_name)
@@ -30,15 +30,13 @@ async def test_get_log(client: AsyncClient, use_jsonb_mode):
 
     assert response.status_code == 200, response.json()
     assert "logs" in response.json()
-    assert "params" in response.json()
-    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert len(response.json()["logs"]) == 1
     assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
+    assert isinstance(response.json()["logs"][0]["entries"]["a/b/c/input"], str)
 
 
 @pytest.mark.anyio
-async def test_get_logs(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -54,8 +52,6 @@ async def test_get_logs(client: AsyncClient, use_jsonb_mode):
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
     assert isinstance(
@@ -66,7 +62,6 @@ async def test_get_logs(client: AsyncClient, use_jsonb_mode):
         response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
         float,
     )
-    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
     # assert the field ordering is correct
     assert (
@@ -86,7 +81,7 @@ async def test_get_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_project_not_found(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_project_not_found(client: AsyncClient):
     project_name = "non_existent_project"
 
     # This should return 404 as the project does not exist
@@ -102,177 +97,36 @@ async def test_get_logs_project_not_found(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_params(client: AsyncClient, use_jsonb_mode):
+async def test_get_entries(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
     _ = await _create_project(client, project_name)
     _ = await _create_log(client, project_name)
 
-    # fetch all params for the project
+    # fetch all entries for the project with context filter
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
-        params={"column_context": "params"},
+        params={"column_context": "a/b"},
     )
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
-    assert isinstance(response.json()["logs"], list)
-    assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert response.json()["logs"][0]["entries"] == {}
-    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
-    # fetch params for the project with the full context, prepended by "params"
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        headers=HEADERS,
-        params={"column_context": "params/a/b"},
-    )
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
     assert isinstance(response.json()["logs"], list)
     assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert response.json()["logs"][0]["entries"] == {}
-    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
-
-    # fetch params for the project with the full context, with "params" inside
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        headers=HEADERS,
-        params={"column_context": "a/params/b"},
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/boolean_input"],
+        bool,
     )
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
-    assert isinstance(response.json()["logs"], list)
-    assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert response.json()["logs"][0]["entries"] == {}
-    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
-
-    # fetch params for the project with the full context, appended by "params"
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        headers=HEADERS,
-        params={"column_context": "a/b/params"},
+    assert isinstance(
+        response.json()["logs"][0]["entries"]["c/numeric_input"],
+        float,
     )
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert isinstance(response.json()["params"]["a/b/param1"]["0"], str)
-    assert isinstance(response.json()["logs"], list)
-    assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert response.json()["logs"][0]["entries"] == {}
-    assert isinstance(response.json()["logs"][0]["params"]["a/b/param1"], str)
 
 
 @pytest.mark.anyio
-async def test_get_entries(client: AsyncClient, use_jsonb_mode):
-    project_name = "eval-project"
-    # create the same project with another user to ensure the correct one
-    # is fetched
-    _ = await _create_project(client, project_name)
-    _ = await _create_log(client, project_name)
-
-    # fetch all entries for the project
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        headers=HEADERS,
-        params={"column_context": "entries"},
-    )
-
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert response.json()["params"] == {}
-    assert isinstance(response.json()["logs"], list)
-    assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
-        bool,
-    )
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
-        float,
-    )
-    assert response.json()["logs"][0]["params"] == {}
-
-    # fetch entries for the project with the full context, prepended by "entries"
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        headers=HEADERS,
-        params={"column_context": "entries/a/b"},
-    )
-
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert response.json()["params"] == {}
-    assert isinstance(response.json()["logs"], list)
-    assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
-        bool,
-    )
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
-        float,
-    )
-    assert response.json()["logs"][0]["params"] == {}
-
-    # fetch entries for the project with the full context, with "entries" inside
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        headers=HEADERS,
-        params={"column_context": "a/entries/b"},
-    )
-
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert response.json()["params"] == {}
-    assert isinstance(response.json()["logs"], list)
-    assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
-        bool,
-    )
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
-        float,
-    )
-    assert response.json()["logs"][0]["params"] == {}
-
-    # fetch entries for the project with the full context, appended by "entries"
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        headers=HEADERS,
-        params={"column_context": "a/b/entries"},
-    )
-
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json(), dict)
-    assert isinstance(response.json()["params"], dict)
-    assert response.json()["params"] == {}
-    assert isinstance(response.json()["logs"], list)
-    assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/boolean_input"],
-        bool,
-    )
-    assert isinstance(
-        response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
-        float,
-    )
-    assert response.json()["logs"][0]["params"] == {}
-
-
-@pytest.mark.anyio
-async def test_get_logs_from_ids(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_from_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -304,7 +158,7 @@ async def test_get_logs_from_ids(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_excluding_ids(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_excluding_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -336,7 +190,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_from_fields(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_from_fields(client: AsyncClient):
     """Test getting logs from specific fields."""
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
@@ -365,7 +219,7 @@ async def test_get_logs_from_fields(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_excluding_fields(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_excluding_fields(client: AsyncClient):
     """Test excluding fields from logs."""
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
@@ -383,7 +237,6 @@ async def test_get_logs_excluding_fields(client: AsyncClient, use_jsonb_mode):
                     "_/state",
                     "_/_data",
                     "_/timestamp",
-                    "a/b/param1",
                 ],
             ),
         },
@@ -407,7 +260,7 @@ async def test_get_logs_excluding_fields(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_w_column_context(client: AsyncClient):
     """Test getting logs with column context."""
     project_name = "eval-project"
     # create project and log
@@ -424,11 +277,6 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        "params": {
-            "a/b/param1": {
-                "0": "test",
-            },
-        },
         "logs": [
             {
                 "id": 1,
@@ -440,9 +288,6 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
                 "derived_entries": {},
                 "versions": {},
                 "clipped_fields": [],
-                "params": {
-                    "a/b/param1": "0",
-                },
             },
         ],
         "count": 1,
@@ -459,25 +304,17 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        "params": {
-            "a/b/param1": {
-                "0": "test",
-            },
-        },
         "logs": [
             {
                 "id": 1,
                 "entries": {
-                    "a/b/c/input": "Some input data",
-                    "a/b/c/boolean_input": True,
-                    "a/b/c/numeric_input": 4.5,
+                    "b/c/input": "Some input data",
+                    "b/c/boolean_input": True,
+                    "b/c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
                 "versions": {},
                 "clipped_fields": [],
-                "params": {
-                    "a/b/param1": "0",
-                },
             },
         ],
         "count": 1,
@@ -494,25 +331,17 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        "params": {
-            "a/b/param1": {
-                "0": "test",
-            },
-        },
         "logs": [
             {
                 "id": 1,
                 "entries": {
-                    "a/b/c/input": "Some input data",
-                    "a/b/c/boolean_input": True,
-                    "a/b/c/numeric_input": 4.5,
+                    "c/input": "Some input data",
+                    "c/boolean_input": True,
+                    "c/numeric_input": 4.5,
                 },
                 "derived_entries": {},
                 "versions": {},
                 "clipped_fields": [],
-                "params": {
-                    "a/b/param1": "0",
-                },
             },
         ],
         "count": 1,
@@ -529,19 +358,17 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
     response = response.json()
     del response["logs"][0]["ts"]
     assert response == {
-        "params": {},
         "logs": [
             {
                 "id": 1,
                 "entries": {
-                    "a/b/c/input": "Some input data",
-                    "a/b/c/boolean_input": True,
-                    "a/b/c/numeric_input": 4.5,
+                    "input": "Some input data",
+                    "boolean_input": True,
+                    "numeric_input": 4.5,
                 },
                 "derived_entries": {},
                 "versions": {},
                 "clipped_fields": [],
-                "params": {},
             },
         ],
         "count": 1,
@@ -549,7 +376,7 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_latest_timestamp(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_latest_timestamp(client: AsyncClient):
     """Test getting latest timestamp."""
     # create logs
     project_name = "eval-project"
@@ -589,7 +416,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_log_ids(client: AsyncClient, use_jsonb_mode):
+async def test_get_log_ids(client: AsyncClient):
     project_name = "eval-project"
     # create the same project with another user to ensure the correct one
     # is fetched
@@ -614,7 +441,7 @@ async def test_get_log_ids(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_field_ordering(client: AsyncClient):
     project_name = "field-order-test"
     _ = await _create_project(client, project_name)
 
@@ -668,7 +495,7 @@ async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_with_value_limit(client: AsyncClient):
     """Test value_limit parameter for truncating large values."""
     project_name = "value-limit-test"
     _ = await _create_project(client, project_name)
@@ -788,7 +615,7 @@ async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_empty_logs(client: AsyncClient, use_jsonb_mode):
+async def test_get_empty_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
@@ -804,7 +631,7 @@ async def test_get_empty_logs(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_pagination(client: AsyncClient, use_jsonb_mode):
+async def test_get_logs_w_pagination(client: AsyncClient):
     project_name = "test-pagination-project"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
@@ -894,11 +721,11 @@ async def test_get_logs_w_pagination(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_get_logs_nested_dict_ordering(client: AsyncClient, use_jsonb_mode):
-    """Test nested dict key ordering is preserved in both EAV and JSONB modes.
+async def test_get_logs_nested_dict_ordering(client: AsyncClient):
+    """Test nested dict key ordering is preserved.
 
-    JSONB mode uses a separate key_order column to store the original insertion order
-    since PostgreSQL JSONB fundamentally alphabetizes keys for performance optimization.
+    key_order stores the original insertion order since PostgreSQL JSONB
+    alphabetizes keys for performance optimization.
     """
     project_name = "nested-dict-order-test"
     _ = await _create_project(client, project_name)
@@ -1002,7 +829,6 @@ async def test_get_logs_nested_dict_ordering(client: AsyncClient, use_jsonb_mode
 @pytest.mark.anyio
 async def test_get_logs_randomized_pagination_and_reproducibility(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     project = "randomize-test"
     await _create_project(client, project)

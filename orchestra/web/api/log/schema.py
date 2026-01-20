@@ -61,8 +61,8 @@ class StandardFieldDefinition(BaseModel):
 
     type: str
     mutable: bool = Field(
-        default=False,
-        description="If true, entries under this field can be updated via update endpoints; otherwise they are immutable after creation (default false).",
+        default=True,
+        description="If true, entries under this field can be updated via update endpoints; otherwise they are immutable after creation (default true).",
     )
     unique: bool = False
     description: Optional[str] = Field(
@@ -89,58 +89,11 @@ class CreateLogConfig(BaseModel):
             "example": "experiment1/trial1",
         },
     )
-    params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
-        default=dict(),
-        description="Dictionary containing one or more key:value pairs that "
-        "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
-        "for batch processing. When using lists for both params and entries, their lengths must match. "
-        "Values must be JSON serializable. If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
-        "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding). "
-        "For contexts with nested unique IDs, parent ID values for the leftmost N-1 unique columns can be supplied as normal param keys. "
-        "The rightmost column is always auto-incremented. For example, if unique columns are ['user', 'session', 'step'], "
-        "you can provide 'user' and 'session' values in params, and 'step' will be auto-generated.",
-        json_schema_extra={
-            "examples": [
-                {
-                    "system-prompt": "...",
-                    "function_definition": "...",
-                    "explicit_types": {
-                        "system-prompt": {
-                            "type": "str",
-                            "mutable": True,
-                            "unique": False,
-                            "description": "The system prompt used for generation",
-                        },
-                        "category": {
-                            "type": "enum",
-                            "values": ["A", "B", "C"],
-                            "restrict": True,
-                            "description": "Classification category",
-                        },
-                        "status": {
-                            "type": "enum",
-                            "restrict": False,
-                        },  # Open enum with no values
-                    },
-                },
-                [
-                    {"system-prompt": "prompt1"},
-                    {"system-prompt": "prompt2"},
-                ],
-                # Example with nested unique IDs - providing parent IDs directly
-                [
-                    {"user": 100, "session": 4, "system-prompt": "prompt1"},
-                    {"user": 100, "session": 4, "system-prompt": "prompt2"},
-                ],
-            ],
-        },
-    )
     entries: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
         default=dict(),
         description="Dictionary containing one or more key:value pairs that "
         "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
-        "for batch processing. When using lists for both params and entries, their lengths must match. "
+        "for batch processing. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
         "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
         "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding). "
@@ -245,30 +198,6 @@ class UpdateLogRequest(BaseModel):
         "or a ContextCreateRequest object. Required when using filter dict in `logs` if project is not provided.",
         json_schema_extra={
             "example": "experiment1/trial1",
-        },
-    )
-    params: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
-        default=dict(),
-        description="Dictionary or list of dictionaries of key-value parameter pairs to add or update in the logs.",
-        json_schema_extra={
-            "example": {
-                "system-prompt": "...",
-                "function_definition": "...",
-                "explicit_types": {
-                    "system-prompt": {
-                        "type": "str",
-                        "mutable": True,
-                        "description": "System prompt for the model",
-                    },
-                    "category": {
-                        "type": "enum",
-                        "values": ["A", "B", "C"],
-                        "restrict": False,
-                        "description": "Task category",
-                    },
-                    "priority": {"type": "enum"},  # Open enum with no values
-                },
-            },
         },
     )
     entries: Union[Dict[str, Any], List[Dict[str, Any]]] = Field(
