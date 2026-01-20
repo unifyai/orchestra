@@ -29,6 +29,8 @@ from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
 from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
+from orchestra.web.api.table_view.views import admin_router as table_view_admin_router
+from orchestra.web.api.table_view.views import router as table_view_router
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 
 API_KEY_AUTH = [
@@ -88,6 +90,13 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
+api_router.include_router(
+    table_view_admin_router,
+    prefix="/admin",
+    tags=["Table Views"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
 # API_KEY_AUTH endpoints
 
 api_router.include_router(
@@ -112,6 +121,11 @@ api_router.include_router(
 api_router.include_router(
     plot_router,
     tags=["Plots"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    table_view_router,
+    tags=["Table Views"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

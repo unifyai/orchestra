@@ -1725,6 +1725,7 @@ class Plot(Base):
     plot_config = Column(JSONB, nullable=False)
     project_config = Column(JSONB, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
     # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
     project = relationship("Project", backref=backref("plots", passive_deletes=True))
@@ -1733,4 +1734,52 @@ class Plot(Base):
         Index("idx_plot_project_id", "project_id"),
         Index("idx_plot_user_id", "user_id"),
         Index("idx_plot_organization_id", "organization_id"),
+    )
+
+
+class TableView(Base):
+    """Model class for shareable table view configurations.
+
+    TableViews are linked to projects and follow project-based access control.
+    When a project is deleted, all associated table views are cascade deleted.
+    """
+
+    __tablename__ = "table_view"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String(12), unique=True, nullable=False, index=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    title = Column(String, nullable=True)
+    table_config = Column(JSONB, nullable=False)
+    project_config = Column(JSONB, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
+    project = relationship(
+        "Project",
+        backref=backref("table_views", passive_deletes=True),
+    )
+
+    __table_args__ = (
+        Index("idx_table_view_project_id", "project_id"),
+        Index("idx_table_view_user_id", "user_id"),
+        Index("idx_table_view_organization_id", "organization_id"),
     )
