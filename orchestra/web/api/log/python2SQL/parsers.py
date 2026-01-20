@@ -1049,10 +1049,22 @@ def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
         processed_expr = textwrap.dedent(expr).replace("\n", " ")
         processed_expr, backtick_fields = _preprocess_backtick_fields(processed_expr)
 
-        # Step 2: Handle problematic field names by creating placeholders
+        # Step 2: Normalize unquoted fields with spaces by keeping the first token.
+        # Field names with spaces must be backticked; unquoted occurrences fall back to
+        # their first token to keep parsing permissive.
+        if field_names:
+            for field_name in field_names:
+                if " " in field_name:
+                    processed_expr = re.sub(
+                        r"\b" + re.escape(field_name) + r"\b",
+                        field_name.split()[0],
+                        processed_expr,
+                    )
+
+        # Step 3: Handle problematic field names by creating placeholders
         # (for field names known via field_names parameter)
         special_fields = {}
-        problematic_chars = {"-", "/", "+", "*", "&", "|", "^"}
+        problematic_chars = {"-", "/", "+", "*", "&", "|", "^", " "}
 
         if field_names:
             # Replace problematic field names with placeholders

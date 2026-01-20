@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -27,7 +27,6 @@ from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -67,6 +66,7 @@ from orchestra.web.api.assistant.schema import (
     AssistantTransferToPersonalRequest,
     AssistantUpdate,
     AssistantVideoUploadResponse,
+    Contact,
     InfoResponse,
     PhotoGenerateRequest,
     RecordingCreate,
@@ -87,9 +87,11 @@ from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_phone_number,
     create_pubsub_topic,
+    create_windows_vm,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
+    delete_windows_vm,
     get_running_jobs,
     get_social_platforms_costs,
     log_pre_hire_chat,
@@ -223,8 +225,7 @@ async def create_assistant(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    log_event_dao = LogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_event_dao = LogEventDAO(session, context_dao)
     api_keys = api_key_dao.filter(user_id=user_id)
     if not api_keys:
         raise HTTPException(
@@ -304,14 +305,15 @@ async def create_assistant(
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
             desktop_url=assistant_in.desktop_url,
-            user_local_desktop=assistant_in.user_local_desktop,
+            desktop_mode=assistant_in.desktop_mode,
+            is_user_desktop=assistant_in.is_user_desktop,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
             voice_id=assistant_in.voice_id,
             voice_provider=assistant_in.voice_provider,
             voice_mode=assistant_in.voice_mode,
-            phone=assistant_in.phone,
+            phone=None,
             email=assistant_in.email,
             phone_country=assistant_in.phone_country,
             user_whatsapp_number=assistant_in.user_whatsapp_number,
@@ -434,8 +436,10 @@ async def create_assistant(
         created_phone = None
         created_pubsub = None
         assigned_whatsapp = None
+        created_windows_vm = None
 
         if assistant_in.create_infra:
+            current_infra_step = "initializing"
             try:
                 # Step 1 & 2: create and watch email
                 if assistant_in.email:
@@ -444,6 +448,7 @@ async def create_assistant(
                         if "@" in assistant_in.email
                         else assistant_in.email
                     )
+                    current_infra_step = "create_email"
                     email_response = await create_email(
                         email_local,
                         assistant_in.first_name,
@@ -457,6 +462,7 @@ async def create_assistant(
                     print(f"EMAIL CREATED: {created_email}")
 
                     await asyncio.sleep(10)
+                    current_infra_step = "watch_email"
                     watch_response = await watch_email(
                         created_email,
                         is_staging=settings.is_staging,
@@ -475,6 +481,7 @@ async def create_assistant(
                         if assistant_in.phone_country
                         else "US"
                     )
+                    current_infra_step = "create_phone_number"
                     phone_response = await create_phone_number(
                         phone_country=phone_country,
                         is_staging=settings.is_staging,
@@ -488,6 +495,7 @@ async def create_assistant(
 
                 # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
+                    current_infra_step = "assign_whatsapp_sender"
                     assigned_whatsapp = (
                         await assign_whatsapp_sender(
                             assistant_in.user_whatsapp_number,
@@ -496,6 +504,7 @@ async def create_assistant(
                     )["whatsapp_number"]
 
                 # Step 5: create pubsub topic
+                current_infra_step = "create_pubsub_topic"
                 pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
                     is_staging=settings.is_staging,
@@ -506,6 +515,24 @@ async def create_assistant(
                     )
                 created_pubsub = True
                 print(f"PUBSUB CREATED: {assistant_id}")
+
+                # Step 6: Create Windows VM if is_user_desktop=False and desktop_mode="windows"
+                if (
+                    assistant_in.desktop_mode == "windows"
+                    and assistant_in.is_user_desktop is False
+                ):
+                    current_infra_step = "create_windows_vm"
+                    vm_response = await create_windows_vm(
+                        assistant_id=str(assistant_id),
+                        unify_apikey=request.state.api_key,
+                        assistant_name=f"{assistant_in.first_name}{assistant_in.surname}",
+                    )
+                    if "detail" in vm_response or "error" in vm_response:
+                        raise Exception(
+                            f"Windows VM creation failed: {vm_response.get('detail') or vm_response.get('error')}",
+                        )
+                    created_windows_vm = vm_response
+                    print(f"WINDOWS VM CREATED: {assistant_id}")
 
                 # Refresh database session after long infrastructure operations
                 logging.info(
@@ -523,6 +550,9 @@ async def create_assistant(
                     "user_whatsapp_number": assistant_in.user_whatsapp_number,
                     "assistant_whatsapp_number": assigned_whatsapp,
                 }
+                # Add desktop_url from VM creation if applicable
+                if created_windows_vm and created_windows_vm.get("desktop_url"):
+                    update_data["desktop_url"] = created_windows_vm["desktop_url"]
                 assistant_dao.update_assistant(
                     user_id=user_id,
                     agent_id=assistant_id,
@@ -540,7 +570,11 @@ async def create_assistant(
                 )
 
             except Exception as infra_error:
-                print(f"INFRA ERROR: {infra_error}")
+                # Use repr() to always show exception type, even if str() is empty
+                print(
+                    f"INFRA ERROR at step '{current_infra_step}': "
+                    f"{type(infra_error).__name__}: {infra_error!r}",
+                )
 
                 # can't rollback infra if the setup isn't complete so need to wait
                 time.sleep(10)
@@ -561,6 +595,14 @@ async def create_assistant(
 
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
+
+                # Delete Windows VM first (created last)
+                if created_windows_vm:
+                    try:
+                        await delete_windows_vm(str(assistant_id))
+                    except Exception as e:
+                        rollback_errors.append(f"Failed to delete Windows VM: {str(e)}")
+                    print(f"WINDOWS VM DELETED: {assistant_id}")
 
                 if created_pubsub:
                     try:
@@ -718,7 +760,8 @@ async def create_assistant(
             profile_photo=assistant.profile_photo,
             profile_video=assistant.profile_video,
             desktop_url=assistant.desktop_url,
-            user_local_desktop=assistant.user_local_desktop,
+            desktop_mode=assistant.desktop_mode,
+            is_user_desktop=assistant.is_user_desktop,
             about=assistant.about,
             weekly_limit=(
                 float(assistant.weekly_limit)
@@ -880,7 +923,8 @@ def list_assistants(
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
-                    user_local_desktop=a.user_local_desktop,
+                    desktop_mode=a.desktop_mode,
+                    is_user_desktop=a.is_user_desktop,
                     about=a.about,
                     phone_country=a.phone_country,
                     weekly_limit=(
@@ -1020,7 +1064,8 @@ async def delete_assistant_contact(
                 profile_photo=updated_assistant.profile_photo,
                 profile_video=updated_assistant.profile_video,
                 desktop_url=updated_assistant.desktop_url,
-                user_local_desktop=updated_assistant.user_local_desktop,
+                desktop_mode=updated_assistant.desktop_mode,
+                is_user_desktop=updated_assistant.is_user_desktop,
                 about=updated_assistant.about,
                 phone_country=updated_assistant.phone_country,
                 weekly_limit=(
@@ -1134,6 +1179,19 @@ async def delete_assistant(
         except Exception as e:
             logging.error(f"Failed to stop job: {str(e)}")
             cleanup_errors.append(f"Failed to stop job: {str(e)}")
+
+        # Delete Windows VM if assistant has one (is_user_desktop=False AND desktop_mode="windows")
+        if assistant.desktop_mode == "windows" and assistant.is_user_desktop is False:
+            try:
+                vm_response = await delete_windows_vm(str(assistant_id))
+                if not vm_response.get("vm_deleted"):
+                    cleanup_errors.append(
+                        f"VM deletion reported issues: {vm_response}",
+                    )
+            except Exception as e:
+                logging.error(f"Failed to delete Windows VM: {str(e)}")
+                cleanup_errors.append(f"Failed to delete Windows VM: {str(e)}")
+            print(f"WINDOWS VM DELETED: {assistant_id}")
 
         # Delete the associated chat transcript context from the "Assistants" project
         try:
@@ -1632,7 +1690,8 @@ async def update_assistant_config(
                 profile_photo=updated.profile_photo,
                 profile_video=updated.profile_video,
                 desktop_url=updated.desktop_url,
-                user_local_desktop=updated.user_local_desktop,
+                desktop_mode=updated.desktop_mode,
+                is_user_desktop=updated.is_user_desktop,
                 about=updated.about,
                 phone_country=updated.phone_country,
                 weekly_limit=(
@@ -4031,20 +4090,6 @@ def cancel_animation_prediction(
 
 
 @admin_router.get(
-    "/assistant/emails",
-    response_model=InfoResponse[List[str]],
-    summary="Admin: list all assistant email addresses",
-)
-async def admin_list_assistant_emails(
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[List[str]]:
-    dao = AssistantDAO(session)
-    """Return every non-null email address that has been set on an Assistant."""
-    emails = dao.list_all_assistant_emails()
-    return InfoResponse(info=emails)
-
-
-@admin_router.get(
     "/assistant/{assistant_id}/status",
     response_model=InfoResponse[AssistantStatus],
     status_code=status.HTTP_200_OK,
@@ -4306,3 +4351,475 @@ def admin_update_assistant(
         assistant_id=assistant_id,
         updated_fields=updated_fields,
     )
+
+
+@admin_router.get(
+    "/assistant",
+    response_model=InfoResponse[List[AssistantRead]],
+    summary="Admin: list all assistants",
+    description="Retrieve every assistant in the system, optionally filtered by phone or email.",
+    tags=["Assistants", "Admin"],
+)
+def admin_list_all_assistants(
+    phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose phone number matches this E.164-style value (leading '+' is URL-encoded).",
+    ),
+    user_phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user phone number matches this value.",
+    ),
+    email: Optional[str] = Query(
+        None,
+        description="Only return assistants whose email address matches this value.",
+    ),
+    user_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user WhatsApp number matches this value.",
+    ),
+    assistant_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose assistant WhatsApp number matches this value.",
+    ),
+    agent_id: Optional[int] = Query(
+        None,
+        description="Only return assistants whose agent_id matches this value.",
+    ),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[List[AssistantRead]]:
+    """
+    List all assistants in the system with optional filtering by phone or email.
+    """
+    # Normalize filter parameters to handle URL-decoded '+' characters
+    phone = normalize_phone_parameter(phone)
+    user_phone = normalize_phone_parameter(user_phone)
+    user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
+    assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
+    assistant_dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    auth_user_dao = AuthUserDAO(session)
+    secret_dao = AssistantSecretDAO(session)
+    try:
+        assistants = assistant_dao.list_all_assistants(
+            phone=phone,
+            user_phone=user_phone,
+            email=email,
+            user_whatsapp_number=user_whatsapp_number,
+            assistant_whatsapp_number=assistant_whatsapp_number,
+            agent_id=agent_id,
+        )
+
+        # Get API key based on assistant type (personal vs organizational)
+        def get_api_key_for_assistant(assistant):
+            if assistant.organization_id is None:
+                # Personal assistant - get user's personal API key
+                keys = api_key_dao.get_personal_keys(assistant.user_id)
+            else:
+                # Org assistant - get org API key
+                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+            return keys[0][0].key if keys else None
+
+        # Get secrets for each assistant
+        def get_secrets_for_assistant(assistant):
+            secrets = secret_dao.list_secrets(
+                assistant.user_id,
+                assistant.agent_id,
+            )
+            return {s.secret_name: s.secret_value for s in secrets}
+
+        api_keys = [get_api_key_for_assistant(a) for a in assistants]
+        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
+        user_ids = [a.user_id for a in assistants]
+        auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
+        return InfoResponse(
+            info=[
+                AssistantRead(
+                    agent_id=str(a.agent_id),
+                    user_id=a.user_id,
+                    organization_id=a.organization_id,
+                    first_name=a.first_name,
+                    surname=a.surname,
+                    age=a.age,
+                    nationality=a.nationality,
+                    profile_photo=a.profile_photo,
+                    profile_video=a.profile_video,
+                    desktop_url=a.desktop_url,
+                    desktop_mode=a.desktop_mode,
+                    is_user_desktop=a.is_user_desktop,
+                    about=a.about,
+                    weekly_limit=float(a.weekly_limit)
+                    if a.weekly_limit is not None
+                    else None,
+                    max_parallel=a.max_parallel,
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                    phone=a.phone,
+                    user_phone=a.user_phone,
+                    email=a.email,
+                    user_whatsapp_number=a.user_whatsapp_number,
+                    assistant_whatsapp_number=a.assistant_whatsapp_number,
+                    voice_id=a.voice_id,
+                    voice_provider=a.voice_provider,
+                    voice_mode=a.voice_mode,
+                    timezone=a.timezone,
+                    api_key=api_keys[i],
+                    user_first_name=auth_users[i].name,
+                    user_last_name=auth_users[i].last_name,
+                    user_email=auth_users[i].email,
+                    secrets=secrets_list[i],
+                )
+                for i, a in enumerate(assistants)
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error fetching assistants: {str(e)}",
+        )
+
+
+@admin_router.patch(
+    "/assistant",
+    response_model=InfoResponse[AssistantRead],
+    summary="Admin: update assistant by filter",
+    description="Update a single assistant based on unique filter parameters.",
+    tags=["Assistants", "Admin"],
+)
+def admin_update_assistant_by_filter(
+    phone: Optional[str] = Query(
+        None,
+        description="Filter: assistant phone number",
+    ),
+    user_phone: Optional[str] = Query(
+        None,
+        description="Filter: user phone number",
+    ),
+    email: Optional[str] = Query(
+        None,
+        description="Filter: assistant email address",
+    ),
+    user_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Filter: user WhatsApp number",
+    ),
+    assistant_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Filter: assistant WhatsApp number",
+    ),
+    new_assistant_whatsapp_number: Optional[str] = Query(
+        None,
+        description="New WhatsApp number for the assistant",
+    ),
+    new_user_whatsapp_number: Optional[str] = Query(
+        None,
+        description="New WhatsApp number for the user",
+    ),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    """
+    Update a single assistant based on filter parameters.
+    """
+    # Normalize filter parameters and the new WhatsApp number to handle URL-decoded '+' characters
+    phone = normalize_phone_parameter(phone)
+    user_phone = normalize_phone_parameter(user_phone)
+    user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
+    assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
+    new_assistant_whatsapp_number = normalize_phone_parameter(
+        new_assistant_whatsapp_number,
+    )
+    new_user_whatsapp_number = normalize_phone_parameter(
+        new_user_whatsapp_number,
+    )
+
+    # Find the assistant to update
+    dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    secret_dao = AssistantSecretDAO(session)
+    assistants = dao.list_all_assistants(
+        phone=phone,
+        user_phone=user_phone,
+        email=email,
+        user_whatsapp_number=user_whatsapp_number,
+        assistant_whatsapp_number=assistant_whatsapp_number,
+    )
+    if not assistants:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    if len(assistants) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Multiple assistants found for filters.",
+        )
+    a = assistants[0]
+
+    # Update only the assistant WhatsApp number
+    update_data = {}
+    if new_assistant_whatsapp_number:
+        update_data["assistant_whatsapp_number"] = new_assistant_whatsapp_number
+    if new_user_whatsapp_number:
+        update_data["user_whatsapp_number"] = new_user_whatsapp_number
+    updated = dao.update_assistant(
+        user_id=a.user_id,
+        agent_id=a.agent_id,
+        update_data=update_data,
+    )
+    session.commit()
+
+    # Get API key based on assistant type (personal vs organizational)
+    if updated.organization_id is None:
+        keys = api_key_dao.get_personal_keys(updated.user_id)
+    else:
+        keys = api_key_dao.filter(organization_id=updated.organization_id)
+    api_key = keys[0][0].key if keys else None
+
+    # Get secrets for the assistant
+    secrets = secret_dao.list_secrets(updated.user_id, updated.agent_id)
+    secrets_dict = {s.secret_name: s.secret_value for s in secrets}
+
+    # Return updated assistant
+    return InfoResponse(
+        info=AssistantRead(
+            agent_id=str(updated.agent_id),
+            user_id=updated.user_id,
+            organization_id=updated.organization_id,
+            first_name=updated.first_name,
+            surname=updated.surname,
+            age=updated.age,
+            nationality=updated.nationality,
+            profile_photo=updated.profile_photo,
+            profile_video=updated.profile_video,
+            desktop_url=updated.desktop_url,
+            desktop_mode=updated.desktop_mode,
+            is_user_desktop=updated.is_user_desktop,
+            about=updated.about,
+            phone_country=updated.phone_country,
+            weekly_limit=float(updated.weekly_limit)
+            if updated.weekly_limit is not None
+            else None,
+            max_parallel=updated.max_parallel,
+            created_at=updated.created_at,
+            updated_at=updated.updated_at,
+            phone=updated.phone,
+            user_phone=updated.user_phone,
+            email=updated.email,
+            user_whatsapp_number=updated.user_whatsapp_number,
+            assistant_whatsapp_number=updated.assistant_whatsapp_number,
+            voice_id=updated.voice_id,
+            voice_provider=updated.voice_provider,
+            voice_mode=updated.voice_mode,
+            timezone=updated.timezone,
+            api_key=api_key,
+            secrets=secrets_dict,
+        ),
+    )
+
+
+@admin_router.get(
+    "/assistant/user/{user_id}",
+    response_model=InfoResponse[List[AssistantRead]],
+    summary="Admin: list all assistants for a user",
+    description="Retrieve all assistants for the specified user_id, optionally filtered by phone, email, or WhatsApp numbers.",
+    tags=["Assistants", "Admin"],
+)
+def admin_list_assistants_for_user(
+    user_id: str,
+    phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose phone number matches this value.",
+    ),
+    user_phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user phone number matches this value.",
+    ),
+    email: Optional[str] = Query(
+        None,
+        description="Only return assistants whose email address matches this value.",
+    ),
+    user_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user WhatsApp number matches this value.",
+    ),
+    assistant_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose assistant WhatsApp number matches this value.",
+    ),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[List[AssistantRead]]:
+    """List all assistants belonging to a given user, with optional filtering."""
+    # Normalize phone parameter to handle URL-decoded '+' characters
+    phone = normalize_phone_parameter(phone)
+    user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
+    assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
+    dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    secret_dao = AssistantSecretDAO(session)
+    try:
+        assistants = dao.list_assistants_for_user(
+            user_id=user_id,
+            phone=phone,
+            user_phone=user_phone,
+            email=email,
+            user_whatsapp_number=user_whatsapp_number,
+            assistant_whatsapp_number=assistant_whatsapp_number,
+        )
+
+        # Get API key based on assistant type (personal vs organizational)
+        def get_api_key_for_assistant(assistant):
+            if assistant.organization_id is None:
+                keys = api_key_dao.get_personal_keys(assistant.user_id)
+            else:
+                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+            return keys[0][0].key if keys else None
+
+        # Get secrets for each assistant
+        def get_secrets_for_assistant(assistant):
+            secrets = secret_dao.list_secrets(
+                assistant.user_id,
+                assistant.agent_id,
+            )
+            return {s.secret_name: s.secret_value for s in secrets}
+
+        api_keys = [get_api_key_for_assistant(a) for a in assistants]
+        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
+
+        return InfoResponse(
+            info=[
+                AssistantRead(
+                    agent_id=str(a.agent_id),
+                    user_id=a.user_id,
+                    organization_id=a.organization_id,
+                    first_name=a.first_name,
+                    surname=a.surname,
+                    age=a.age,
+                    nationality=a.nationality,
+                    profile_photo=a.profile_photo,
+                    profile_video=a.profile_video,
+                    desktop_url=a.desktop_url,
+                    desktop_mode=a.desktop_mode,
+                    is_user_desktop=a.is_user_desktop,
+                    about=a.about,
+                    weekly_limit=float(a.weekly_limit)
+                    if a.weekly_limit is not None
+                    else None,
+                    max_parallel=a.max_parallel,
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                    phone=a.phone,
+                    user_phone=a.user_phone,
+                    email=a.email,
+                    user_whatsapp_number=a.user_whatsapp_number,
+                    assistant_whatsapp_number=a.assistant_whatsapp_number,
+                    voice_id=a.voice_id,
+                    voice_provider=a.voice_provider,
+                    voice_mode=a.voice_mode,
+                    timezone=a.timezone,
+                    api_key=api_keys[i],
+                    secrets=secrets_list[i],
+                )
+                for i, a in enumerate(assistants)
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error fetching assistants for user {user_id}: {str(e)}",
+        )
+
+
+@admin_router.get(
+    "/contacts",
+    response_model=List[Contact],
+    summary="Admin: list all contacts",
+    description="List all contact-context logs, optionally filtered by email, phone, or WhatsApp number",
+    tags=["Assistants", "Admin"],
+)
+def admin_list_contacts(
+    email_address: Optional[str] = Query(None, description="Filter by email_address"),
+    phone_number: Optional[str] = Query(None, description="Filter by phone_number"),
+    whatsapp_number: Optional[str] = Query(
+        None,
+        description="Filter by whatsapp_number",
+    ),
+    session: Session = Depends(get_db_session),
+) -> List[Contact]:
+    """
+    Retrieve all contact logs stored in any context containing "Contacts" (case-sensitive).
+    Supports optional filtering on email, phone, or WhatsApp number.
+    """
+    from typing import Any, Dict
+
+    # Find all context IDs whose name contains 'Contacts' (case-sensitive)
+    ctx_ids = (
+        session.execute(select(Context.id).where(Context.name.like("%Contacts%")))
+        .scalars()
+        .all()
+    )
+    if not ctx_ids:
+        return []
+
+    # Build field filters
+    filters = {}
+    if email_address is not None:
+        filters["email_address"] = email_address
+    if phone_number is not None:
+        filters["phone_number"] = normalize_phone_parameter(phone_number)
+    if whatsapp_number is not None:
+        filters["whatsapp_number"] = normalize_phone_parameter(whatsapp_number)
+
+    # Retrieve matching log_event IDs
+    log_event_dao = LogEventDAO(session)
+    if filters:
+        event_ids = log_event_dao.get_ids_by_filter(
+            project_id=None,
+            filters=filters,
+            context_ids=ctx_ids,
+        )
+    else:
+        event_ids = []
+        for cid in ctx_ids:
+            rows = log_event_dao.filter(context_id=cid)
+            for r in rows:
+                evt = r[0]
+                event_ids.append(evt.id)
+    if not event_ids:
+        return []
+
+    # Fetch log entries and assemble contacts per event
+    grouped: Dict[int, Dict[str, Any]] = {}
+
+    # Query LogEvent.data directly
+    query = select(LogEvent.id, LogEvent.data).where(LogEvent.id.in_(event_ids))
+    rows = session.execute(query).all()
+
+    for event_id, data in rows:
+        # data is already a dict from JSONB column
+        grouped[event_id] = dict(data) if data else {}
+
+    # Fetch user_id for each log_event via project
+    rows = session.execute(
+        select(LogEvent.id, Project.user_id)
+        .join(Project, LogEvent.project_id == Project.id)
+        .where(LogEvent.id.in_(event_ids)),
+    )
+    user_map = {evt: uid for evt, uid in rows}
+
+    # Build final contact list with user_id
+    results = []
+    for eid, data in grouped.items():
+        contact: Dict[str, Any] = {}
+        custom: Dict[str, Any] = {}
+        for k, v in data.items():
+            if k in (
+                "first_name",
+                "surname",
+                "email_address",
+                "phone_number",
+                "whatsapp_number",
+                "description",
+            ):
+                contact[k] = v
+            else:
+                custom[k] = v
+        contact["custom_fields"] = custom
+        contact["user_id"] = user_map.get(eid)
+        results.append(contact)
+    return results

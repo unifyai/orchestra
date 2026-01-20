@@ -194,8 +194,27 @@ def _create_log(
     _headers = HEADERS if user == 1 else HEADERS_2
     if entries is None:
         entries = log_data["log"]
-    if params is None:
-        params = {"a/b/param1": "test"}
+
+    # Merge params into entries for backwards compatibility
+    # The params argument is deprecated but still accepted for existing tests
+    if params is not None:
+        if isinstance(entries, dict) and isinstance(params, dict):
+            # Merge params into entries (entries takes precedence)
+            merged = {**params}
+            merged.update(entries)
+            entries = merged
+        elif isinstance(entries, list) and isinstance(params, list):
+            # Merge each params dict into corresponding entries dict
+            entries = [
+                {**params[i], **entries[i]} if i < len(params) else entries[i]
+                for i in range(len(entries))
+            ]
+        elif isinstance(entries, list) and isinstance(params, dict):
+            # Apply same params to all entries
+            entries = [{**params, **entry} for entry in entries]
+        elif isinstance(entries, dict) and isinstance(params, list):
+            # Apply entries to all params
+            entries = [{**param, **entries} for param in params]
 
     # Handle both single dict and list of dicts for entries
     if isinstance(entries, dict):
@@ -230,44 +249,10 @@ def _create_log(
                     ):
                         entry["explicit_types"][k]["mutable"] = True
 
-    # Handle both single dict and list of dicts for params
-    if isinstance(params, dict):
-        # set all params to be mutable (backwards compatibility)
-        if "explicit_types" not in params:
-            explicit_types_params = {k: {"mutable": True} for k in params.keys()}
-            params["explicit_types"] = explicit_types_params
-        else:
-            # Preserve existing explicit_types but ensure mutable=True for backward compatibility
-            for k in params.keys():
-                if k != "explicit_types" and k not in params["explicit_types"]:
-                    params["explicit_types"][k] = {"mutable": True}
-                elif (
-                    k != "explicit_types"
-                    and "mutable" not in params["explicit_types"][k]
-                ):
-                    params["explicit_types"][k]["mutable"] = True
-    elif isinstance(params, list):
-        # Handle list of params
-        for param in params:
-            if "explicit_types" not in param:
-                explicit_types_params = {k: {"mutable": True} for k in param.keys()}
-                param["explicit_types"] = explicit_types_params
-            else:
-                # Preserve existing explicit_types but ensure mutable=True for backward compatibility
-                for k in param.keys():
-                    if k != "explicit_types" and k not in param["explicit_types"]:
-                        param["explicit_types"][k] = {"mutable": True}
-                    elif (
-                        k != "explicit_types"
-                        and "mutable" not in param["explicit_types"][k]
-                    ):
-                        param["explicit_types"][k]["mutable"] = True
-
     return client.post(
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": params,
             "entries": entries,
             "context": context,
         },
@@ -453,28 +438,28 @@ async def _create_logs_for_grouping(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_grouping"]
     for i in range(len(data)):
-        # Split into params and entries
+        # Build entries dict
         entries = {}
         if "a/input" in data[i]:
             entries["a/input"] = data[i]["a/input"]
         elif "input" in data[i]:
             entries["a/input"] = data[i]["input"]
 
+        entries["system_prompt"] = data[i]["system_prompt"]
         response = await _create_log(
             client,
             project_name,
-            params={"system_prompt": data[i]["system_prompt"]},
             entries=entries,
         )
         assert response.status_code == 200, response.json()
 
 
 async def _create_logs_for_grouping_entries(client, project_name, user=1):
-    """Entry-based version for dual-mode testing (no params)."""
+    """Entry-based version for dual-mode testing."""
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_grouping"]
     for i in range(len(data)):
-        # Put system_prompt in entries instead of params
+        # Put all fields in entries
         entries = {"system_prompt": data[i]["system_prompt"]}
         if "a/input" in data[i]:
             entries["a/input"] = data[i]["a/input"]
@@ -484,7 +469,6 @@ async def _create_logs_for_grouping_entries(client, project_name, user=1):
         response = await _create_log(
             client,
             project_name,
-            params={},
             entries=entries,
         )
         assert response.status_code == 200, response.json()
@@ -509,7 +493,6 @@ async def _create_several_logs(
         response = await _create_log(
             client,
             project_name,
-            params={"a/b/param1": "test"},
             entries=data,
             context=(
                 {"name": context_name, "description": "test context"}
@@ -524,7 +507,6 @@ async def _create_several_logs(
                 client,
                 project_name,
                 entries=data[i],
-                params={"a/b/param1": f"test_{i}"},
             )
             assert response.status_code == 200, response.json()
 
@@ -534,3 +516,142 @@ def _create_project(client, project_name, user=1):
     url = "/v0/project"
     project_data = {"name": project_name}
     return client.post(url, json=project_data, headers=_headers)
+
+
+async def wait_for_gcs_images(
+    client: AsyncClient,
+    project_name: str,
+    context_name: str,
+    image_col_name: str = "img",
+    max_retries: int = 12,
+    base_delay: float = 1.0,
+    max_delay: float = 10.0,
+) -> None:
+    """
+    Wait for GCS images to become available after upload.
+
+    GCS has eventual consistency, so images may not be immediately readable
+    after upload. This helper polls until all images are accessible.
+
+    Args:
+        client: The test client
+        project_name: Project containing the logs
+        context_name: Context containing the logs
+        image_col_name: Name of the image column (default: "img")
+        max_retries: Maximum number of retry attempts (default: 12)
+        base_delay: Initial delay in seconds (default: 1.0)
+        max_delay: Maximum delay cap in seconds (default: 10.0)
+
+    Raises:
+        AssertionError: If images are not available after all retries,
+                       includes diagnostic info for debugging.
+    """
+    import asyncio
+    import logging
+
+    from orchestra.services.bucket_service import BucketService
+
+    bucket_service = BucketService()
+
+    # Fetch all logs to get image URLs
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    all_logs = response.json()["logs"]
+
+    # Track diagnostic info for debugging intermittent failures
+    diagnostic_info: dict[str, dict] = {}
+    total_wait_time = 0.0
+
+    for attempt in range(max_retries):
+        unavailable_images = []
+        for log in all_logs:
+            log_name = log["entries"].get("name", f"log_{log.get('id', 'unknown')}")
+            image_value = log["entries"].get(image_col_name)
+
+            # Collect diagnostic info on first attempt
+            if attempt == 0:
+                if image_value is None:
+                    diagnostic_info[log_name] = {
+                        "status": "no_img_field",
+                        "value_preview": None,
+                    }
+                elif image_value.startswith("data:"):
+                    diagnostic_info[log_name] = {
+                        "status": "base64_data_uri",
+                        "value_preview": image_value[:80] + "...",
+                    }
+                elif (
+                    image_value.startswith("gs://")
+                    or "storage.googleapis.com" in image_value
+                ):
+                    diagnostic_info[log_name] = {
+                        "status": "gcs_url",
+                        "full_url": image_value,
+                        "extracted_filename": image_value.split("/")[-1],
+                    }
+                else:
+                    diagnostic_info[log_name] = {
+                        "status": "unknown_format",
+                        "value_preview": (
+                            image_value[:80] + "..."
+                            if len(image_value) > 80
+                            else image_value
+                        ),
+                    }
+
+            if image_value:
+                # Check if this is a GCS URL
+                if (
+                    image_value.startswith("gs://")
+                    or "storage.googleapis.com" in image_value
+                ):
+                    filename = image_value.split("/")[-1]
+                    try:
+                        result = bucket_service.get_media(filename)
+                        if result is None:
+                            unavailable_images.append(log_name)
+                            if attempt == 0:
+                                diagnostic_info[log_name][
+                                    "error"
+                                ] = "get_media returned None (NotFound)"
+                    except Exception as e:
+                        unavailable_images.append(log_name)
+                        if attempt == 0:
+                            diagnostic_info[log_name][
+                                "error"
+                            ] = f"Exception: {type(e).__name__}: {e}"
+                # else: it's inline Base64 data, no GCS fetch needed
+
+        if not unavailable_images:
+            logging.info(
+                f"All {len(all_logs)} images available in GCS after {attempt + 1} "
+                f"attempts ({total_wait_time}s total wait)",
+            )
+            return
+
+        if attempt < max_retries - 1:
+            delay = min(base_delay * (2**attempt), max_delay)
+            total_wait_time += delay
+            logging.warning(
+                f"GCS pre-flight check: {len(unavailable_images)} images not yet "
+                f"available ({unavailable_images}), retrying in {delay}s "
+                f"(attempt {attempt + 1}/{max_retries})",
+            )
+            await asyncio.sleep(delay)
+        else:
+            # Build detailed diagnostic message
+            diag_str = json.dumps(diagnostic_info, indent=2)
+            raise AssertionError(
+                f"GCS pre-flight check failed: Images {unavailable_images} not "
+                f"available after {max_retries} attempts "
+                f"({total_wait_time}s total wait time).\n\n"
+                f"=== DIAGNOSTIC INFO ===\n{diag_str}\n"
+                f"=== END DIAGNOSTIC INFO ===\n\n"
+                f"This will help debug whether the issue is:\n"
+                f"- GCS URLs not being stored (check 'status' field)\n"
+                f"- Wrong filename extraction (check 'extracted_filename')\n"
+                f"- GCS read failures (check 'error' field)",
+            )

@@ -41,6 +41,7 @@ async def create_phone_number(phone_country: str = "US", is_staging: bool = Fals
                 "status_callback": status_callback,
                 "phone_country": phone_country,
             },
+            timeout=20,
         )
         return response.json()
 
@@ -65,6 +66,7 @@ async def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = F
                 "user_whatsapp_number": user_whatsapp_number,
                 "callback_url": callback_url,
             },
+            timeout=20,
         )
         return response.json()
 
@@ -85,6 +87,7 @@ async def delete_phone_number(phone_number: str):
             f"{COMMS_URL}/phone/delete",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={"PhoneNumber": phone_number},
+            timeout=20,
         )
         return response.json()
 
@@ -110,6 +113,7 @@ async def create_email(local: str, first_name: str, last_name: str):
                 "first_name": first_name,
                 "last_name": last_name,
             },
+            timeout=20,
         )
         return response.json()
 
@@ -130,6 +134,7 @@ async def delete_email(email: str):
             f"{COMMS_URL}/gmail/delete",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={"primary_email": email},
+            timeout=20,
         )
         return response.json()
 
@@ -156,6 +161,7 @@ async def watch_email(email: str, is_staging: bool = False):
                 if is_staging
                 else "gmail-notifications",
             },
+            timeout=20,
         )
         return response.json()
 
@@ -177,6 +183,7 @@ async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
             f"{COMMS_URL}/infra/pubsub/topic",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             data={"topic_name": topic_name},
+            timeout=20,
         )
         return response.json()
 
@@ -199,6 +206,58 @@ async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
             f"{COMMS_URL}/infra/pubsub/topic",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             data={"topic_name": topic_name},
+            timeout=20,
+        )
+        return response.json()
+
+
+async def create_windows_vm(
+    assistant_id: str,
+    unify_apikey: str,
+    assistant_name: str,
+):
+    """
+    Create a Windows VM for the assistant via the infra service.
+
+    Args:
+        assistant_id: Numeric assistant ID (e.g., "12345")
+        unify_apikey: API key used for VNC/Windows password
+        assistant_name: Used for Windows username
+
+    Returns:
+        JSON response with vm_name, ip_address, hostname, desktop_url, status
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COMMS_URL}/infra/vm/create",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "assistant_id": assistant_id,
+                "unify_apikey": unify_apikey,
+                "assistant_name": assistant_name,
+            },
+            timeout=60,
+        )
+        return response.json()
+
+
+async def delete_windows_vm(assistant_id: str):
+    """
+    Delete a Windows VM and associated resources (DNS, static IP).
+
+    Args:
+        assistant_id: Numeric assistant ID (e.g., "12345")
+
+    Returns:
+        JSON response with vm_deleted, dns_deleted, ip_released flags
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.request(
+            "DELETE",
+            f"{COMMS_URL}/infra/vm/delete",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"assistant_id": assistant_id},
+            timeout=60,
         )
         return response.json()
 
@@ -211,6 +270,7 @@ async def get_social_platforms_costs():
         response = await client.get(
             f"{COMMS_URL}/social/available-platforms",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=20,
         )
         return response.json()
 
@@ -282,6 +342,7 @@ async def stop_jobs(assistant_id: str, session: Session):
                 f"{COMMS_URL}/infra/job/stop",
                 data={"job_name": job_names[0]},
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=20,
             )
             response.raise_for_status()
 
@@ -294,6 +355,7 @@ async def wake_up_assistant(assistant_id: str, is_staging: bool = False):
         return await client.post(
             wake_up_url,
             data={"assistant_id": assistant_id},
+            timeout=20,
         )
 
 
@@ -311,6 +373,7 @@ async def reawaken_assistant(assistant_id: str, is_staging: bool = False):
         response = await client.post(
             reawaken_url,
             data={"assistant_id": assistant_id},
+            timeout=20,
         )
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
@@ -340,6 +403,7 @@ async def log_pre_hire_chat(
                 "Content-Type": "application/json",
             },
             json=payload,
+            timeout=20,
         )
         response.raise_for_status()
         return {"status": "success"}
@@ -368,6 +432,7 @@ async def trigger_contact_sync(assistant_id: int) -> dict:
                 "event_type": "sync_contacts",
                 "message": "Contacts sync triggered.",
             },
+            timeout=20,
         )
         response.raise_for_status()
         return response.json()

@@ -1,6 +1,40 @@
-# orchestra
+# Orchestra
 
-This repo includes the code for orchestra, the server in charge of the model hub api and the benchmarks.
+## System Architecture
+
+Orchestra is the backend API and database layer in a multi-repository system:
+
+```
+         User (Console/Phone/SMS/Email)
+                      │
+    ┌─────────────────┴──────────────────┐
+    │           Communication            │
+    │    (Webhooks, Voice, SMS, Email)   │
+    └────┬───────────────────────────────┘
+         │
+    ┌────┴────┐    ┌─────────┐    ┌─────────┐
+    │  Unity  │    │  Unify  │    │Orchestra│
+    │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
+    │         │    │         │    │  (DB)   │
+    └────┬────┘    └────┬────┘    └────┬────┘
+         │              ▲              ▲
+         │              │              │
+         │    ┌─────────┴─┐       ┌────┴───────┐
+         └───▶│  UniLLM   │       │  Console   │
+              │ (LLM API) │       │(Interfaces)│
+              └───────────┘       └────────────┘
+```
+
+**This repo (Orchestra)** is the source of truth for all persistent data. It provides the REST API at `api.unify.ai/v0` that Unify (Python SDK) and Console (web UI) communicate with.
+
+Related repositories:
+- [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
+- [Console](https://github.com/unifyai/console) — Web UI that reads/writes Orchestra data
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain (persists state via Unify)
+
+---
+
+This repo includes the code for Orchestra, the core API server and database layer used by Unity, Communication, Unify, and Console.
 
 - Orchestra Production API URL: https://api.unify.ai/v0
 - Orchestra Staging API URL: https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0
@@ -13,11 +47,8 @@ This repo includes the code for orchestra, the server in charge of the model hub
 - [Running the tests](#running-the-tests)
 - [Running orchestra](#running-orchestra)
 - TODO: Tests (unit, integration, load testing, manual)
-- TODO: Adding model, providers, and model endpoints
 - [Observability](./orchestra/observability/README.md): Monitoring, logging, and tracing setup.
-- [Google Cloud](./GCP.md): GCP services being used.
 - [CI/CD](./.github/workflows/README.md)
-- [Pub/Sub](./PubSub.md): How to set up and interact with Pub/Sub message queues.
 
 ## Project structure
 
@@ -64,7 +95,6 @@ pre-commit install
 
 ## Secrets / Environment Variables
 
-TODO: Lorem ipsum
 TODO: Tool to fetch them from GCP
 
 VSCode will load the .env file by default, but take into account that you might need to configure your IDE to load the variables.
@@ -108,20 +138,6 @@ Everytime you create a new container, you should run migrations:
 alembic upgrade "head"
 ```
 
-In order to add your user information to the db, you need
-1. `user_id`: you can get your user id by making a request to the [/credits](https://docs.unify.ai/api-reference/credits/get_credits) endpoint (the "id" key in the response contains your user_id)
-2. `api_key`: you can get your api key through the console
-3. `email_id`: your email id used for logging in to this account
-
-The basic data containing the models, providers and endpoints is stored in a GCP bucket that will be used by the script.
-Now, you should run the script:
-
-```bash
-python add_latest_endpoint_data.py <user_id> <email_id> <api_key>
-```
-
-which should populate the tables with the necessary data to get started.
-
 Now, connect to the PSQL database (password=`orchestra`):
 
 ```bash
@@ -134,7 +150,7 @@ To run the service, you can do `poetry run python -m orchestra` but you won't be
 
 To run orchestra in debug mode (in VSCode / Codespaces), your `launch.json` file should look something like this:
 
-```python
+```json
 {
     "version": "0.2.0",
     "configurations": [

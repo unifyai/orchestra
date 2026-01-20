@@ -290,48 +290,6 @@ async def test_delete_user_removes_api_keys(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_delete_user_with_queries(client: AsyncClient, dbsession):
-    """Verify queries are deleted during account deletion."""
-    from datetime import datetime
-
-    from sqlalchemy import insert, select
-
-    from orchestra.db.models.orchestra_models import Query
-
-    user = await create_test_user(client, "delete_queries@test.com")
-    user_id = user["id"]
-
-    dbsession.execute(
-        insert(Query).values(
-            user_id=user_id,
-            at=datetime.utcnow(),
-            model_provider_str="openai@gpt-4",
-            credits=0.03,
-            query_body='{"prompt": "test"}',
-            response_body='{"response": "test"}',
-            status_code=200,
-        ),
-    )
-    dbsession.flush()
-
-    query_exists = dbsession.execute(
-        select(Query).where(Query.user_id == user_id),
-    ).scalar_one_or_none()
-    assert query_exists is not None
-
-    response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-    query_after = dbsession.execute(
-        select(Query).where(Query.user_id == user_id),
-    ).scalar_one_or_none()
-    assert query_after is None
-
-
-@pytest.mark.anyio
 async def test_delete_user_with_paid_recharges_allowed(client: AsyncClient, dbsession):
     """User with only PAID recharges can be deleted."""
     from orchestra.db.dao.recharge_dao import RechargeDAO
