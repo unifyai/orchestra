@@ -5167,11 +5167,14 @@ def process_embedding_queue(
             "content": {
                 "application/json": {
                     "example": {
-                        "message": "Index maintenance completed. Deleted 3562 embeddings.",
+                        "message": "Index maintenance completed in 95.5s. Deleted 3562 embeddings.",
                         "status": "success",
                         "skipped": False,
                         "metrics": {
+                            "mode": "auto",
                             "soft_deleted_count": 3562,
+                            "total_embeddings": 2058127,
+                            "invalid_indexes_found": [],
                             "invalid_indexes_cleaned": [],
                             "deletion_metrics": {
                                 "total_deleted": 3562,
@@ -5181,15 +5184,21 @@ def process_embedding_queue(
                             "reindex_results": {
                                 "embedding_hnsw_cosine_openai_1536_idx": {
                                     "action": "reindexed",
-                                    "duration": 45.2,
+                                    "duration": 75.2,
                                     "success": True,
                                 },
                             },
+                            "phases_executed": [
+                                "invalid_index_cleanup",
+                                "batched_delete",
+                                "reindex",
+                                "vacuum",
+                            ],
                             "durations": {
                                 "invalid_index_cleanup": 0.1,
                                 "batched_delete": 12.5,
-                                "reindex": 85.0,
-                                "vacuum": 8.3,
+                                "reindex": 75.0,
+                                "vacuum": 7.9,
                             },
                         },
                     },
@@ -5202,21 +5211,25 @@ def process_embedding_queue(
     },
 )
 def run_index_maintenance(
-    skip_if_no_work: bool = Query(
-        True,
-        description="Skip maintenance if no soft-deleted rows and no invalid indexes. "
-        "Set to False to force full reindex regardless.",
+    mode: str = Query(
+        "auto",
+        description="Maintenance mode: "
+        "'auto' (smart threshold-based, default for nightly runs), "
+        "'full' (force all phases, good for weekly), "
+        "'cleanup_only' (delete soft-deleted rows, skip reindex), "
+        "'reindex_only' (reindex only, skip deletion), "
+        "'check' (dry run, report metrics only)",
     ),
     soft_delete_threshold: int = Query(
         100,
         ge=0,
-        description="Minimum soft-deleted rows before running cleanup. "
-        "Prevents unnecessary work on small deletions.",
+        description="Minimum soft-deleted rows before cleanup runs in 'auto' mode. "
+        "Default: 100. Set to 0 to always cleanup if any soft-deleted rows exist.",
     ),
-    force_reindex: bool = Query(
+    skip_vacuum: bool = Query(
         False,
-        description="Force REINDEX CONCURRENTLY even if no soft deletes. "
-        "Useful for periodic index optimization (e.g., weekly).",
+        description="Skip VACUUM phase after maintenance. "
+        "Faster but doesn't immediately reclaim disk space.",
     ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
@@ -5224,90 +5237,69 @@ def run_index_maintenance(
     """
     Trigger HNSW index maintenance.
 
+    **Maintenance Modes:**
+    - `auto` (default): Smart threshold-based. Cleanup if soft-deleted >= threshold,
+      reindex only if cleanup happened. Best for nightly runs.
+    - `full`: Run all phases regardless of thresholds. Best for weekly optimization.
+    - `cleanup_only`: Only delete soft-deleted rows, skip expensive reindex.
+      Good for emergency cleanup without downtime risk.
+    - `reindex_only`: Only reindex, skip deletion. Use when index is fragmented
+      but no soft deletes exist.
+    - `check`: Dry run - just report metrics without making any changes.
+
     **Cloud Scheduler Configuration:**
-    - Nightly cleanup: `0 2 * * *` with `skip_if_no_work=true, soft_delete_threshold=100`
-    - Weekly full reindex: `0 3 * * 0` with `force_reindex=true`
+    - Nightly: `0 2 * * *` with `mode=auto` (default)
+    - Weekly full: `0 3 * * 0` with `mode=full`
 
-    **Maintenance Phases:**
-    1. Check for invalid indexes (failed CONCURRENTLY operations) - always runs
-    2. Hard-delete soft-deleted embeddings in batches - if above threshold
-    3. REINDEX CONCURRENTLY (keeps old index usable) - if deletions occurred or forced
-    4. VACUUM to reclaim disk space - if any work done
+    **Phases (in order):**
+    1. Invalid index cleanup (always runs, handles failed CONCURRENTLY operations)
+    2. Batched soft-delete cleanup (if mode allows and threshold met)
+    3. REINDEX CONCURRENTLY (if mode allows, keeps index usable during rebuild)
+    4. VACUUM (if skip_vacuum=false and any work was done)
 
-    **Key Features:**
-    - REINDEX CONCURRENTLY: No query downtime during rebuild
-    - Batched deletes: Prevents long table locks
-    - Threshold-based: Avoids unnecessary work
-    - Invalid index cleanup: Handles failed previous operations
-
-    **WARNING:** Can take several minutes for large tables (~6GB index).
+    **WARNING:** Reindex can take several minutes for large indexes (~6GB).
     Recommended for low-traffic hours (2-4 AM UTC).
     """
     try:
         from orchestra.workers.index_maintenance import (
-            get_raw_connection,
-            get_soft_deleted_count,
-            rebuild_hnsw_indexes,
+            run_index_maintenance as do_maintenance,
         )
 
-        # Get raw connection for checking counts
-        conn = get_raw_connection(session)
-        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
-
-        try:
-            # Check if there's work to do
-            soft_deleted = get_soft_deleted_count(conn)
-            invalid_indexes = []
-
-            # Always check for invalid indexes (quick operation)
-            try:
-                result = conn.execute(
-                    text(
-                        """
-                        SELECT i.indexname
-                        FROM pg_indexes i
-                        JOIN pg_class c ON c.relname = i.indexname
-                        JOIN pg_index idx ON idx.indexrelid = c.oid
-                        WHERE i.tablename = 'embedding'
-                          AND idx.indisvalid = false
-                    """,
-                    ),
-                )
-                invalid_indexes = [row[0] for row in result.fetchall()]
-            except Exception:
-                pass  # Non-critical check
-
-            has_work = (
-                soft_deleted >= soft_delete_threshold
-                or len(invalid_indexes) > 0
-                or force_reindex
+        # Validate mode
+        valid_modes = ["auto", "full", "cleanup_only", "reindex_only", "check"]
+        if mode not in valid_modes:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": f"Invalid mode '{mode}'. Must be one of: {valid_modes}",
+                },
             )
 
-            if skip_if_no_work and not has_work:
-                return {
-                    "message": f"Skipped: {soft_deleted} soft-deleted rows (threshold: {soft_delete_threshold}), "
-                    f"{len(invalid_indexes)} invalid indexes",
-                    "status": "success",
-                    "skipped": True,
-                    "metrics": {
-                        "soft_deleted_count": soft_deleted,
-                        "invalid_indexes_found": invalid_indexes,
-                        "threshold": soft_delete_threshold,
-                        "force_reindex": force_reindex,
-                    },
-                }
-
-        finally:
-            conn.close()
-
-        # Run full maintenance
-        metrics = rebuild_hnsw_indexes(session)
+        # Run maintenance with specified mode
+        metrics = do_maintenance(
+            session=session,
+            mode=mode,
+            soft_delete_threshold=soft_delete_threshold,
+            skip_vacuum=skip_vacuum,
+        )
 
         if metrics["success"]:
             deleted = metrics.get("deletion_metrics", {}).get("total_deleted", 0)
             total_duration = sum(metrics.get("durations", {}).values())
+
+            if metrics.get("skipped"):
+                return {
+                    "message": f"Skipped: {metrics['soft_deleted_count']} soft-deleted rows "
+                    f"(threshold: {soft_delete_threshold}), "
+                    f"{len(metrics.get('invalid_indexes_found', []))} invalid indexes",
+                    "status": "success",
+                    "skipped": True,
+                    "metrics": metrics,
+                }
+
             return {
-                "message": f"Index maintenance completed in {total_duration:.1f}s. Deleted {deleted} embeddings.",
+                "message": f"Index maintenance completed in {total_duration:.1f}s. "
+                f"Deleted {deleted} embeddings. Phases: {metrics['phases_executed']}",
                 "status": "success",
                 "skipped": False,
                 "metrics": metrics,
