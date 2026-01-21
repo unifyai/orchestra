@@ -4991,7 +4991,7 @@ def process_traffic_logs(
 
 
 # Hard cap for max_items to prevent pathological calls
-MAX_ITEMS_HARD_CAP = 5000
+MAX_ITEMS_HARD_CAP = 2500
 MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
 
 
@@ -5005,14 +5005,24 @@ MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
                     "example": {
                         "message": "Processed 150 embeddings in 45.23s",
                         "status": "success",
+                        "queue_drained": False,
                         "metrics": {
                             "processed": 150,
+                            "errors": 0,
                             "duration": 45.23,
                             "throughput": 3.32,
                             "time_limit_reached": False,
-                            "size_limit_reached": False,
-                            "queue_before": {"pending": 500, "processing": 0},
-                            "queue_after": {"pending": 350, "processing": 0},
+                            "size_limit_reached": True,
+                            "queue_before": {
+                                "pending": 500,
+                                "processing": 0,
+                                "failed": 2,
+                            },
+                            "queue_after": {
+                                "pending": 350,
+                                "processing": 0,
+                                "failed": 2,
+                            },
                         },
                     },
                 },
@@ -5025,34 +5035,37 @@ MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
 )
 def process_embedding_queue(
     max_items: int = Query(
-        1000,
+        2500,
         le=MAX_ITEMS_HARD_CAP,
-        description=f"Maximum number of embeddings to process (hard cap: {MAX_ITEMS_HARD_CAP})",
+        description=f"Maximum embeddings to process per call (hard cap: {MAX_ITEMS_HARD_CAP}). "
+        "Recommended: 2500 for 5-minute scheduler.",
     ),
     max_time_seconds: int = Query(
-        300,
+        280,
         le=MAX_TIME_SECONDS_HARD_CAP,
-        description=f"Maximum processing time in seconds (hard cap: {MAX_TIME_SECONDS_HARD_CAP})",
+        description=f"Maximum processing time in seconds (hard cap: {MAX_TIME_SECONDS_HARD_CAP}). "
+        "Set slightly below scheduler interval to avoid overlap (e.g., 280s for 5-minute schedule).",
     ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """
-    Admin endpoint to manually process pending embeddings from the queue.
+    Process pending embeddings from the queue.
 
-    This endpoint is designed to be called by:
-    - Cloud Scheduler for periodic processing (recommended: every 5 minutes)
-    - Administrators for manual triggering
-    - Internal processes when immediate embedding generation is needed
+    **Cloud Scheduler Configuration:**
+    - Recommended: `*/5 * * * *` with `max_items=2500, max_time_seconds=280`
+    - For faster processing: `*/2 * * * *` with `max_items=1000, max_time_seconds=115`
 
-    The endpoint processes embeddings in batches with both time and size bounds.
-    Processing stops when either limit is reached, ensuring predictable execution time.
+    **Response Fields:**
+    - `queue_drained`: True if all pending items were processed (queue is empty)
+    - `time_limit_reached`: True if stopped due to time bound
+    - `size_limit_reached`: True if stopped due to max_items limit
 
-    Features:
+    **Features:**
     - Atomic queue claiming with FOR UPDATE SKIP LOCKED (multi-worker safe)
     - Automatic reset of stale items stuck in 'processing' state (crash recovery)
-    - Time-bounded execution to prevent long-running operations
-    - Size-bounded execution to limit API costs per invocation
+    - Time and size bounded execution for predictable scheduler behavior
+    - Safe for concurrent invocation (no double-processing)
     """
     try:
         from orchestra.workers.embedding_worker import (
@@ -5062,13 +5075,21 @@ def process_embedding_queue(
 
         # Get queue status before processing
         metrics_before = get_queue_metrics(session)
+        pending_before = metrics_before.get("pending", 0)
 
-        if metrics_before.get("pending", 0) == 0:
+        if pending_before == 0:
             return {
                 "message": "No pending embeddings to process",
                 "status": "success",
+                "queue_drained": True,
                 "metrics": {
                     "processed": 0,
+                    "errors": 0,
+                    "duration": 0,
+                    "throughput": 0,
+                    "stale_reset": 0,
+                    "time_limit_reached": False,
+                    "size_limit_reached": False,
                     "queue_before": metrics_before,
                     "queue_after": metrics_before,
                 },
@@ -5085,19 +5106,29 @@ def process_embedding_queue(
         metrics_after = get_queue_metrics(session)
 
         processed = result.get("processed", 0)
+        errors = result.get("errors", 0)
         duration = result.get("duration", 0)
+        time_limit_reached = result.get("time_limit_reached", False)
+        size_limit_reached = result.get("size_limit_reached", False)
+
+        # Queue is drained if we processed everything without hitting limits
+        pending_after = metrics_after.get("pending", 0)
+        queue_drained = (
+            pending_after == 0 and not time_limit_reached and not size_limit_reached
+        )
 
         return {
             "message": f"Processed {processed} embeddings in {duration:.2f}s",
             "status": "success",
+            "queue_drained": queue_drained,
             "metrics": {
                 "processed": processed,
-                "errors": result.get("errors", 0),
-                "duration": duration,
-                "throughput": result.get("throughput", 0),
+                "errors": errors,
+                "duration": round(duration, 2),
+                "throughput": round(result.get("throughput", 0), 2),
                 "stale_reset": result.get("stale_reset", 0),
-                "time_limit_reached": result.get("time_limit_reached", False),
-                "size_limit_reached": result.get("size_limit_reached", False),
+                "time_limit_reached": time_limit_reached,
+                "size_limit_reached": size_limit_reached,
                 "queue_before": metrics_before,
                 "queue_after": metrics_after,
             },
@@ -5123,6 +5154,7 @@ def process_embedding_queue(
                     "example": {
                         "message": "Index maintenance completed. Deleted 3562 embeddings.",
                         "status": "success",
+                        "skipped": False,
                         "metrics": {
                             "soft_deleted_count": 3562,
                             "invalid_indexes_cleaned": [],
@@ -5155,40 +5187,114 @@ def process_embedding_queue(
     },
 )
 def run_index_maintenance(
+    skip_if_no_work: bool = Query(
+        True,
+        description="Skip maintenance if no soft-deleted rows and no invalid indexes. "
+        "Set to False to force full reindex regardless.",
+    ),
+    soft_delete_threshold: int = Query(
+        100,
+        ge=0,
+        description="Minimum soft-deleted rows before running cleanup. "
+        "Prevents unnecessary work on small deletions.",
+    ),
+    force_reindex: bool = Query(
+        False,
+        description="Force REINDEX CONCURRENTLY even if no soft deletes. "
+        "Useful for periodic index optimization (e.g., weekly).",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """
-    Admin endpoint to manually trigger HNSW index maintenance.
+    Trigger HNSW index maintenance.
 
-    This endpoint performs comprehensive index maintenance:
-    1. Checks for and cleans up invalid indexes (left by failed CONCURRENTLY ops)
-    2. Hard-deletes soft-deleted embeddings in batches (avoids long locks)
-    3. Uses REINDEX CONCURRENTLY to rebuild indexes (no query downtime)
-    4. Runs VACUUM to reclaim disk space
+    **Cloud Scheduler Configuration:**
+    - Nightly cleanup: `0 2 * * *` with `skip_if_no_work=true, soft_delete_threshold=100`
+    - Weekly full reindex: `0 3 * * 0` with `force_reindex=true`
 
-    Key improvements over traditional DROP/CREATE:
-    - REINDEX CONCURRENTLY keeps old index usable during rebuild
-    - Batched deletes prevent long table locks
-    - Invalid index detection handles failed previous operations
+    **Maintenance Phases:**
+    1. Check for invalid indexes (failed CONCURRENTLY operations) - always runs
+    2. Hard-delete soft-deleted embeddings in batches - if above threshold
+    3. REINDEX CONCURRENTLY (keeps old index usable) - if deletions occurred or forced
+    4. VACUUM to reclaim disk space - if any work done
 
-    WARNING: This operation can take several minutes for large tables.
-    Recommended to run during low-traffic hours (e.g., 2 AM UTC).
+    **Key Features:**
+    - REINDEX CONCURRENTLY: No query downtime during rebuild
+    - Batched deletes: Prevents long table locks
+    - Threshold-based: Avoids unnecessary work
+    - Invalid index cleanup: Handles failed previous operations
 
-    This endpoint is designed to be called by:
-    - Cloud Scheduler for nightly maintenance
-    - Administrators for manual triggering after large deletions
+    **WARNING:** Can take several minutes for large tables (~6GB index).
+    Recommended for low-traffic hours (2-4 AM UTC).
     """
     try:
-        from orchestra.workers.index_maintenance import rebuild_hnsw_indexes
+        from orchestra.workers.index_maintenance import (
+            get_raw_connection,
+            get_soft_deleted_count,
+            rebuild_hnsw_indexes,
+        )
 
+        # Get raw connection for checking counts
+        conn = get_raw_connection(session)
+        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+
+        try:
+            # Check if there's work to do
+            soft_deleted = get_soft_deleted_count(conn)
+            invalid_indexes = []
+
+            # Always check for invalid indexes (quick operation)
+            try:
+                result = conn.execute(
+                    text(
+                        """
+                        SELECT i.indexname
+                        FROM pg_indexes i
+                        JOIN pg_class c ON c.relname = i.indexname
+                        JOIN pg_index idx ON idx.indexrelid = c.oid
+                        WHERE i.tablename = 'embedding'
+                          AND idx.indisvalid = false
+                    """,
+                    ),
+                )
+                invalid_indexes = [row[0] for row in result.fetchall()]
+            except Exception:
+                pass  # Non-critical check
+
+            has_work = (
+                soft_deleted >= soft_delete_threshold
+                or len(invalid_indexes) > 0
+                or force_reindex
+            )
+
+            if skip_if_no_work and not has_work:
+                return {
+                    "message": f"Skipped: {soft_deleted} soft-deleted rows (threshold: {soft_delete_threshold}), "
+                    f"{len(invalid_indexes)} invalid indexes",
+                    "status": "success",
+                    "skipped": True,
+                    "metrics": {
+                        "soft_deleted_count": soft_deleted,
+                        "invalid_indexes_found": invalid_indexes,
+                        "threshold": soft_delete_threshold,
+                        "force_reindex": force_reindex,
+                    },
+                }
+
+        finally:
+            conn.close()
+
+        # Run full maintenance
         metrics = rebuild_hnsw_indexes(session)
 
         if metrics["success"]:
             deleted = metrics.get("deletion_metrics", {}).get("total_deleted", 0)
+            total_duration = sum(metrics.get("durations", {}).values())
             return {
-                "message": f"Index maintenance completed. Deleted {deleted} embeddings.",
+                "message": f"Index maintenance completed in {total_duration:.1f}s. Deleted {deleted} embeddings.",
                 "status": "success",
+                "skipped": False,
                 "metrics": metrics,
             }
         else:
