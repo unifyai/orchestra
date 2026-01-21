@@ -71,6 +71,7 @@ pytest-shard = "^0.1.2"
 phonenumbers = "^9.0.21"
 opentelemetry-instrumentation-openai = "^0.50.1"
 opentelemetry-instrumentation-httpx = "^0.60b1"
+cloud-sql-python-connector = {extras = ["pg8000"], version = "^1.20.0"}
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "*"
