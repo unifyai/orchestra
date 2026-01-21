@@ -621,3 +621,12 @@ class QueryLogsPostBody(BaseModel):
         None,
         description="When set, entries that appear in at least this many logs will be grouped together",
     )
+
+
+class AtomicFieldUpdateRequest(BaseModel):
+    """Request model for atomic field operations that are race-safe under concurrent updates."""
+
+    operation: str = Field(
+        description="Atomic operation to apply. Supported formats: +N, -N, *N, /N where N is a number.",
+        example="+1",
+    )

@@ -5,6 +5,7 @@ Includes endpoints related to Log API.
 
 import json
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -47,6 +48,7 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
+    AtomicFieldUpdateRequest,
     CreateDerivedEntriesConfig,
     CreateFieldsRequest,
     CreateLogConfig,
@@ -1178,6 +1180,136 @@ def update_logs(
         log_dao=log_dao,
         derived_log_dao=derived_log_dao,
     )
+
+
+@router.patch(
+    "/logs/{log_id}/fields/{field_name}/atomic",
+    responses={
+        200: {
+            "description": "Atomic operation applied successfully",
+            "content": {
+                "application/json": {
+                    "example": {"new_value": 42.0},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid operation format",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid operation format. Use +N, -N, *N, /N where N is a number.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Log not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Log not found."},
+                },
+            },
+        },
+    },
+)
+def atomic_field_update(
+    request_fastapi: Request,
+    log_id: int = Path(..., description="The ID of the log to update"),
+    field_name: str = Path(
+        ...,
+        description="The name of the field to update atomically",
+    ),
+    body: AtomicFieldUpdateRequest = Body(...),
+    session=Depends(get_db_session),
+):
+    """
+    Apply an atomic operation to a numeric field in a log entry.
+
+    This endpoint performs race-safe atomic updates directly in PostgreSQL,
+    ensuring correct results even under high concurrent load. For example,
+    if N concurrent requests all send `+1`, the final value will be correctly
+    incremented by N.
+
+    Supported operations:
+    - `+N`: Add N to the current value
+    - `-N`: Subtract N from the current value
+    - `*N`: Multiply the current value by N
+    - `/N`: Divide the current value by N
+
+    If the field doesn't exist or is NULL, it is treated as 0 before the operation.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Parse and validate the operation
+    match = re.match(r"^([+\-*/])(\d+\.?\d*)$", body.operation)
+    if not match:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid operation format. Use +N, -N, *N, /N where N is a number.",
+        )
+
+    operator, operand_str = match.groups()
+    operand = float(operand_str)
+
+    # Validate division by zero
+    if operator == "/" and operand == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Division by zero is not allowed.",
+        )
+
+    # Check that the log exists and user has permission
+    log_event = session.query(LogEvent).filter(LogEvent.id == log_id).first()
+    if not log_event:
+        raise HTTPException(status_code=404, detail="Log not found.")
+
+    # Verify user has access to this log's project
+    project_dao = ProjectDAO(
+        session,
+        OrganizationMemberDAO(session),
+        ContextDAO(session),
+    )
+    project = project_dao.filter_by_user_access(
+        user_id=user_id,
+        id=log_event.project_id,
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Log not found.")
+
+    # Build the atomic SQL update
+    # The operator is validated by the regex match, so it's safe to use in SQL
+    sql = text(
+        f"""
+        UPDATE log_event
+        SET data = jsonb_set(
+            COALESCE(data, '{{}}'::jsonb),
+            :path,
+            to_jsonb(COALESCE((data->>:field)::numeric, 0) {operator} :operand)
+        ),
+        updated_at = :now
+        WHERE id = :log_id
+        RETURNING (data->>:field)::numeric as new_value
+        """,
+    )
+
+    result = session.execute(
+        sql,
+        {
+            "log_id": log_id,
+            "field": field_name,
+            "path": "{" + field_name + "}",
+            "operand": operand,
+            "now": datetime.now(timezone.utc),
+        },
+    ).fetchone()
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Log not found.")
+
+    session.commit()
+
+    return {"new_value": result.new_value}
 
 
 def _update_logs(
