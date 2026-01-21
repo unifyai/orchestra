@@ -4,11 +4,10 @@ Background worker for processing embedding generation queue.
 This worker:
 1. Polls the embedding_queue table for pending items
 2. Uses FOR UPDATE SKIP LOCKED for atomic, multi-worker safe claiming
-3. Processes embeddings in batches (2048 - OpenAI recommended size)
-4. Calls OpenAI API for embedding generation
-5. Inserts embeddings into the database (with upsert for soft-deleted rows)
-6. Handles retries for failed embeddings
-7. Respects both time and size bounds for processing
+3. Generates embeddings via OpenAI API in batches of 2048 (API limit)
+4. Performs a SINGLE bulk insert per invocation (not per-batch)
+5. Handles retries for failed embeddings
+6. Respects both time and size bounds for processing
 
 Usage:
     python -m orchestra.workers.embedding_worker
@@ -29,7 +28,8 @@ import signal
 import sys
 import time
 from collections import defaultdict
-from typing import List, NamedTuple, Optional
+from dataclasses import dataclass
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from sqlalchemy import create_engine, text, update
 from sqlalchemy.dialects.postgresql import insert
@@ -45,21 +45,27 @@ logger = logging.getLogger(__name__)
 # Configuration Constants
 # =============================================================================
 
-# OpenAI API batching - recommended batch size for embedding generation
-BATCH_SIZE = 2048
+# --- OpenAI API Limits ---
+# Maximum batch size for a single OpenAI embedding API call (recommended by OpenAI)
+OPENAI_EMBEDDING_BATCH_SIZE = 2048
 
-# Retry behavior - max attempts before marking as 'failed'
-MAX_RETRIES = 3
+# --- Retry Behavior ---
+# Maximum retry attempts before marking a queue item as 'failed'
+MAX_RETRY_ATTEMPTS = 3
 
-# Processing bounds - defaults for process_pending_embeddings()
-DEFAULT_LIMIT = 2500  # Default max items per invocation
-DEFAULT_TIME_LIMIT_SECONDS = 280  # Default time bound (~5 minutes, with buffer)
+# --- Crash Recovery ---
+# Items stuck in 'processing' longer than this will be reset to 'pending'
+STALE_ITEM_TIMEOUT_MINUTES = 5
 
-# Crash recovery - reset items stuck in 'processing' longer than this
-STALE_THRESHOLD_MINUTES = 5
+# --- Daemon Mode (standalone worker) ---
+# Sleep interval when queue is empty (only used in daemon mode)
+DAEMON_POLL_INTERVAL_SECONDS = 30
 
-# Daemon mode only - sleep interval when queue is empty
-POLL_INTERVAL_SECONDS = 30
+# --- Default Processing Bounds ---
+# These defaults are used when calling process_pending_embeddings() directly.
+# The API endpoint can override these with its own defaults/limits.
+DEFAULT_MAX_ITEMS_PER_INVOCATION = 5000  # Max items to process in one call
+DEFAULT_MAX_TIME_SECONDS = 170  # Max time before stopping (~3 min with 10s buffer)
 
 # Global shutdown flag for graceful termination
 shutdown_flag = False
@@ -78,6 +84,18 @@ class QueueItem(NamedTuple):
     retry_count: int
     error_message: Optional[str]
     created_at: object
+
+
+@dataclass
+class GeneratedEmbedding:
+    """Represents an embedding ready for database insertion."""
+
+    queue_item_id: int
+    ref_id: int
+    key: str
+    model: str
+    vector: list
+    is_deleted: bool = False
 
 
 # SQL query for atomic claiming with FOR UPDATE SKIP LOCKED
@@ -151,7 +169,7 @@ def reset_stale_processing_items(session: Session) -> int:
     Reset queue items stuck in 'processing' state for too long.
 
     This handles worker crashes by resetting items that have been
-    in 'processing' state for longer than STALE_THRESHOLD_MINUTES.
+    in 'processing' state for longer than STALE_ITEM_TIMEOUT_MINUTES.
 
     Uses processing_started_at (when item was claimed) NOT created_at (when queued),
     to avoid incorrectly resetting items that were queued long ago but just claimed.
@@ -173,7 +191,7 @@ def reset_stale_processing_items(session: Session) -> int:
               AND processing_started_at < NOW() - INTERVAL ':minutes minutes'
         """.replace(
                 ":minutes",
-                str(STALE_THRESHOLD_MINUTES),
+                str(STALE_ITEM_TIMEOUT_MINUTES),
             ),
         ),
     )
@@ -202,7 +220,7 @@ def claim_pending_batch(session: Session, limit: int) -> List[QueueItem]:
     """
     result = session.execute(
         text(CLAIM_QUERY),
-        {"max_retries": MAX_RETRIES, "limit": limit},
+        {"max_retries": MAX_RETRY_ATTEMPTS, "limit": limit},
     )
     session.commit()
 
@@ -224,54 +242,116 @@ def claim_pending_batch(session: Session, limit: int) -> List[QueueItem]:
     ]
 
 
-def process_embedding_batch(session: Session, batch: List[QueueItem]) -> int:
+def generate_embeddings_for_items(
+    items: List[QueueItem],
+) -> Tuple[List[GeneratedEmbedding], List[QueueItem]]:
     """
-    Process a batch of claimed embeddings.
+    Generate embeddings for a list of queue items using OpenAI API.
 
-    Items are already marked as 'processing' by claim_pending_batch(),
-    so this function just generates embeddings and handles success/failure.
+    This function batches items by (model, dimensions) and calls the OpenAI API
+    in chunks of OPENAI_EMBEDDING_BATCH_SIZE (2048).
+
+    Args:
+        items: List of QueueItem objects to generate embeddings for
+
+    Returns:
+        Tuple of (successful_embeddings, failed_items)
+    """
+    from orchestra.web.api.log.python2SQL.helpers import _get_embeddings_batch
+
+    if not items:
+        return [], []
+
+    # Group by (model, dimensions) - can't batch different models together
+    by_model: Dict[Tuple[str, Optional[int]], List[QueueItem]] = defaultdict(list)
+    for item in items:
+        key = (item.model, item.dimensions)
+        by_model[key].append(item)
+
+    successful_embeddings: List[GeneratedEmbedding] = []
+    failed_items: List[QueueItem] = []
+
+    for (model, dimensions), model_items in by_model.items():
+        logger.info(
+            f"Generating embeddings for {len(model_items)} items with model {model}",
+        )
+
+        # Process in OpenAI-compatible batches (2048 max)
+        for batch_start in range(0, len(model_items), OPENAI_EMBEDDING_BATCH_SIZE):
+            batch = model_items[batch_start : batch_start + OPENAI_EMBEDDING_BATCH_SIZE]
+            texts = [item.text for item in batch]
+
+            try:
+                # Call OpenAI API
+                embeddings = _get_embeddings_batch(texts, model, dimensions)
+
+                # Create GeneratedEmbedding objects
+                for i, item in enumerate(batch):
+                    successful_embeddings.append(
+                        GeneratedEmbedding(
+                            queue_item_id=item.id,
+                            ref_id=item.ref_id,
+                            key=item.key,
+                            model=item.model,
+                            vector=embeddings[i],
+                            is_deleted=False,
+                        ),
+                    )
+
+                logger.info(f"Generated {len(batch)} embeddings for model {model}")
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to generate embeddings for batch: {e}",
+                    exc_info=True,
+                )
+                # Mark entire batch as failed
+                failed_items.extend(batch)
+
+    return successful_embeddings, failed_items
+
+
+def bulk_insert_embeddings(
+    session: Session,
+    embeddings: List[GeneratedEmbedding],
+    queue_item_ids: List[int],
+) -> int:
+    """
+    Perform a single bulk upsert of all generated embeddings.
+
+    This is more efficient than inserting per-batch because:
+    1. Single transaction for all embeddings
+    2. Single index update operation
+    3. Reduced round-trips to database
 
     Args:
         session: Database session
-        batch: List of QueueItem objects to process (already claimed)
+        embeddings: List of GeneratedEmbedding objects to insert
+        queue_item_ids: IDs of queue items to remove after successful insert
 
     Returns:
-        Number of successfully processed items
+        Number of embeddings inserted
     """
-    # Import models here to avoid circular imports at module level
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
-    from orchestra.web.api.log.python2SQL.helpers import _get_embeddings_batch
 
-    if not batch:
+    if not embeddings:
         return 0
 
-    batch_ids = [item.id for item in batch]
-
     try:
-        # Extract texts and generate embeddings
-        texts = [item.text for item in batch]
-        model = batch[0].model  # All items in batch have same model
-        dimensions = batch[0].dimensions
-
-        logger.info(f"Generating {len(texts)} embeddings for model {model}")
-
-        # Call OpenAI API (using sync wrapper since worker runs in sync context)
-        embeddings = _get_embeddings_batch(texts, model, dimensions)
-
         # Prepare embedding objects for bulk insert
-        embedding_objects = [
+        embedding_dicts = [
             {
-                "ref_id": batch[i].ref_id,
-                "key": batch[i].key,
-                "model": batch[i].model,
-                "vector": embeddings[i],
+                "ref_id": emb.ref_id,
+                "key": emb.key,
+                "model": emb.model,
+                "vector": emb.vector,
                 "is_deleted": False,
             }
-            for i in range(len(batch))
+            for emb in embeddings
         ]
 
         # Bulk upsert embeddings (handles soft-deleted rows by resurrecting them)
-        stmt = insert(Embedding).values(embedding_objects)
+        stmt = insert(Embedding).values(embedding_dicts)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_embedding",
             set_={
@@ -283,37 +363,52 @@ def process_embedding_batch(session: Session, batch: List[QueueItem]) -> int:
 
         # Delete processed items from queue
         session.query(EmbeddingQueue).filter(
-            EmbeddingQueue.id.in_(batch_ids),
+            EmbeddingQueue.id.in_(queue_item_ids),
         ).delete(synchronize_session=False)
 
         session.commit()
-        logger.info(f"Successfully processed {len(batch)} embeddings")
-        return len(batch)
+        logger.info(f"Bulk inserted {len(embeddings)} embeddings")
+        return len(embeddings)
 
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to process batch: {e}", exc_info=True)
+        logger.error(f"Failed to bulk insert embeddings: {e}", exc_info=True)
+        raise
 
-        # Update retry count and status for each item
-        for item in batch:
-            new_retry_count = item.retry_count + 1
-            new_status = "failed" if new_retry_count >= MAX_RETRIES else "pending"
 
-            session.execute(
-                update(EmbeddingQueue)
-                .where(EmbeddingQueue.id == item.id)
-                .values(
-                    status=new_status,
-                    retry_count=new_retry_count,
-                    error_message=str(e)[:500],  # Truncate error message
-                    # Clear processing_started_at when returning to pending
-                    processing_started_at=None
-                    if new_status == "pending"
-                    else item.created_at,
-                ),
-            )
-        session.commit()
-        return 0
+def mark_items_as_failed(
+    session: Session,
+    items: List[QueueItem],
+    error_message: str,
+) -> None:
+    """
+    Update failed items with incremented retry count.
+
+    Items that exceed MAX_RETRY_ATTEMPTS are marked as 'failed'.
+    Otherwise, they're returned to 'pending' for retry.
+
+    Args:
+        session: Database session
+        items: List of QueueItem objects that failed
+        error_message: Error message to store
+    """
+    from orchestra.db.models.orchestra_models import EmbeddingQueue
+
+    for item in items:
+        new_retry_count = item.retry_count + 1
+        new_status = "failed" if new_retry_count >= MAX_RETRY_ATTEMPTS else "pending"
+
+        session.execute(
+            update(EmbeddingQueue)
+            .where(EmbeddingQueue.id == item.id)
+            .values(
+                status=new_status,
+                retry_count=new_retry_count,
+                error_message=error_message[:500],  # Truncate
+                processing_started_at=None if new_status == "pending" else None,
+            ),
+        )
+    session.commit()
 
 
 def get_queue_metrics(session: Session) -> dict:
@@ -350,27 +445,32 @@ def get_queue_metrics(session: Session) -> dict:
 
 def process_pending_embeddings(
     session: Session,
-    limit: int = DEFAULT_LIMIT,
-    max_time_seconds: int = DEFAULT_TIME_LIMIT_SECONDS,
+    limit: int = DEFAULT_MAX_ITEMS_PER_INVOCATION,
+    max_time_seconds: int = DEFAULT_MAX_TIME_SECONDS,
 ) -> dict:
     """
-    Process pending embeddings with both time and size bounding.
+    Process pending embeddings with time and size bounding.
 
     This function:
-    1. Resets any stale items stuck in 'processing' state
-    2. Atomically claims batches using FOR UPDATE SKIP LOCKED
-    3. Processes batches until limit or time bound is reached
-    4. Returns detailed metrics about the processing run
+    1. Resets any stale items stuck in 'processing' state (crash recovery)
+    2. Atomically claims items using FOR UPDATE SKIP LOCKED
+    3. Generates all embeddings (in OpenAI-compatible batches of 2048)
+    4. Performs a SINGLE bulk insert for all generated embeddings
+    5. Returns detailed metrics about the processing run
+
+    The key optimization is that we generate embeddings in multiple API calls
+    (limited by OpenAI's 2048 batch size), but only do ONE database insert
+    at the end of the invocation. This reduces database load and transaction
+    overhead significantly for large batches.
 
     Args:
         session: Database session
-        limit: Maximum number of embeddings to process
-        max_time_seconds: Maximum time to spend processing (in seconds)
+        limit: Maximum number of embeddings to process (default: 5000)
+        max_time_seconds: Maximum time to spend processing in seconds (default: 280)
 
     Returns:
         Dictionary with processing metrics
     """
-
     start_time = time.time()
 
     # Reset any stale items stuck in 'processing' state (crash recovery)
@@ -385,66 +485,98 @@ def process_pending_embeddings(
         f"stale_reset={stale_reset}",
     )
 
-    total_processed = 0
-    total_errors = 0
+    # Collect all items to process in this invocation
+    all_claimed_items: List[QueueItem] = []
     time_limit_reached = False
     size_limit_reached = False
 
-    while total_processed < limit:
+    # Phase 1: Claim items up to the limit (or until queue is empty)
+    while len(all_claimed_items) < limit:
         # Check time bound
         elapsed = time.time() - start_time
         if elapsed >= max_time_seconds:
-            logger.info(f"Time limit reached ({elapsed:.1f}s), stopping")
+            logger.info(f"Time limit reached during claiming ({elapsed:.1f}s)")
             time_limit_reached = True
             break
 
         # Check shutdown flag
         if shutdown_flag:
-            logger.info("Shutdown requested, stopping processing")
+            logger.info("Shutdown requested, stopping")
             break
 
-        # Calculate batch size (don't exceed remaining limit)
-        remaining = limit - total_processed
-        batch_size = min(BATCH_SIZE, remaining)
+        # Calculate how many more items we can claim
+        remaining = limit - len(all_claimed_items)
+        # Don't claim more than OPENAI_EMBEDDING_BATCH_SIZE at a time for efficiency
+        batch_size = min(OPENAI_EMBEDDING_BATCH_SIZE, remaining)
 
         # Atomically claim a batch of pending items
         claimed = claim_pending_batch(session, batch_size)
 
         if not claimed:
-            logger.debug("No more pending embeddings to process")
+            logger.debug("No more pending embeddings to claim")
             break
 
-        logger.info(f"Claimed {len(claimed)} items for processing")
+        all_claimed_items.extend(claimed)
+        logger.info(
+            f"Claimed {len(claimed)} items (total: {len(all_claimed_items)}/{limit})",
+        )
 
-        # Group by (model, dimensions) - can't batch different models together
-        by_model = defaultdict(list)
-        for item in claimed:
-            key = (item.model, item.dimensions)
-            by_model[key].append(item)
-
-        # Process each model's embeddings
-        for (model, dimensions), items in by_model.items():
-            logger.info(f"Processing {len(items)} embeddings for model {model}")
-
-            # Process in sub-batches if needed (though usually same model)
-            for i in range(0, len(items), BATCH_SIZE):
-                if shutdown_flag:
-                    break
-
-                sub_batch = items[i : i + BATCH_SIZE]
-                processed = process_embedding_batch(session, sub_batch)
-
-                if processed > 0:
-                    total_processed += processed
-                else:
-                    total_errors += len(sub_batch)
-
-        # Check if we've hit the size limit
-        if total_processed >= limit:
+        if len(all_claimed_items) >= limit:
             size_limit_reached = True
             break
 
-    # Log final metrics
+    if not all_claimed_items:
+        duration = time.time() - start_time
+        return {
+            "processed": 0,
+            "errors": 0,
+            "duration": duration,
+            "throughput": 0,
+            "error_rate": 0,
+            "stale_reset": stale_reset,
+            "time_limit_reached": time_limit_reached,
+            "size_limit_reached": size_limit_reached,
+        }
+
+    logger.info(f"Total claimed: {len(all_claimed_items)} items")
+
+    # Phase 2: Generate all embeddings (multiple API calls, batched by 2048)
+    successful_embeddings, failed_items = generate_embeddings_for_items(
+        all_claimed_items,
+    )
+
+    # Phase 3: Single bulk insert for all successful embeddings
+    total_processed = 0
+    total_errors = len(failed_items)
+
+    if successful_embeddings:
+        try:
+            # Get queue item IDs for successful embeddings
+            successful_queue_ids = [emb.queue_item_id for emb in successful_embeddings]
+
+            total_processed = bulk_insert_embeddings(
+                session,
+                successful_embeddings,
+                successful_queue_ids,
+            )
+        except Exception as e:
+            logger.error(f"Bulk insert failed: {e}", exc_info=True)
+            # All items that were supposedly successful are now failed
+            failed_items.extend(
+                [
+                    item
+                    for item in all_claimed_items
+                    if item.id in [emb.queue_item_id for emb in successful_embeddings]
+                ],
+            )
+            total_errors = len(failed_items)
+            total_processed = 0
+
+    # Phase 4: Handle failed items
+    if failed_items:
+        mark_items_as_failed(session, failed_items, "Embedding generation failed")
+
+    # Calculate final metrics
     duration = time.time() - start_time
     throughput = total_processed / duration if duration > 0 else 0
     error_rate = (
@@ -463,7 +595,6 @@ def process_pending_embeddings(
         f"size_limit_reached={size_limit_reached}",
     )
 
-    # Return detailed metrics
     return {
         "processed": total_processed,
         "errors": total_errors,
@@ -495,7 +626,7 @@ def run_once(session: Session) -> int:
 
 
 def main():
-    """Main entry point for the embedding worker."""
+    """Main entry point for the embedding worker (daemon mode)."""
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -513,9 +644,9 @@ def main():
                 if processed == 0:
                     # No work to do, sleep for a bit
                     logger.debug(
-                        f"No pending work, sleeping for {POLL_INTERVAL_SECONDS} seconds",
+                        f"No pending work, sleeping for {DAEMON_POLL_INTERVAL_SECONDS}s",
                     )
-                    time.sleep(POLL_INTERVAL_SECONDS)
+                    time.sleep(DAEMON_POLL_INTERVAL_SECONDS)
                 else:
                     logger.info(f"Processed {processed} embeddings")
 

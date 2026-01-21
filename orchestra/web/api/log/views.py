@@ -4990,9 +4990,17 @@ def process_traffic_logs(
         )
 
 
-# Hard cap for max_items to prevent pathological calls
-MAX_ITEMS_HARD_CAP = 2500
-MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
+# =============================================================================
+# Embedding Queue Endpoint Configuration
+# =============================================================================
+
+# Hard caps - absolute limits to prevent pathological/abusive calls
+EMBEDDING_QUEUE_MAX_ITEMS_HARD_CAP = 10000  # Absolute maximum items per API call
+EMBEDDING_QUEUE_MAX_TIME_HARD_CAP = 600  # 10 minutes max
+
+# Defaults - sensible values for Cloud Scheduler integration (3-minute schedule)
+EMBEDDING_QUEUE_DEFAULT_MAX_ITEMS = 5000  # Recommended for 3-minute scheduler
+EMBEDDING_QUEUE_DEFAULT_MAX_TIME = 170  # 2:50 - leaves 10s buffer before next run
 
 
 @admin_router.post(
@@ -5003,23 +5011,23 @@ MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
             "content": {
                 "application/json": {
                     "example": {
-                        "message": "Processed 150 embeddings in 45.23s",
+                        "message": "Processed 5000 embeddings in 85.5s",
                         "status": "success",
                         "queue_drained": False,
                         "metrics": {
-                            "processed": 150,
+                            "processed": 5000,
                             "errors": 0,
-                            "duration": 45.23,
-                            "throughput": 3.32,
+                            "duration": 85.5,
+                            "throughput": 58.48,
                             "time_limit_reached": False,
                             "size_limit_reached": True,
                             "queue_before": {
-                                "pending": 500,
+                                "pending": 10000,
                                 "processing": 0,
                                 "failed": 2,
                             },
                             "queue_after": {
-                                "pending": 350,
+                                "pending": 5000,
                                 "processing": 0,
                                 "failed": 2,
                             },
@@ -5035,16 +5043,18 @@ MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
 )
 def process_embedding_queue(
     max_items: int = Query(
-        2500,
-        le=MAX_ITEMS_HARD_CAP,
-        description=f"Maximum embeddings to process per call (hard cap: {MAX_ITEMS_HARD_CAP}). "
-        "Recommended: 2500 for 5-minute scheduler.",
+        EMBEDDING_QUEUE_DEFAULT_MAX_ITEMS,
+        le=EMBEDDING_QUEUE_MAX_ITEMS_HARD_CAP,
+        description="Maximum embeddings to process per call. "
+        "Default: 5000, Hard cap: 10000. "
+        "Recommended: 5000 for 3-minute Cloud Scheduler interval.",
     ),
     max_time_seconds: int = Query(
-        280,
-        le=MAX_TIME_SECONDS_HARD_CAP,
-        description=f"Maximum processing time in seconds (hard cap: {MAX_TIME_SECONDS_HARD_CAP}). "
-        "Set slightly below scheduler interval to avoid overlap (e.g., 280s for 5-minute schedule).",
+        EMBEDDING_QUEUE_DEFAULT_MAX_TIME,
+        le=EMBEDDING_QUEUE_MAX_TIME_HARD_CAP,
+        description="Maximum processing time in seconds. "
+        "Default: 170s, Hard cap: 600s. "
+        "Set ~10s below scheduler interval to avoid overlap.",
     ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
@@ -5052,20 +5062,25 @@ def process_embedding_queue(
     """
     Process pending embeddings from the queue.
 
+    **How It Works:**
+    1. Claims items atomically using FOR UPDATE SKIP LOCKED (multi-worker safe)
+    2. Generates embeddings via OpenAI API in batches of 2048 (API limit)
+    3. Performs a SINGLE bulk insert for all embeddings (optimized)
+    4. Returns detailed metrics about the processing run
+
     **Cloud Scheduler Configuration:**
-    - Recommended: `*/5 * * * *` with `max_items=2500, max_time_seconds=280`
-    - For faster processing: `*/2 * * * *` with `max_items=1000, max_time_seconds=115`
+    - Recommended: `*/3 * * * *` (every 3 min) with `max_items=5000, max_time_seconds=170`
+    - Expected throughput: ~100k embeddings/hour
 
     **Response Fields:**
-    - `queue_drained`: True if all pending items were processed (queue is empty)
+    - `queue_drained`: True if queue is empty after processing
     - `time_limit_reached`: True if stopped due to time bound
     - `size_limit_reached`: True if stopped due to max_items limit
 
-    **Features:**
-    - Atomic queue claiming with FOR UPDATE SKIP LOCKED (multi-worker safe)
-    - Automatic reset of stale items stuck in 'processing' state (crash recovery)
-    - Time and size bounded execution for predictable scheduler behavior
-    - Safe for concurrent invocation (no double-processing)
+    **Safety Features:**
+    - FOR UPDATE SKIP LOCKED prevents double-processing
+    - Stale items (stuck in 'processing' > 5 min) are auto-reset
+    - Time-bounded to fit within scheduler intervals
     """
     try:
         from orchestra.workers.embedding_worker import (
