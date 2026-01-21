@@ -52,11 +52,11 @@ BATCH_SIZE = 2048
 MAX_RETRIES = 3
 
 # Processing bounds - defaults for process_pending_embeddings()
-DEFAULT_LIMIT = 5000  # Default max items per invocation
-DEFAULT_TIME_LIMIT_SECONDS = 300  # Default time bound (5 minutes)
+DEFAULT_LIMIT = 2500  # Default max items per invocation
+DEFAULT_TIME_LIMIT_SECONDS = 280  # Default time bound (~5 minutes, with buffer)
 
 # Crash recovery - reset items stuck in 'processing' longer than this
-STALE_THRESHOLD_MINUTES = 10
+STALE_THRESHOLD_MINUTES = 5
 
 # Daemon mode only - sleep interval when queue is empty
 POLL_INTERVAL_SECONDS = 30
