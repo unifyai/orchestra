@@ -1091,16 +1091,26 @@ async def test_member_removal_preserves_other_assistant_logs(
     # Verify Assistant B still exists
     assert assistant_dao.get_assistant_by_agent_id(agent_id_b) is not None
 
-    # Verify log A is removed from shared contexts, but log B remains
-    for ctx in [tier1_context, tier2_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-        assert log_id_a not in log_ids, f"Log A should be removed from {ctx}"
-        assert log_id_b in log_ids, f"Log B should still exist in {ctx}"
+    # Verify log A is removed from tier2 (User/All/*) but remains in tier1 (All/*)
+    # due to archive protection - topmost All/* contexts are preserved as historical records
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier2_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
+    assert log_id_a not in log_ids, f"Log A should be removed from {tier2_context}"
+    assert log_id_b in log_ids, f"Log B should still exist in {tier2_context}"
+
+    # Archive protection: log A remains in topmost All/* context for historical record
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier1_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
+    assert log_id_a in log_ids, f"Log A should remain in archive {tier1_context}"
+    assert log_id_b in log_ids, f"Log B should still exist in {tier1_context}"
 
     # Verify Assistant B's Tier 3 context is untouched
     logs_resp_b = await client.get(

@@ -3278,12 +3278,17 @@ async def test_delete_context_assistants_cleans_all_tiers(client: AsyncClient):
     )
     assert response.status_code == 200
 
-    # Verify log is removed from ALL tiers (sibling cleanup worked)
-    for ctx in [tier1, tier2]:
-        logs = await fetch_logs(client, project_name, context=ctx)
-        assert log_id not in [
-            log["id"] for log in logs
-        ], f"Log should be removed from sibling context {ctx}"
+    # Verify log is removed from tier2, but remains in tier1 (archive protection)
+    logs = await fetch_logs(client, project_name, context=tier2)
+    assert log_id not in [
+        log["id"] for log in logs
+    ], f"Log should be removed from sibling context {tier2}"
+
+    # Archive protection: log remains in topmost All/* context
+    logs = await fetch_logs(client, project_name, context=tier1)
+    assert log_id in [
+        log["id"] for log in logs
+    ], f"Log should remain in archive context {tier1}"
 
 
 @pytest.mark.anyio
@@ -3394,12 +3399,17 @@ async def test_delete_context_from_tier2_cleans_other_tiers(client: AsyncClient)
     )
     assert response.status_code == 200
 
-    # Verify log is removed from tier1 and tier3 as well
-    for ctx in [tier1, tier3]:
-        logs = await fetch_logs(client, project_name, context=ctx)
-        assert log_id not in [
-            log["id"] for log in logs
-        ], f"Log should be removed from {ctx} when tier2 is deleted"
+    # Verify log is removed from tier3, but remains in tier1 (archive protection)
+    logs = await fetch_logs(client, project_name, context=tier3)
+    assert log_id not in [
+        log["id"] for log in logs
+    ], f"Log should be removed from {tier3} when tier2 is deleted"
+
+    # Archive protection: log remains in topmost All/* context
+    logs = await fetch_logs(client, project_name, context=tier1)
+    assert log_id in [
+        log["id"] for log in logs
+    ], f"Log should remain in archive {tier1} when tier2 is deleted"
 
 
 @pytest.mark.anyio
@@ -3473,14 +3483,26 @@ async def test_delete_context_include_children_with_sibling_cleanup(
     result = response.json()
     assert "Deleted 2 context(s)" in result["info"]
 
-    # Verify all logs are removed from sibling contexts
+    # Verify logs are removed from User/All/* contexts but remain in All/* (archive protection)
+    # log_ids[0] is for Logs, log_ids[1] is for Chats
+    sub_ctx_log_map = {"Logs": log_ids[0], "Chats": log_ids[1]}
+
     for sub_ctx in ["Logs", "Chats"]:
-        for sibling in [f"All/{sub_ctx}", f"{user}/All/{sub_ctx}"]:
-            logs = await fetch_logs(client, project_name, context=sibling)
-            for log_id in log_ids:
-                assert log_id not in [
-                    log["id"] for log in logs
-                ], f"Log should be removed from {sibling}"
+        log_id = sub_ctx_log_map[sub_ctx]
+
+        # Logs should be removed from User/All/* (not protected)
+        tier2_ctx = f"{user}/All/{sub_ctx}"
+        logs = await fetch_logs(client, project_name, context=tier2_ctx)
+        assert log_id not in [
+            log["id"] for log in logs
+        ], f"Log should be removed from {tier2_ctx}"
+
+        # Archive protection: logs remain in topmost All/* contexts
+        tier1_ctx = f"All/{sub_ctx}"
+        logs = await fetch_logs(client, project_name, context=tier1_ctx)
+        assert log_id in [
+            log["id"] for log in logs
+        ], f"Log should remain in archive {tier1_ctx}"
 
 
 @pytest.mark.anyio
@@ -3533,9 +3555,14 @@ async def test_unitytests_project_sibling_cleanup(client: AsyncClient):
     )
     assert response.status_code == 200
 
-    # Verify log is removed from sibling contexts
-    for ctx in [tier1, tier2]:
-        logs = await fetch_logs(client, project_name, context=ctx)
-        assert log_id not in [
-            log["id"] for log in logs
-        ], f"Log should be removed from {ctx} in UnityTests project"
+    # Verify log is removed from tier2 but remains in tier1 (archive protection)
+    logs = await fetch_logs(client, project_name, context=tier2)
+    assert log_id not in [
+        log["id"] for log in logs
+    ], f"Log should be removed from {tier2} in UnityTests project"
+
+    # Archive protection: log remains in topmost All/* context
+    logs = await fetch_logs(client, project_name, context=tier1)
+    assert log_id in [
+        log["id"] for log in logs
+    ], f"Log should remain in archive {tier1} in UnityTests project"
