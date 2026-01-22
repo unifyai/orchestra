@@ -886,8 +886,8 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     dbsession.expire_all()
     assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
 
-    # Verify log is removed from ALL three contexts via sibling cleanup
-    for ctx in [tier1_context, tier2_context, tier3_context]:
+    # Verify log is removed from tier2 and tier3 contexts via sibling cleanup
+    for ctx in [tier2_context, tier3_context]:
         logs_resp = await client.get(
             f"/v0/logs?project_name=Assistants&context={ctx}",
             headers=org_headers,
@@ -896,6 +896,16 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
             assert log_id not in [
                 log["id"] for log in logs_resp.json()["logs"]
             ], f"Log should be cleaned from {ctx}"
+
+    # Archive protection: log remains in topmost All/* context for historical record
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier1_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    assert log_id in [
+        log["id"] for log in logs_resp.json()["logs"]
+    ], f"Log should remain in archive {tier1_context}"
 
 
 @pytest.mark.anyio
