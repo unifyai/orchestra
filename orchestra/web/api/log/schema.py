@@ -624,9 +624,63 @@ class QueryLogsPostBody(BaseModel):
 
 
 class AtomicFieldUpdateRequest(BaseModel):
-    """Request model for atomic field operations that are race-safe under concurrent updates."""
+    """Request model for atomic field operations that are race-safe under concurrent updates.
+
+    This endpoint supports two modes:
+    1. Update mode (default): Updates an existing log entry by log_id
+    2. Upsert mode: When project/context/unique_keys/initial_data are provided,
+       finds or creates a log entry by unique keys, then applies the atomic operation.
+
+    Upsert mode uses advisory locks to handle concurrent first inserts safely.
+    """
 
     operation: str = Field(
         description="Atomic operation to apply. Supported formats: +N, -N, *N, /N where N is a number.",
         example="+1",
+    )
+
+    # Optional fields for upsert mode
+    project: Optional[str] = Field(
+        default=None,
+        description="(Upsert mode) Name of the project.",
+        example="Assistants",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="(Upsert mode) Context path for the log.",
+        example="JohnDoe/AdaLovelace/Spending/Monthly",
+    )
+    unique_keys: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="(Upsert mode) Unique key configuration for the context. Maps key names to types (str, int, float).",
+        example={"_assistant_id": "str", "month": "str"},
+    )
+    initial_data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="(Upsert mode) Data to use when creating a new log entry. Must include all unique key values.",
+        example={"_assistant_id": "123", "month": "2026-01", "_org_id": 456},
+    )
+    add_to_all_context: bool = Field(
+        default=False,
+        description="(Upsert mode) If true, also adds the log to the 'All/*' archive context.",
+    )
+
+
+class AtomicFieldUpdateResponse(BaseModel):
+    """Response from atomic field update operation."""
+
+    new_value: float = Field(
+        description="The new value of the field after the operation."
+    )
+    log_id: Optional[int] = Field(
+        default=None,
+        description="ID of the log entry (included in upsert mode).",
+    )
+    created: Optional[bool] = Field(
+        default=None,
+        description="True if a new log was created (upsert mode only).",
+    )
+    mirrored_contexts: Optional[List[str]] = Field(
+        default=None,
+        description="List of archive contexts the log was mirrored to (upsert mode only).",
     )

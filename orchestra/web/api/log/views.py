@@ -49,6 +49,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
     AtomicFieldUpdateRequest,
+    AtomicFieldUpdateResponse,
     CreateDerivedEntriesConfig,
     CreateFieldsRequest,
     CreateLogConfig,
@@ -1184,6 +1185,7 @@ def update_logs(
 
 @router.patch(
     "/logs/{log_id}/fields/{field_name}/atomic",
+    response_model=AtomicFieldUpdateResponse,
     responses={
         200: {
             "description": "Atomic operation applied successfully",
@@ -1227,9 +1229,7 @@ def atomic_field_update(
     Apply an atomic operation to a numeric field in a log entry.
 
     This endpoint performs race-safe atomic updates directly in PostgreSQL,
-    ensuring correct results even under high concurrent load. For example,
-    if N concurrent requests all send `+1`, the final value will be correctly
-    incremented by N.
+    ensuring correct results even under high concurrent load.
 
     Supported operations:
     - `+N`: Add N to the current value
@@ -1238,6 +1238,111 @@ def atomic_field_update(
     - `/N`: Divide the current value by N
 
     If the field doesn't exist or is NULL, it is treated as 0 before the operation.
+    """
+    return _atomic_field_update_impl(
+        request_fastapi=request_fastapi,
+        log_id=log_id,
+        field_name=field_name,
+        body=body,
+        session=session,
+    )
+
+
+@router.post(
+    "/logs/atomic",
+    response_model=AtomicFieldUpdateResponse,
+    responses={
+        200: {
+            "description": "Atomic upsert applied successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "log_id": 789,
+                        "new_value": 83.50,
+                        "created": False,
+                        "mirrored_contexts": ["All/Spending/Monthly"],
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid operation format or missing required fields",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid operation format. Use +N, -N, *N, /N where N is a number.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Project not found."},
+                },
+            },
+        },
+    },
+)
+def atomic_field_upsert(
+    request_fastapi: Request,
+    body: AtomicFieldUpdateRequest = Body(...),
+    session=Depends(get_db_session),
+):
+    """
+    Atomic find-or-create with atomic field update (upsert mode).
+
+    This endpoint atomically:
+    1. Ensures the context exists with correct unique_keys configuration
+    2. Acquires an advisory lock on the unique key values (prevents race on first insert)
+    3. Finds an existing log by unique_keys or creates it with initial_data
+    4. Applies an atomic operation to the specified field
+    5. If add_to_all_context=true, mirrors the log to the All/* archive context
+
+    Required body fields for upsert mode:
+    - project: Name of the project
+    - context: Context path for the log
+    - unique_keys: Key name to type mapping (e.g., {"_assistant_id": "str", "month": "str"})
+    - initial_data: Data for new log entry (must include all unique key values)
+    - operation: Atomic operation (+N, -N, *N, /N)
+
+    This is race-safe for concurrent first inserts - only one request will create the log,
+    and all concurrent requests will correctly increment the field.
+    """
+    # Validate upsert mode has required fields
+    if (
+        not body.project
+        or not body.context
+        or not body.unique_keys
+        or not body.initial_data
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Upsert mode requires: project, context, unique_keys, and initial_data.",
+        )
+
+    return _atomic_field_update_impl(
+        request_fastapi=request_fastapi,
+        log_id=None,
+        field_name=None,
+        body=body,
+        session=session,
+    )
+
+
+def _atomic_field_update_impl(
+    request_fastapi: Request,
+    log_id: Optional[int],
+    field_name: Optional[str],
+    body: AtomicFieldUpdateRequest,
+    session,
+) -> AtomicFieldUpdateResponse:
+    """Internal implementation for atomic field updates.
+
+    Supports two modes:
+    1. Update mode: log_id and field_name are provided
+    2. Upsert mode: body contains project/context/unique_keys/initial_data
     """
     user_id = request_fastapi.state.user_id
 
@@ -1259,57 +1364,331 @@ def atomic_field_update(
             detail="Division by zero is not allowed.",
         )
 
-    # Check that the log exists and user has permission
-    log_event = session.query(LogEvent).filter(LogEvent.id == log_id).first()
-    if not log_event:
-        raise HTTPException(status_code=404, detail="Log not found.")
+    # Determine mode based on parameters
+    is_upsert_mode = body.project is not None and body.context is not None
 
-    # Verify user has access to this log's project
+    if is_upsert_mode:
+        # === UPSERT MODE ===
+        return _atomic_upsert_mode(
+            user_id=user_id,
+            body=body,
+            operator=operator,
+            operand=operand,
+            session=session,
+        )
+    else:
+        # === UPDATE MODE ===
+        if log_id is None or field_name is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Update mode requires log_id and field_name in the path.",
+            )
+
+        # Check that the log exists and user has permission
+        log_event = session.query(LogEvent).filter(LogEvent.id == log_id).first()
+        if not log_event:
+            raise HTTPException(status_code=404, detail="Log not found.")
+
+        # Verify user has access to this log's project
+        project_dao = ProjectDAO(
+            session,
+            OrganizationMemberDAO(session),
+            ContextDAO(session),
+        )
+        project = project_dao.filter_by_user_access(
+            user_id=user_id,
+            id=log_event.project_id,
+        )
+        if not project:
+            raise HTTPException(status_code=404, detail="Log not found.")
+
+        # Build the atomic SQL update
+        sql = text(
+            f"""
+            UPDATE log_event
+            SET data = jsonb_set(
+                COALESCE(data, '{{}}'::jsonb),
+                :path,
+                to_jsonb(COALESCE((data->>:field)::numeric, 0) {operator} :operand)
+            ),
+            updated_at = :now
+            WHERE id = :log_id
+            RETURNING (data->>:field)::numeric as new_value
+            """,
+        )
+
+        result = session.execute(
+            sql,
+            {
+                "log_id": log_id,
+                "field": field_name,
+                "path": "{" + field_name + "}",
+                "operand": operand,
+                "now": datetime.now(timezone.utc),
+            },
+        ).fetchone()
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Log not found.")
+
+        session.commit()
+
+        return AtomicFieldUpdateResponse(new_value=result.new_value)
+
+
+def _atomic_upsert_mode(
+    user_id: str,
+    body: AtomicFieldUpdateRequest,
+    operator: str,
+    operand: float,
+    session,
+) -> AtomicFieldUpdateResponse:
+    """Handle atomic upsert mode - find or create log, then apply operation."""
+    # Validate that all unique keys are present in initial_data
+    for key_name in body.unique_keys.keys():
+        if key_name not in body.initial_data:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing unique key '{key_name}' in initial_data.",
+            )
+
+    # Get or verify project access
     project_dao = ProjectDAO(
         session,
         OrganizationMemberDAO(session),
         ContextDAO(session),
     )
-    project = project_dao.filter_by_user_access(
+    projects = project_dao.filter_by_user_access(
         user_id=user_id,
-        id=log_event.project_id,
+        name=body.project,
     )
-    if not project:
-        raise HTTPException(status_code=404, detail="Log not found.")
+    if not projects:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    project = projects[0][0]  # filter_by_user_access returns list of tuples
+    project_id = project.id
 
-    # Build the atomic SQL update
-    # The operator is validated by the regex match, so it's safe to use in SQL
-    sql = text(
+    context_dao = ContextDAO(session)
+
+    # Create/get context FIRST - this commits internally which is fine
+    # The context needs to be visible to all concurrent transactions
+    context_id = context_dao.get_or_create(
+        project_id=project_id,
+        name=body.context,
+        unique_keys=body.unique_keys,
+    )
+
+    # Build the unique key filter conditions for SQL
+    unique_key_conditions = []
+    unique_key_values = []
+    for key_name in body.unique_keys.keys():
+        key_value = body.initial_data[key_name]
+        unique_key_conditions.append(f"data->>'{key_name}' = :key_{key_name}")
+        unique_key_values.append((f"key_{key_name}", str(key_value)))
+
+    # Build a hash for the advisory lock from project + context + unique key values
+    # Include context_id to ensure we're locking on the same context
+    lock_key_parts = [str(project_id), str(context_id)]
+    for key_name in sorted(body.unique_keys.keys()):
+        lock_key_parts.append(str(body.initial_data[key_name]))
+    lock_key_str = ":".join(lock_key_parts)
+
+    # Acquire advisory lock on unique key combination
+    # This serializes log operations for the same context+unique_keys
+    # The lock is held until this transaction commits (after log insert/update)
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": lock_key_str},
+    )
+
+    # Build the conditions string
+    conditions_str = " AND ".join(unique_key_conditions)
+
+    # Check if the log exists
+    check_sql = text(
         f"""
-        UPDATE log_event
-        SET data = jsonb_set(
-            COALESCE(data, '{{}}'::jsonb),
-            :path,
-            to_jsonb(COALESCE((data->>:field)::numeric, 0) {operator} :operand)
-        ),
-        updated_at = :now
-        WHERE id = :log_id
-        RETURNING (data->>:field)::numeric as new_value
+        SELECT le.id, le.data
+        FROM log_event le
+        JOIN log_event_context lec ON lec.log_event_id = le.id
+        WHERE le.project_id = :project_id
+          AND lec.context_id = :context_id
+          AND {conditions_str}
+        FOR UPDATE
         """,
     )
 
-    result = session.execute(
-        sql,
-        {
-            "log_id": log_id,
-            "field": field_name,
-            "path": "{" + field_name + "}",
-            "operand": operand,
-            "now": datetime.now(timezone.utc),
-        },
-    ).fetchone()
+    check_params = {
+        "project_id": project_id,
+        "context_id": context_id,
+    }
+    for param_name, param_value in unique_key_values:
+        check_params[param_name] = param_value
 
-    if not result:
-        raise HTTPException(status_code=404, detail="Log not found.")
+    existing = session.execute(check_sql, check_params).fetchone()
+
+    # For upsert mode, we need to determine the field name
+    # It's the first key in initial_data that's not in unique_keys,
+    # or we infer from a common pattern. For spending, it's typically the
+    # numeric field being incremented. Let's require explicit field specification.
+    # We'll look for a field that's numeric in initial_data but not a unique key.
+    field_name = None
+    for key, value in body.initial_data.items():
+        if key not in body.unique_keys and isinstance(value, (int, float)):
+            field_name = key
+            break
+
+    # If no field found, use the first non-unique-key field
+    if field_name is None:
+        for key in body.initial_data.keys():
+            if key not in body.unique_keys:
+                field_name = key
+                break
+
+    if field_name is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not determine field to update. initial_data must contain at least one non-unique-key field.",
+        )
+
+    # Validate field name for SQL injection
+    if '"' in field_name or "'" in field_name or "--" in field_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid field name.",
+        )
+
+    if existing:
+        # Update existing log
+        update_sql = text(
+            f"""
+            UPDATE log_event
+            SET data = jsonb_set(
+                    COALESCE(data, '{{}}'::jsonb),
+                    :path,
+                    to_jsonb(COALESCE((data->>'{field_name}')::numeric, 0) {operator} :operand)
+                ),
+                updated_at = :now
+            WHERE id = :log_id
+            RETURNING id, (data->>'{field_name}')::numeric as new_value
+            """,
+        )
+
+        result = session.execute(
+            update_sql,
+            {
+                "log_id": existing.id,
+                "path": "{" + field_name + "}",
+                "operand": operand,
+                "now": datetime.now(timezone.utc),
+            },
+        ).fetchone()
+
+        log_id = result.id
+        new_value = float(result.new_value)
+        created = False
+    else:
+        # Insert new log
+        initial_data_with_field = dict(body.initial_data)
+        initial_data_with_field[field_name] = operand
+
+        insert_sql = text(
+            f"""
+            INSERT INTO log_event (project_id, data, created_at, updated_at)
+            VALUES (:project_id, CAST(:initial_data AS jsonb), :now, :now)
+            RETURNING id, (data->>'{field_name}')::numeric as new_value
+            """,
+        )
+
+        result = session.execute(
+            insert_sql,
+            {
+                "project_id": project_id,
+                "initial_data": json.dumps(initial_data_with_field),
+                "now": datetime.now(timezone.utc),
+            },
+        ).fetchone()
+
+        log_id = result.id
+        new_value = float(result.new_value)
+        created = True
+
+        # Link to context
+        session.execute(
+            text(
+                """
+                INSERT INTO log_event_context (log_event_id, context_id)
+                VALUES (:log_id, :context_id)
+                """,
+            ),
+            {"log_id": log_id, "context_id": context_id},
+        )
+
+    mirrored_contexts = []
+
+    # If add_to_all_context=true, mirror to archive context
+    if body.add_to_all_context:
+        context_parts = body.context.split("/")
+
+        if "_user" in body.initial_data and "_assistant" in body.initial_data:
+            user_name = str(body.initial_data.get("_user", ""))
+            assistant_name = str(body.initial_data.get("_assistant", ""))
+
+            user_idx = None
+            assistant_idx = None
+            for i, part in enumerate(context_parts):
+                if part == user_name and user_idx is None:
+                    user_idx = i
+                elif part == assistant_name and user_idx is not None:
+                    assistant_idx = i
+                    break
+
+            if user_idx is not None and assistant_idx is not None:
+                prefix_parts = context_parts[:user_idx]
+                subcontext_parts = context_parts[assistant_idx + 1 :]
+
+                if prefix_parts:
+                    archive_context = (
+                        "/".join(prefix_parts) + "/All/" + "/".join(subcontext_parts)
+                    )
+                else:
+                    archive_context = "All/" + "/".join(subcontext_parts)
+
+                archive_context_id = context_dao.get_or_create(
+                    project_id=project_id,
+                    name=archive_context,
+                    unique_keys=body.unique_keys,
+                )
+
+                existing_link = session.execute(
+                    text(
+                        """
+                        SELECT 1 FROM log_event_context
+                        WHERE log_event_id = :log_id AND context_id = :context_id
+                        """,
+                    ),
+                    {"log_id": log_id, "context_id": archive_context_id},
+                ).fetchone()
+
+                if not existing_link:
+                    session.execute(
+                        text(
+                            """
+                            INSERT INTO log_event_context (log_event_id, context_id)
+                            VALUES (:log_id, :context_id)
+                            """,
+                        ),
+                        {"log_id": log_id, "context_id": archive_context_id},
+                    )
+
+                mirrored_contexts.append(archive_context)
 
     session.commit()
 
-    return {"new_value": result.new_value}
+    return AtomicFieldUpdateResponse(
+        new_value=new_value,
+        log_id=log_id,
+        created=created,
+        mirrored_contexts=mirrored_contexts if mirrored_contexts else None,
+    )
 
 
 def _update_logs(
