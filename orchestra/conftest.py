@@ -243,6 +243,115 @@ def fastapi_app(
     return application
 
 
+@pytest.fixture
+def fastapi_app_concurrent(
+    _engine: Engine,
+    worker_id,
+) -> Generator[FastAPI, None, None]:
+    """
+    FastAPI app fixture that uses INDEPENDENT sessions per request.
+
+    Use this for tests that need true transaction isolation (e.g., advisory locks,
+    concurrent insert tests). Each request gets its own session/connection.
+
+    This fixture creates a SEPARATE engine with proper transaction management
+    (not AUTOCOMMIT) to accurately reflect production behavior where:
+    - session.commit() actually commits the transaction
+    - pg_advisory_xact_lock is held until session.commit() is called
+    - Advisory locks are released when the endpoint commits (not after)
+
+    Note: Changes are NOT rolled back automatically - tests should use unique
+    identifiers to avoid conflicts between test runs.
+
+    :param _engine: database engine (used to get the database URL).
+    :param worker_id: pytest-xdist worker ID for parallel test isolation.
+    :yields: fastapi app with production-like session management.
+    """
+    from orchestra.settings import settings
+
+    application = get_app()
+
+    # Create a SEPARATE engine for concurrent tests with production-like settings
+    # Production uses READ COMMITTED (PostgreSQL default) with proper transactions.
+    url = str(settings.db_url)
+    if worker_id:
+        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+
+    concurrent_engine = create_engine(
+        url,
+        isolation_level="READ COMMITTED",
+        pool_size=50,
+        max_overflow=50,
+        pool_pre_ping=True,
+    )
+
+    # Create session factory matching production's pattern
+    SessionFactory = sessionmaker(
+        bind=concurrent_engine,
+        expire_on_commit=False,
+    )
+
+    def get_independent_session() -> Generator[Session, None, None]:
+        """
+        Matches production's get_db_session pattern.
+
+        Each call creates a NEW session from the factory. The session manages
+        its own transaction, and session.commit() actually commits to the DB
+        (releasing advisory locks at that point, just like production).
+        """
+        session: Session = SessionFactory()
+        try:
+            yield session
+            session.commit()  # Same as production - commits and releases locks
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    # Override to use production-like session management
+    application.dependency_overrides[get_db_session] = get_independent_session
+
+    # Set up db_engine on app state (normally done in _setup_db during startup)
+    application.state.db_engine = concurrent_engine
+
+    # Also set session factory for middleware that might need it
+    application.state.db_session_factory = SessionFactory
+
+    # Set up OTel tracing
+    setup_opentelemetry(application)
+
+    yield application
+
+    # Cleanup: dispose the concurrent engine to release all connections
+    concurrent_engine.dispose()
+
+
+@pytest.fixture
+async def client_concurrent(
+    fastapi_app_concurrent: FastAPI,
+    anyio_backend: Any,
+    request: pytest.FixtureRequest,
+) -> AsyncGenerator[AsyncClient, None]:
+    """
+    Client fixture for concurrent tests with independent sessions.
+
+    Use this instead of `client` when testing advisory locks, concurrent inserts,
+    or any scenario requiring true transaction isolation between requests.
+
+    :param fastapi_app_concurrent: the application with independent sessions.
+    :param request: pytest request object.
+    :yields: async client for the app.
+    """
+    test_name = request.node.nodeid
+    async with TestAwareAsyncClient(
+        app=fastapi_app_concurrent,
+        base_url="http://test",
+        test_name=test_name,
+    ) as ac:
+        yield ac
+
+
 class TestAwareAsyncClient(AsyncClient):
     """AsyncClient wrapper that injects test name into requests for SQL capture."""
 
