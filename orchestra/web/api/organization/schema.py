@@ -13,7 +13,9 @@ class OrganizationCreate(BaseModel):
     """Schema for creating an organization."""
 
     name: str
-    timezone: Optional[str] = None  # IANA timezone; defaults to owner's timezone if not set
+    timezone: Optional[
+        str
+    ] = None  # IANA timezone; defaults to owner's timezone if not set
     # Note: billing_user_id is always set to owner_id automatically
 
     @field_validator("timezone")
