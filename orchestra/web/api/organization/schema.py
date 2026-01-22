@@ -2,23 +2,48 @@
 
 from datetime import datetime
 from typing import Optional
+from zoneinfo import available_timezones
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+VALID_TIMEZONES = available_timezones()
 
 
 class OrganizationCreate(BaseModel):
     """Schema for creating an organization."""
 
     name: str
+    timezone: Optional[str] = None  # IANA timezone; defaults to owner's timezone if not set
     # Note: billing_user_id is always set to owner_id automatically
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure the timezone is a valid IANA timezone name."""
+        if v is None:
+            return v
+        if v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
 
 
 class OrganizationUpdate(BaseModel):
     """Schema for updating an organization."""
 
     name: Optional[str] = None
+    timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
     # Note: billing_user_id cannot be updated directly.
     # Use the transfer-ownership endpoint to change both owner and billing user.
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure the timezone is a valid IANA timezone name."""
+        if v is None:
+            return v
+        if v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
 
 
 class OrganizationOwnershipTransfer(BaseModel):
@@ -34,6 +59,7 @@ class OrganizationResponse(BaseModel):
     name: str
     owner_id: str
     billing_user_id: str
+    timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
     created_at: datetime
 
     model_config = {"from_attributes": True}
