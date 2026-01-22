@@ -726,6 +726,7 @@ def create_organization(
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
+    auth_user_dao = AuthUserDAO(session)
 
     existing_org = organization_dao.filter(owner_id=owner_id)
     if existing_org:
@@ -739,7 +740,11 @@ def create_organization(
     if not owner_role:
         raise HTTPException(status_code=500, detail="Owner system role not found")
 
-    organization_dao.create(name=name, owner_id=owner_id)
+    # Get owner's timezone to initialize org timezone
+    owner_row = auth_user_dao.get_by_id(owner_id) if owner_id else None
+    owner_timezone = owner_row[0].timezone if owner_row else None
+
+    organization_dao.create(name=name, owner_id=owner_id, timezone=owner_timezone)
     new_org = organization_dao.filter(owner_id=owner_id)
     organization_member_dao.create(
         organization_id=new_org[0][0].id,

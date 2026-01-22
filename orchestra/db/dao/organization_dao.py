@@ -15,6 +15,7 @@ class OrganizationDAO:
         name: str,
         owner_id: str,
         billing_user_id: Optional[str] = None,
+        timezone: Optional[str] = None,
     ) -> Organization:
         """
         Create a new organization.
@@ -22,6 +23,7 @@ class OrganizationDAO:
         :param name: Organization name.
         :param owner_id: ID of the user who owns the organization.
         :param billing_user_id: ID of the user who will be billed. Defaults to owner_id.
+        :param timezone: IANA timezone string (e.g., "America/New_York"). Defaults to None.
         :return: The created Organization object.
         """
         # Default billing user to owner if not specified
@@ -32,6 +34,7 @@ class OrganizationDAO:
             name=name,
             owner_id=owner_id,
             billing_user_id=billing_user_id,
+            timezone=timezone,
         )
         self.session.add(org)
         self.session.flush()  # Flush to get the org ID
@@ -71,6 +74,7 @@ class OrganizationDAO:
         owner_id: Optional[str] = None,
         billing_user_id: Optional[str] = None,
         name: Optional[str] = None,
+        timezone: Optional[str] = None,
     ) -> None:
         """
         Update an organization.
@@ -79,6 +83,7 @@ class OrganizationDAO:
         :param owner_id: New owner user ID.
         :param billing_user_id: New billing user ID.
         :param name: New organization name.
+        :param timezone: IANA timezone string (e.g., "America/New_York").
         """
         query = select(Organization)
         query = query.where(Organization.id == id)
@@ -91,6 +96,8 @@ class OrganizationDAO:
                 setattr(entry, "owner_id", owner_id)
             if billing_user_id:
                 setattr(entry, "billing_user_id", billing_user_id)
+            if timezone is not None:
+                setattr(entry, "timezone", timezone)
 
     def delete(self, id: int):
         """

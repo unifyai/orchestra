@@ -62,6 +62,7 @@ async def create_organization(
 
     The authenticated user will be the owner of the organization.
     billing_user_id is always set to the owner (billing follows ownership).
+    timezone is initialized from the owner's timezone setting.
     Returns the organization details and the owner's organization API key.
     """
     user_id = request_fastapi.state.user_id
@@ -69,6 +70,7 @@ async def create_organization(
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
+    auth_user_dao = AuthUserDAO(session)
 
     # Check if organization name already exists
     existing = org_dao.filter(name=organization.name)
@@ -78,13 +80,22 @@ async def create_organization(
             detail=f"Organization with name '{organization.name}' already exists",
         )
 
+    # Determine timezone: use provided value, fall back to owner's, then UTC
+    if organization.timezone is not None:
+        org_timezone = organization.timezone
+    else:
+        owner_row = auth_user_dao.get_by_id(user_id)
+        org_timezone = owner_row[0].timezone if owner_row else None
+
     # Create organization
     try:
         # billing_user_id always equals owner_id
+        # timezone: provided > owner's timezone > None (runtime defaults to UTC)
         org = org_dao.create(
             name=organization.name,
             owner_id=user_id,
             billing_user_id=user_id,
+            timezone=org_timezone,
         )
 
         # Get Owner system role
@@ -325,11 +336,12 @@ async def update_organization(
                 detail=f"Organization with name '{organization.name}' already exists",
             )
 
-    # Update organization (only name can be updated here)
+    # Update organization (name and timezone can be updated here)
     try:
         org_dao.update(
             id=organization_id,
             name=organization.name,
+            timezone=organization.timezone,
         )
         session.commit()
 
