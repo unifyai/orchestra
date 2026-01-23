@@ -1597,10 +1597,13 @@ class Embedding(Base):
     __tablename__ = "embedding"
 
     id = Column(Integer, primary_key=True)
+    # ref_id uses SET NULL instead of CASCADE to preserve soft-deleted embeddings.
+    # When a LogEvent is deleted, ref_id becomes NULL but the embedding row stays
+    # until index maintenance cleans it up (avoiding HNSW index surgery on delete).
     ref_id = Column(
         Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("log_event.id", ondelete="SET NULL"),
+        nullable=True,
     )
     model = Column(String, nullable=False)
     key = Column(String, nullable=False)
