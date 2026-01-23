@@ -135,9 +135,11 @@ def get_index_size(conn, index_name: str) -> int:
 
 
 def get_soft_deleted_count(conn) -> int:
-    """Get count of soft-deleted embeddings."""
+    """Get count of soft-deleted and orphaned embeddings pending cleanup."""
     result = conn.execute(
-        text("SELECT COUNT(*) FROM embedding WHERE is_deleted = true"),
+        text(
+            "SELECT COUNT(*) FROM embedding WHERE is_deleted = true OR ref_id IS NULL",
+        ),
     ).scalar()
     return result or 0
 
@@ -223,7 +225,11 @@ def cleanup_invalid_indexes(conn) -> List[str]:
 
 def batched_delete_soft_deleted(conn) -> dict:
     """
-    Delete soft-deleted embeddings in batches to avoid long locks.
+    Delete soft-deleted and orphaned embeddings in batches to avoid long locks.
+
+    Cleans up embeddings that are:
+    - Soft-deleted (is_deleted = true): Marked for deletion by application code
+    - Orphaned (ref_id IS NULL): Parent LogEvent was deleted, FK set ref_id to NULL
 
     Returns:
         Dictionary with deletion metrics
@@ -233,7 +239,7 @@ def batched_delete_soft_deleted(conn) -> dict:
     batch_count = 0
 
     logger.info(
-        f"Starting batched deletion of soft-deleted embeddings "
+        f"Starting batched deletion of soft-deleted/orphaned embeddings "
         f"(batch_size={BATCH_DELETE_SIZE})",
     )
 
@@ -243,12 +249,13 @@ def batched_delete_soft_deleted(conn) -> dict:
             break
 
         # Delete a batch using ctid for efficient row identification
+        # Include both soft-deleted (is_deleted = true) AND orphaned (ref_id IS NULL)
         result = conn.execute(
             text(
                 """
                 WITH to_delete AS (
                     SELECT ctid FROM embedding
-                    WHERE is_deleted = true
+                    WHERE is_deleted = true OR ref_id IS NULL
                     LIMIT :batch_size
                 )
                 DELETE FROM embedding
