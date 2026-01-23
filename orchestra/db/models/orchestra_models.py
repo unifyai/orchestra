@@ -217,6 +217,10 @@ class AuthUser(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
+    # Monthly spending limit for this user's assistants (NULL = no limit)
+    # Cannot exceed the org's monthly_spending_cap if user is in an org
+    monthly_spending_cap = Column(Numeric, nullable=True)
+
     # Business classification fields for B2B/B2C tax compliance
     account_type = Column(
         String(20),
@@ -397,6 +401,9 @@ class Organization(Base):
     # Initialized from owner's timezone on creation, defaults to UTC if not set
     timezone = Column(String, nullable=True)
 
+    # Monthly spending limit for all users/assistants in the org (NULL = no limit)
+    monthly_spending_cap = Column(Numeric, nullable=True)
+
     # Relationships
     interfaces = relationship(
         "Interface",
@@ -445,6 +452,10 @@ class OrganizationMember(Base):
         nullable=False,
     )  # RBAC role for this member (Owner, Admin, Member, Viewer, or custom roles)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Monthly spending limit for this member within this org (NULL = no limit)
+    # Set by org admins; cannot exceed org's monthly_spending_cap
+    monthly_spending_cap = Column(Numeric, nullable=True)
 
 
 class OrganizationInvite(Base):
@@ -1145,6 +1156,9 @@ class Assistant(Base):
     phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
+    # Monthly spending limit for this assistant (NULL = no limit)
+    # Cannot exceed the user's monthly_spending_cap
+    monthly_spending_cap = Column(Numeric, nullable=True)
     max_parallel = Column(Integer, nullable=True)
     email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
