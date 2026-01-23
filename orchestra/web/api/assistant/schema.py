@@ -276,6 +276,11 @@ class AssistantRead(AssistantCreate):
         description="Dictionary of secret names to values. Only returned via admin endpoints.",
         example={"openai_api_key": "sk-..."},
     )
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="Monthly spending limit in dollars for this assistant.",
+        example=100.00,
+    )
 
     class Config:
         orm_mode = True
@@ -412,6 +417,11 @@ class AssistantUpdate(BaseModel):
         True,
         description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
         exclude=True,
+    )
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="Monthly spending limit in dollars. Set to null to remove the limit.",
+        example=100.00,
     )
 
     @field_validator("timezone")
@@ -1275,3 +1285,94 @@ class Contact(BaseModel):
     whatsapp_number: Optional[str] = None
     description: Optional[str] = None
     custom_fields: Dict[str, Any] = {}
+
+
+# ============================================================================
+# Spending Limit Schemas
+# ============================================================================
+
+
+class SpendingLimitRequest(BaseModel):
+    """Request body for setting a spending limit."""
+
+    monthly_spending_cap: Optional[float] = Field(
+        ...,
+        description="Monthly spending limit in dollars. Set to null to remove the limit.",
+        example=100.00,
+        ge=0,
+    )
+
+
+class AssistantSpendResponse(BaseModel):
+    """Response for getting assistant monthly spend."""
+
+    agent_id: int = Field(..., description="Assistant ID.")
+    month: str = Field(..., description="Month in YYYY-MM format.")
+    cumulative_spend: float = Field(
+        ...,
+        description="Total spend for this assistant in the specified month.",
+        example=78.50,
+    )
+    limit: Optional[float] = Field(
+        None,
+        description="Monthly spending limit for this assistant.",
+        example=100.00,
+    )
+    percent_used: Optional[float] = Field(
+        None,
+        description="Percentage of limit used (null if no limit set).",
+        example=78.5,
+    )
+
+
+class AssistantSpendingLimitResponse(BaseModel):
+    """Response for setting assistant spending limit."""
+
+    agent_id: int = Field(..., description="Assistant ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit.",
+        example=100.00,
+    )
+    effective_limit: Optional[float] = Field(
+        None,
+        description="Effective limit (may be lower due to user/org limit).",
+        example=100.00,
+    )
+
+
+class UserSpendingLimitResponse(BaseModel):
+    """Response for setting user spending limit."""
+
+    user_id: str = Field(..., description="User ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit.",
+        example=200.00,
+    )
+    effective_limit: Optional[float] = Field(
+        None,
+        description="Effective limit (may be lower due to org limit).",
+        example=200.00,
+    )
+    cascaded_updates: Optional[Dict[str, int]] = Field(
+        None,
+        description="Count of child entities that had their limits capped.",
+        example={"assistants_capped": 3},
+    )
+
+
+class OrgSpendingLimitResponse(BaseModel):
+    """Response for setting organization spending limit."""
+
+    organization_id: int = Field(..., description="Organization ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit.",
+        example=500.00,
+    )
+    cascaded_updates: Optional[Dict[str, int]] = Field(
+        None,
+        description="Count of child entities that had their limits capped.",
+        example={"users_capped": 3, "assistants_capped": 7},
+    )
