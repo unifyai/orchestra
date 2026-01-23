@@ -1525,28 +1525,26 @@ def _atomic_upsert_mode(
 
     existing = session.execute(check_sql, check_params).fetchone()
 
-    # For upsert mode, we need to determine the field name
-    # It's the first key in initial_data that's not in unique_keys,
-    # or we infer from a common pattern. For spending, it's typically the
-    # numeric field being incremented. Let's require explicit field specification.
-    # We'll look for a field that's numeric in initial_data but not a unique key.
-    field_name = None
-    for key, value in body.initial_data.items():
-        if key not in body.unique_keys and isinstance(value, (int, float)):
-            field_name = key
-            break
-
-    # If no field found, use the first non-unique-key field
+    # Use explicitly provided field name, or fall back to inference for backwards compat
+    field_name = body.field
     if field_name is None:
-        for key in body.initial_data.keys():
-            if key not in body.unique_keys:
+        # Legacy behavior: infer from initial_data (first numeric non-unique-key field)
+        for key, value in body.initial_data.items():
+            if key not in body.unique_keys and isinstance(value, (int, float)):
                 field_name = key
                 break
+
+        # If no numeric field found, use the first non-unique-key field
+        if field_name is None:
+            for key in body.initial_data.keys():
+                if key not in body.unique_keys:
+                    field_name = key
+                    break
 
     if field_name is None:
         raise HTTPException(
             status_code=400,
-            detail="Could not determine field to update. initial_data must contain at least one non-unique-key field.",
+            detail="Could not determine field to update. Provide 'field' parameter or include a non-unique-key field in initial_data.",
         )
 
     # Validate field name for SQL injection
