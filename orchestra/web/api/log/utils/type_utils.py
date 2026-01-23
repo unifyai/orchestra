@@ -41,6 +41,27 @@ SPECIAL_FIELD_TYPES = [
     "enum",  # Enum type with restricted values (Log.inferred_type will be "str")
 ]
 
+# ============================================================
+# JSON Schema Type Aliases
+# ============================================================
+# Standard JSON Schema uses different type names than Python/Orchestra.
+# This mapping allows Orchestra to accept both standard JSON Schema types
+# and Python-style type names for backwards compatibility.
+#
+# Standard JSON Schema types → Orchestra internal types
+JSON_SCHEMA_TYPE_ALIASES = {
+    "string": "str",
+    "integer": "int",
+    "number": "float",
+    "boolean": "bool",
+    "array": "list",
+    "object": "dict",
+    "null": "NoneType",
+}
+
+# Reverse mapping for converting Orchestra types to JSON Schema
+ORCHESTRA_TO_JSON_SCHEMA = {v: k for k, v in JSON_SCHEMA_TYPE_ALIASES.items()}
+
 # Default field type for untyped/mixed-type fields
 # This is used when no type is specified during field creation
 # "Any" means the field is NOT strongly typed and can accept logs of any/mixed types
@@ -148,6 +169,7 @@ def _canon_ident(name: str) -> str:
       - "any" -> "Any"
       - "none" / "nonetype" -> "NoneType"
       - "enum" -> "enum" (kept lowercase per SPECIAL_FIELD_TYPES)
+      - JSON Schema types are mapped to Orchestra types (e.g., "string" -> "str")
       - Known containers use Title-case when parameterized; bare remains lowercase.
       - Known primitives lowercased (per SUPPORTED_BASE_TYPES)
       - Otherwise, keep Title-case if provided, else lowercase for determinism.
@@ -165,6 +187,10 @@ def _canon_ident(name: str) -> str:
 
     if lower in _COLLECTION_CANON:
         return _COLLECTION_CANON[lower]
+
+    # Map JSON Schema types to Orchestra internal types
+    if lower in JSON_SCHEMA_TYPE_ALIASES:
+        return JSON_SCHEMA_TYPE_ALIASES[lower]
 
     if lower in SUPPORTED_BASE_TYPES:
         return lower

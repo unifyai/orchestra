@@ -574,7 +574,7 @@ async def test_create_fields_invalid_type(client: AsyncClient):
     fields_data = {
         "project_name": project_name,
         "context": context_name,
-        "fields": {"badfield": "string"},  # Invalid type (should be str)
+        "fields": {"badfield": "foobar"},  # Invalid type (not a recognized type)
     }
     response = await client.post(
         f"/v0/logs/fields",
@@ -583,6 +583,279 @@ async def test_create_fields_invalid_type(client: AsyncClient):
     )
     assert response.status_code == 400
     assert "Invalid field type" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_fields_json_schema_types(client: AsyncClient):
+    """Test creating fields with standard JSON Schema type names.
+
+    Orchestra now accepts standard JSON Schema types alongside Python-style types:
+    - "string" -> "str"
+    - "integer" -> "int"
+    - "number" -> "float"
+    - "boolean" -> "bool"
+    - "array" -> "list"
+    - "object" -> "dict"
+    """
+    project_name = "test-json-schema-types"
+    context_name = "json-schema-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Test context for JSON Schema types",
+        },
+        headers=HEADERS,
+    )
+
+    # Create fields using JSON Schema type names (simple strings)
+    fields_data = {
+        "project_name": project_name,
+        "context": context_name,
+        "fields": {
+            "string_field": "string",
+            "integer_field": "integer",
+            "number_field": "number",
+            "boolean_field": "boolean",
+            "array_field": "array",
+            "object_field": "object",
+        },
+    }
+    response = await client.post(
+        "/v0/logs/fields",
+        json=fields_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify the fields were created with normalized types
+    fields_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    # JSON Schema types should be normalized to Orchestra internal types
+    assert fields["string_field"]["data_type"] == "str"
+    assert fields["integer_field"]["data_type"] == "int"
+    assert fields["number_field"]["data_type"] == "float"
+    assert fields["boolean_field"]["data_type"] == "bool"
+    assert fields["array_field"]["data_type"] == "list"
+    assert fields["object_field"]["data_type"] == "dict"
+
+
+@pytest.mark.anyio
+async def test_create_fields_json_schema_with_constraints(client: AsyncClient):
+    """Test creating fields with full JSON Schema definitions including constraints.
+
+    This tests the StandardFieldDefinition path where the type field contains
+    a JSON Schema type name with additional properties.
+    """
+    project_name = "test-json-schema-constraints"
+    context_name = "constraints-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Test context for JSON Schema with constraints",
+        },
+        headers=HEADERS,
+    )
+
+    # Create fields using JSON Schema type names with constraints
+    fields_data = {
+        "project_name": project_name,
+        "context": context_name,
+        "fields": {
+            # Standard definition with JSON Schema type
+            "name_field": {
+                "type": "string",
+                "description": "User name",
+            },
+            # Standard definition with constraints (constraints are stored in schema)
+            "age_field": {
+                "type": "integer",
+                "description": "User age",
+            },
+            # Standard definition with format
+            "timestamp_field": {
+                "type": "string",
+                "description": "ISO timestamp",
+            },
+        },
+    }
+    response = await client.post(
+        "/v0/logs/fields",
+        json=fields_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify the fields were created
+    fields_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    # Types should be normalized
+    assert fields["name_field"]["data_type"] == "str"
+    assert fields["age_field"]["data_type"] == "int"
+    assert fields["timestamp_field"]["data_type"] == "str"
+
+
+@pytest.mark.anyio
+async def test_create_fields_full_json_schema(client: AsyncClient):
+    """Test creating fields with full JSON Schema objects (anyOf, $ref, etc.).
+
+    This tests the JsonSchemaFieldDefinition path for complex schemas that
+    don't fit the StandardFieldDefinition pattern.
+    """
+    project_name = "test-full-json-schema"
+    context_name = "full-schema-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Test context for full JSON Schema",
+        },
+        headers=HEADERS,
+    )
+
+    # Create fields using full JSON Schema definitions
+    fields_data = {
+        "project_name": project_name,
+        "context": context_name,
+        "fields": {
+            # anyOf for optional type (common in Pydantic's model_json_schema)
+            "optional_field": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "Optional string field",
+            },
+            # array with items
+            "list_of_ints": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "List of integers",
+            },
+            # $ref style (common in Pydantic for nested models)
+            "ref_field": {
+                "$ref": "#/$defs/SomeModel",
+                "description": "Reference to a model",
+            },
+        },
+    }
+    response = await client.post(
+        "/v0/logs/fields",
+        json=fields_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify the fields were created with JSON schemas stored
+    fields_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    # Fields should exist - the exact stored type depends on schema handling
+    assert "optional_field" in fields
+    assert "list_of_ints" in fields
+    assert "ref_field" in fields
+
+
+@pytest.mark.anyio
+async def test_create_fields_mixed_types(client: AsyncClient):
+    """Test creating fields with a mix of type formats in a single request."""
+    project_name = "test-mixed-types"
+    context_name = "mixed-context"
+
+    # Setup project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Test context for mixed type formats",
+        },
+        headers=HEADERS,
+    )
+
+    # Create fields using a mix of formats
+    fields_data = {
+        "project_name": project_name,
+        "context": context_name,
+        "fields": {
+            # Python-style simple string
+            "python_str": "str",
+            # JSON Schema simple string
+            "json_string": "string",
+            # StandardFieldDefinition with Python type
+            "std_python": {"type": "int", "mutable": True},
+            # StandardFieldDefinition with JSON Schema type
+            "std_json": {"type": "integer", "mutable": False},
+            # Full JSON Schema
+            "full_schema": {
+                "anyOf": [{"type": "number"}, {"type": "null"}],
+                "description": "Optional number",
+            },
+            # Enum type
+            "status": {"type": "enum", "values": ["active", "inactive"]},
+            # Untyped (None)
+            "untyped": None,
+        },
+    }
+    response = await client.post(
+        "/v0/logs/fields",
+        json=fields_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify all fields were created
+    fields_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    assert fields["python_str"]["data_type"] == "str"
+    assert fields["json_string"]["data_type"] == "str"
+    assert fields["std_python"]["data_type"] == "int"
+    assert fields["std_json"]["data_type"] == "int"
+    assert "full_schema" in fields
+    assert fields["status"]["data_type"] == "enum"
+    assert fields["untyped"]["data_type"] == "Any"
 
 
 @pytest.mark.anyio
