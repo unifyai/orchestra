@@ -1017,7 +1017,7 @@ class FieldType(Base):
         nullable=False,
         server_default="entry",
     )  # entry, param, derived_entry
-    mutable = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
+    mutable = Column(Boolean(), nullable=False, server_default="t")  # type: ignore
     unique = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
     enum_values = Column(JSONB, nullable=False, server_default=text("'[]'"))
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")

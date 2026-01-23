@@ -43,7 +43,7 @@ class FieldTypeDAO:
         field_name: str,
         value,
         context_id: int,
-        mutable: bool = False,
+        mutable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -191,7 +191,7 @@ class FieldTypeDAO:
         field_name: str,
         value,
         context_id: int,
-        mutable: bool = False,
+        mutable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -513,7 +513,7 @@ class FieldTypeDAO:
         values_to_insert = []
         for field_name, field_info in fields.items():
             field_type = DEFAULT_FIELD_TYPE  # Default to DEFAULT_FIELD_TYPE ("Any")
-            mutable = False
+            mutable = True
             unique = False
             enum_values = None
             enum_restrict = False
@@ -625,7 +625,7 @@ class FieldTypeDAO:
                 - field_name: The name of the field
                 - value: The value (not used for type inference anymore)
                 - context_id: The context ID
-                - mutable: Optional, defaults to False
+                - mutable: Optional, defaults to True
                 - field_category: Optional, defaults to "entry". Valid values are:
                     - "entry": Regular entry fields
                     - "derived_entry": Derived field values
@@ -666,8 +666,13 @@ class FieldTypeDAO:
             project_id = data["project_id"]
             field_name = data["field_name"]
             context_id = data["context_id"]
-            mutable = data.get("mutable", True)
             field_category = data.get("field_category", "entry")
+            # Derived entries are always immutable; others default to mutable
+            mutable = (
+                False
+                if field_category == "derived_entry"
+                else data.get("mutable", True)
+            )
             unique = data.get("unique", False)
             field_description = data.get("description", description)
 
