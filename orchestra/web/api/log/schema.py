@@ -638,8 +638,12 @@ class AtomicFieldUpdateRequest(BaseModel):
         description="Atomic operation to apply. Supported formats: +N, -N, *N, /N where N is a number.",
         example="+1",
     )
-
     # Optional fields for upsert mode
+    field: Optional[str] = Field(
+        default=None,
+        description="(Upsert mode) Name of the numeric field to update atomically.",
+        example="cumulative_spend",
+    )
     project: Optional[str] = Field(
         default=None,
         description="(Upsert mode) Name of the project.",
@@ -670,7 +674,7 @@ class AtomicFieldUpdateResponse(BaseModel):
     """Response from atomic field update operation."""
 
     new_value: float = Field(
-        description="The new value of the field after the operation."
+        description="The new value of the field after the operation.",
     )
     log_id: Optional[int] = Field(
         default=None,

@@ -836,3 +836,130 @@ def test_atomic_upsert_concurrent_high_contention_threaded(fastapi_app_concurren
     assert (
         max_value == expected
     ), f"Expected {expected}, got {max_value}. Lost {expected - max_value} in updates."
+
+
+@pytest.mark.anyio
+async def test_atomic_upsert_explicit_field_parameter(client: AsyncClient):
+    """Test atomic upsert uses explicit 'field' parameter instead of inferring from initial_data.
+
+    This test captures a bug where the atomic upsert would incorrectly infer the target field
+    from initial_data (choosing the first non-unique-key field, often '_user') instead of
+    using the explicitly provided 'field' parameter. The fix ensures that when 'field' is
+    specified, it is used directly without inference.
+    """
+    project_name = "atomic-upsert-explicit-field-test"
+    await _create_project(client, project_name)
+
+    # First: Test that explicit 'field' parameter is used correctly
+    # Include cumulative_spend: 0 in initial_data to ensure the field exists
+    response = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name,
+            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",  # Explicitly specify the field
+            "operation": "+0.00005",  # Small value like LLM costs
+            "initial_data": {
+                "_assistant_id": "test-agent-123",
+                "month": "2026-01",
+                "_user": "TestUserName",  # String field that should NOT be modified
+                "_user_id": "test-user-001",
+                "_assistant": "TestAssistant",
+                "cumulative_spend": 0,  # Initialize the field we want to increment
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["created"] is True
+    assert data["new_value"] == 0.00005
+    log_id = data["log_id"]
+
+    # Apply a second update to verify increment works on existing logs with explicit field
+    response2 = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name,
+            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",  # Explicit field on update
+            "operation": "+0.00003",
+            "initial_data": {
+                "_assistant_id": "test-agent-123",
+                "month": "2026-01",
+                "_user": "TestUserName",
+                "_user_id": "test-user-001",
+                "_assistant": "TestAssistant",
+                "cumulative_spend": 0,
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+
+    assert response2.status_code == 200, response2.json()
+    data2 = response2.json()
+    assert data2["created"] is False  # Should update existing log
+    assert data2["new_value"] == 0.00008  # 0.00005 + 0.00003
+    assert data2["log_id"] == log_id  # Same log
+
+    # Now test the critical case: field parameter without the field in initial_data
+    # Without the fix, this would fail or incorrectly update a different field
+    project_name2 = "atomic-upsert-field-not-in-initial-test"
+    await _create_project(client, project_name2)
+
+    response3 = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name2,
+            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",  # Explicitly specify field NOT in initial_data
+            "operation": "+0.001",
+            "initial_data": {
+                "_assistant_id": "agent-999",
+                "month": "2026-02",
+                "_user": "AnotherUser",  # Only string fields in initial_data
+                "_assistant": "TestBot",
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+
+    # With the fix, this should succeed and create cumulative_spend field
+    assert response3.status_code == 200, response3.json()
+    data3 = response3.json()
+    assert data3["created"] is True
+    assert data3["new_value"] == 0.001  # Field initialized to 0 then +0.001
+    log_id3 = data3["log_id"]
+
+    # Verify we can increment again on that same log
+    response4 = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name2,
+            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+0.002",
+            "initial_data": {
+                "_assistant_id": "agent-999",
+                "month": "2026-02",
+                "_user": "AnotherUser",
+                "_assistant": "TestBot",
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+
+    assert response4.status_code == 200, response4.json()
+    data4 = response4.json()
+    assert data4["created"] is False  # Updating existing log
+    assert data4["new_value"] == 0.003  # 0.001 + 0.002
+    assert data4["log_id"] == log_id3
