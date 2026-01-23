@@ -532,9 +532,9 @@ async def test_create_log_with_mutable_fields(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_create_log_default_immutable(client: AsyncClient):
-    """Test that implicitly created fields default to immutable."""
-    project_name = "test_default_immutable"
+async def test_create_log_default_mutable(client: AsyncClient):
+    """Test that implicitly created fields default to mutable."""
+    project_name = "test_default_mutable"
     _ = await _create_project(client, project_name)
 
     # Create a log without specifying mutability (should default to mutable)

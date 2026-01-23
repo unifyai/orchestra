@@ -196,14 +196,14 @@ def create_logs(
     {
         "field_name": {
             "type": "str",
-            "mutable": false,  # Makes the field immutable
+            "mutable": false,  # Makes the field immutable (default is true)
             "unique": true     # Makes the field unique
         }
     }
     ```
 
-    By default, all fields are immmutable unless specified otherwise.
-    Once a field is marked as mutable, only then can it be modified through
+    By default, all fields are mutable. Set `mutable: false` to make a field
+    immutable after creation. Only mutable fields can be modified through
     the update endpoint.
 
     **Response includes:**
@@ -864,6 +864,8 @@ def create_from_logs(
                 context_id=context_id,
                 field_type="vector" if is_embedding else None,
                 infer_type=not is_embedding,
+                # Derived entries are always immutable (computed values shouldn't be updated)
+                mutable=field_category != "derived_entry",
             )
             session.commit()
 

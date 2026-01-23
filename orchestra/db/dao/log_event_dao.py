@@ -1447,6 +1447,7 @@ class LogEventDAO:
                         value=non_null_val,
                         context_id=template.context_id,
                         field_category="derived_entry",
+                        mutable=False,  # Derived entries are always immutable
                         infer_type=True,
                     )
                 except Exception as e:
