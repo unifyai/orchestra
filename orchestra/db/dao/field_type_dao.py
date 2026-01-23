@@ -489,8 +489,6 @@ class FieldTypeDAO:
             context_id: The context ID
             fields: Dictionary mapping fields names to their definitions.
         """
-        from orchestra.web.api.log.schema import StandardFieldDefinition
-
         if not fields:
             return
 
@@ -498,8 +496,12 @@ class FieldTypeDAO:
         self._validate_description(description)
 
         # Prepare values for bulk insertion
-        # Import EnumType for isinstance check
-        from orchestra.web.api.log.schema import EnumType
+        # Import field definition types for isinstance checks
+        from orchestra.web.api.log.schema import (
+            EnumType,
+            JsonSchemaFieldDefinition,
+            StandardFieldDefinition,
+        )
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
             is_pydantic_schema,
@@ -544,6 +546,16 @@ class FieldTypeDAO:
                 if field_type.lower() == "enum":
                     enum_values = getattr(field_info, "values", None)
                     enum_restrict = getattr(field_info, "restrict", False)
+            elif isinstance(field_info, JsonSchemaFieldDefinition):
+                # Handle full JSON Schema field definitions
+                # Convert to dict (excluding None values) and store as JSON string
+                schema_dict = field_info.model_dump(exclude_none=True)
+                schema = normalize_pydantic_schema(schema_dict)
+                field_type = pydantic_schema_to_string(schema)
+                # Extract description from schema if present
+                field_description = schema_dict.get("description")
+                # Validate individual field description
+                self._validate_description(field_description)
             elif isinstance(field_info, str):
                 field_type = field_info
             elif isinstance(field_info, dict) and is_pydantic_schema(field_info):

@@ -72,6 +72,66 @@ class StandardFieldDefinition(BaseModel):
     )
 
 
+class JsonSchemaFieldDefinition(BaseModel):
+    """
+    Accepts a full JSON Schema field definition (e.g., from Pydantic's model_json_schema()).
+
+    This allows passing standard JSON Schema with all its features:
+    - Standard types: "string", "integer", "number", "boolean", "array", "object", "null"
+    - $ref and $defs for complex/nested types
+    - anyOf, oneOf, allOf for union types
+    - items for array element types
+    - properties for object property types
+    - format, minimum, maximum, pattern, etc. for constraints
+    - title, description for metadata
+
+    Orchestra normalizes JSON Schema types to internal types:
+    - "string" -> "str"
+    - "integer" -> "int"
+    - "number" -> "float"
+    - "boolean" -> "bool"
+    - "array" -> "list"
+    - "object" -> "dict"
+    - "null" -> "NoneType"
+
+    The full schema is preserved for validation against logged values.
+    """
+
+    model_config = {"extra": "allow"}
+
+    # Optional top-level type (may be absent for $ref or anyOf schemas)
+    type: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_is_json_schema(self):
+        """Validate that this looks like a JSON Schema (has recognizable schema keys)."""
+        # Get all fields including extra
+        data = self.model_dump()
+
+        # A JSON Schema typically has one of these keys
+        json_schema_indicators = {
+            "type",
+            "$ref",
+            "anyOf",
+            "oneOf",
+            "allOf",
+            "items",
+            "properties",
+            "enum",
+            "const",
+            "$defs",
+            "definitions",
+        }
+
+        has_indicator = any(key in data for key in json_schema_indicators)
+        if not has_indicator:
+            raise ValueError(
+                "JsonSchemaFieldDefinition requires at least one JSON Schema key "
+                f"(e.g., type, $ref, anyOf). Got keys: {list(data.keys())}",
+            )
+        return self
+
+
 class CreateLogConfig(BaseModel):
     project_name: str = Field(
         description="Name of the project the stored entries will be associated to.",
@@ -415,8 +475,18 @@ class CreateFieldsRequest(BaseModel):
         description="Optional context path for the fields.",
         example="experiment1/trial1",
     )
-    fields: Dict[str, Union[StandardFieldDefinition, EnumType, str, None]] = Field(
-        description="Dictionary mapping field names to their type definitions.",
+    fields: Dict[
+        str,
+        Union[EnumType, StandardFieldDefinition, JsonSchemaFieldDefinition, str, None],
+    ] = Field(
+        description="Dictionary mapping field names to their type definitions. "
+        "Supports multiple formats:\n"
+        "- Simple string: 'str', 'int', 'float', 'bool', 'list', 'dict', 'datetime', 'image', etc.\n"
+        "- JSON Schema types: 'string', 'integer', 'number', 'boolean', 'array', 'object'\n"
+        "- StandardFieldDefinition: {'type': 'str', 'mutable': True, 'unique': False}\n"
+        "- Full JSON Schema: {'type': 'string', 'format': 'date-time'} or {'$ref': '#/$defs/MyModel'}\n"
+        "- EnumType: {'type': 'enum', 'values': ['a', 'b', 'c']}\n"
+        "- None: Untyped field (accepts any value)",
         example={
             "score": "int",
             "response": None,
@@ -425,10 +495,14 @@ class CreateFieldsRequest(BaseModel):
                 "unique": True,
                 "description": "User email address",
             },
-            "comment": {
-                "type": "str",
-                "mutable": True,
-                "description": "User comment",
+            "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 timestamp",
+            },
+            "status": {
+                "type": "enum",
+                "values": ["pending", "approved", "rejected"],
             },
         },
     )
