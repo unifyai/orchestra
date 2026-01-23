@@ -1,10 +1,10 @@
 """Organization management schemas."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 from zoneinfo import available_timezones
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 VALID_TIMEZONES = available_timezones()
 
@@ -249,3 +249,96 @@ class OrganizationCheckoutResponse(BaseModel):
 
     checkout_url: str
     session_id: str
+
+
+# ============================================================================
+# Spending Limit Schemas
+# ============================================================================
+
+
+class OrgSpendingLimitRequest(BaseModel):
+    """Request body for setting organization spending limit."""
+
+    monthly_spending_cap: Optional[float] = Field(
+        ...,
+        description="Monthly spending limit in dollars. Set to null to remove the limit.",
+        example=500.00,
+        ge=0,
+    )
+
+
+class OrgSpendingLimitResponse(BaseModel):
+    """Response for setting organization spending limit."""
+
+    organization_id: int = Field(..., description="Organization ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit.",
+        example=500.00,
+    )
+    cascaded_updates: Optional[Dict[str, int]] = Field(
+        None,
+        description="Count of child entities that had their limits capped.",
+        example={"users_capped": 3, "assistants_capped": 7},
+    )
+
+
+# ============================================================================
+# Member Spending Limit Schemas
+# ============================================================================
+
+
+class MemberSpendingLimitRequest(BaseModel):
+    """Request body for setting a member's spending limit within an org."""
+
+    monthly_spending_cap: Optional[float] = Field(
+        ...,
+        description="Monthly spending limit in dollars for this member. Set to null for no limit.",
+        example=100.00,
+        ge=0,
+    )
+
+
+class MemberSpendingLimitResponse(BaseModel):
+    """Response for setting a member's spending limit."""
+
+    organization_id: int = Field(..., description="Organization ID.")
+    user_id: str = Field(..., description="User ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit for this member.",
+        example=100.00,
+    )
+    assistants_capped: int = Field(
+        0,
+        description="Number of assistants that had their limits reduced due to this change.",
+    )
+
+
+class OrgSpendResponse(BaseModel):
+    """Response for getting organization's cumulative spend."""
+
+    organization_id: int = Field(..., description="Organization ID.")
+    month: str = Field(description="Month in YYYY-MM format.")
+    cumulative_spend: float = Field(description="Cumulative spend for the month.")
+    limit: Optional[float] = Field(
+        None,
+        description="Monthly spending limit for the org.",
+    )
+    percent_used: Optional[float] = Field(None, description="Percentage of limit used.")
+
+
+class MemberSpendResponse(BaseModel):
+    """Response for getting an organization member's cumulative spend."""
+
+    organization_id: int = Field(..., description="Organization ID.")
+    user_id: str = Field(..., description="User ID of the member.")
+    month: str = Field(description="Month in YYYY-MM format.")
+    cumulative_spend: float = Field(
+        description="Cumulative spend for the member in this org.",
+    )
+    limit: Optional[float] = Field(
+        None,
+        description="Member's spending limit in this org.",
+    )
+    percent_used: Optional[float] = Field(None, description="Percentage of limit used.")

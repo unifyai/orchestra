@@ -26,6 +26,7 @@ from orchestra.web.api.dependencies import (
     check_account_not_frozen,
 )
 from orchestra.web.api.log.views import admin_router as log_admin_router
+from orchestra.web.api.organization import admin_router as organization_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
 from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
@@ -94,6 +95,13 @@ api_router.include_router(
     table_view_admin_router,
     prefix="/admin",
     tags=["Table Views"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    organization_admin_router,
+    prefix="/admin",
+    tags=["Organizations"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

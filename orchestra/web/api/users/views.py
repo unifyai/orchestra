@@ -53,6 +53,9 @@ from orchestra.web.api.users.schema import (
     UpdateQueryLoggingRequest,
     UserBusinessStatusResponse,
     UserRequest,
+    UserSpendingLimitRequest,
+    UserSpendingLimitResponse,
+    UserSpendResponse,
 )
 from orchestra.web.api.utils.business_validation import (
     format_business_address,
@@ -1648,3 +1651,114 @@ def delete_own_account(
         raise HTTPException(status_code=400, detail=result.message)
 
     return AccountDeletionResponse(success=True, message=result.message)
+
+
+# ============================================================================
+# User Spending Limit Endpoints (Personal Context)
+# ============================================================================
+
+
+@router.put("/user/spending-limit", response_model=UserSpendingLimitResponse)
+async def set_user_spending_limit(
+    request: Request,
+    body: UserSpendingLimitRequest,
+    session: Session = Depends(get_db_session),
+) -> UserSpendingLimitResponse:
+    """
+    Set the monthly spending limit for the current user's personal usage.
+
+    This limit applies when using the user's personal API key (not org API keys).
+    When the limit is lowered, personal assistant limits that exceed the new limit
+    will be automatically capped.
+    """
+    user_id = request.state.user_id
+    auth_user_dao = AuthUserDAO(session)
+
+    # Verify user exists
+    user_row = auth_user_dao.get_by_id(user_id)
+    if not user_row:
+        raise not_found("User")
+
+    # Use the DAO method which handles cascade logic
+    cascade_result = auth_user_dao.set_spending_cap(
+        user_id=user_id,
+        monthly_spending_cap=body.monthly_spending_cap,
+    )
+    session.commit()
+
+    return UserSpendingLimitResponse(
+        user_id=user_id,
+        monthly_spending_cap=body.monthly_spending_cap,
+        assistants_capped=cascade_result.assistants_capped,
+    )
+
+
+@router.get("/user/spending-limit", response_model=UserSpendingLimitResponse)
+async def get_user_spending_limit(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> UserSpendingLimitResponse:
+    """
+    Get the monthly spending limit for the current user's personal usage.
+    """
+    user_id = request.state.user_id
+    auth_user_dao = AuthUserDAO(session)
+
+    # Verify user exists
+    user_row = auth_user_dao.get_by_id(user_id)
+    if not user_row:
+        raise not_found("User")
+
+    # Use DAO method for consistency
+    spending_cap = auth_user_dao.get_spending_cap(user_id)
+
+    return UserSpendingLimitResponse(
+        user_id=user_id,
+        monthly_spending_cap=spending_cap,
+        assistants_capped=0,
+    )
+
+
+# ============================================================================
+# Admin Spend Endpoints (for UniLLM service calls)
+# ============================================================================
+
+
+@admin_router.get("/user/{target_user_id}/spend", response_model=UserSpendResponse)
+def admin_get_user_spend(
+    target_user_id: str,
+    month: str = Query(
+        ...,
+        description="Month in YYYY-MM format",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        examples=["2026-01"],
+    ),
+    session: Session = Depends(get_db_session),
+) -> UserSpendResponse:
+    """
+    Admin endpoint: Get a user's cumulative spend for a given month (personal context).
+
+    This endpoint is for internal service calls (e.g., UniLLM) and does not
+    require the caller to be the user themselves.
+    """
+    auth_user_dao = AuthUserDAO(session)
+    user_row = auth_user_dao.get_by_id(target_user_id)
+    if not user_row:
+        raise not_found("User")
+
+    user = user_row[0]
+
+    cumulative_spend = auth_user_dao.get_cumulative_spend(target_user_id, month)
+    limit = auth_user_dao.get_spending_cap(target_user_id)
+
+    percent_used = None
+    if limit is not None and limit > 0:
+        percent_used = round((cumulative_spend / limit) * 100, 2)
+
+    return UserSpendResponse(
+        user_id=target_user_id,
+        month=month,
+        cumulative_spend=cumulative_spend,
+        limit=limit,
+        percent_used=percent_used,
+    )

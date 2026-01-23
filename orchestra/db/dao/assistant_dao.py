@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from zoneinfo import available_timezones
@@ -7,6 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant
+
+
+@dataclass
+class AssistantSpendingCapResult:
+    """Result of setting an assistant spending cap."""
+
+    monthly_spending_cap: Optional[float] = None
+    effective_limit: Optional[float] = None
+    parent_limit: Optional[float] = None
+
 
 VALID_TIMEZONES = available_timezones()
 
@@ -283,6 +294,11 @@ class AssistantDAO:
             if tz is not None and tz not in VALID_TIMEZONES:
                 raise ValueError(f"'{tz}' is not a valid IANA timezone.")
 
+        # Handle monthly_spending_cap with validation via set_spending_cap
+        if "monthly_spending_cap" in update_data:
+            new_cap = update_data.pop("monthly_spending_cap")
+            self.set_spending_cap(agent_id, user_id, new_cap)
+
         # Track changes for contact sync
         should_sync_timezone = False
         should_sync_bio = False
@@ -415,3 +431,190 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
+
+    def set_spending_cap(
+        self,
+        agent_id: int,
+        user_id: str,
+        monthly_spending_cap: Optional[float],
+    ) -> AssistantSpendingCapResult:
+        """
+        Set assistant spending cap with context-aware parent limit validation.
+
+        For personal assistants (org_id=NULL): validates against user's personal limit.
+        For org assistants: validates against member limit and org limit.
+
+        :param agent_id: Assistant agent ID.
+        :param user_id: User ID of the owner.
+        :param monthly_spending_cap: New spending cap (None = no limit).
+        :return: Result with new cap and effective limit.
+        :raises ValueError: If assistant limit exceeds parent limit.
+        :raises HTTPException: If assistant not found.
+        """
+        from orchestra.db.dao.auth_user_dao import AuthUserDAO
+        from orchestra.db.dao.organization_dao import OrganizationDAO
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+
+        assistant = self.get_assistant_by_agent_id(agent_id)
+        if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+
+        # Verify ownership
+        if assistant.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+
+        new_limit = monthly_spending_cap
+        parent_limit: Optional[float] = None
+
+        if assistant.organization_id is not None:
+            # Organizational assistant - validate against member limit and org limit
+            org_dao = OrganizationDAO(self.session)
+            org_member_dao = OrganizationMemberDAO(self.session)
+
+            org = org_dao.get(assistant.organization_id)
+            member = org_member_dao.get_member(user_id, assistant.organization_id)
+
+            # Get applicable limits (member limit and org limit)
+            member_limit = (
+                float(member.monthly_spending_cap)
+                if member and member.monthly_spending_cap is not None
+                else None
+            )
+            org_limit = (
+                float(org.monthly_spending_cap)
+                if org and org.monthly_spending_cap is not None
+                else None
+            )
+
+            # The effective parent limit is the most restrictive
+            if member_limit is not None and org_limit is not None:
+                parent_limit = min(member_limit, org_limit)
+            elif member_limit is not None:
+                parent_limit = member_limit
+            elif org_limit is not None:
+                parent_limit = org_limit
+
+            # Validate against parent limit
+            if new_limit is not None and parent_limit is not None:
+                if new_limit > parent_limit:
+                    if member_limit is not None and new_limit > member_limit:
+                        raise ValueError(
+                            f"Assistant limit cannot exceed member limit (${member_limit:.2f})",
+                        )
+                    else:
+                        raise ValueError(
+                            f"Assistant limit cannot exceed organization limit (${org_limit:.2f})",
+                        )
+        else:
+            # Personal assistant - validate against user's personal limit
+            auth_user_dao = AuthUserDAO(self.session)
+            user_row = auth_user_dao.get_by_id(user_id)
+            if user_row:
+                user = user_row[0]
+                parent_limit = (
+                    float(user.monthly_spending_cap)
+                    if user.monthly_spending_cap is not None
+                    else None
+                )
+
+            if new_limit is not None and parent_limit is not None:
+                if new_limit > parent_limit:
+                    raise ValueError(
+                        f"Assistant limit cannot exceed user limit (${parent_limit:.2f})",
+                    )
+
+        # Update the assistant's spending limit
+        assistant.monthly_spending_cap = (
+            Decimal(str(new_limit)) if new_limit is not None else None
+        )
+
+        # Calculate effective limit
+        effective_limit = new_limit
+        if parent_limit is not None:
+            if effective_limit is None:
+                effective_limit = parent_limit
+            else:
+                effective_limit = min(effective_limit, parent_limit)
+
+        return AssistantSpendingCapResult(
+            monthly_spending_cap=new_limit,
+            effective_limit=effective_limit,
+            parent_limit=parent_limit,
+        )
+
+    def get_spending_cap(self, agent_id: int) -> Optional[float]:
+        """
+        Get assistant's monthly spending cap.
+
+        :param agent_id: Assistant agent ID.
+        :return: Monthly spending cap or None if not set or assistant not found.
+        """
+        assistant = self.get_assistant_by_agent_id(agent_id)
+        if assistant and assistant.monthly_spending_cap is not None:
+            return float(assistant.monthly_spending_cap)
+        return None
+
+    def get_cumulative_spend(self, agent_id: int, month: str) -> float:
+        """
+        Get assistant's cumulative spend for a given month.
+
+        Queries the Assistants project logs for spending data.
+
+        :param agent_id: Assistant agent ID.
+        :param month: Month in YYYY-MM format.
+        :return: Cumulative spend for the month (0.0 if no spend data).
+        """
+        from sqlalchemy import cast, func
+        from sqlalchemy.types import Float
+
+        from orchestra.db.models.orchestra_models import (
+            Context,
+            LogEvent,
+            LogEventContext,
+            Project,
+        )
+
+        assistant = self.get_assistant_by_agent_id(agent_id)
+        if not assistant:
+            return 0.0
+
+        # Build query based on whether assistant is personal or organizational
+        query = (
+            self.session.query(
+                func.coalesce(
+                    cast(LogEvent.data.op("->>")("cumulative_spend"), Float),
+                    0.0,
+                ).label("spend"),
+            )
+            .select_from(LogEvent)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .join(Context, LogEventContext.context_id == Context.id)
+            .join(Project, Context.project_id == Project.id)
+            .filter(
+                Project.name == "Assistants",
+                Context.name == "All/Spending/Monthly",
+                LogEvent.data.op("->>")("_assistant_id") == str(agent_id),
+                LogEvent.data.op("->>")("month") == month,
+            )
+        )
+
+        # Add project ownership filter based on whether assistant is personal or org
+        if assistant.organization_id:
+            query = query.filter(Project.organization_id == assistant.organization_id)
+        else:
+            query = query.filter(
+                Project.organization_id.is_(None),
+                Project.user_id == assistant.user_id,
+            )
+
+        result = query.first()
+
+        if result and result.spend:
+            return float(result.spend)
+        return 0.0
