@@ -1610,7 +1610,10 @@ async def test_user_limit_cascade_caps_multiple_assistants(client: AsyncClient):
 
     for i, limit in enumerate(original_limits):
         response = await _create_assistant(
-            client, f"MultiCascade{i}", "Bot", HEADERS
+            client,
+            f"MultiCascade{i}",
+            "Bot",
+            HEADERS,
         )
         assert response.status_code in [200, 201], response.json()
         agent_id = response.json()["info"]["agent_id"]
