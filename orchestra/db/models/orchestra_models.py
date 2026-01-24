@@ -266,13 +266,6 @@ class AuthUser(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    temp_interfaces = relationship(
-        "TempInterface",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-
     __table_args__ = (
         # Check constraint for account_type
         sa.CheckConstraint(
@@ -407,12 +400,6 @@ class Organization(Base):
     # Relationships
     interfaces = relationship(
         "Interface",
-        back_populates="organization",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    temp_interfaces = relationship(
-        "TempInterface",
         back_populates="organization",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -686,12 +673,6 @@ class Project(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    temp_interfaces = relationship(
-        "TempInterface",
-        back_populates="project",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
     # we want sql nulls to be distinct in the unique constraints
     # (postgresql_nulls_not_distinct=False)
     __table_args__ = (
@@ -921,21 +902,6 @@ class ActiveDerivedLog(Base):
     __table_args__ = (UniqueConstraint("project_id", "context_id", "key"),)
 
 
-class DashboardView(Base):
-    __tablename__ = "dashboard_view"
-
-    id = Column(Integer, primary_key=True)
-    project_id = Column(
-        Integer,
-        ForeignKey("project.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    name = Column(String)
-    view = Column(String)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-
-
 class Interface(Base):
     __tablename__ = "interface"
 
@@ -1034,46 +1000,6 @@ class FieldType(Base):
         sa.CheckConstraint(
             "char_length(description) <= 256",
             name="ck_field_type_description_len",
-        ),
-    )
-
-
-class TempInterface(Base):
-    __tablename__ = "temp_interface"
-
-    id = Column(String, primary_key=True, default=uuid.uuid4)
-    user_id = Column(
-        String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
-        index=True,
-    )
-    organization_id = Column(
-        Integer,
-        ForeignKey("organization.id", ondelete="CASCADE"),
-        index=True,
-    )
-    name = Column(String(), nullable=False)
-    new_counter = Column(Integer, nullable=False)
-    items = Column(String(), nullable=False)
-    project_id = Column(
-        Integer,
-        ForeignKey("project.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    context = Column(String(), nullable=True)
-    color = Column(String(), nullable=True)
-    created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
-    # Relationships
-    project = relationship("Project", back_populates="temp_interfaces")
-    user = relationship("AuthUser", back_populates="temp_interfaces")
-    organization = relationship("Organization", back_populates="temp_interfaces")
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "project_id",
-            "name",
-            name="temp_it_uq_project_name",
         ),
     )
 
