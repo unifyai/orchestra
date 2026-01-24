@@ -102,6 +102,54 @@ def cleanup_orphaned_field_types(session: Session, context_id: int) -> None:
         )
 
 
+def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) -> None:
+    """
+    Delete ActiveDerivedLog templates for derived fields that no longer exist
+    in any log events for the given context.
+
+    This is called after rollback to clean up derived field templates that were
+    created after the rolled-back commit point.
+    """
+    # Get all field names that currently exist in log events for this context
+    existing_fields_result = session.execute(
+        text(
+            """
+            SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+            """,
+        ),
+        {"context_id": context_id},
+    ).fetchall()
+
+    existing_field_names = {row[0] for row in existing_fields_result}
+
+    # Delete ActiveDerivedLog templates for derived fields that no longer exist
+    if existing_field_names:
+        session.execute(
+            text(
+                """
+                DELETE FROM active_derived_log_template
+                WHERE context_id = :context_id
+                  AND key NOT IN :existing_fields
+                """,
+            ),
+            {"context_id": context_id, "existing_fields": tuple(existing_field_names)},
+        )
+    else:
+        # No fields exist - delete all derived log templates for this context
+        session.execute(
+            text(
+                """
+                DELETE FROM active_derived_log_template
+                WHERE context_id = :context_id
+                """,
+            ),
+            {"context_id": context_id},
+        )
+
+
 class ContextDAO:
     def __init__(self, session: Session):
         self.session = session
@@ -3471,6 +3519,7 @@ class ContextDAO:
             # Step 2: Garbage collection in a new transaction
             delete_orphaned_log_events(self.session, context.project_id)
             cleanup_orphaned_field_types(self.session, context_id)
+            cleanup_orphaned_derived_log_templates(self.session, context_id)
             self.session.commit()
 
         except Exception as e:
