@@ -1666,15 +1666,29 @@ class Embedding(Base):
 
 
 class EmbeddingQueue(Base):
-    """Queue for async embedding generation.
+    """Queue for async embedding generation with two-stage processing pipeline.
 
-    Embeddings are queued during log creation and processed by background workers.
-    This decouples log creation from OpenAI API calls and HNSW index updates.
+    Embeddings are queued during log creation and processed by background workers
+    in two stages to maximize throughput:
+
+    Stage 1 (parallel-safe): Generate embedding vectors
+    - Multiple workers can run concurrently using FOR UPDATE SKIP LOCKED
+    - pending → generating → vector_ready
+
+    Stage 2 (serial): Bulk insert into indexed Embedding table
+    - Single worker for optimal HNSW index performance
+    - vector_ready → inserting → (deleted from queue)
+
     Status values:
-    - pending: Waiting to be processed
-    - processing: Currently being processed by a worker
+    - pending: Waiting for Stage 1 processing
+    - generating: Being processed by Stage 1 worker (vector generation)
+    - vector_ready: Vector generated, awaiting Stage 2 (index insertion)
+    - inserting: Being processed by Stage 2 worker (bulk insert)
     - completed: Successfully processed (will be deleted from queue)
     - failed: Failed after max retries (kept for debugging)
+
+    TODO: Migrate Cloud Scheduler jobs to Cloud Tasks for dynamic scaling
+    based on queue depth rather than fixed scheduling intervals.
     """
 
     __tablename__ = "embedding_queue"
@@ -1696,10 +1710,15 @@ class EmbeddingQueue(Base):
     # Timestamp when item was claimed for processing (used for stale detection)
     processing_started_at = Column(TIMESTAMP, nullable=True)
 
+    # Stage 1 output: Generated embedding vector (stored here until Stage 2 inserts it)
+    generated_vector = Column(Vector(), nullable=True)
+    # Timestamp when vector was generated (for monitoring/debugging)
+    vector_generated_at = Column(TIMESTAMP, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
         sa.CheckConstraint(
-            "status IN ('pending', 'processing', 'completed', 'failed')",
+            "status IN ('pending', 'generating', 'vector_ready', 'inserting', 'completed', 'failed')",
             name="chk_embedding_queue_status",
         ),
         Index("idx_embedding_queue_status_created", "status", "created_at"),
@@ -1709,6 +1728,12 @@ class EmbeddingQueue(Base):
             "idx_embedding_queue_processing_started",
             "status",
             "processing_started_at",
+        ),
+        # Index for Stage 2 worker to efficiently find vector_ready items
+        Index(
+            "idx_embedding_queue_vector_ready",
+            "created_at",
+            postgresql_where=sa.text("status = 'vector_ready'"),
         ),
     )
 
