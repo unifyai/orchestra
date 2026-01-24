@@ -5502,172 +5502,20 @@ def process_traffic_logs(
 
 
 # =============================================================================
-# Embedding Queue Endpoint Configuration
+# Decoupled Embedding Pipeline Constants (Stage 1: Generation, Stage 2: Insertion)
 # =============================================================================
 
-# Hard caps - absolute limits to prevent pathological/abusive calls
-EMBEDDING_QUEUE_MAX_ITEMS_HARD_CAP = 10000  # Absolute maximum items per API call
-EMBEDDING_QUEUE_MAX_TIME_HARD_CAP = 600  # 10 minutes max
+# Stage 1: Embedding Generation (parallel-safe)
+GENERATION_DEFAULT_MAX_ITEMS = 4096  # 2 OpenAI batches of 2048
+GENERATION_MAX_ITEMS_HARD_CAP = 8192
+GENERATION_DEFAULT_MAX_TIME = 40  # ~15-20s per batch + overhead
+GENERATION_MAX_TIME_HARD_CAP = 120
 
-# Defaults - sensible values for Cloud Scheduler integration (3-minute schedule)
-EMBEDDING_QUEUE_DEFAULT_MAX_ITEMS = 5000  # Recommended for 3-minute scheduler
-EMBEDDING_QUEUE_DEFAULT_MAX_TIME = 170  # 2:50 - leaves 10s buffer before next run
-
-
-@admin_router.post(
-    "/process_embedding_queue",
-    responses={
-        200: {
-            "description": "Embedding queue processed successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "message": "Processed 5000 embeddings in 85.5s",
-                        "status": "success",
-                        "queue_drained": False,
-                        "metrics": {
-                            "processed": 5000,
-                            "errors": 0,
-                            "duration": 85.5,
-                            "throughput": 58.48,
-                            "time_limit_reached": False,
-                            "size_limit_reached": True,
-                            "queue_before": {
-                                "pending": 10000,
-                                "processing": 0,
-                                "failed": 2,
-                            },
-                            "queue_after": {
-                                "pending": 5000,
-                                "processing": 0,
-                                "failed": 2,
-                            },
-                        },
-                    },
-                },
-            },
-        },
-        500: {
-            "description": "Internal Server Error",
-        },
-    },
-)
-def process_embedding_queue(
-    max_items: int = Query(
-        EMBEDDING_QUEUE_DEFAULT_MAX_ITEMS,
-        le=EMBEDDING_QUEUE_MAX_ITEMS_HARD_CAP,
-        description="Maximum embeddings to process per call. "
-        "Default: 5000, Hard cap: 10000. "
-        "Recommended: 5000 for 3-minute Cloud Scheduler interval.",
-    ),
-    max_time_seconds: int = Query(
-        EMBEDDING_QUEUE_DEFAULT_MAX_TIME,
-        le=EMBEDDING_QUEUE_MAX_TIME_HARD_CAP,
-        description="Maximum processing time in seconds. "
-        "Default: 170s, Hard cap: 600s. "
-        "Set ~10s below scheduler interval to avoid overlap.",
-    ),
-    session=Depends(get_db_session),
-    _=Depends(auth_admin_key),
-):
-    """
-    Process pending embeddings from the queue.
-
-    **How It Works:**
-    1. Claims items atomically using FOR UPDATE SKIP LOCKED (multi-worker safe)
-    2. Generates embeddings via OpenAI API in batches of 2048 (API limit)
-    3. Performs a SINGLE bulk insert for all embeddings (optimized)
-    4. Returns detailed metrics about the processing run
-
-    **Cloud Scheduler Configuration:**
-    - Recommended: `*/3 * * * *` (every 3 min) with `max_items=5000, max_time_seconds=170`
-    - Expected throughput: ~100k embeddings/hour
-
-    **Response Fields:**
-    - `queue_drained`: True if queue is empty after processing
-    - `time_limit_reached`: True if stopped due to time bound
-    - `size_limit_reached`: True if stopped due to max_items limit
-
-    **Safety Features:**
-    - FOR UPDATE SKIP LOCKED prevents double-processing
-    - Stale items (stuck in 'processing' > 5 min) are auto-reset
-    - Time-bounded to fit within scheduler intervals
-    """
-    try:
-        from orchestra.workers.embedding_worker import (
-            get_queue_metrics,
-            process_pending_embeddings,
-        )
-
-        # Get queue status before processing
-        metrics_before = get_queue_metrics(session)
-        pending_before = metrics_before.get("pending", 0)
-
-        if pending_before == 0:
-            return {
-                "message": "No pending embeddings to process",
-                "status": "success",
-                "queue_drained": True,
-                "metrics": {
-                    "processed": 0,
-                    "errors": 0,
-                    "duration": 0,
-                    "throughput": 0,
-                    "stale_reset": 0,
-                    "time_limit_reached": False,
-                    "size_limit_reached": False,
-                    "queue_before": metrics_before,
-                    "queue_after": metrics_before,
-                },
-            }
-
-        # Process embeddings with time and size bounds
-        result = process_pending_embeddings(
-            session,
-            limit=max_items,
-            max_time_seconds=max_time_seconds,
-        )
-
-        # Get queue status after processing
-        metrics_after = get_queue_metrics(session)
-
-        processed = result.get("processed", 0)
-        errors = result.get("errors", 0)
-        duration = result.get("duration", 0)
-        time_limit_reached = result.get("time_limit_reached", False)
-        size_limit_reached = result.get("size_limit_reached", False)
-
-        # Queue is drained if we processed everything without hitting limits
-        pending_after = metrics_after.get("pending", 0)
-        queue_drained = (
-            pending_after == 0 and not time_limit_reached and not size_limit_reached
-        )
-
-        return {
-            "message": f"Processed {processed} embeddings in {duration:.2f}s",
-            "status": "success",
-            "queue_drained": queue_drained,
-            "metrics": {
-                "processed": processed,
-                "errors": errors,
-                "duration": round(duration, 2),
-                "throughput": round(result.get("throughput", 0), 2),
-                "stale_reset": result.get("stale_reset", 0),
-                "time_limit_reached": time_limit_reached,
-                "size_limit_reached": size_limit_reached,
-                "queue_before": metrics_before,
-                "queue_after": metrics_after,
-            },
-        }
-
-    except Exception as e:
-        import traceback
-
-        error_message = traceback.format_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"Error processing embedding queue: {error_message}"},
-        )
+# Stage 2: Index Insertion (serial)
+INSERTION_DEFAULT_MAX_ITEMS = 12000  # For 3-minute schedule
+INSERTION_MAX_ITEMS_HARD_CAP = 20000
+INSERTION_DEFAULT_MAX_TIME = 150  # ~100s at 100/s + buffer
+INSERTION_MAX_TIME_HARD_CAP = 300
 
 
 @admin_router.post(
@@ -5831,4 +5679,266 @@ def run_index_maintenance(
         return JSONResponse(
             status_code=500,
             content={"detail": f"Error running index maintenance: {error_message}"},
+        )
+
+
+# =============================================================================
+# Decoupled Embedding Pipeline Endpoints (Stage 1 + Stage 2)
+# =============================================================================
+
+
+@router.post(
+    "/admin/generate_pending_embeddings",
+    tags=["admin"],
+    responses={
+        200: {
+            "description": "Successfully processed pending embeddings",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Generated vectors for 4096 embeddings",
+                        "status": "success",
+                        "metrics": {
+                            "processed": 4096,
+                            "successful": 4096,
+                            "failed": 0,
+                            "stale_reset": 0,
+                            "duration_seconds": 18.5,
+                            "throughput_per_second": 221.4,
+                            "queue_drained": False,
+                            "queue_metrics": {
+                                "pending": 50000,
+                                "generating": 0,
+                                "vector_ready": 4096,
+                                "inserting": 0,
+                                "failed": 0,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+        },
+    },
+)
+def generate_pending_embeddings(
+    max_items: int = Query(
+        GENERATION_DEFAULT_MAX_ITEMS,
+        le=GENERATION_MAX_ITEMS_HARD_CAP,
+        description="Maximum items to process. Default: 4096 (2 OpenAI batches), Hard cap: 8192.",
+    ),
+    max_time_seconds: int = Query(
+        GENERATION_DEFAULT_MAX_TIME,
+        le=GENERATION_MAX_TIME_HARD_CAP,
+        description="Maximum processing time in seconds. Default: 40s, Hard cap: 120s.",
+    ),
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """
+    Stage 1: Generate embedding vectors for pending queue items.
+
+    This endpoint is **SAFE FOR PARALLEL EXECUTION**. Multiple workers can call
+    this endpoint simultaneously - FOR UPDATE SKIP LOCKED ensures each queue
+    item is processed by exactly one worker.
+
+    **Flow:**
+    1. Reset stale 'generating' items back to 'pending' (crash recovery)
+    2. Claim batch: pending → generating (atomic with FOR UPDATE SKIP LOCKED)
+    3. Generate vectors via OpenAI API (batched by model, 2048 max per API call)
+    4. Update queue: status='vector_ready', generated_vector=<vector>
+    5. On error: increment retry_count or mark 'failed'
+
+    **Cloud Scheduler Configuration (2 parallel jobs):**
+    - Job 1: Schedule "0,30 * * * * *" (at :00 and :30 of each minute)
+      POST /admin/generate_pending_embeddings?max_items=4096&max_time_seconds=40
+    - Job 2: Schedule "15,45 * * * * *" (at :15 and :45 of each minute)
+      POST /admin/generate_pending_embeddings?max_items=4096&max_time_seconds=40
+
+    **TODO:** Migrate to Cloud Tasks for dynamic scaling based on queue depth.
+    Cloud Tasks can automatically scale workers based on demand rather than
+    fixed scheduling intervals.
+    """
+    try:
+        from orchestra.workers.embedding_generator import (
+            get_generation_queue_metrics,
+            process_pending_embeddings,
+        )
+
+        # Get queue status before processing
+        metrics_before = get_generation_queue_metrics(session)
+        pending_before = metrics_before.get("pending", 0)
+
+        if pending_before == 0:
+            return {
+                "message": "No pending embeddings to generate",
+                "status": "success",
+                "queue_drained": True,
+                "metrics": {
+                    "processed": 0,
+                    "successful": 0,
+                    "failed": 0,
+                    "stale_reset": 0,
+                    "duration_seconds": 0,
+                    "throughput_per_second": 0,
+                    "queue_metrics": metrics_before,
+                },
+            }
+
+        # Process embeddings (generate vectors)
+        result = process_pending_embeddings(
+            session,
+            max_items=max_items,
+            max_time_seconds=max_time_seconds,
+        )
+
+        successful = result.get("successful", 0)
+        failed = result.get("failed", 0)
+        duration = result.get("duration_seconds", 0)
+
+        return {
+            "message": f"Generated vectors for {successful} embeddings"
+            + (f" ({failed} failed)" if failed else ""),
+            "status": "success",
+            "queue_drained": result.get("queue_drained", False),
+            "metrics": result,
+        }
+
+    except Exception as e:
+        import traceback
+
+        error_message = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error generating embeddings: {error_message}"},
+        )
+
+
+@router.post(
+    "/admin/index_ready_embeddings",
+    tags=["admin"],
+    responses={
+        200: {
+            "description": "Successfully inserted embeddings into index",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Inserted 12000 embeddings into index",
+                        "status": "success",
+                        "metrics": {
+                            "processed": 12000,
+                            "inserted": 12000,
+                            "failed": 0,
+                            "stale_reset": 0,
+                            "duration_seconds": 110.5,
+                            "throughput_per_second": 108.6,
+                            "queue_drained": False,
+                            "queue_metrics": {
+                                "pending": 50000,
+                                "generating": 4096,
+                                "vector_ready": 38000,
+                                "inserting": 0,
+                                "failed": 0,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+        },
+    },
+)
+def index_ready_embeddings(
+    max_items: int = Query(
+        INSERTION_DEFAULT_MAX_ITEMS,
+        le=INSERTION_MAX_ITEMS_HARD_CAP,
+        description="Maximum items to insert. Default: 12000, Hard cap: 20000.",
+    ),
+    max_time_seconds: int = Query(
+        INSERTION_DEFAULT_MAX_TIME,
+        le=INSERTION_MAX_TIME_HARD_CAP,
+        description="Maximum processing time in seconds. Default: 150s, Hard cap: 300s.",
+    ),
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """
+    Stage 2: Bulk insert generated embeddings into the indexed Embedding table.
+
+    This endpoint should run **SERIALLY** (one worker at a time) for optimal
+    HNSW index performance. While technically safe with FOR UPDATE SKIP LOCKED,
+    parallel insertion degrades performance due to index lock contention.
+
+    **Flow:**
+    1. Reset stale 'inserting' items back to 'vector_ready' (crash recovery)
+    2. Claim batch: vector_ready → inserting (atomic with FOR UPDATE SKIP LOCKED)
+    3. Bulk INSERT into Embedding table (ON CONFLICT DO UPDATE for soft-delete resurrection)
+    4. DELETE successfully inserted items from queue
+    5. On error: mark items as 'failed' with error message
+
+    **Cloud Scheduler Configuration (1 serial job):**
+    - Schedule: "*/3 * * * *" (every 3 minutes)
+    - URL: POST /admin/index_ready_embeddings?max_items=12000&max_time_seconds=150
+    - Attempt deadline: 180s
+
+    **TODO:** Migrate to Cloud Tasks for dynamic scaling. With Cloud Tasks,
+    a single task can handle larger batches with longer timeouts, and tasks
+    can be dispatched based on queue depth.
+    """
+    try:
+        from orchestra.workers.embedding_inserter import (
+            get_insertion_queue_metrics,
+            process_ready_embeddings,
+        )
+
+        # Get queue status before processing
+        metrics_before = get_insertion_queue_metrics(session)
+        ready_before = metrics_before.get("vector_ready", 0)
+
+        if ready_before == 0:
+            return {
+                "message": "No ready embeddings to insert",
+                "status": "success",
+                "queue_drained": True,
+                "metrics": {
+                    "processed": 0,
+                    "inserted": 0,
+                    "failed": 0,
+                    "stale_reset": 0,
+                    "duration_seconds": 0,
+                    "throughput_per_second": 0,
+                    "queue_metrics": metrics_before,
+                },
+            }
+
+        # Process embeddings (bulk insert into index)
+        result = process_ready_embeddings(
+            session,
+            max_items=max_items,
+            max_time_seconds=max_time_seconds,
+        )
+
+        inserted = result.get("inserted", 0)
+        failed = result.get("failed", 0)
+        duration = result.get("duration_seconds", 0)
+
+        return {
+            "message": f"Inserted {inserted} embeddings into index"
+            + (f" ({failed} failed)" if failed else ""),
+            "status": "success",
+            "queue_drained": result.get("queue_drained", False),
+            "metrics": result,
+        }
+
+    except Exception as e:
+        import traceback
+
+        error_message = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error inserting embeddings: {error_message}"},
         )
