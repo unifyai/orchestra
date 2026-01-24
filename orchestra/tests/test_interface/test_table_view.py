@@ -2159,14 +2159,7 @@ async def test_create_table_view_token_collision_failure(
 
 @pytest.mark.anyio
 async def test_table_views_deleted_on_context_deletion(client: AsyncClient, dbsession):
-    """
-    Test that table views are deleted when their context is deleted.
-
-    BUG: Currently table views are NOT deleted when their context is deleted.
-    This is inconsistent with Plot, which does get cleaned up.
-    Both Plot and TableView store context as a string in project_config JSONB,
-    but only Plot has cleanup logic in context_dao.delete().
-    """
+    """Test that table views are deleted when their context is deleted."""
     user = await create_test_user(client, "table_view_ctx_cascade@test.com")
 
     # Create project
@@ -2229,12 +2222,7 @@ async def test_table_views_deleted_on_context_deletion(client: AsyncClient, dbse
     dbsession.expire_all()
 
     # Table view with context should be deleted
-    assert table_view_dao.get_by_token(token_with_ctx) is None, (
-        "BUG: TableView with context should be deleted when context is deleted. "
-        "This is inconsistent with Plot, which does get cleaned up. "
-        "Both use the same design (context stored in project_config JSONB) "
-        "but only Plot has cleanup logic in context_dao.delete()."
-    )
+    assert table_view_dao.get_by_token(token_with_ctx) is None
 
     # Table view without context should still exist
     assert table_view_dao.get_by_token(token_without_ctx) is not None

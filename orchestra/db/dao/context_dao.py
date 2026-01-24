@@ -2823,6 +2823,7 @@ class ContextDAO:
             get_assistants_sibling_context_info,
             remove_logs_from_sibling_contexts,
         )
+        from orchestra.db.dao.table_view_dao import TableViewDAO
 
         try:
             context = self.session.query(Context).filter_by(id=id).one()
@@ -2839,6 +2840,19 @@ class ContextDAO:
                 logger.info(
                     f"Deleted {deleted_plots} plots for context '{context.name}' "
                     f"in project {project.id}",
+                )
+
+            # Delete table views that reference this context
+            # Table views store context as a string in project_config JSONB, not as FK
+            table_view_dao = TableViewDAO(self.session)
+            deleted_table_views = table_view_dao.delete_by_project(
+                project_id=project.id,
+                context=context.name,
+            )
+            if deleted_table_views > 0:
+                logger.info(
+                    f"Deleted {deleted_table_views} table views for context "
+                    f"'{context.name}' in project {project.id}",
                 )
 
             # For Assistants/UnityTests projects, clean up sibling contexts first
