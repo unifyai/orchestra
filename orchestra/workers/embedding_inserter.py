@@ -87,6 +87,9 @@ def reset_stale_inserting_items(session: Session) -> int:
     This handles worker crashes by resetting items that have been
     in 'inserting' state for longer than STALE_INSERTING_TIMEOUT_MINUTES.
 
+    Uses FOR UPDATE SKIP LOCKED to avoid lock contention when multiple
+    workers run concurrently.
+
     Args:
         session: Database session
 
@@ -99,9 +102,13 @@ def reset_stale_inserting_items(session: Session) -> int:
             UPDATE embedding_queue
             SET status = 'vector_ready',
                 processing_started_at = NULL
-            WHERE status = 'inserting'
-              AND processing_started_at IS NOT NULL
-              AND processing_started_at < NOW() - INTERVAL ':minutes minutes'
+            WHERE id IN (
+                SELECT id FROM embedding_queue
+                WHERE status = 'inserting'
+                  AND processing_started_at IS NOT NULL
+                  AND processing_started_at < NOW() - INTERVAL ':minutes minutes'
+                FOR UPDATE SKIP LOCKED
+            )
         """.replace(
                 ":minutes",
                 str(STALE_INSERTING_TIMEOUT_MINUTES),
