@@ -19,7 +19,6 @@ from orchestra.db.dao.table_view_dao import TableViewDAO
 from orchestra.settings import settings
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
-
 # ==================== TableViewDAO Unit Tests ====================
 
 
@@ -168,7 +167,8 @@ async def test_table_view_dao_update(client: AsyncClient, dbsession):
     dbsession.commit()
 
     projects = project_dao.filter(
-        user_id=user["id"], name="TableViewDAO_Update_Project"
+        user_id=user["id"],
+        name="TableViewDAO_Update_Project",
     )
     project = projects[0][0]
 
@@ -214,7 +214,8 @@ async def test_table_view_dao_delete(client: AsyncClient, dbsession):
     dbsession.commit()
 
     projects = project_dao.filter(
-        user_id=user["id"], name="TableViewDAO_Delete_Project"
+        user_id=user["id"],
+        name="TableViewDAO_Delete_Project",
     )
     project = projects[0][0]
 
@@ -269,7 +270,8 @@ async def test_table_view_dao_update_organization_id(client: AsyncClient, dbsess
     dbsession.commit()
 
     projects = project_dao.filter(
-        user_id=user["id"], name="TableViewDAO_OrgUpdate_Project"
+        user_id=user["id"],
+        name="TableViewDAO_OrgUpdate_Project",
     )
     project = projects[0][0]
 
@@ -303,7 +305,8 @@ async def test_table_view_dao_update_organization_id(client: AsyncClient, dbsess
 
 @pytest.mark.anyio
 async def test_table_view_dao_list_by_project_pagination(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test TableViewDAO list_by_project with pagination."""
     user = await create_test_user(client, "table_view_dao_list_proj@test.com")
@@ -947,7 +950,8 @@ async def test_table_views_deleted_on_project_deletion(client: AsyncClient, dbse
 
 @pytest.mark.anyio
 async def test_create_table_view_in_organization_project(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test creating a table view in an organization project."""
     user = await create_test_user(client, "table_view_org_create@test.com")
@@ -1013,7 +1017,8 @@ async def test_create_table_view_in_organization_project(
 
 @pytest.mark.anyio
 async def test_list_table_views_only_returns_own_personal_views(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that listing personal table views only returns the user's own views."""
     user1 = await create_test_user(client, "list_own_user1@test.com")
@@ -1060,7 +1065,8 @@ async def test_list_table_views_only_returns_own_personal_views(
 
 @pytest.mark.anyio
 async def test_cannot_access_other_users_personal_table_view(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that a user cannot access another user's personal table view."""
     user1 = await create_test_user(client, "table_view_access_user1@test.com")
@@ -1300,7 +1306,8 @@ async def test_delete_table_views_by_project(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_delete_table_views_by_project_and_context(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test batch deleting table views for a specific project/context pair."""
     user = await create_test_user(client, "table_view_batch_ctx_delete@test.com")
@@ -1318,7 +1325,8 @@ async def test_delete_table_views_by_project_and_context(
     dbsession.commit()
 
     projects = project_dao.filter(
-        user_id=user["id"], name="table-view-batch-ctx-project"
+        user_id=user["id"],
+        name="table-view-batch-ctx-project",
     )
     project = projects[0][0]
 
@@ -1405,7 +1413,8 @@ async def test_delete_table_views_by_project_not_found(client: AsyncClient, dbse
 
 @pytest.mark.anyio
 async def test_create_table_view_nonexistent_context_fails(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that creating a table view with a non-existent context fails."""
     user = await create_test_user(client, "table_view_ctx_validate@test.com")
@@ -1442,7 +1451,8 @@ async def test_create_table_view_nonexistent_context_fails(
 
 @pytest.mark.anyio
 async def test_create_table_view_existing_context_succeeds(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that creating a table view with an existing context succeeds."""
     user = await create_test_user(client, "table_view_ctx_valid@test.com")
@@ -1550,7 +1560,8 @@ async def test_list_table_views_pagination(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_list_table_views_pagination_invalid_params(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test pagination with invalid parameters."""
     user = await create_test_user(client, "table_view_pagination_invalid@test.com")
@@ -1672,7 +1683,8 @@ async def test_update_table_view_validates_context(client: AsyncClient, dbsessio
 
 @pytest.mark.anyio
 async def test_update_table_view_to_different_project_requires_access(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that updating to a different project requires write access to that project."""
     user1 = await create_test_user(client, "table_view_update_proj1@test.com")
@@ -1734,7 +1746,8 @@ async def test_update_table_view_to_different_project_requires_access(
 
 @pytest.mark.anyio
 async def test_update_table_view_project_id_changes_with_project_name(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that project_id FK is updated when project_name changes (Bug #2 fix)."""
     user = await create_test_user(client, "table_view_project_id_update@test.com")
@@ -1961,7 +1974,8 @@ async def test_hidden_only_accepted(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_table_view_project_name_updates_on_project_rename(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that table view shows updated project name after project is renamed.
 
@@ -2023,7 +2037,8 @@ async def test_table_view_project_name_updates_on_project_rename(
 
 @pytest.mark.anyio
 async def test_table_view_list_shows_current_project_name(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that list endpoint shows current project name after rename."""
     user = await create_test_user(client, "table_view_list_rename@test.com")
@@ -2069,7 +2084,8 @@ async def test_table_view_list_shows_current_project_name(
 
 @pytest.mark.anyio
 async def test_table_view_project_config_does_not_contain_project_name(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that project_name is NOT stored in project_config JSONB.
 
@@ -2104,7 +2120,8 @@ async def test_table_view_project_config_does_not_contain_project_name(
 
 @pytest.mark.anyio
 async def test_create_table_view_token_collision_failure(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that token collision returns HTTP 503 with retry message."""
     from unittest.mock import patch
@@ -2135,3 +2152,89 @@ async def test_create_table_view_token_collision_failure(
 
     assert create_response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert "token" in create_response.json()["detail"].lower()
+
+
+# ==================== Context Deletion Cleanup Tests ====================
+
+
+@pytest.mark.anyio
+async def test_table_views_deleted_on_context_deletion(client: AsyncClient, dbsession):
+    """
+    Test that table views are deleted when their context is deleted.
+
+    BUG: Currently table views are NOT deleted when their context is deleted.
+    This is inconsistent with Plot, which does get cleaned up.
+    Both Plot and TableView store context as a string in project_config JSONB,
+    but only Plot has cleanup logic in context_dao.delete().
+    """
+    user = await create_test_user(client, "table_view_ctx_cascade@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="TableView_Context_Cascade",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="TableView_Context_Cascade")
+    project = projects[0][0]
+
+    # Create context
+    context_id = context_dao.create(
+        project_id=project.id,
+        name="deletable_context",
+        description="Will be deleted",
+    )
+    dbsession.commit()
+
+    # Create table views - some with the context, some without
+    table_view_dao = TableViewDAO(dbsession)
+    table_view_with_context = table_view_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        table_config={"columns": ["value"]},
+        project_config={
+            "project_name": "TableView_Context_Cascade",
+            "context": "deletable_context",
+        },
+        title="TableView With Context",
+    )
+    table_view_without_context = table_view_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        table_config={"columns": ["value"]},
+        project_config={"project_name": "TableView_Context_Cascade"},
+        title="TableView Without Context",
+    )
+    dbsession.commit()
+
+    token_with_ctx = table_view_with_context.token
+    token_without_ctx = table_view_without_context.token
+
+    # Verify both table views exist
+    assert table_view_dao.get_by_token(token_with_ctx) is not None
+    assert table_view_dao.get_by_token(token_without_ctx) is not None
+
+    # Delete the context
+    context_dao.delete(context_id)
+
+    # Refresh session to see changes
+    dbsession.expire_all()
+
+    # Table view with context should be deleted
+    assert table_view_dao.get_by_token(token_with_ctx) is None, (
+        "BUG: TableView with context should be deleted when context is deleted. "
+        "This is inconsistent with Plot, which does get cleaned up. "
+        "Both use the same design (context stored in project_config JSONB) "
+        "but only Plot has cleanup logic in context_dao.delete()."
+    )
+
+    # Table view without context should still exist
+    assert table_view_dao.get_by_token(token_without_ctx) is not None
