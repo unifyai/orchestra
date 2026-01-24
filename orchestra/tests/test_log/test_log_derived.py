@@ -2859,3 +2859,46 @@ async def test_update_derived_entry_both_modes(client: AsyncClient):
             assert (
                 derived_val == num_val * 3
             ), f"Updated derived value should be {num_val * 3}, got {derived_val}"
+
+
+@pytest.mark.anyio
+async def test_derived_logs_reports_failures_for_invalid_ids(client: AsyncClient):
+    """
+    Test that create_derived_logs reports failures when some IDs are invalid.
+
+    BUG: Currently failures are silently swallowed - the response contains no
+    information about which IDs were skipped/failed.
+    """
+    project_name = "test_derived_failures_reported"
+    await _create_project(client, project_name, user=1)
+
+    # Create some real logs
+    real_ids = []
+    for i in range(3):
+        response = await _create_log(client, project_name, entries={"value": i * 10})
+        assert response.status_code == 200
+        real_ids.append(response.json()["log_event_ids"][0])
+
+    # Mix real IDs with fake IDs that don't exist
+    fake_ids = [999999994, 999999995]
+    mixed_ids = real_ids + fake_ids  # 3 real + 2 fake = 5 total
+
+    key = "computed_field"
+    equation = "{lg:value} + 1"
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs={"lg": mixed_ids},
+    )
+    assert response.status_code == 200
+    result = response.json()
+
+    # The response SHOULD include failure information for the invalid IDs
+    failed = result.get("failed", [])
+    assert len(failed) == len(fake_ids), (
+        f"Expected {len(fake_ids)} failures reported for invalid IDs {fake_ids}, "
+        f"but got {len(failed)} failures: {failed}"
+    )
