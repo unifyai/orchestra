@@ -150,6 +150,88 @@ def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) ->
         )
 
 
+def cleanup_plots_created_after_commit(
+    session: Session,
+    project_id: int,
+    context_name: str,
+    commit_timestamp: datetime,
+) -> int:
+    """
+    Delete Plot records that reference the given context and were created
+    after the commit timestamp.
+
+    This is called after rollback to clean up plots that were created after
+    the rolled-back commit point.
+
+    Returns:
+        Number of plots deleted.
+    """
+    result = session.execute(
+        text(
+            """
+            DELETE FROM plot
+            WHERE project_id = :project_id
+              AND project_config->>'context' = :context_name
+              AND created_at > :commit_timestamp
+            RETURNING id
+            """,
+        ),
+        {
+            "project_id": project_id,
+            "context_name": context_name,
+            "commit_timestamp": commit_timestamp,
+        },
+    )
+    deleted_count = len(result.fetchall())
+    if deleted_count > 0:
+        logger.info(
+            f"Deleted {deleted_count} plots created after rollback point for "
+            f"context '{context_name}' in project {project_id}",
+        )
+    return deleted_count
+
+
+def cleanup_table_views_created_after_commit(
+    session: Session,
+    project_id: int,
+    context_name: str,
+    commit_timestamp: datetime,
+) -> int:
+    """
+    Delete TableView records that reference the given context and were created
+    after the commit timestamp.
+
+    This is called after rollback to clean up table views that were created after
+    the rolled-back commit point.
+
+    Returns:
+        Number of table views deleted.
+    """
+    result = session.execute(
+        text(
+            """
+            DELETE FROM table_view
+            WHERE project_id = :project_id
+              AND project_config->>'context' = :context_name
+              AND created_at > :commit_timestamp
+            RETURNING id
+            """,
+        ),
+        {
+            "project_id": project_id,
+            "context_name": context_name,
+            "commit_timestamp": commit_timestamp,
+        },
+    )
+    deleted_count = len(result.fetchall())
+    if deleted_count > 0:
+        logger.info(
+            f"Deleted {deleted_count} table views created after rollback point for "
+            f"context '{context_name}' in project {project_id}",
+        )
+    return deleted_count
+
+
 class ContextDAO:
     def __init__(self, session: Session):
         self.session = session
@@ -3534,6 +3616,21 @@ class ContextDAO:
             delete_orphaned_log_events(self.session, context.project_id)
             cleanup_orphaned_field_types(self.session, context_id)
             cleanup_orphaned_derived_log_templates(self.session, context_id)
+
+            # Clean up plots and table views created after the commit point
+            cleanup_plots_created_after_commit(
+                self.session,
+                context.project_id,
+                context.name,
+                context_version.archived_at,
+            )
+            cleanup_table_views_created_after_commit(
+                self.session,
+                context.project_id,
+                context.name,
+                context_version.archived_at,
+            )
+
             self.session.commit()
 
         except Exception as e:
