@@ -5687,9 +5687,8 @@ def run_index_maintenance(
 # =============================================================================
 
 
-@router.post(
-    "/admin/generate_pending_embeddings",
-    tags=["admin"],
+@admin_router.post(
+    "/generate_pending_embeddings",
     responses={
         200: {
             "description": "Successfully processed pending embeddings",
@@ -5816,9 +5815,8 @@ def generate_pending_embeddings(
         )
 
 
-@router.post(
-    "/admin/index_ready_embeddings",
-    tags=["admin"],
+@admin_router.post(
+    "/index_ready_embeddings",
     responses={
         200: {
             "description": "Successfully inserted embeddings into index",
