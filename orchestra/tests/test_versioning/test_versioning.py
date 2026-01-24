@@ -19,6 +19,7 @@ from orchestra.tests.test_log import (
     _update_logs,
     fetch_logs,
 )
+from orchestra.tests.utils import create_test_user
 
 
 @pytest.mark.anyio
@@ -1326,4 +1327,220 @@ async def test_rollback_cleans_up_active_derived_log_templates(
         f"BUG: ActiveDerivedLog template for '{derived_key}' should NOT exist after "
         f"rollback. The template was created after the commit point and should have "
         f"been cleaned up. Found template: key={template.key}, equation={template.equation}"
+    )
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_plots(client: AsyncClient, dbsession):
+    """
+    Tests that rollback removes Plot records created after the commit point.
+
+    BUG: Currently Plot records are NOT cleaned up during rollback.
+    This means that after rolling back, plots created after the rolled-back
+    commit still exist, even though they reference a state that no longer exists.
+
+    Steps:
+    1. Create a versioned context and commit
+    2. Create a plot referencing that context
+    3. Rollback to the first commit
+    4. Verify the plot is deleted (this currently fails)
+    """
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.plot_dao import PlotDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+
+    user = await create_test_user(client, "rollback_plot_cleanup@test.com")
+
+    project_name = "test_rollback_plot_cleanup"
+    context_name = "plot_cleanup_context"
+
+    # Create project and context via DAOs
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name=project_name,
+        user_id=user["id"],
+        organization_id=None,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name=project_name)
+    project = projects[0][0]
+
+    context_id = context_dao.create(
+        project_id=project.id,
+        name=context_name,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    # --- Version 1: Create a log and commit ---
+    await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "context": {"name": context_name},
+            "entries": {"value": 100},
+        },
+        headers=user["headers"],
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit"},
+        headers=user["headers"],
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Create a plot after the commit (using DAO) ---
+    plot_dao = PlotDAO(dbsession)
+    plot = plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "histogram", "x_axis": "value"},
+        project_config={
+            "project_name": project_name,
+            "context": context_name,
+        },
+        title="Plot Created After Commit",
+    )
+    dbsession.commit()
+    plot_token = plot.token
+
+    # Verify plot exists
+    assert plot_dao.get_by_token(plot_token) is not None
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=user["headers"],
+    )
+    assert rollback_res.status_code == 200
+
+    # Refresh session to see changes
+    dbsession.expire_all()
+
+    # --- KEY ASSERTION: Plot should NOT exist after rollback ---
+    # The plot was created after the commit point we rolled back to,
+    # so it should be cleaned up during rollback
+    assert plot_dao.get_by_token(plot_token) is None, (
+        f"BUG: Plot should NOT exist after rollback. "
+        f"Plot records created after the commit point are not being cleaned up "
+        f"during rollback."
+    )
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_table_views(client: AsyncClient, dbsession):
+    """
+    Tests that rollback removes TableView records created after the commit point.
+
+    BUG: Currently TableView records are NOT cleaned up during rollback.
+    This means that after rolling back, table views created after the rolled-back
+    commit still exist, even though they reference a state that no longer exists.
+
+    Steps:
+    1. Create a versioned context and commit
+    2. Create a table view referencing that context
+    3. Rollback to the first commit
+    4. Verify the table view is deleted (this currently fails)
+    """
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+    from orchestra.db.dao.table_view_dao import TableViewDAO
+
+    user = await create_test_user(client, "rollback_table_view_cleanup@test.com")
+
+    project_name = "test_rollback_table_view_cleanup"
+    context_name = "table_view_cleanup_context"
+
+    # Create project and context via DAOs
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name=project_name,
+        user_id=user["id"],
+        organization_id=None,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name=project_name)
+    project = projects[0][0]
+
+    context_id = context_dao.create(
+        project_id=project.id,
+        name=context_name,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    # --- Version 1: Create a log and commit ---
+    await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "context": {"name": context_name},
+            "entries": {"value": 100},
+        },
+        headers=user["headers"],
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit"},
+        headers=user["headers"],
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Create a table view after the commit (using DAO) ---
+    table_view_dao = TableViewDAO(dbsession)
+    table_view = table_view_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        table_config={"columns": ["value"]},
+        project_config={
+            "project_name": project_name,
+            "context": context_name,
+        },
+        title="TableView Created After Commit",
+    )
+    dbsession.commit()
+    table_view_token = table_view.token
+
+    # Verify table view exists
+    assert table_view_dao.get_by_token(table_view_token) is not None
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=user["headers"],
+    )
+    assert rollback_res.status_code == 200
+
+    # Refresh session to see changes
+    dbsession.expire_all()
+
+    # --- KEY ASSERTION: TableView should NOT exist after rollback ---
+    # The table view was created after the commit point we rolled back to,
+    # so it should be cleaned up during rollback
+    assert table_view_dao.get_by_token(table_view_token) is None, (
+        f"BUG: TableView should NOT exist after rollback. "
+        f"TableView records created after the commit point are not being cleaned up "
+        f"during rollback."
     )
