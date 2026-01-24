@@ -1067,3 +1067,113 @@ async def test_jsonb_nested_structure_versioning(client: AsyncClient):
     assert entries["config"]["retry"]["backoff"] == [1, 2, 4]
     assert entries["tags"] == ["prod", "critical"]
     assert entries["matrix"] == [[1, 2], [3, 4]]
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_field_types(client: AsyncClient):
+    """
+    Tests that rollback removes FieldType records created after the commit point.
+
+    BUG: Currently FieldType records are NOT cleaned up during rollback.
+    This means that after rolling back, the fields list still shows fields
+    that were created after the rolled-back commit, even though the logs
+    containing those fields no longer exist.
+
+    Steps:
+    1. Create a log with field_a, commit
+    2. Add a new field field_b to the log
+    3. Rollback to the first commit
+    4. Verify field_b is NOT in the fields list (this currently fails)
+    """
+    project_name = "test_rollback_field_cleanup"
+    context_name = "field_cleanup_context"
+
+    # Setup: Create a versioned project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # --- Version 1: Create log with field_a ---
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"field_a": "initial_value"},
+    )
+
+    # Get fields before commit - should only have field_a
+    fields_v1_res = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_v1_res.status_code == 200
+    fields_v1 = set(fields_v1_res.json().keys())
+    assert "field_a" in fields_v1
+    assert "field_b" not in fields_v1
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit with field_a"},
+        headers=HEADERS,
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Add field_b (after commit) ---
+    logs_v1 = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_v1[0]["id"]],
+        {"field_b": "new_field_value"},
+        context={"name": context_name},
+        overwrite=False,  # Append, don't overwrite
+    )
+
+    # Verify field_b now exists
+    fields_v2_res = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_v2_res.status_code == 200
+    fields_v2 = set(fields_v2_res.json().keys())
+    assert "field_a" in fields_v2
+    assert "field_b" in fields_v2, "field_b should exist after update"
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=HEADERS,
+    )
+    assert rollback_res.status_code == 200
+
+    # Verify log data is rolled back
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    assert len(logs_after_rollback) == 1
+    assert logs_after_rollback[0]["entries"]["field_a"] == "initial_value"
+    assert (
+        "field_b" not in logs_after_rollback[0]["entries"]
+    ), "field_b should not be in log entries after rollback"
+
+    # --- KEY ASSERTION: field_b should NOT be in the fields list ---
+    fields_after_rollback_res = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_after_rollback_res.status_code == 200
+    fields_after_rollback = set(fields_after_rollback_res.json().keys())
+
+    assert "field_a" in fields_after_rollback, "field_a should still exist"
+    assert "field_b" not in fields_after_rollback, (
+        f"BUG: field_b should NOT exist after rollback, but found fields: "
+        f"{fields_after_rollback}. FieldType records created after the commit "
+        f"point are not being cleaned up during rollback."
+    )
