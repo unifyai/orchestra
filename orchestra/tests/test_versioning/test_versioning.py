@@ -1177,3 +1177,153 @@ async def test_rollback_cleans_up_field_types(client: AsyncClient):
         f"{fields_after_rollback}. FieldType records created after the commit "
         f"point are not being cleaned up during rollback."
     )
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_active_derived_log_templates(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Tests that rollback removes ActiveDerivedLog templates created after the commit point.
+
+    BUG: Currently ActiveDerivedLog templates are NOT cleaned up during rollback.
+    This means that after rolling back, derived field templates still exist and
+    will be applied to new logs, even though the derived field shouldn't exist
+    in the rolled-back state.
+
+    Steps:
+    1. Create a log with base_value, commit
+    2. Create a derived field computed_value = base_value * 2
+    3. Rollback to the first commit
+    4. Verify the ActiveDerivedLog template for computed_value is deleted
+    """
+    project_name = "test_rollback_derived_template_cleanup"
+    context_name = "derived_cleanup_context"
+
+    # Setup: Create a versioned project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # --- Version 1: Create log with base_value ---
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"base_value": 10},
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit with base_value"},
+        headers=HEADERS,
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Create derived field (after commit) ---
+    derived_key = "computed_value"
+    derive_res = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project_name": project_name,
+            "key": derived_key,
+            "equation": "{log:base_value} * 2",
+            "referenced_logs": {"log": {"context": context_name}},
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert derive_res.status_code == 200, derive_res.text
+    assert "Created 1 derived logs" in derive_res.json().get("info", "")
+
+    # Verify derived field exists in logs
+    logs_with_derived = await fetch_logs(client, project_name, context=context_name)
+    assert len(logs_with_derived) == 1
+    assert logs_with_derived[0].get("derived_entries", {}).get(derived_key) == 20
+
+    # Verify the ActiveDerivedLog template exists (check via fields endpoint)
+    fields_with_derived = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_with_derived.status_code == 200
+    assert derived_key in fields_with_derived.json()
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=HEADERS,
+    )
+    assert rollback_res.status_code == 200
+
+    # Verify log data is rolled back (no derived field)
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    assert len(logs_after_rollback) == 1
+    assert logs_after_rollback[0]["entries"]["base_value"] == 10
+    assert derived_key not in logs_after_rollback[0].get(
+        "derived_entries",
+        {},
+    ), f"Derived field {derived_key} should not exist in log after rollback"
+
+    # --- KEY ASSERTION: ActiveDerivedLog template should be deleted ---
+    # The template's existence can be checked by:
+    # 1. The derived field should not appear in the fields list
+    # 2. Creating a new log should NOT auto-compute the derived field
+
+    # Check 1: Derived field should not be in fields list
+    fields_after_rollback = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_after_rollback.status_code == 200
+    fields_after = fields_after_rollback.json()
+    assert derived_key not in fields_after, (
+        f"BUG: Derived field '{derived_key}' should NOT be in fields after rollback. "
+        f"Found fields: {list(fields_after.keys())}. "
+        f"ActiveDerivedLog templates created after the commit point are not being "
+        f"cleaned up during rollback."
+    )
+
+    # Check 2: Directly verify ActiveDerivedLog template is deleted from database
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import ActiveDerivedLog, Context, Project
+
+    dbsession.expire_all()
+
+    # Get project and context IDs
+    project = dbsession.execute(
+        select(Project).where(Project.name == project_name),
+    ).scalar_one()
+    context = dbsession.execute(
+        select(Context).where(
+            Context.project_id == project.id,
+            Context.name == context_name,
+        ),
+    ).scalar_one()
+
+    # Check if ActiveDerivedLog template still exists
+    template = dbsession.execute(
+        select(ActiveDerivedLog).where(
+            ActiveDerivedLog.project_id == project.id,
+            ActiveDerivedLog.context_id == context.id,
+            ActiveDerivedLog.key == derived_key,
+        ),
+    ).scalar_one_or_none()
+
+    assert template is None, (
+        f"BUG: ActiveDerivedLog template for '{derived_key}' should NOT exist after "
+        f"rollback. The template was created after the commit point and should have "
+        f"been cleaned up. Found template: key={template.key}, equation={template.equation}"
+    )
