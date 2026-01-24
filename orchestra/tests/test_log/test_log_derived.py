@@ -2896,9 +2896,12 @@ async def test_derived_logs_reports_failures_for_invalid_ids(client: AsyncClient
     assert response.status_code == 200
     result = response.json()
 
-    # The response SHOULD include failure information for the invalid IDs
-    failed = result.get("failed", [])
-    assert len(failed) == len(fake_ids), (
-        f"Expected {len(fake_ids)} failures reported for invalid IDs {fake_ids}, "
-        f"but got {len(failed)} failures: {failed}"
+    # The response SHOULD include information about IDs that were not found
+    not_found = result.get("not_found", [])
+    assert len(not_found) == len(fake_ids), (
+        f"Expected {len(fake_ids)} not_found IDs for invalid IDs {fake_ids}, "
+        f"but got {len(not_found)}: {not_found}"
     )
+    assert set(not_found) == set(
+        fake_ids,
+    ), f"Expected not_found to contain {fake_ids}, but got {not_found}"

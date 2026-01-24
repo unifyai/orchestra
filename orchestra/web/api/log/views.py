@@ -721,8 +721,16 @@ def create_from_logs(
                 context_id=context_id,
             )
 
+            # Track which IDs were computed vs requested for failure reporting
+            requested_ids = set(filtered_log_ids)
+            computed_ids = {log_id for log_id, _ in computed_values}
+            not_found_ids = sorted(requested_ids - computed_ids)
+
             if not computed_values:
-                return {"info": "No values computed. Nothing to create."}
+                response = {"info": "No values computed. Nothing to create."}
+                if not_found_ids:
+                    response["not_found"] = not_found_ids
+                return response
 
             # Create index mappings for each alias
             alias_to_id_list = {}
@@ -869,9 +877,12 @@ def create_from_logs(
             )
             session.commit()
 
-            return {
+            response = {
                 "info": f"Created {len(updates)} derived logs with key='{body.key}'.",
             }
+            if not_found_ids:
+                response["not_found"] = not_found_ids
+            return response
 
         except Exception as e:
             session.rollback()
