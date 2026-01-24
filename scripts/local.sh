@@ -179,6 +179,26 @@ check_poetry() {
   return 0
 }
 
+# Get an executable from the in-project .venv, with fallback to poetry run.
+# This avoids issues where poetry picks up the wrong virtualenv when called
+# from a different repo's context (e.g., unity calling orchestra's local.sh).
+#
+# Usage: get_venv_executable <repo_path> <executable_name>
+# Example: get_venv_executable "/path/to/orchestra" "python"
+# Returns: Full path to executable, or "poetry run <executable>" as fallback
+get_venv_executable() {
+  local repo_path="$1"
+  local executable="$2"
+  local venv_bin="$repo_path/.venv/bin"
+
+  if [[ -x "$venv_bin/$executable" ]]; then
+    echo "$venv_bin/$executable"
+  else
+    # Fallback to poetry - may work if environment is clean
+    echo "poetry run $executable"
+  fi
+}
+
 # =============================================================================
 # PostgreSQL Container Management
 # =============================================================================
@@ -331,7 +351,10 @@ run_migrations() {
   export ORCHESTRA_DB_PASS=orchestra
   export ORCHESTRA_DB_BASE=orchestra
 
-  if poetry run alembic upgrade head 2>&1; then
+  local alembic_cmd
+  alembic_cmd=$(get_venv_executable "$repo_path" "alembic")
+
+  if $alembic_cmd upgrade head 2>&1; then
     log_success "Migrations completed"
     return 0
   else
@@ -506,15 +529,11 @@ start_orchestra_server() {
   local workers="${ORCHESTRA_WORKERS:-$num_cores}"
   log_info "Starting Orchestra with $workers workers"
 
-  # Get virtualenv python path
+  # Get virtualenv python path - use in-project .venv to avoid poetry picking
+  # up wrong environment when called from another repo's context
   local venv_python
-  venv_python=$(poetry env info --executable 2>/dev/null)
-  if [[ -z "$venv_python" || ! -x "$venv_python" ]]; then
-    log_warn "Could not get virtualenv python path, falling back to poetry run"
-    venv_python="poetry run python"
-  else
-    log_info "Using virtualenv python: $venv_python"
-  fi
+  venv_python=$(get_venv_executable "$ORCHESTRA_REPO_PATH" "python")
+  log_info "Using python: $venv_python"
 
   # Set file descriptor limit
   local fd_limit=$((num_cores * 750))
