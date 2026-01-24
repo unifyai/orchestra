@@ -1332,19 +1332,7 @@ async def test_rollback_cleans_up_active_derived_log_templates(
 
 @pytest.mark.anyio
 async def test_rollback_cleans_up_plots(client: AsyncClient, dbsession):
-    """
-    Tests that rollback removes Plot records created after the commit point.
-
-    BUG: Currently Plot records are NOT cleaned up during rollback.
-    This means that after rolling back, plots created after the rolled-back
-    commit still exist, even though they reference a state that no longer exists.
-
-    Steps:
-    1. Create a versioned context and commit
-    2. Create a plot referencing that context
-    3. Rollback to the first commit
-    4. Verify the plot is deleted (this currently fails)
-    """
+    """Tests that rollback removes Plot records created after the commit point."""
     from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.plot_dao import PlotDAO
@@ -1440,19 +1428,7 @@ async def test_rollback_cleans_up_plots(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_rollback_cleans_up_table_views(client: AsyncClient, dbsession):
-    """
-    Tests that rollback removes TableView records created after the commit point.
-
-    BUG: Currently TableView records are NOT cleaned up during rollback.
-    This means that after rolling back, table views created after the rolled-back
-    commit still exist, even though they reference a state that no longer exists.
-
-    Steps:
-    1. Create a versioned context and commit
-    2. Create a table view referencing that context
-    3. Rollback to the first commit
-    4. Verify the table view is deleted (this currently fails)
-    """
+    """Tests that rollback removes TableView records created after the commit point."""
     from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
