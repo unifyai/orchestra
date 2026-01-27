@@ -21,6 +21,21 @@ class LogLevel(str, enum.Enum):  # noqa: WPS600
     FATAL = "FATAL"
 
 
+class UniqueValidationMode(str, enum.Enum):
+    """
+    Mode for unique field validation.
+
+    JSONB_SCAN: Original behavior - scan all logs with JSONB containment (slow, O(N×M))
+    LOOKUP_TABLE: New behavior - use lookup table with B-tree index (fast, O(M×log N))
+
+    Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
+    Default is JSONB_SCAN for backward compatibility during migration.
+    """
+
+    JSONB_SCAN = "jsonb_scan"
+    LOOKUP_TABLE = "lookup_table"
+
+
 class Settings(BaseSettings):
     """
     Application settings.
@@ -261,6 +276,28 @@ class Settings(BaseSettings):
             ).lower()
             == "true"
         )
+
+    @property
+    def unique_validation_mode(self) -> UniqueValidationMode:
+        """
+        Get the unique field validation mode.
+
+        Controls how unique field constraints are checked:
+        - jsonb_scan: Original O(N×M) JSONB containment scan (slow)
+        - lookup_table: New O(M×log N) lookup table approach (fast)
+
+        Default is jsonb_scan for backward compatibility during migration.
+
+        :return: The configured validation mode.
+        """
+        mode_str = os.environ.get(
+            "ORCHESTRA_UNIQUE_VALIDATION_MODE",
+            UniqueValidationMode.LOOKUP_TABLE.value,
+        )
+        try:
+            return UniqueValidationMode(mode_str)
+        except ValueError:
+            return UniqueValidationMode.LOOKUP_TABLE
 
     model_config = SettingsConfigDict(
         env_file=".env",
