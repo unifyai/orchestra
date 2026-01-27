@@ -145,6 +145,7 @@ class LogEventDAO:
                         context_id=context_id,
                         unique_keys=unique_keys or {},
                         provided_values=provided_unique_ids,
+                        log_event_ids=log_event_ids,
                     )
                 except ValueError as e:
                     # Convert ValueError to a more user-friendly error
@@ -501,6 +502,7 @@ class LogEventDAO:
         context_id: int,
         unique_keys: Dict[str, str],
         provided_values: List[Dict[str, Any]],
+        log_event_ids: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generate composite key values for unique_keys and auto-counting fields.
@@ -714,28 +716,26 @@ class LogEventDAO:
                 seen.add(combo)
 
             # Step 2: Check against existing data using UniqueConstraintDAO
-            # Note: This requires log_event_ids which are not available at this point
-            # in the bulk_create flow. The validation happens before log creation.
-            # We use the JSONB scan fallback here since we don't have log_event_ids yet.
             unique_dao = UniqueConstraintDAO(self.session)
 
-            # Prepare entries for composite key check (using placeholder IDs)
-            # The actual constraint insertion happens after log creation
-            log_entries = [
-                (0, {col: row[col] for col in unique_key_columns}) for row in completed
-            ]
+            # Use real log_event_ids if provided, otherwise skip constraint insertion
+            if log_event_ids and len(log_event_ids) == len(completed):
+                log_entries = [
+                    (log_event_ids[i], {col: row[col] for col in unique_key_columns})
+                    for i, row in enumerate(completed)
+                ]
 
-            duplicate = unique_dao.check_composite_keys_batch(
-                context_id=context_id,
-                log_entries=log_entries,
-                key_columns=list(unique_key_columns),
-            )
-
-            if duplicate:
-                _, key_values = duplicate
-                raise ValueError(
-                    f"Duplicate composite key already exists for this context: {key_values}",
+                duplicate = unique_dao.check_composite_keys_batch(
+                    context_id=context_id,
+                    log_entries=log_entries,
+                    key_columns=list(unique_key_columns),
                 )
+
+                if duplicate:
+                    _, key_values = duplicate
+                    raise ValueError(
+                        f"Duplicate composite key already exists for this context: {key_values}",
+                    )
 
         return completed
 

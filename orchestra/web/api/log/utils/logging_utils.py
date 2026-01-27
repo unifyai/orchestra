@@ -1815,18 +1815,26 @@ def _create_logs_internal(
     # Uses lookup table (O(M×log N)) or JSONB scan (O(N×M)) based on config.
     # Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
     # =========================================================================
-    if log_data_updates and field_types:
+    if log_data_updates:
         from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
         session = log_event_dao.session
 
-        # Get unique fields for this project/context
+        # Get unique fields from EXISTING field types
         # field_types structure: {"field_name": {"field_type": "str", "unique": True}}
         unique_fields = {
             k
             for k, v in field_types.items()
             if isinstance(v, dict) and v.get("unique", False)
         }
+
+        # ALSO include unique fields from NEWLY created field types (via explicit_types)
+        # This handles the case where a log creates a new unique field in the same request
+        if new_field_types:
+            new_unique_fields = {
+                ft["field_name"] for ft in new_field_types if ft.get("unique", False)
+            }
+            unique_fields = unique_fields | new_unique_fields
 
         if unique_fields:
             unique_dao = UniqueConstraintDAO(session)
