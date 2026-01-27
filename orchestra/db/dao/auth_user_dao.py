@@ -576,6 +576,7 @@ class AuthUserDAO:
         Get user's cumulative spend for a given month (personal context).
 
         Queries the user's personal Assistants project logs for spending data.
+        Aggregates cumulative_spend across all assistants owned by this user.
 
         :param user_id: User ID.
         :param month: Month in YYYY-MM format.
@@ -591,10 +592,12 @@ class AuthUserDAO:
             Project,
         )
 
+        # Sum cumulative_spend across all assistants for this user
+        # Logs are stored in All/Spending/Monthly with _user_id field
         result = (
             self.session.query(
                 func.coalesce(
-                    cast(LogEvent.data.op("->>")("cumulative_spend"), Float),
+                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
                     0.0,
                 ).label("spend"),
             )
@@ -606,7 +609,8 @@ class AuthUserDAO:
                 Project.name == "Assistants",
                 Project.user_id == user_id,
                 Project.organization_id.is_(None),
-                Context.name == f"{user_id}/All/Spending/Monthly",
+                Context.name == "All/Spending/Monthly",
+                LogEvent.data.op("->>")("_user_id") == user_id,
                 LogEvent.data.op("->>")("month") == month,
             )
             .first()

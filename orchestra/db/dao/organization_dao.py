@@ -271,6 +271,7 @@ class OrganizationDAO:
         Get organization's cumulative spend for a given month.
 
         Queries the organization's Assistants project logs for spending data.
+        Aggregates cumulative_spend across all assistants in the organization.
 
         :param org_id: Organization ID.
         :param month: Month in YYYY-MM format.
@@ -286,10 +287,11 @@ class OrganizationDAO:
             Project,
         )
 
+        # Sum cumulative_spend across all assistants in this organization
         result = (
             self.session.query(
                 func.coalesce(
-                    cast(LogEvent.data.op("->>")("cumulative_spend"), Float),
+                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
                     0.0,
                 ).label("spend"),
             )

@@ -1371,6 +1371,298 @@ async def test_non_member_cannot_get_org_spend(client: AsyncClient):
 
 
 # ===========================================================================
+# Spend Aggregation Tests
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_user_spend_aggregates_across_multiple_assistants(client: AsyncClient):
+    """Test that user spend endpoint aggregates spend from multiple assistants.
+
+    This test verifies the bug fix where user spend was only returning the spend
+    from a single assistant instead of summing across all assistants owned by the user.
+
+    The fix was to:
+    1. Query "All/Spending/Monthly" context instead of per-assistant context
+    2. Filter by _user_id in log entries
+    3. Use SUM() to aggregate across all matching logs
+    """
+    # Clear any existing user limit
+    await client.put(
+        "/v0/user/spending-limit",
+        json={"monthly_spending_cap": None},
+        headers=HEADERS,
+    )
+
+    # Get the current user ID
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+
+    # Create two personal assistants
+    response1 = await _create_assistant(client, "MultiSpendBot1", "TestBot", HEADERS)
+    assert response1.status_code in [200, 201], response1.json()
+    agent_id_1 = response1.json()["info"]["agent_id"]
+
+    response2 = await _create_assistant(client, "MultiSpendBot2", "TestBot", HEADERS)
+    assert response2.status_code in [200, 201], response2.json()
+    agent_id_2 = response2.json()["info"]["agent_id"]
+
+    # Simulate spending by creating logs via atomic upsert
+    # First create the Assistants project
+    await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=HEADERS,
+    )
+
+    # Log spend for first assistant
+    await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "All/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+25.00",
+            "initial_data": {
+                "_assistant_id": str(agent_id_1),
+                "month": "2026-01",
+                "_user_id": user_id,
+                "_user": "TestUser",
+                "_assistant": "MultiSpendBot1",
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+
+    # Log spend for second assistant
+    await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "All/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+15.00",
+            "initial_data": {
+                "_assistant_id": str(agent_id_2),
+                "month": "2026-01",
+                "_user_id": user_id,
+                "_user": "TestUser",
+                "_assistant": "MultiSpendBot2",
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+
+    # Get user spend via admin endpoint
+    response = await client.get(
+        f"/v0/admin/user/{user_id}/spend?month=2026-01",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    # Should aggregate spend from BOTH assistants: 25 + 15 = 40
+    assert data["cumulative_spend"] >= 40.0, (
+        f"Expected cumulative_spend >= 40.0 (sum of 25+15 from two assistants), "
+        f"got {data['cumulative_spend']}. This suggests the query is not aggregating correctly."
+    )
+
+
+@pytest.mark.anyio
+async def test_org_spend_aggregates_across_multiple_assistants(client: AsyncClient):
+    """Test that org spend endpoint aggregates spend from multiple org assistants.
+
+    This test verifies the bug fix where org spend was returning only a single
+    assistant's spend instead of summing across all org assistants.
+
+    The fix was to use SUM() instead of just fetching the first matching row.
+    """
+    # Create an organization
+    response = await _create_organization(client, "SpendAggregateOrg", HEADERS)
+    assert response.status_code in [200, 201], response.json()
+    org_data = response.json()
+    org_id = org_data["id"]
+    org_api_key = org_data["api_key"]
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Create Assistants project in org
+    await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+
+    # Create two org assistants
+    response1 = await _create_assistant(client, "OrgSpendBot1", "TestBot", org_headers)
+    assert response1.status_code in [200, 201], response1.json()
+    agent_id_1 = response1.json()["info"]["agent_id"]
+
+    response2 = await _create_assistant(client, "OrgSpendBot2", "TestBot", org_headers)
+    assert response2.status_code in [200, 201], response2.json()
+    agent_id_2 = response2.json()["info"]["agent_id"]
+
+    # Log spend for first org assistant
+    await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "All/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+50.00",
+            "initial_data": {
+                "_assistant_id": str(agent_id_1),
+                "month": "2026-01",
+                "_user": "OrgUser",
+                "_assistant": "OrgSpendBot1",
+            },
+            "add_to_all_context": False,
+        },
+        headers=org_headers,
+    )
+
+    # Log spend for second org assistant
+    await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "All/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+30.00",
+            "initial_data": {
+                "_assistant_id": str(agent_id_2),
+                "month": "2026-01",
+                "_user": "OrgUser",
+                "_assistant": "OrgSpendBot2",
+            },
+            "add_to_all_context": False,
+        },
+        headers=org_headers,
+    )
+
+    # Get org spend via admin endpoint
+    response = await client.get(
+        f"/v0/admin/organization/{org_id}/spend?month=2026-01",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    # Should aggregate spend from BOTH org assistants: 50 + 30 = 80
+    assert data["cumulative_spend"] >= 80.0, (
+        f"Expected cumulative_spend >= 80.0 (sum of 50+30 from two org assistants), "
+        f"got {data['cumulative_spend']}. This suggests the query is not using SUM() to aggregate."
+    )
+
+
+@pytest.mark.anyio
+async def test_member_spend_aggregates_across_org_assistants(client: AsyncClient):
+    """Test that member spend endpoint aggregates spend from all assistants created by member.
+
+    In org context, a member's spend should be the sum of spend from all assistants
+    they've created within the organization.
+    """
+    # Create an organization
+    response = await _create_organization(client, "MemberSpendAggOrg", HEADERS)
+    assert response.status_code in [200, 201], response.json()
+    org_data = response.json()
+    org_id = org_data["id"]
+    org_api_key = org_data["api_key"]
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Get owner ID
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    owner_id = credits_resp.json()["id"]
+
+    # Create Assistants project in org
+    await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+
+    # Create two org assistants by the member
+    response1 = await _create_assistant(client, "MemberBot1", "AggTest", org_headers)
+    assert response1.status_code in [200, 201], response1.json()
+    agent_id_1 = response1.json()["info"]["agent_id"]
+
+    response2 = await _create_assistant(client, "MemberBot2", "AggTest", org_headers)
+    assert response2.status_code in [200, 201], response2.json()
+    agent_id_2 = response2.json()["info"]["agent_id"]
+
+    # Log spend for first assistant (with member's user_id)
+    await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "All/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+20.00",
+            "initial_data": {
+                "_assistant_id": str(agent_id_1),
+                "month": "2026-01",
+                "_user_id": owner_id,
+                "_user": "OwnerUser",
+                "_assistant": "MemberBot1",
+            },
+            "add_to_all_context": False,
+        },
+        headers=org_headers,
+    )
+
+    # Log spend for second assistant
+    await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "All/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+35.00",
+            "initial_data": {
+                "_assistant_id": str(agent_id_2),
+                "month": "2026-01",
+                "_user_id": owner_id,
+                "_user": "OwnerUser",
+                "_assistant": "MemberBot2",
+            },
+            "add_to_all_context": False,
+        },
+        headers=org_headers,
+    )
+
+    # Get member spend via admin endpoint
+    response = await client.get(
+        f"/v0/admin/organization/{org_id}/members/{owner_id}/spend?month=2026-01",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    # Should aggregate spend from BOTH assistants: 20 + 35 = 55
+    assert data["cumulative_spend"] >= 55.0, (
+        f"Expected cumulative_spend >= 55.0 (sum of 20+35 from member's assistants), "
+        f"got {data['cumulative_spend']}. This suggests member spend aggregation is broken."
+    )
+
+
+# ===========================================================================
 # Admin Member Spend Endpoint Tests
 # ===========================================================================
 
