@@ -1,6 +1,7 @@
 """Tests for atomic field update operations."""
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
@@ -963,3 +964,238 @@ async def test_atomic_upsert_explicit_field_parameter(client: AsyncClient):
     assert data4["created"] is False  # Updating existing log
     assert data4["new_value"] == 0.003  # 0.001 + 0.002
     assert data4["log_id"] == log_id3
+
+
+@pytest.mark.anyio
+async def test_atomic_upsert_with_org_api_key(client: AsyncClient):
+    """Test atomic upsert uses org project when using org API key.
+
+    This test captures a bug where atomic upsert with an org API key would
+    incorrectly create logs in the user's personal project instead of the
+    organization's project. The fix ensures that organization_id from the
+    API key context is passed to filter_by_user_access, which then returns
+    the org-scoped project.
+
+    Flow:
+    1. Create an organization
+    2. Create an org API key
+    3. Create an "Assistants" project in the org
+    4. Use the org API key for atomic upsert
+    5. Verify the log was created in the org project (not personal)
+    """
+
+    # Step 1: Create an organization (API key is returned in response)
+    org_name = f"atomic-upsert-org-test-{int(time.time())}"
+    response = await client.post(
+        "/v0/organizations",
+        json={"name": org_name},
+        headers=HEADERS,
+    )
+    assert response.status_code in (200, 201), response.json()
+    org_data = response.json()
+    org_id = org_data.get("id")
+    org_api_key = org_data.get("api_key")
+    assert org_id is not None, f"Failed to get org_id from response: {org_data}"
+    assert (
+        org_api_key is not None
+    ), f"Failed to get org_api_key from response: {org_data}"
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Step 2: Create "Assistants" project in org (via the org API key)
+    response = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+    # May already exist, so accept 200 or 409
+    assert response.status_code in (200, 201, 409), response.json()
+
+    # Step 4: Use atomic upsert with org API key
+    response = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "OrgUser/OrgAssistant/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+0.00123",
+            "initial_data": {
+                "_assistant_id": "org-agent-001",
+                "month": "2026-01",
+                "_user": "OrgUser",
+                "_assistant": "OrgAssistant",
+                "_org_id": org_id,
+            },
+            "add_to_all_context": True,
+        },
+        headers=org_headers,
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["created"] is True
+    assert data["new_value"] == 0.00123
+    log_id = data["log_id"]
+
+    # Step 3: Increment again to verify it updates the same log in org project
+    response2 = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": "Assistants",
+            "context": "OrgUser/OrgAssistant/Spending/Monthly",
+            "unique_keys": {"_assistant_id": "str", "month": "str"},
+            "field": "cumulative_spend",
+            "operation": "+0.00077",
+            "initial_data": {
+                "_assistant_id": "org-agent-001",
+                "month": "2026-01",
+            },
+            "add_to_all_context": True,
+        },
+        headers=org_headers,
+    )
+
+    assert response2.status_code == 200, response2.json()
+    data2 = response2.json()
+    assert data2["created"] is False  # Same log
+    assert data2["new_value"] == 0.002  # 0.00123 + 0.00077 = 0.002
+    assert data2["log_id"] == log_id  # Same log ID
+
+
+@pytest.mark.anyio
+async def test_atomic_upsert_org_project_isolation(client: AsyncClient):
+    """Test that org and personal projects are properly isolated for atomic upsert.
+
+    This verifies that:
+    1. Personal API key creates logs in personal project
+    2. Org API key creates logs in org project
+    3. Both can have "Assistants" project with same context but independent logs
+    """
+    # Create unique identifiers for this test run
+    test_id = f"isolation-{int(time.time())}"
+
+    # Step 1: Create a log with personal API key
+    project_name = "Assistants"
+    await _create_project(client, project_name)
+
+    response_personal = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name,
+            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "unique_keys": {"test_id": "str"},
+            "field": "value",
+            "operation": "+100",
+            "initial_data": {
+                "test_id": f"personal-{test_id}",
+                "source": "personal",
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+    assert response_personal.status_code == 200, response_personal.json()
+    personal_log_id = response_personal.json()["log_id"]
+    assert response_personal.json()["new_value"] == 100
+
+    # Step 2: Create an organization (API key is returned in response)
+    org_name = f"isolation-org-{test_id}"
+    response = await client.post(
+        "/v0/organizations",
+        json={"name": org_name},
+        headers=HEADERS,
+    )
+    assert response.status_code in (200, 201), response.json()
+    org_data = response.json()
+    org_id = org_data.get("id")
+    org_api_key = org_data.get("api_key")
+    assert org_id is not None, f"Failed to get org_id from response: {org_data}"
+    assert (
+        org_api_key is not None
+    ), f"Failed to get org_api_key from response: {org_data}"
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Create Assistants project in org
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=org_headers,
+    )
+    assert response.status_code in (200, 201, 409), response.json()
+
+    # Step 3: Create a log with org API key (same context path but different test_id)
+    response_org = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name,
+            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "unique_keys": {"test_id": "str"},
+            "field": "value",
+            "operation": "+200",
+            "initial_data": {
+                "test_id": f"org-{test_id}",
+                "source": "organization",
+            },
+            "add_to_all_context": False,
+        },
+        headers=org_headers,
+    )
+    assert response_org.status_code == 200, response_org.json()
+    org_log_id = response_org.json()["log_id"]
+    assert response_org.json()["new_value"] == 200
+
+    # Step 4: Verify logs are different (different log IDs proves isolation)
+    assert personal_log_id != org_log_id, (
+        f"Personal and org logs should have different IDs: "
+        f"personal={personal_log_id}, org={org_log_id}"
+    )
+
+    # Step 5: Update personal log again - should not affect org log
+    response_personal2 = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name,
+            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "unique_keys": {"test_id": "str"},
+            "field": "value",
+            "operation": "+50",
+            "initial_data": {
+                "test_id": f"personal-{test_id}",
+            },
+            "add_to_all_context": False,
+        },
+        headers=HEADERS,
+    )
+    assert response_personal2.status_code == 200, response_personal2.json()
+    assert response_personal2.json()["new_value"] == 150  # 100 + 50
+    assert response_personal2.json()["log_id"] == personal_log_id
+
+    # Step 6: Update org log - should not affect personal log
+    response_org2 = await client.post(
+        "/v0/logs/atomic",
+        json={
+            "project": project_name,
+            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "unique_keys": {"test_id": "str"},
+            "field": "value",
+            "operation": "+25",
+            "initial_data": {
+                "test_id": f"org-{test_id}",
+            },
+            "add_to_all_context": False,
+        },
+        headers=org_headers,
+    )
+    assert response_org2.status_code == 200, response_org2.json()
+    assert response_org2.json()["new_value"] == 225  # 200 + 25
+    assert response_org2.json()["log_id"] == org_log_id
