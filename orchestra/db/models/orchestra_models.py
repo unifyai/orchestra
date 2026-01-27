@@ -1744,7 +1744,7 @@ class TableView(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
-    # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
+    # Relationships - passive_deletes = True lets the DB handle CASCADE DELETE
     project = relationship(
         "Project",
         backref=backref("table_views", passive_deletes=True),
