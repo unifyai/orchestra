@@ -1358,6 +1358,7 @@ def _atomic_field_update_impl(
     2. Upsert mode: body contains project/context/unique_keys/initial_data
     """
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # Parse and validate the operation
     match = re.match(r"^([+\-*/])(\d+\.?\d*)$", body.operation)
@@ -1384,6 +1385,7 @@ def _atomic_field_update_impl(
         # === UPSERT MODE ===
         return _atomic_upsert_mode(
             user_id=user_id,
+            organization_id=organization_id,
             body=body,
             operator=operator,
             operand=operand,
@@ -1451,6 +1453,7 @@ def _atomic_field_update_impl(
 
 def _atomic_upsert_mode(
     user_id: str,
+    organization_id: Optional[int],
     body: AtomicFieldUpdateRequest,
     operator: str,
     operand: float,
@@ -1473,6 +1476,7 @@ def _atomic_upsert_mode(
     )
     projects = project_dao.filter_by_user_access(
         user_id=user_id,
+        organization_id=organization_id,
         name=body.project,
     )
     if not projects:
