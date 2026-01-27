@@ -1567,17 +1567,27 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
     if logs_tier3.status_code == 200:
         assert logs_tier3.json()["count"] == 0, "Tier3 context should be empty"
 
-    # Verify log is removed from sibling contexts (tier2 and tier1)
-    for sibling_ctx in [tier2_context, tier1_context]:
-        sibling_logs = await client.get(
-            f"/v0/logs?project_name={project_name}&context={sibling_ctx}",
-            headers=org_headers,
-        )
-        if sibling_logs.status_code == 200:
-            log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
-            assert (
-                log_id not in log_ids
-            ), f"Log {log_id} should be removed from sibling context {sibling_ctx}"
+    # Verify log is removed from tier2 but remains in tier1 (archive protection)
+    sibling_logs = await client.get(
+        f"/v0/logs?project_name={project_name}&context={tier2_context}",
+        headers=org_headers,
+    )
+    if sibling_logs.status_code == 200:
+        log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
+        assert (
+            log_id not in log_ids
+        ), f"Log {log_id} should be removed from sibling context {tier2_context}"
+
+    # Archive protection: log remains in topmost All/* context
+    archive_logs = await client.get(
+        f"/v0/logs?project_name={project_name}&context={tier1_context}",
+        headers=org_headers,
+    )
+    if archive_logs.status_code == 200:
+        log_ids = [log["id"] for log in archive_logs.json()["logs"]]
+        assert (
+            log_id in log_ids
+        ), f"Log {log_id} should remain in archive context {tier1_context}"
 
 
 # =============================================================================
@@ -2785,8 +2795,8 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
     transfer_data = transfer_resp.json()["info"]
     assert transfer_data["logs_deleted"] is True
 
-    # Verify log is removed from ALL three contexts via sibling cleanup
-    for ctx in [tier1_context, tier2_context, tier3_context]:
+    # Verify log is removed from tier2 and tier3 but remains in tier1 (archive protection)
+    for ctx in [tier2_context, tier3_context]:
         logs_resp = await client.get(
             f"/v0/logs?project_name=Assistants&context={ctx}",
             headers=org_headers,
@@ -2795,6 +2805,16 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
             assert log_id not in [
                 log["id"] for log in logs_resp.json()["logs"]
             ], f"Log should be cleaned from {ctx}"
+
+    # Archive protection: log remains in topmost All/* context
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier1_context}",
+        headers=org_headers,
+    )
+    if logs_resp.status_code == 200:
+        assert log_id in [
+            log["id"] for log in logs_resp.json()["logs"]
+        ], f"Log should remain in archive {tier1_context}"
 
 
 @pytest.mark.anyio
@@ -2928,17 +2948,26 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     )
     assert transfer_resp.status_code == 200
 
-    # Verify Assistant A's log is removed from shared contexts
-    for ctx in [tier1_context, tier2_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-        assert log_id_a not in log_ids, f"Log A should be removed from {ctx}"
-        # Assistant B's log should still exist
-        assert log_id_b in log_ids, f"Log B should still exist in {ctx}"
+    # Verify Assistant A's log is removed from tier2 context
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier2_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
+    assert log_id_a not in log_ids, f"Log A should be removed from {tier2_context}"
+    # Assistant B's log should still exist
+    assert log_id_b in log_ids, f"Log B should still exist in {tier2_context}"
+
+    # Archive protection: log A remains in topmost All/* context for historical record
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier1_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
+    assert log_id_a in log_ids, f"Log A should remain in archive {tier1_context}"
+    assert log_id_b in log_ids, f"Log B should still exist in {tier1_context}"
 
     # Verify Assistant B's Tier 3 context is untouched
     logs_resp_b = await client.get(

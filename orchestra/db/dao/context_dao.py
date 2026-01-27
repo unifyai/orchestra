@@ -53,6 +53,185 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
     )
 
 
+def cleanup_orphaned_field_types(session: Session, context_id: int) -> None:
+    """
+    Delete FieldType records for fields that no longer exist in any log events
+    for the given context.
+
+    This is called after rollback to clean up field metadata for fields that
+    were created after the rolled-back commit point.
+    """
+    # Get all field names that currently exist in log events for this context
+    existing_fields_result = session.execute(
+        text(
+            """
+            SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+            """,
+        ),
+        {"context_id": context_id},
+    ).fetchall()
+
+    existing_field_names = {row[0] for row in existing_fields_result}
+
+    # Delete FieldType records for fields that no longer exist
+    # Only delete context-specific field types (context_id is not NULL)
+    if existing_field_names:
+        session.execute(
+            text(
+                """
+                DELETE FROM field_type
+                WHERE context_id = :context_id
+                  AND field_name NOT IN :existing_fields
+                """,
+            ),
+            {"context_id": context_id, "existing_fields": tuple(existing_field_names)},
+        )
+    else:
+        # No fields exist - delete all field types for this context
+        session.execute(
+            text(
+                """
+                DELETE FROM field_type
+                WHERE context_id = :context_id
+                """,
+            ),
+            {"context_id": context_id},
+        )
+
+
+def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) -> None:
+    """
+    Delete ActiveDerivedLog templates for derived fields that no longer exist
+    in any log events for the given context.
+
+    This is called after rollback to clean up derived field templates that were
+    created after the rolled-back commit point.
+    """
+    # Get all field names that currently exist in log events for this context
+    existing_fields_result = session.execute(
+        text(
+            """
+            SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+            """,
+        ),
+        {"context_id": context_id},
+    ).fetchall()
+
+    existing_field_names = {row[0] for row in existing_fields_result}
+
+    # Delete ActiveDerivedLog templates for derived fields that no longer exist
+    if existing_field_names:
+        session.execute(
+            text(
+                """
+                DELETE FROM active_derived_log_template
+                WHERE context_id = :context_id
+                  AND key NOT IN :existing_fields
+                """,
+            ),
+            {"context_id": context_id, "existing_fields": tuple(existing_field_names)},
+        )
+    else:
+        # No fields exist - delete all derived log templates for this context
+        session.execute(
+            text(
+                """
+                DELETE FROM active_derived_log_template
+                WHERE context_id = :context_id
+                """,
+            ),
+            {"context_id": context_id},
+        )
+
+
+def cleanup_plots_created_after_commit(
+    session: Session,
+    project_id: int,
+    context_name: str,
+    commit_timestamp: datetime,
+) -> int:
+    """
+    Delete Plot records that reference the given context and were created
+    after the commit timestamp.
+
+    This is called after rollback to clean up plots that were created after
+    the rolled-back commit point.
+
+    Returns:
+        Number of plots deleted.
+    """
+    result = session.execute(
+        text(
+            """
+            DELETE FROM plot
+            WHERE project_id = :project_id
+              AND project_config->>'context' = :context_name
+              AND created_at > :commit_timestamp
+            RETURNING id
+            """,
+        ),
+        {
+            "project_id": project_id,
+            "context_name": context_name,
+            "commit_timestamp": commit_timestamp,
+        },
+    )
+    deleted_count = len(result.fetchall())
+    if deleted_count > 0:
+        logger.info(
+            f"Deleted {deleted_count} plots created after rollback point for "
+            f"context '{context_name}' in project {project_id}",
+        )
+    return deleted_count
+
+
+def cleanup_table_views_created_after_commit(
+    session: Session,
+    project_id: int,
+    context_name: str,
+    commit_timestamp: datetime,
+) -> int:
+    """
+    Delete TableView records that reference the given context and were created
+    after the commit timestamp.
+
+    This is called after rollback to clean up table views that were created after
+    the rolled-back commit point.
+
+    Returns:
+        Number of table views deleted.
+    """
+    result = session.execute(
+        text(
+            """
+            DELETE FROM table_view
+            WHERE project_id = :project_id
+              AND project_config->>'context' = :context_name
+              AND created_at > :commit_timestamp
+            RETURNING id
+            """,
+        ),
+        {
+            "project_id": project_id,
+            "context_name": context_name,
+            "commit_timestamp": commit_timestamp,
+        },
+    )
+    deleted_count = len(result.fetchall())
+    if deleted_count > 0:
+        logger.info(
+            f"Deleted {deleted_count} table views created after rollback point for "
+            f"context '{context_name}' in project {project_id}",
+        )
+    return deleted_count
+
+
 class ContextDAO:
     def __init__(self, session: Session):
         self.session = session
@@ -2726,6 +2905,7 @@ class ContextDAO:
             get_assistants_sibling_context_info,
             remove_logs_from_sibling_contexts,
         )
+        from orchestra.db.dao.table_view_dao import TableViewDAO
 
         try:
             context = self.session.query(Context).filter_by(id=id).one()
@@ -2742,6 +2922,19 @@ class ContextDAO:
                 logger.info(
                     f"Deleted {deleted_plots} plots for context '{context.name}' "
                     f"in project {project.id}",
+                )
+
+            # Delete table views that reference this context
+            # Table views store context as a string in project_config JSONB, not as FK
+            table_view_dao = TableViewDAO(self.session)
+            deleted_table_views = table_view_dao.delete_by_project(
+                project_id=project.id,
+                context=context.name,
+            )
+            if deleted_table_views > 0:
+                logger.info(
+                    f"Deleted {deleted_table_views} table views for context "
+                    f"'{context.name}' in project {project.id}",
                 )
 
             # For Assistants/UnityTests projects, clean up sibling contexts first
@@ -3421,6 +3614,23 @@ class ContextDAO:
 
             # Step 2: Garbage collection in a new transaction
             delete_orphaned_log_events(self.session, context.project_id)
+            cleanup_orphaned_field_types(self.session, context_id)
+            cleanup_orphaned_derived_log_templates(self.session, context_id)
+
+            # Clean up plots and table views created after the commit point
+            cleanup_plots_created_after_commit(
+                self.session,
+                context.project_id,
+                context.name,
+                context_version.archived_at,
+            )
+            cleanup_table_views_created_after_commit(
+                self.session,
+                context.project_id,
+                context.name,
+                context_version.archived_at,
+            )
+
             self.session.commit()
 
         except Exception as e:

@@ -1302,19 +1302,28 @@ async def test_delete_assistant_deletes_contexts(
             logs_after_delete.json()["count"] == 0
         ), f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."
 
-    # Verify the log is also removed from sibling contexts (User/All/Ctx and All/Ctx)
-    # The sibling cleanup should remove the log from these contexts when the
-    # User/Assistant/Ctx context is deleted
-    for sibling_ctx in [user_all_context, global_all_context]:
-        sibling_logs = await client.get(
-            f"/v0/logs?project_name={project_name}&context={sibling_ctx}",
-            headers=HEADERS,
-        )
-        if sibling_logs.status_code == 200:
-            log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
-            assert (
-                log_id not in log_ids
-            ), f"Log {log_id} should be removed from sibling context {sibling_ctx}"
+    # Verify the log is removed from User/All/Ctx (tier2 - not protected)
+    # but remains in All/Ctx (tier1 - protected archive)
+    sibling_logs = await client.get(
+        f"/v0/logs?project_name={project_name}&context={user_all_context}",
+        headers=HEADERS,
+    )
+    if sibling_logs.status_code == 200:
+        log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
+        assert (
+            log_id not in log_ids
+        ), f"Log {log_id} should be removed from sibling context {user_all_context}"
+
+    # Archive protection: logs remain in topmost All/* contexts for historical record
+    archive_logs = await client.get(
+        f"/v0/logs?project_name={project_name}&context={global_all_context}",
+        headers=HEADERS,
+    )
+    if archive_logs.status_code == 200:
+        log_ids = [log["id"] for log in archive_logs.json()["logs"]]
+        assert (
+            log_id in log_ids
+        ), f"Log {log_id} should remain in archive context {global_all_context}"
 
 
 @pytest.mark.anyio

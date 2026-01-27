@@ -60,6 +60,8 @@ from orchestra.web.api.assistant.schema import (
     AssistantCreate,
     AssistantPhotoUploadResponse,
     AssistantRead,
+    AssistantSpendingLimitResponse,
+    AssistantSpendResponse,
     AssistantStatus,
     AssistantTransferResponse,
     AssistantTransferToOrgRequest,
@@ -75,6 +77,7 @@ from orchestra.web.api.assistant.schema import (
     SecretCreate,
     SecretRead,
     SecretUpdate,
+    SpendingLimitRequest,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -1619,6 +1622,13 @@ async def update_assistant_config(
             del update_data["create_infra"]
         if "weekly_limit" in update_data and update.weekly_limit is not None:
             update_data["weekly_limit"] = Decimal(update.weekly_limit)
+        if (
+            "monthly_spending_cap" in update_data
+            and update.monthly_spending_cap is not None
+        ):
+            update_data["monthly_spending_cap"] = Decimal(
+                str(update.monthly_spending_cap),
+            )
         if assistant_email:
             update_data["email"] = assistant_email
         if assistant_phone:
@@ -4823,3 +4833,206 @@ def admin_list_contacts(
         contact["user_id"] = user_map.get(eid)
         results.append(contact)
     return results
+
+
+# ============================================================================
+# Spending Limit Endpoints
+# ============================================================================
+
+
+@router.get(
+    "/assistant/{agent_id}/spending-limit",
+    response_model=AssistantSpendingLimitResponse,
+    responses={
+        200: {
+            "description": "Spending limit retrieved successfully",
+        },
+        404: {
+            "description": "Assistant not found",
+        },
+    },
+)
+async def get_assistant_spending_limit(
+    request: Request,
+    agent_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Get the monthly spending limit for an assistant.
+
+    Returns the assistant's limit and effective limit (considering parent limits).
+    """
+    user_id = request.state.user_id
+
+    # Get the assistant and verify access
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    # Verify user owns the assistant
+    if assistant.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    # Get the limit
+    monthly_cap = assistant_dao.get_spending_cap(agent_id)
+
+    # Calculate effective limit based on context
+    effective_limit = monthly_cap
+    if assistant.organization_id is not None:
+        # Org assistant - check member and org limits
+        from orchestra.db.dao.organization_dao import OrganizationDAO
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+
+        org_dao = OrganizationDAO(session)
+        org_member_dao = OrganizationMemberDAO(session)
+
+        org = org_dao.get(assistant.organization_id)
+        member = org_member_dao.get_member(user_id, assistant.organization_id)
+
+        parent_limits = []
+        if member and member.monthly_spending_cap is not None:
+            parent_limits.append(float(member.monthly_spending_cap))
+        if org and org.monthly_spending_cap is not None:
+            parent_limits.append(float(org.monthly_spending_cap))
+
+        if parent_limits:
+            parent_limit = min(parent_limits)
+            if effective_limit is None:
+                effective_limit = parent_limit
+            else:
+                effective_limit = min(effective_limit, parent_limit)
+    else:
+        # Personal assistant - check user limit
+        user_row = AuthUserDAO(session).get_by_id(user_id)
+        if user_row:
+            user = user_row[0]
+            if user.monthly_spending_cap is not None:
+                parent_limit = float(user.monthly_spending_cap)
+                if effective_limit is None:
+                    effective_limit = parent_limit
+                else:
+                    effective_limit = min(effective_limit, parent_limit)
+
+    return AssistantSpendingLimitResponse(
+        agent_id=agent_id,
+        monthly_spending_cap=monthly_cap,
+        effective_limit=effective_limit,
+    )
+
+
+@router.put(
+    "/assistant/{agent_id}/spending-limit",
+    response_model=AssistantSpendingLimitResponse,
+    responses={
+        200: {
+            "description": "Spending limit set successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "agent_id": 123,
+                        "monthly_spending_cap": 100.00,
+                        "effective_limit": 100.00,
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid limit",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Assistant limit cannot exceed user limit ($50.00)",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Assistant not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Assistant not found."},
+                },
+            },
+        },
+    },
+)
+async def set_assistant_spending_limit(
+    request: Request,
+    agent_id: int,
+    body: SpendingLimitRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Set the monthly spending limit for an assistant.
+
+    For personal assistants (no organization):
+    - Limit cannot exceed the user's personal spending limit
+
+    For organizational assistants:
+    - Limit cannot exceed the member's org spending limit
+    - Limit cannot exceed the organization's spending limit
+
+    Setting to null removes the limit.
+    """
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    try:
+        result = assistant_dao.set_spending_cap(
+            agent_id=agent_id,
+            user_id=user_id,
+            monthly_spending_cap=body.monthly_spending_cap,
+        )
+        session.commit()
+
+        return AssistantSpendingLimitResponse(
+            agent_id=agent_id,
+            monthly_spending_cap=result.monthly_spending_cap,
+            effective_limit=result.effective_limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# Admin Spend Endpoints (for UniLLM service calls)
+# ============================================================================
+
+
+@admin_router.get("/assistant/{agent_id}/spend")
+def admin_get_assistant_spend(
+    agent_id: int,
+    month: str = Query(
+        ...,
+        description="Month in YYYY-MM format",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        examples=["2026-01"],
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """
+    Admin endpoint: Get an assistant's cumulative spend for a given month.
+
+    This endpoint is for internal service calls (e.g., UniLLM) and does not
+    require the caller to own the assistant.
+    """
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
+    limit = assistant_dao.get_spending_cap(agent_id)
+
+    percent_used = None
+    if limit is not None and limit > 0:
+        percent_used = round((cumulative_spend / limit) * 100, 2)
+
+    return AssistantSpendResponse(
+        agent_id=agent_id,
+        month=month,
+        cumulative_spend=cumulative_spend,
+        limit=limit,
+        percent_used=percent_used,
+    )

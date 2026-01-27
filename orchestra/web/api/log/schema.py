@@ -72,6 +72,66 @@ class StandardFieldDefinition(BaseModel):
     )
 
 
+class JsonSchemaFieldDefinition(BaseModel):
+    """
+    Accepts a full JSON Schema field definition (e.g., from Pydantic's model_json_schema()).
+
+    This allows passing standard JSON Schema with all its features:
+    - Standard types: "string", "integer", "number", "boolean", "array", "object", "null"
+    - $ref and $defs for complex/nested types
+    - anyOf, oneOf, allOf for union types
+    - items for array element types
+    - properties for object property types
+    - format, minimum, maximum, pattern, etc. for constraints
+    - title, description for metadata
+
+    Orchestra normalizes JSON Schema types to internal types:
+    - "string" -> "str"
+    - "integer" -> "int"
+    - "number" -> "float"
+    - "boolean" -> "bool"
+    - "array" -> "list"
+    - "object" -> "dict"
+    - "null" -> "NoneType"
+
+    The full schema is preserved for validation against logged values.
+    """
+
+    model_config = {"extra": "allow"}
+
+    # Optional top-level type (may be absent for $ref or anyOf schemas)
+    type: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_is_json_schema(self):
+        """Validate that this looks like a JSON Schema (has recognizable schema keys)."""
+        # Get all fields including extra
+        data = self.model_dump()
+
+        # A JSON Schema typically has one of these keys
+        json_schema_indicators = {
+            "type",
+            "$ref",
+            "anyOf",
+            "oneOf",
+            "allOf",
+            "items",
+            "properties",
+            "enum",
+            "const",
+            "$defs",
+            "definitions",
+        }
+
+        has_indicator = any(key in data for key in json_schema_indicators)
+        if not has_indicator:
+            raise ValueError(
+                "JsonSchemaFieldDefinition requires at least one JSON Schema key "
+                f"(e.g., type, $ref, anyOf). Got keys: {list(data.keys())}",
+            )
+        return self
+
+
 class CreateLogConfig(BaseModel):
     project_name: str = Field(
         description="Name of the project the stored entries will be associated to.",
@@ -415,8 +475,18 @@ class CreateFieldsRequest(BaseModel):
         description="Optional context path for the fields.",
         example="experiment1/trial1",
     )
-    fields: Dict[str, Union[StandardFieldDefinition, EnumType, str, None]] = Field(
-        description="Dictionary mapping field names to their type definitions.",
+    fields: Dict[
+        str,
+        Union[EnumType, StandardFieldDefinition, JsonSchemaFieldDefinition, str, None],
+    ] = Field(
+        description="Dictionary mapping field names to their type definitions. "
+        "Supports multiple formats:\n"
+        "- Simple string: 'str', 'int', 'float', 'bool', 'list', 'dict', 'datetime', 'image', etc.\n"
+        "- JSON Schema types: 'string', 'integer', 'number', 'boolean', 'array', 'object'\n"
+        "- StandardFieldDefinition: {'type': 'str', 'mutable': True, 'unique': False}\n"
+        "- Full JSON Schema: {'type': 'string', 'format': 'date-time'} or {'$ref': '#/$defs/MyModel'}\n"
+        "- EnumType: {'type': 'enum', 'values': ['a', 'b', 'c']}\n"
+        "- None: Untyped field (accepts any value)",
         example={
             "score": "int",
             "response": None,
@@ -425,10 +495,14 @@ class CreateFieldsRequest(BaseModel):
                 "unique": True,
                 "description": "User email address",
             },
-            "comment": {
-                "type": "str",
-                "mutable": True,
-                "description": "User comment",
+            "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 timestamp",
+            },
+            "status": {
+                "type": "enum",
+                "values": ["pending", "approved", "rejected"],
             },
         },
     )
@@ -620,4 +694,71 @@ class QueryLogsPostBody(BaseModel):
     group_threshold: Optional[int] = Field(
         None,
         description="When set, entries that appear in at least this many logs will be grouped together",
+    )
+
+
+class AtomicFieldUpdateRequest(BaseModel):
+    """Request model for atomic field operations that are race-safe under concurrent updates.
+
+    This endpoint supports two modes:
+    1. Update mode (default): Updates an existing log entry by log_id
+    2. Upsert mode: When project/context/unique_keys/initial_data are provided,
+       finds or creates a log entry by unique keys, then applies the atomic operation.
+
+    Upsert mode uses advisory locks to handle concurrent first inserts safely.
+    """
+
+    operation: str = Field(
+        description="Atomic operation to apply. Supported formats: +N, -N, *N, /N where N is a number.",
+        example="+1",
+    )
+    # Optional fields for upsert mode
+    field: Optional[str] = Field(
+        default=None,
+        description="(Upsert mode) Name of the numeric field to update atomically.",
+        example="cumulative_spend",
+    )
+    project: Optional[str] = Field(
+        default=None,
+        description="(Upsert mode) Name of the project.",
+        example="Assistants",
+    )
+    context: Optional[str] = Field(
+        default=None,
+        description="(Upsert mode) Context path for the log.",
+        example="JohnDoe/AdaLovelace/Spending/Monthly",
+    )
+    unique_keys: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="(Upsert mode) Unique key configuration for the context. Maps key names to types (str, int, float).",
+        example={"_assistant_id": "str", "month": "str"},
+    )
+    initial_data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="(Upsert mode) Data to use when creating a new log entry. Must include all unique key values.",
+        example={"_assistant_id": "123", "month": "2026-01", "_org_id": 456},
+    )
+    add_to_all_context: bool = Field(
+        default=False,
+        description="(Upsert mode) If true, also adds the log to the 'All/*' archive context.",
+    )
+
+
+class AtomicFieldUpdateResponse(BaseModel):
+    """Response from atomic field update operation."""
+
+    new_value: float = Field(
+        description="The new value of the field after the operation.",
+    )
+    log_id: Optional[int] = Field(
+        default=None,
+        description="ID of the log entry (included in upsert mode).",
+    )
+    created: Optional[bool] = Field(
+        default=None,
+        description="True if a new log was created (upsert mode only).",
+    )
+    mirrored_contexts: Optional[List[str]] = Field(
+        default=None,
+        description="List of archive contexts the log was mirrored to (upsert mode only).",
     )

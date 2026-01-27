@@ -217,6 +217,10 @@ class AuthUser(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
+    # Monthly spending limit for this user's assistants (NULL = no limit)
+    # Cannot exceed the org's monthly_spending_cap if user is in an org
+    monthly_spending_cap = Column(Numeric, nullable=True)
+
     # Business classification fields for B2B/B2C tax compliance
     account_type = Column(
         String(20),
@@ -262,7 +266,6 @@ class AuthUser(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-
     __table_args__ = (
         # Check constraint for account_type
         sa.CheckConstraint(
@@ -387,6 +390,13 @@ class Organization(Base):
         server_default="false",
     )
 
+    # Timezone for org-level billing (IANA format, e.g., "America/New_York")
+    # Initialized from owner's timezone on creation, defaults to UTC if not set
+    timezone = Column(String, nullable=True)
+
+    # Monthly spending limit for all users/assistants in the org (NULL = no limit)
+    monthly_spending_cap = Column(Numeric, nullable=True)
+
     # Relationships
     interfaces = relationship(
         "Interface",
@@ -429,6 +439,10 @@ class OrganizationMember(Base):
         nullable=False,
     )  # RBAC role for this member (Owner, Admin, Member, Viewer, or custom roles)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Monthly spending limit for this member within this org (NULL = no limit)
+    # Set by org admins; cannot exceed org's monthly_spending_cap
+    monthly_spending_cap = Column(Numeric, nullable=True)
 
 
 class OrganizationInvite(Base):
@@ -969,7 +983,7 @@ class FieldType(Base):
         nullable=False,
         server_default="entry",
     )  # entry, param, derived_entry
-    mutable = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
+    mutable = Column(Boolean(), nullable=False, server_default="t")  # type: ignore
     unique = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
     enum_values = Column(JSONB, nullable=False, server_default=text("'[]'"))
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")
@@ -1068,6 +1082,9 @@ class Assistant(Base):
     phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
+    # Monthly spending limit for this assistant (NULL = no limit)
+    # Cannot exceed the user's monthly_spending_cap
+    monthly_spending_cap = Column(Numeric, nullable=True)
     max_parallel = Column(Integer, nullable=True)
     email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
@@ -1506,10 +1523,13 @@ class Embedding(Base):
     __tablename__ = "embedding"
 
     id = Column(Integer, primary_key=True)
+    # ref_id uses SET NULL instead of CASCADE to preserve soft-deleted embeddings.
+    # When a LogEvent is deleted, ref_id becomes NULL but the embedding row stays
+    # until index maintenance cleans it up (avoiding HNSW index surgery on delete).
     ref_id = Column(
         Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("log_event.id", ondelete="SET NULL"),
+        nullable=True,
     )
     model = Column(String, nullable=False)
     key = Column(String, nullable=False)
@@ -1572,15 +1592,29 @@ class Embedding(Base):
 
 
 class EmbeddingQueue(Base):
-    """Queue for async embedding generation.
+    """Queue for async embedding generation with two-stage processing pipeline.
 
-    Embeddings are queued during log creation and processed by background workers.
-    This decouples log creation from OpenAI API calls and HNSW index updates.
+    Embeddings are queued during log creation and processed by background workers
+    in two stages to maximize throughput:
+
+    Stage 1 (parallel-safe): Generate embedding vectors
+    - Multiple workers can run concurrently using FOR UPDATE SKIP LOCKED
+    - pending → generating → vector_ready
+
+    Stage 2 (serial): Bulk insert into indexed Embedding table
+    - Single worker for optimal HNSW index performance
+    - vector_ready → inserting → (deleted from queue)
+
     Status values:
-    - pending: Waiting to be processed
-    - processing: Currently being processed by a worker
+    - pending: Waiting for Stage 1 processing
+    - generating: Being processed by Stage 1 worker (vector generation)
+    - vector_ready: Vector generated, awaiting Stage 2 (index insertion)
+    - inserting: Being processed by Stage 2 worker (bulk insert)
     - completed: Successfully processed (will be deleted from queue)
     - failed: Failed after max retries (kept for debugging)
+
+    TODO: Migrate Cloud Scheduler jobs to Cloud Tasks for dynamic scaling
+    based on queue depth rather than fixed scheduling intervals.
     """
 
     __tablename__ = "embedding_queue"
@@ -1602,10 +1636,15 @@ class EmbeddingQueue(Base):
     # Timestamp when item was claimed for processing (used for stale detection)
     processing_started_at = Column(TIMESTAMP, nullable=True)
 
+    # Stage 1 output: Generated embedding vector (stored here until Stage 2 inserts it)
+    generated_vector = Column(Vector(), nullable=True)
+    # Timestamp when vector was generated (for monitoring/debugging)
+    vector_generated_at = Column(TIMESTAMP, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
         sa.CheckConstraint(
-            "status IN ('pending', 'processing', 'completed', 'failed')",
+            "status IN ('pending', 'generating', 'vector_ready', 'inserting', 'completed', 'failed')",
             name="chk_embedding_queue_status",
         ),
         Index("idx_embedding_queue_status_created", "status", "created_at"),
@@ -1615,6 +1654,12 @@ class EmbeddingQueue(Base):
             "idx_embedding_queue_processing_started",
             "status",
             "processing_started_at",
+        ),
+        # Index for Stage 2 worker to efficiently find vector_ready items
+        Index(
+            "idx_embedding_queue_vector_ready",
+            "created_at",
+            postgresql_where=sa.text("status = 'vector_ready'"),
         ),
     )
 
