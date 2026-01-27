@@ -902,6 +902,36 @@ class ActiveDerivedLog(Base):
     __table_args__ = (UniqueConstraint("project_id", "context_id", "key"),)
 
 
+class LogUniqueConstraint(Base):
+    """
+    Lookup table for efficient unique field validation.
+
+    Replaces O(N×M) JSONB containment scans with O(M×log N) B-tree lookups
+    for checking unique field constraints during log creation/update.
+
+    Supports:
+    - Single unique fields: field_name = 'row_id', value_hash = md5(value)
+    - Composite keys: field_name = '__composite__', value_hash = md5(json(combo))
+    """
+
+    __tablename__ = "log_unique_constraint"
+
+    context_id = Column(Integer, nullable=False)
+    field_name = Column(String, nullable=False)
+    value_hash = Column(String(32), nullable=False)  # MD5 hash of the value
+    log_event_id = Column(
+        BigInteger,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("context_id", "field_name", "value_hash"),
+        Index("idx_log_unique_constraint_log_event", "log_event_id"),
+    )
+
+
 class Interface(Base):
     __tablename__ = "interface"
 
