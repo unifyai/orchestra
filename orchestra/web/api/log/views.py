@@ -2191,76 +2191,52 @@ def _update_logs(
     if all_flat_updates:
         # Enforce unique field constraints for updated values (JSONB mode)
         if ctx_id is not None:
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
             unique_fields = {
-                k: v
+                k
                 for k, v in field_types.items()
                 if isinstance(v, dict) and v.get("unique", False)
             }
 
             if unique_fields:
-                unique_checks = []
-                seen_values: Dict[tuple, int] = {}
+                unique_dao = UniqueConstraintDAO(session)
+
+                # Group updates by log_event_id to build log_data dicts
+                updates_by_log: Dict[int, Dict[str, Any]] = {}
                 for update in all_flat_updates:
+                    log_id = update.get("log_event_id")
                     field_name = update.get("key")
-                    if field_name not in unique_fields:
-                        continue
                     value = update.get("value")
-                    if value is None:
-                        continue
+                    if log_id not in updates_by_log:
+                        updates_by_log[log_id] = {}
+                    updates_by_log[log_id][field_name] = value
 
-                    value_json = json.dumps({field_name: value})
-                    unique_checks.append(
-                        (update.get("log_event_id"), field_name, value_json),
+                # Prepare log entries for validation
+                log_entries = [
+                    (log_id, log_data) for log_id, log_data in updates_by_log.items()
+                ]
+
+                # Exclude the logs being updated from duplicate check
+                exclude_ids = list(updates_by_log.keys())
+
+                # Check for duplicates
+                duplicate = unique_dao.check_unique_fields_batch(
+                    context_id=ctx_id,
+                    project_id=project_id,
+                    log_entries=log_entries,
+                    unique_fields=unique_fields,
+                    exclude_ids=exclude_ids,
+                )
+
+                if duplicate:
+                    _, field_name, _ = duplicate
+                    # Clean up any constraints that were inserted
+                    unique_dao.remove_constraints_for_logs(exclude_ids)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Duplicate entry for unique field '{field_name}'.",
                     )
-
-                    dedupe_key = (field_name, value_json)
-                    existing_id = seen_values.get(dedupe_key)
-                    if existing_id is not None and existing_id != update.get(
-                        "log_event_id",
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Duplicate entry for unique field '{field_name}'.",
-                        )
-                    seen_values[dedupe_key] = update.get("log_event_id")
-
-                if unique_checks:
-                    params: Dict[str, Any] = {
-                        "project_id": project_id,
-                        "context_id": ctx_id,
-                        "exclude_ids": list(
-                            {u.get("log_event_id") for u in all_flat_updates},
-                        ),
-                    }
-                    or_conditions = []
-                    case_parts = []
-                    for i, (_, field_name, value_json) in enumerate(unique_checks):
-                        params[f"value_{i}"] = value_json
-                        or_conditions.append(f"le.data @> CAST(:value_{i} AS jsonb)")
-                        case_parts.append(
-                            f"WHEN le.data @> CAST(:value_{i} AS jsonb) THEN {i}",
-                        )
-
-                    jsonb_query = f"""
-                        SELECT DISTINCT CASE {' '.join(case_parts)} END AS match_idx
-                        FROM log_event le
-                        JOIN log_event_context lec ON le.id = lec.log_event_id
-                        WHERE le.project_id = :project_id
-                        AND lec.context_id = :context_id
-                        AND le.id != ALL(:exclude_ids)
-                        AND ({' OR '.join(or_conditions)})
-                    """
-
-                    results = session.execute(text(jsonb_query), params).fetchall()
-                    for (match_idx,) in results:
-                        if match_idx is not None:
-                            _, field_name, _ = unique_checks[match_idx]
-                            raise HTTPException(
-                                status_code=400,
-                                detail=(
-                                    f"Duplicate entry for unique field '{field_name}'."
-                                ),
-                            )
 
         try:
             # Call bulk_update with all updates
