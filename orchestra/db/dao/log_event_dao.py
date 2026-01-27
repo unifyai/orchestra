@@ -697,6 +697,9 @@ class LogEventDAO:
             completed.append(ordered_row)
 
         if unique_key_columns:
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
+            # Step 1: Check for duplicates within the batch
             seen = set()
             for row in completed:
                 combo = tuple(row.get(col) for col in unique_key_columns)
@@ -710,28 +713,29 @@ class LogEventDAO:
                     )
                 seen.add(combo)
 
-            or_conditions = []
-            for row in completed:
-                combo = {col: row[col] for col in unique_key_columns}
-                or_conditions.append(
-                    LogEvent.data.op("@>")(cast(literal(json.dumps(combo)), JSONB)),
-                )
+            # Step 2: Check against existing data using UniqueConstraintDAO
+            # Note: This requires log_event_ids which are not available at this point
+            # in the bulk_create flow. The validation happens before log creation.
+            # We use the JSONB scan fallback here since we don't have log_event_ids yet.
+            unique_dao = UniqueConstraintDAO(self.session)
 
-            if or_conditions:
-                existing = (
-                    self.session.query(LogEvent.id)
-                    .join(
-                        LogEventContext,
-                        LogEventContext.log_event_id == LogEvent.id,
-                    )
-                    .filter(LogEventContext.context_id == context_id)
-                    .filter(or_(*or_conditions))
-                    .first()
+            # Prepare entries for composite key check (using placeholder IDs)
+            # The actual constraint insertion happens after log creation
+            log_entries = [
+                (0, {col: row[col] for col in unique_key_columns}) for row in completed
+            ]
+
+            duplicate = unique_dao.check_composite_keys_batch(
+                context_id=context_id,
+                log_entries=log_entries,
+                key_columns=list(unique_key_columns),
+            )
+
+            if duplicate:
+                _, key_values = duplicate
+                raise ValueError(
+                    f"Duplicate composite key already exists for this context: {key_values}",
                 )
-                if existing:
-                    raise ValueError(
-                        "Duplicate composite key already exists for this context.",
-                    )
 
         return completed
 
