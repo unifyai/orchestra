@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal, Optional
 from zoneinfo import available_timezones
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from orchestra.web.api.utils.tax_id_validator import validate_tax_id_for_country
 
@@ -245,3 +245,50 @@ class AccountDeletionResponse(BaseModel):
 
     success: bool
     message: str
+
+
+# ============================================================================
+# User Spending Limit Schemas (Personal Context)
+# ============================================================================
+
+
+class UserSpendingLimitRequest(BaseModel):
+    """Request body for setting user's personal spending limit."""
+
+    monthly_spending_cap: Optional[float] = Field(
+        ...,
+        description="Monthly spending limit in dollars for personal usage. Set to null for no limit.",
+        example=200.00,
+        ge=0,
+    )
+
+
+class UserSpendingLimitResponse(BaseModel):
+    """Response for user's personal spending limit."""
+
+    user_id: str = Field(..., description="User ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The monthly spending limit for personal usage.",
+        example=200.00,
+    )
+    assistants_capped: int = Field(
+        0,
+        description="Number of personal assistants that had their limits reduced.",
+    )
+
+
+class UserSpendResponse(BaseModel):
+    """Response for user's current spend."""
+
+    user_id: str = Field(..., description="User ID.")
+    month: str = Field(..., description="Month in YYYY-MM format.")
+    cumulative_spend: float = Field(..., description="Cumulative spend for the month.")
+    limit: Optional[float] = Field(
+        None,
+        description="Monthly spending limit for the user.",
+    )
+    percent_used: Optional[float] = Field(
+        None,
+        description="Percentage of limit used (null if no limit).",
+    )

@@ -1,13 +1,23 @@
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    Assistant,
     AuthUser,
     Organization,
     OrganizationMember,
 )
+
+
+@dataclass
+class MemberSpendingCapResult:
+    """Result of setting a member spending cap with cascade updates."""
+
+    assistants_capped: int = 0
 
 
 class OrganizationMemberDAO:
@@ -168,3 +178,129 @@ class OrganizationMemberDAO:
             .scalar()
         )
         return result or 0
+
+    def set_spending_cap(
+        self,
+        user_id: str,
+        organization_id: int,
+        monthly_spending_cap: Optional[float],
+        org_spending_cap: Optional[float] = None,
+    ) -> MemberSpendingCapResult:
+        """
+        Set member spending cap with validation and cascade to assistants.
+
+        Validates that the member limit does not exceed the org limit.
+        When the limit is lowered, all assistant limits owned by this member
+        that exceed the new limit are automatically capped.
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID.
+        :param monthly_spending_cap: New spending cap (None = no limit).
+        :param org_spending_cap: Organization's spending cap for validation.
+        :return: Result containing count of cascaded updates.
+        :raises ValueError: If member limit exceeds org limit.
+        """
+        result = MemberSpendingCapResult()
+
+        member = self.get_member(user_id, organization_id)
+        if not member:
+            return result
+
+        # Validate against org limit
+        if monthly_spending_cap is not None and org_spending_cap is not None:
+            if monthly_spending_cap > org_spending_cap:
+                raise ValueError(
+                    f"Member limit cannot exceed organization limit (${org_spending_cap:.2f})",
+                )
+
+        new_limit = (
+            Decimal(str(monthly_spending_cap))
+            if monthly_spending_cap is not None
+            else None
+        )
+
+        # If lowering the limit, cap assistant limits owned by this member in this org
+        if new_limit is not None:
+            assistants_to_cap = (
+                self.session.query(Assistant)
+                .filter(
+                    Assistant.organization_id == organization_id,
+                    Assistant.user_id == user_id,
+                    Assistant.monthly_spending_cap > new_limit,
+                )
+                .all()
+            )
+            for assistant in assistants_to_cap:
+                assistant.monthly_spending_cap = new_limit
+                result.assistants_capped += 1
+
+        member.monthly_spending_cap = new_limit
+        return result
+
+    def get_spending_cap(
+        self,
+        user_id: str,
+        organization_id: int,
+    ) -> Optional[float]:
+        """
+        Get a member's monthly spending cap.
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID.
+        :return: Monthly spending cap or None if not set or member not found.
+        """
+        member = self.get_member(user_id, organization_id)
+        if member and member.monthly_spending_cap is not None:
+            return float(member.monthly_spending_cap)
+        return None
+
+    def get_cumulative_spend(
+        self,
+        user_id: str,
+        organization_id: int,
+        month: str,
+    ) -> float:
+        """
+        Get a member's cumulative spend for a given month within an organization.
+
+        Sums all assistant spending logs for this user in the organization.
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID.
+        :param month: Month in YYYY-MM format.
+        :return: Cumulative spend for the month (0.0 if no spend data).
+        """
+        from sqlalchemy import cast, func
+        from sqlalchemy.types import Float
+
+        from orchestra.db.models.orchestra_models import (
+            Context,
+            LogEvent,
+            LogEventContext,
+            Project,
+        )
+
+        result = (
+            self.session.query(
+                func.coalesce(
+                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
+                    0.0,
+                ).label("total_spend"),
+            )
+            .select_from(LogEvent)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .join(Context, LogEventContext.context_id == Context.id)
+            .join(Project, Context.project_id == Project.id)
+            .filter(
+                Project.name == "Assistants",
+                Project.organization_id == organization_id,
+                Context.name == "All/Spending/Monthly",
+                LogEvent.data.op("->>")("_user_id") == user_id,
+                LogEvent.data.op("->>")("month") == month,
+            )
+            .first()
+        )
+
+        if result and result.total_spend:
+            return float(result.total_spend)
+        return 0.0

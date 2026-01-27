@@ -1,10 +1,20 @@
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import List, Optional
 from zoneinfo import available_timezones
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import AuthUser
+from orchestra.db.models.orchestra_models import Assistant, AuthUser
+
+
+@dataclass
+class UserSpendingCapResult:
+    """Result of setting a user spending cap with cascade updates."""
+
+    assistants_capped: int = 0
+
 
 ASSISTANT_HIRING_APPROVAL_STATUSES = [
     None,
@@ -168,6 +178,7 @@ class AuthUserDAO:
         tax_exempt: Optional[bool] = ...,
         business_verified: Optional[bool] = ...,
         tax_jurisdiction: Optional[str] = ...,
+        monthly_spending_cap: Optional[float] = ...,
     ) -> None:
         query = select(AuthUser)
         query = query.where(AuthUser.id == id)
@@ -256,6 +267,11 @@ class AuthUserDAO:
                 setattr(entry, "business_verified", business_verified)
             if tax_jurisdiction is not ...:
                 setattr(entry, "tax_jurisdiction", tax_jurisdiction)
+
+            # Handle monthly_spending_cap with cascade logic
+            if monthly_spending_cap is not ...:
+                # Use set_spending_cap which handles cascading to assistants
+                self.set_spending_cap(str(id), monthly_spending_cap)
 
             self.session.commit()
 
@@ -494,3 +510,108 @@ class AuthUserDAO:
             query = query.limit(limit)
 
         return list(self.session.execute(query).scalars().all())
+
+    def set_spending_cap(
+        self,
+        user_id: str,
+        monthly_spending_cap: Optional[float],
+    ) -> UserSpendingCapResult:
+        """
+        Set user's personal spending cap with cascade to personal assistants.
+
+        When the limit is lowered, all personal assistant limits (organization_id=NULL)
+        that exceed the new limit are automatically capped.
+
+        :param user_id: User ID.
+        :param monthly_spending_cap: New spending cap (None = no limit).
+        :return: Result containing count of cascaded updates.
+        """
+        result = UserSpendingCapResult()
+
+        user_row = self.get_by_id(user_id)
+        if not user_row:
+            return result
+
+        user = user_row[0]
+        new_limit = (
+            Decimal(str(monthly_spending_cap))
+            if monthly_spending_cap is not None
+            else None
+        )
+
+        # If lowering the limit, cap personal assistant limits
+        if new_limit is not None:
+            assistants_to_cap = (
+                self.session.query(Assistant)
+                .filter(
+                    Assistant.user_id == user_id,
+                    Assistant.organization_id.is_(None),
+                    Assistant.monthly_spending_cap > new_limit,
+                )
+                .all()
+            )
+            for assistant in assistants_to_cap:
+                assistant.monthly_spending_cap = new_limit
+                result.assistants_capped += 1
+
+        user.monthly_spending_cap = new_limit
+        return result
+
+    def get_spending_cap(self, user_id: str) -> Optional[float]:
+        """
+        Get user's personal monthly spending cap.
+
+        :param user_id: User ID.
+        :return: Monthly spending cap or None if not set or user not found.
+        """
+        user_row = self.get_by_id(user_id)
+        if user_row:
+            user = user_row[0]
+            if user.monthly_spending_cap is not None:
+                return float(user.monthly_spending_cap)
+        return None
+
+    def get_cumulative_spend(self, user_id: str, month: str) -> float:
+        """
+        Get user's cumulative spend for a given month (personal context).
+
+        Queries the user's personal Assistants project logs for spending data.
+
+        :param user_id: User ID.
+        :param month: Month in YYYY-MM format.
+        :return: Cumulative spend for the month (0.0 if no spend data).
+        """
+        from sqlalchemy import cast, func
+        from sqlalchemy.types import Float
+
+        from orchestra.db.models.orchestra_models import (
+            Context,
+            LogEvent,
+            LogEventContext,
+            Project,
+        )
+
+        result = (
+            self.session.query(
+                func.coalesce(
+                    cast(LogEvent.data.op("->>")("cumulative_spend"), Float),
+                    0.0,
+                ).label("spend"),
+            )
+            .select_from(LogEvent)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .join(Context, LogEventContext.context_id == Context.id)
+            .join(Project, Context.project_id == Project.id)
+            .filter(
+                Project.name == "Assistants",
+                Project.user_id == user_id,
+                Project.organization_id.is_(None),
+                Context.name == f"{user_id}/All/Spending/Monthly",
+                LogEvent.data.op("->>")("month") == month,
+            )
+            .first()
+        )
+
+        if result and result.spend:
+            return float(result.spend)
+        return 0.0

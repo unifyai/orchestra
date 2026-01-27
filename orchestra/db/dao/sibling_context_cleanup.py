@@ -2,12 +2,19 @@
 Shared sibling context cleanup logic for Assistants/UnityTests projects.
 
 Handles the 3-tier context hierarchy used in Assistants projects:
-- Tier 1: All/<SubContext> (global aggregate)
+- Tier 1: All/<SubContext> (global aggregate) - PROTECTED ARCHIVE
 - Tier 2: <User>/All/<SubContext> (user aggregate)
 - Tier 3: <User>/<Assistant>/<SubContext> (user + assistant specific)
 
 When deleting logs/contexts from one tier, the same logs should be
 removed from sibling tiers to maintain consistency.
+
+ARCHIVE PROTECTION:
+- Topmost archive contexts (All/*) are protected from cascading deletions
+  originating from lower-tier contexts (Tier 2 or Tier 3).
+- This preserves historical data for billing and reporting.
+- Deleting from All/* itself still cascades to lower tiers normally.
+- Intermediate contexts (*/All/*) are NOT protected.
 """
 
 from typing import TYPE_CHECKING, Dict, List, Optional
@@ -69,6 +76,14 @@ def get_assistants_sibling_context_info(
             sibling_map[log_id] = []
         if ctx_id not in sibling_map[log_id]:
             sibling_map[log_id].append(ctx_id)
+
+    def _is_topmost_archive(name: str) -> bool:
+        """Check if context is a topmost archive (All/* only, NOT */All/*).
+
+        Topmost archives are protected from cascading deletions originating
+        from lower-tier contexts.
+        """
+        return name.startswith("All/")
 
     def _get_log_field_values(field_name: str) -> Dict[int, str]:
         """Get field values for all log events from LogEvent.data JSONB column.
@@ -212,9 +227,19 @@ def get_assistants_sibling_context_info(
                 else None
             )
 
+        # Determine if current context is a topmost archive
+        current_is_archive = _is_topmost_archive(context_name)
+
         # Find sibling contexts (excluding the current context)
         for sibling_name in [tier1_name, tier2_name, tier3_name]:
             if sibling_name and sibling_name != context_name:
+                # ARCHIVE PROTECTION: When deleting from a non-archive context,
+                # skip cascade to topmost archive (All/*) contexts.
+                # This preserves historical data in the archive.
+                sibling_is_archive = _is_topmost_archive(sibling_name)
+                if not current_is_archive and sibling_is_archive:
+                    continue
+
                 ctx_id = _find_context_id(sibling_name)
                 if ctx_id and ctx_id != context_id:
                     # Verify log actually exists in this context before adding

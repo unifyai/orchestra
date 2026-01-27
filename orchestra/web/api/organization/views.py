@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -27,6 +27,9 @@ from orchestra.web.api.organization.schema import (
     InviteListResponse,
     InviteResponse,
     InviteUserRequest,
+    MemberSpendingLimitRequest,
+    MemberSpendingLimitResponse,
+    MemberSpendResponse,
     OrganizationBillingResponse,
     OrganizationBillingUpdate,
     OrganizationBusinessProfileResponse,
@@ -39,6 +42,9 @@ from orchestra.web.api.organization.schema import (
     OrganizationOwnershipTransfer,
     OrganizationResponse,
     OrganizationUpdate,
+    OrgSpendingLimitRequest,
+    OrgSpendingLimitResponse,
+    OrgSpendResponse,
 )
 from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.email import send_email_async
@@ -46,6 +52,7 @@ from orchestra.web.api.utils.email import send_email_async
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+admin_router = APIRouter()
 
 
 @router.post(
@@ -62,6 +69,7 @@ async def create_organization(
 
     The authenticated user will be the owner of the organization.
     billing_user_id is always set to the owner (billing follows ownership).
+    timezone is initialized from the owner's timezone setting.
     Returns the organization details and the owner's organization API key.
     """
     user_id = request_fastapi.state.user_id
@@ -69,6 +77,7 @@ async def create_organization(
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
+    auth_user_dao = AuthUserDAO(session)
 
     # Check if organization name already exists
     existing = org_dao.filter(name=organization.name)
@@ -78,13 +87,22 @@ async def create_organization(
             detail=f"Organization with name '{organization.name}' already exists",
         )
 
+    # Determine timezone: use provided value, fall back to owner's, then UTC
+    if organization.timezone is not None:
+        org_timezone = organization.timezone
+    else:
+        owner_row = auth_user_dao.get_by_id(user_id)
+        org_timezone = owner_row[0].timezone if owner_row else None
+
     # Create organization
     try:
         # billing_user_id always equals owner_id
+        # timezone: provided > owner's timezone > None (runtime defaults to UTC)
         org = org_dao.create(
             name=organization.name,
             owner_id=user_id,
             billing_user_id=user_id,
+            timezone=org_timezone,
         )
 
         # Get Owner system role
@@ -325,11 +343,12 @@ async def update_organization(
                 detail=f"Organization with name '{organization.name}' already exists",
             )
 
-    # Update organization (only name can be updated here)
+    # Update organization (name and timezone can be updated here)
     try:
         org_dao.update(
             id=organization_id,
             name=organization.name,
+            timezone=organization.timezone,
         )
         session.commit()
 
@@ -1890,3 +1909,402 @@ async def update_organization_business_profile(
     # Return updated profile
     profile = org_billing_dao.get_business_profile(organization_id)
     return OrganizationBusinessProfileResponse(**profile).model_dump()
+
+
+# ============================================================================
+# Spending Limit Endpoints
+# ============================================================================
+
+
+@router.get(
+    "/organizations/{organization_id}/spending-limit",
+    response_model=OrgSpendingLimitResponse,
+    responses={
+        200: {
+            "description": "Spending limit retrieved successfully",
+        },
+        403: {
+            "description": "User is not a member of the organization",
+        },
+        404: {
+            "description": "Organization not found",
+        },
+    },
+)
+async def get_org_spending_limit(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Get the monthly spending limit for an organization.
+
+    Returns the organization's limit. Any member of the organization can read this.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Get the organization
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    # Check if user is a member of the org
+    org_member_dao = OrganizationMemberDAO(session)
+    member = org_member_dao.get_member(user_id, organization_id)
+    is_owner = org.owner_id == user_id
+
+    if not member and not is_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="You must be a member of this organization to view its spending limit.",
+        )
+
+    # Use DAO method for consistency
+    spending_cap = org_dao.get_spending_cap(organization_id)
+
+    return OrgSpendingLimitResponse(
+        organization_id=organization_id,
+        monthly_spending_cap=spending_cap,
+        cascaded_updates=None,
+    )
+
+
+@router.put(
+    "/organizations/{organization_id}/spending-limit",
+    response_model=OrgSpendingLimitResponse,
+    responses={
+        200: {
+            "description": "Spending limit set successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "organization_id": 1,
+                        "monthly_spending_cap": 500.00,
+                        "cascaded_updates": {"users_capped": 3, "assistants_capped": 7},
+                    },
+                },
+            },
+        },
+        403: {
+            "description": "User is not an admin of the organization",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Only organization admins can set spending limits.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Organization not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Organization not found."},
+                },
+            },
+        },
+    },
+)
+async def set_org_spending_limit(
+    request_fastapi: Request,
+    organization_id: int,
+    body: OrgSpendingLimitRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Set the monthly spending limit for an organization.
+
+    When the limit is lowered, member and assistant limits that exceed the new org limit
+    will be automatically capped to the org limit (eager cascade).
+
+    Setting to null removes the limit (no cap for members/assistants from this org).
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Get the organization
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    # Check if user has org:write permission via org membership role
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+
+    if not has_permission:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization admins can set spending limits.",
+        )
+
+    # Use the DAO method which handles cascade logic
+    cascade_result = org_dao.set_spending_cap(
+        org_id=organization_id,
+        monthly_spending_cap=body.monthly_spending_cap,
+    )
+    session.commit()
+
+    cascaded_updates = None
+    if cascade_result.members_capped > 0 or cascade_result.assistants_capped > 0:
+        cascaded_updates = {
+            "members_capped": cascade_result.members_capped,
+            "assistants_capped": cascade_result.assistants_capped,
+        }
+
+    return OrgSpendingLimitResponse(
+        organization_id=organization_id,
+        monthly_spending_cap=body.monthly_spending_cap,
+        cascaded_updates=cascaded_updates,
+    )
+
+
+@router.put(
+    "/organizations/{organization_id}/members/{member_user_id}/spending-limit",
+    response_model=MemberSpendingLimitResponse,
+    responses={
+        200: {
+            "description": "Member spending limit set successfully",
+        },
+        400: {
+            "description": "Member limit exceeds organization limit",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Member limit cannot exceed organization limit of $500.00",
+                    },
+                },
+            },
+        },
+        403: {
+            "description": "User is not an admin of the organization",
+        },
+        404: {
+            "description": "Organization or member not found",
+        },
+    },
+)
+async def set_member_spending_limit(
+    request_fastapi: Request,
+    organization_id: int,
+    member_user_id: str,
+    body: MemberSpendingLimitRequest,
+    session: Session = Depends(get_db_session),
+) -> MemberSpendingLimitResponse:
+    """
+    Set the monthly spending limit for a member within an organization.
+
+    This limit controls how much the member can spend when using the org's API key.
+    It is separate from the user's personal spending limit (which applies to their
+    personal API key).
+
+    The member limit cannot exceed the organization's limit.
+    When the limit is lowered, assistant limits owned by this member that exceed
+    the new limit will be automatically capped.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Get the organization
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    # Check if user has org:write permission
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization admins can set member spending limits.",
+        )
+
+    # Get the member
+    org_member_dao = OrganizationMemberDAO(session)
+    member = org_member_dao.get_member(member_user_id, organization_id)
+    if not member:
+        raise HTTPException(
+            status_code=404,
+            detail="User is not a member of this organization.",
+        )
+
+    org_spending_cap = (
+        float(org.monthly_spending_cap) if org.monthly_spending_cap else None
+    )
+
+    try:
+        cascade_result = org_member_dao.set_spending_cap(
+            user_id=member_user_id,
+            organization_id=organization_id,
+            monthly_spending_cap=body.monthly_spending_cap,
+            org_spending_cap=org_spending_cap,
+        )
+        session.commit()
+
+        return MemberSpendingLimitResponse(
+            organization_id=organization_id,
+            user_id=member_user_id,
+            monthly_spending_cap=body.monthly_spending_cap,
+            assistants_capped=cascade_result.assistants_capped,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get(
+    "/organizations/{organization_id}/members/{member_user_id}/spending-limit",
+    response_model=MemberSpendingLimitResponse,
+)
+async def get_member_spending_limit(
+    request_fastapi: Request,
+    organization_id: int,
+    member_user_id: str,
+    session: Session = Depends(get_db_session),
+) -> MemberSpendingLimitResponse:
+    """
+    Get the monthly spending limit for a member within an organization.
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Get the organization
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    # Check if user has org:read permission
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view member spending limits.",
+        )
+
+    # Get the member and verify they exist
+    org_member_dao = OrganizationMemberDAO(session)
+    member = org_member_dao.get_member(member_user_id, organization_id)
+    if not member:
+        raise HTTPException(
+            status_code=404,
+            detail="User is not a member of this organization.",
+        )
+
+    # Use DAO method for consistency
+    spending_cap = org_member_dao.get_spending_cap(member_user_id, organization_id)
+
+    return MemberSpendingLimitResponse(
+        organization_id=organization_id,
+        user_id=member_user_id,
+        monthly_spending_cap=spending_cap,
+        assistants_capped=0,
+    )
+
+
+# ============================================================================
+# Admin Spend Endpoints (for UniLLM service calls)
+# ============================================================================
+
+
+@admin_router.get("/organization/{organization_id}/spend")
+def admin_get_org_spend(
+    organization_id: int,
+    month: str = Query(
+        ...,
+        description="Month in YYYY-MM format",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        examples=["2026-01"],
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """
+    Admin endpoint: Get an organization's cumulative spend for a given month.
+
+    This endpoint is for internal service calls (e.g., UniLLM) and does not
+    require the caller to be a member of the organization.
+    """
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    cumulative_spend = org_dao.get_cumulative_spend(organization_id, month)
+    limit = org_dao.get_spending_cap(organization_id)
+
+    percent_used = None
+    if limit is not None and limit > 0:
+        percent_used = round((cumulative_spend / limit) * 100, 2)
+
+    return OrgSpendResponse(
+        organization_id=organization_id,
+        month=month,
+        cumulative_spend=cumulative_spend,
+        limit=limit,
+        percent_used=percent_used,
+    )
+
+
+@admin_router.get("/organization/{organization_id}/members/{member_user_id}/spend")
+def admin_get_member_spend(
+    organization_id: int,
+    member_user_id: str,
+    month: str = Query(
+        ...,
+        description="Month in YYYY-MM format",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        examples=["2026-01"],
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """
+    Admin endpoint: Get an organization member's cumulative spend for a given month.
+
+    This endpoint is for internal service calls (e.g., UniLLM) and does not
+    require the caller to have org membership.
+
+    The spend is the SUM of all assistant spending logs for this user in the org.
+    """
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    org_member_dao = OrganizationMemberDAO(session)
+    member = org_member_dao.get_member(member_user_id, organization_id)
+    if not member:
+        raise HTTPException(
+            status_code=404,
+            detail="User is not a member of this organization.",
+        )
+
+    cumulative_spend = org_member_dao.get_cumulative_spend(
+        member_user_id,
+        organization_id,
+        month,
+    )
+    limit = org_member_dao.get_spending_cap(member_user_id, organization_id)
+
+    percent_used = None
+    if limit is not None and limit > 0:
+        percent_used = round((cumulative_spend / limit) * 100, 2)
+
+    return MemberSpendResponse(
+        organization_id=organization_id,
+        user_id=member_user_id,
+        month=month,
+        cumulative_spend=cumulative_spend,
+        limit=limit,
+        percent_used=percent_used,
+    )

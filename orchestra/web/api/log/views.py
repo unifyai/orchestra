@@ -5,6 +5,7 @@ Includes endpoints related to Log API.
 
 import json
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -47,6 +48,8 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
+    AtomicFieldUpdateRequest,
+    AtomicFieldUpdateResponse,
     CreateDerivedEntriesConfig,
     CreateFieldsRequest,
     CreateLogConfig,
@@ -193,14 +196,14 @@ def create_logs(
     {
         "field_name": {
             "type": "str",
-            "mutable": false,  # Makes the field immutable
+            "mutable": false,  # Makes the field immutable (default is true)
             "unique": true     # Makes the field unique
         }
     }
     ```
 
-    By default, all fields are immmutable unless specified otherwise.
-    Once a field is marked as mutable, only then can it be modified through
+    By default, all fields are mutable. Set `mutable: false` to make a field
+    immutable after creation. Only mutable fields can be modified through
     the update endpoint.
 
     **Response includes:**
@@ -718,8 +721,16 @@ def create_from_logs(
                 context_id=context_id,
             )
 
+            # Track which IDs were computed vs requested for failure reporting
+            requested_ids = set(filtered_log_ids)
+            computed_ids = {log_id for log_id, _ in computed_values}
+            not_found_ids = sorted(requested_ids - computed_ids)
+
             if not computed_values:
-                return {"info": "No values computed. Nothing to create."}
+                response = {"info": "No values computed. Nothing to create."}
+                if not_found_ids:
+                    response["not_found"] = not_found_ids
+                return response
 
             # Create index mappings for each alias
             alias_to_id_list = {}
@@ -861,12 +872,17 @@ def create_from_logs(
                 context_id=context_id,
                 field_type="vector" if is_embedding else None,
                 infer_type=not is_embedding,
+                # Derived entries are always immutable (computed values shouldn't be updated)
+                mutable=field_category != "derived_entry",
             )
             session.commit()
 
-            return {
+            response = {
                 "info": f"Created {len(updates)} derived logs with key='{body.key}'.",
             }
+            if not_found_ids:
+                response["not_found"] = not_found_ids
+            return response
 
         except Exception as e:
             session.rollback()
@@ -1177,6 +1193,512 @@ def update_logs(
         log_event_dao=log_event_dao,
         log_dao=log_dao,
         derived_log_dao=derived_log_dao,
+    )
+
+
+@router.patch(
+    "/logs/{log_id}/fields/{field_name}/atomic",
+    response_model=AtomicFieldUpdateResponse,
+    responses={
+        200: {
+            "description": "Atomic operation applied successfully",
+            "content": {
+                "application/json": {
+                    "example": {"new_value": 42.0},
+                },
+            },
+        },
+        400: {
+            "description": "Invalid operation format",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid operation format. Use +N, -N, *N, /N where N is a number.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Log not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Log not found."},
+                },
+            },
+        },
+    },
+)
+def atomic_field_update(
+    request_fastapi: Request,
+    log_id: int = Path(..., description="The ID of the log to update"),
+    field_name: str = Path(
+        ...,
+        description="The name of the field to update atomically",
+    ),
+    body: AtomicFieldUpdateRequest = Body(...),
+    session=Depends(get_db_session),
+):
+    """
+    Apply an atomic operation to a numeric field in a log entry.
+
+    This endpoint performs race-safe atomic updates directly in PostgreSQL,
+    ensuring correct results even under high concurrent load.
+
+    Supported operations:
+    - `+N`: Add N to the current value
+    - `-N`: Subtract N from the current value
+    - `*N`: Multiply the current value by N
+    - `/N`: Divide the current value by N
+
+    If the field doesn't exist or is NULL, it is treated as 0 before the operation.
+    """
+    return _atomic_field_update_impl(
+        request_fastapi=request_fastapi,
+        log_id=log_id,
+        field_name=field_name,
+        body=body,
+        session=session,
+    )
+
+
+@router.post(
+    "/logs/atomic",
+    response_model=AtomicFieldUpdateResponse,
+    responses={
+        200: {
+            "description": "Atomic upsert applied successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "log_id": 789,
+                        "new_value": 83.50,
+                        "created": False,
+                        "mirrored_contexts": ["All/Spending/Monthly"],
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid operation format or missing required fields",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid operation format. Use +N, -N, *N, /N where N is a number.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Project not found."},
+                },
+            },
+        },
+    },
+)
+def atomic_field_upsert(
+    request_fastapi: Request,
+    body: AtomicFieldUpdateRequest = Body(...),
+    session=Depends(get_db_session),
+):
+    """
+    Atomic find-or-create with atomic field update (upsert mode).
+
+    This endpoint atomically:
+    1. Ensures the context exists with correct unique_keys configuration
+    2. Acquires an advisory lock on the unique key values (prevents race on first insert)
+    3. Finds an existing log by unique_keys or creates it with initial_data
+    4. Applies an atomic operation to the specified field
+    5. If add_to_all_context=true, mirrors the log to the All/* archive context
+
+    Required body fields for upsert mode:
+    - project: Name of the project
+    - context: Context path for the log
+    - unique_keys: Key name to type mapping (e.g., {"_assistant_id": "str", "month": "str"})
+    - initial_data: Data for new log entry (must include all unique key values)
+    - operation: Atomic operation (+N, -N, *N, /N)
+
+    This is race-safe for concurrent first inserts - only one request will create the log,
+    and all concurrent requests will correctly increment the field.
+    """
+    # Validate upsert mode has required fields
+    if (
+        not body.project
+        or not body.context
+        or not body.unique_keys
+        or not body.initial_data
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Upsert mode requires: project, context, unique_keys, and initial_data.",
+        )
+
+    return _atomic_field_update_impl(
+        request_fastapi=request_fastapi,
+        log_id=None,
+        field_name=None,
+        body=body,
+        session=session,
+    )
+
+
+def _atomic_field_update_impl(
+    request_fastapi: Request,
+    log_id: Optional[int],
+    field_name: Optional[str],
+    body: AtomicFieldUpdateRequest,
+    session,
+) -> AtomicFieldUpdateResponse:
+    """Internal implementation for atomic field updates.
+
+    Supports two modes:
+    1. Update mode: log_id and field_name are provided
+    2. Upsert mode: body contains project/context/unique_keys/initial_data
+    """
+    user_id = request_fastapi.state.user_id
+
+    # Parse and validate the operation
+    match = re.match(r"^([+\-*/])(\d+\.?\d*)$", body.operation)
+    if not match:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid operation format. Use +N, -N, *N, /N where N is a number.",
+        )
+
+    operator, operand_str = match.groups()
+    operand = float(operand_str)
+
+    # Validate division by zero
+    if operator == "/" and operand == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Division by zero is not allowed.",
+        )
+
+    # Determine mode based on parameters
+    is_upsert_mode = body.project is not None and body.context is not None
+
+    if is_upsert_mode:
+        # === UPSERT MODE ===
+        return _atomic_upsert_mode(
+            user_id=user_id,
+            body=body,
+            operator=operator,
+            operand=operand,
+            session=session,
+        )
+    else:
+        # === UPDATE MODE ===
+        if log_id is None or field_name is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Update mode requires log_id and field_name in the path.",
+            )
+
+        # Check that the log exists and user has permission
+        log_event = session.query(LogEvent).filter(LogEvent.id == log_id).first()
+        if not log_event:
+            raise HTTPException(status_code=404, detail="Log not found.")
+
+        # Verify user has access to this log's project
+        project_dao = ProjectDAO(
+            session,
+            OrganizationMemberDAO(session),
+            ContextDAO(session),
+        )
+        project = project_dao.filter_by_user_access(
+            user_id=user_id,
+            id=log_event.project_id,
+        )
+        if not project:
+            raise HTTPException(status_code=404, detail="Log not found.")
+
+        # Build the atomic SQL update
+        sql = text(
+            f"""
+            UPDATE log_event
+            SET data = jsonb_set(
+                COALESCE(data, '{{}}'::jsonb),
+                :path,
+                to_jsonb(COALESCE((data->>:field)::numeric, 0) {operator} :operand)
+            ),
+            updated_at = :now
+            WHERE id = :log_id
+            RETURNING (data->>:field)::numeric as new_value
+            """,
+        )
+
+        result = session.execute(
+            sql,
+            {
+                "log_id": log_id,
+                "field": field_name,
+                "path": "{" + field_name + "}",
+                "operand": operand,
+                "now": datetime.now(timezone.utc),
+            },
+        ).fetchone()
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Log not found.")
+
+        session.commit()
+
+        return AtomicFieldUpdateResponse(new_value=result.new_value)
+
+
+def _atomic_upsert_mode(
+    user_id: str,
+    body: AtomicFieldUpdateRequest,
+    operator: str,
+    operand: float,
+    session,
+) -> AtomicFieldUpdateResponse:
+    """Handle atomic upsert mode - find or create log, then apply operation."""
+    # Validate that all unique keys are present in initial_data
+    for key_name in body.unique_keys.keys():
+        if key_name not in body.initial_data:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing unique key '{key_name}' in initial_data.",
+            )
+
+    # Get or verify project access
+    project_dao = ProjectDAO(
+        session,
+        OrganizationMemberDAO(session),
+        ContextDAO(session),
+    )
+    projects = project_dao.filter_by_user_access(
+        user_id=user_id,
+        name=body.project,
+    )
+    if not projects:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    project = projects[0][0]  # filter_by_user_access returns list of tuples
+    project_id = project.id
+
+    context_dao = ContextDAO(session)
+
+    # Create/get context FIRST - this commits internally which is fine
+    # The context needs to be visible to all concurrent transactions
+    context_id = context_dao.get_or_create(
+        project_id=project_id,
+        name=body.context,
+        unique_keys=body.unique_keys,
+    )
+
+    # Build the unique key filter conditions for SQL
+    unique_key_conditions = []
+    unique_key_values = []
+    for key_name in body.unique_keys.keys():
+        key_value = body.initial_data[key_name]
+        unique_key_conditions.append(f"data->>'{key_name}' = :key_{key_name}")
+        unique_key_values.append((f"key_{key_name}", str(key_value)))
+
+    # Build a hash for the advisory lock from project + context + unique key values
+    # Include context_id to ensure we're locking on the same context
+    lock_key_parts = [str(project_id), str(context_id)]
+    for key_name in sorted(body.unique_keys.keys()):
+        lock_key_parts.append(str(body.initial_data[key_name]))
+    lock_key_str = ":".join(lock_key_parts)
+
+    # Acquire advisory lock on unique key combination
+    # This serializes log operations for the same context+unique_keys
+    # The lock is held until this transaction commits (after log insert/update)
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": lock_key_str},
+    )
+
+    # Build the conditions string
+    conditions_str = " AND ".join(unique_key_conditions)
+
+    # Check if the log exists
+    check_sql = text(
+        f"""
+        SELECT le.id, le.data
+        FROM log_event le
+        JOIN log_event_context lec ON lec.log_event_id = le.id
+        WHERE le.project_id = :project_id
+          AND lec.context_id = :context_id
+          AND {conditions_str}
+        FOR UPDATE
+        """,
+    )
+
+    check_params = {
+        "project_id": project_id,
+        "context_id": context_id,
+    }
+    for param_name, param_value in unique_key_values:
+        check_params[param_name] = param_value
+
+    existing = session.execute(check_sql, check_params).fetchone()
+
+    # Use explicitly provided field name, or fall back to inference for backwards compat
+    field_name = body.field
+    if field_name is None:
+        # Legacy behavior: infer from initial_data (first numeric non-unique-key field)
+        for key, value in body.initial_data.items():
+            if key not in body.unique_keys and isinstance(value, (int, float)):
+                field_name = key
+                break
+
+        # If no numeric field found, use the first non-unique-key field
+        if field_name is None:
+            for key in body.initial_data.keys():
+                if key not in body.unique_keys:
+                    field_name = key
+                    break
+
+    if field_name is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not determine field to update. Provide 'field' parameter or include a non-unique-key field in initial_data.",
+        )
+
+    # Validate field name for SQL injection
+    if '"' in field_name or "'" in field_name or "--" in field_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid field name.",
+        )
+
+    if existing:
+        # Update existing log
+        update_sql = text(
+            f"""
+            UPDATE log_event
+            SET data = jsonb_set(
+                    COALESCE(data, '{{}}'::jsonb),
+                    :path,
+                    to_jsonb(COALESCE((data->>'{field_name}')::numeric, 0) {operator} :operand)
+                ),
+                updated_at = :now
+            WHERE id = :log_id
+            RETURNING id, (data->>'{field_name}')::numeric as new_value
+            """,
+        )
+
+        result = session.execute(
+            update_sql,
+            {
+                "log_id": existing.id,
+                "path": "{" + field_name + "}",
+                "operand": operand,
+                "now": datetime.now(timezone.utc),
+            },
+        ).fetchone()
+
+        log_id = result.id
+        new_value = float(result.new_value)
+        created = False
+    else:
+        # Insert new log
+        initial_data_with_field = dict(body.initial_data)
+        initial_data_with_field[field_name] = operand
+
+        insert_sql = text(
+            f"""
+            INSERT INTO log_event (project_id, data, created_at, updated_at)
+            VALUES (:project_id, CAST(:initial_data AS jsonb), :now, :now)
+            RETURNING id, (data->>'{field_name}')::numeric as new_value
+            """,
+        )
+
+        result = session.execute(
+            insert_sql,
+            {
+                "project_id": project_id,
+                "initial_data": json.dumps(initial_data_with_field),
+                "now": datetime.now(timezone.utc),
+            },
+        ).fetchone()
+
+        log_id = result.id
+        new_value = float(result.new_value)
+        created = True
+
+        # Link to context
+        session.execute(
+            text(
+                """
+                INSERT INTO log_event_context (log_event_id, context_id)
+                VALUES (:log_id, :context_id)
+                """,
+            ),
+            {"log_id": log_id, "context_id": context_id},
+        )
+
+    mirrored_contexts = []
+
+    # If add_to_all_context=true, mirror to archive context
+    if body.add_to_all_context:
+        context_parts = body.context.split("/")
+
+        if "_user" in body.initial_data and "_assistant" in body.initial_data:
+            user_name = str(body.initial_data.get("_user", ""))
+            assistant_name = str(body.initial_data.get("_assistant", ""))
+
+            user_idx = None
+            assistant_idx = None
+            for i, part in enumerate(context_parts):
+                if part == user_name and user_idx is None:
+                    user_idx = i
+                elif part == assistant_name and user_idx is not None:
+                    assistant_idx = i
+                    break
+
+            if user_idx is not None and assistant_idx is not None:
+                prefix_parts = context_parts[:user_idx]
+                subcontext_parts = context_parts[assistant_idx + 1 :]
+
+                if prefix_parts:
+                    archive_context = (
+                        "/".join(prefix_parts) + "/All/" + "/".join(subcontext_parts)
+                    )
+                else:
+                    archive_context = "All/" + "/".join(subcontext_parts)
+
+                archive_context_id = context_dao.get_or_create(
+                    project_id=project_id,
+                    name=archive_context,
+                    unique_keys=body.unique_keys,
+                )
+
+                existing_link = session.execute(
+                    text(
+                        """
+                        SELECT 1 FROM log_event_context
+                        WHERE log_event_id = :log_id AND context_id = :context_id
+                        """,
+                    ),
+                    {"log_id": log_id, "context_id": archive_context_id},
+                ).fetchone()
+
+                if not existing_link:
+                    session.execute(
+                        text(
+                            """
+                            INSERT INTO log_event_context (log_event_id, context_id)
+                            VALUES (:log_id, :context_id)
+                            """,
+                        ),
+                        {"log_id": log_id, "context_id": archive_context_id},
+                    )
+
+                mirrored_contexts.append(archive_context)
+
+    session.commit()
+
+    return AtomicFieldUpdateResponse(
+        new_value=new_value,
+        log_id=log_id,
+        created=created,
+        mirrored_contexts=mirrored_contexts if mirrored_contexts else None,
     )
 
 
@@ -4990,127 +5512,21 @@ def process_traffic_logs(
         )
 
 
-# Hard cap for max_items to prevent pathological calls
-MAX_ITEMS_HARD_CAP = 5000
-MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
+# =============================================================================
+# Decoupled Embedding Pipeline Constants (Stage 1: Generation, Stage 2: Insertion)
+# =============================================================================
 
+# Stage 1: Embedding Generation (parallel-safe)
+GENERATION_DEFAULT_MAX_ITEMS = 4096  # 2 OpenAI batches of 2048
+GENERATION_MAX_ITEMS_HARD_CAP = 8192
+GENERATION_DEFAULT_MAX_TIME = 40  # ~15-20s per batch + overhead
+GENERATION_MAX_TIME_HARD_CAP = 120
 
-@admin_router.post(
-    "/process_embedding_queue",
-    responses={
-        200: {
-            "description": "Embedding queue processed successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "message": "Processed 150 embeddings in 45.23s",
-                        "status": "success",
-                        "metrics": {
-                            "processed": 150,
-                            "duration": 45.23,
-                            "throughput": 3.32,
-                            "time_limit_reached": False,
-                            "size_limit_reached": False,
-                            "queue_before": {"pending": 500, "processing": 0},
-                            "queue_after": {"pending": 350, "processing": 0},
-                        },
-                    },
-                },
-            },
-        },
-        500: {
-            "description": "Internal Server Error",
-        },
-    },
-)
-def process_embedding_queue(
-    max_items: int = Query(
-        1000,
-        le=MAX_ITEMS_HARD_CAP,
-        description=f"Maximum number of embeddings to process (hard cap: {MAX_ITEMS_HARD_CAP})",
-    ),
-    max_time_seconds: int = Query(
-        300,
-        le=MAX_TIME_SECONDS_HARD_CAP,
-        description=f"Maximum processing time in seconds (hard cap: {MAX_TIME_SECONDS_HARD_CAP})",
-    ),
-    session=Depends(get_db_session),
-    _=Depends(auth_admin_key),
-):
-    """
-    Admin endpoint to manually process pending embeddings from the queue.
-
-    This endpoint is designed to be called by:
-    - Cloud Scheduler for periodic processing (recommended: every 5 minutes)
-    - Administrators for manual triggering
-    - Internal processes when immediate embedding generation is needed
-
-    The endpoint processes embeddings in batches with both time and size bounds.
-    Processing stops when either limit is reached, ensuring predictable execution time.
-
-    Features:
-    - Atomic queue claiming with FOR UPDATE SKIP LOCKED (multi-worker safe)
-    - Automatic reset of stale items stuck in 'processing' state (crash recovery)
-    - Time-bounded execution to prevent long-running operations
-    - Size-bounded execution to limit API costs per invocation
-    """
-    try:
-        from orchestra.workers.embedding_worker import (
-            get_queue_metrics,
-            process_pending_embeddings,
-        )
-
-        # Get queue status before processing
-        metrics_before = get_queue_metrics(session)
-
-        if metrics_before.get("pending", 0) == 0:
-            return {
-                "message": "No pending embeddings to process",
-                "status": "success",
-                "metrics": {
-                    "processed": 0,
-                    "queue_before": metrics_before,
-                    "queue_after": metrics_before,
-                },
-            }
-
-        # Process embeddings with time and size bounds
-        result = process_pending_embeddings(
-            session,
-            limit=max_items,
-            max_time_seconds=max_time_seconds,
-        )
-
-        # Get queue status after processing
-        metrics_after = get_queue_metrics(session)
-
-        processed = result.get("processed", 0)
-        duration = result.get("duration", 0)
-
-        return {
-            "message": f"Processed {processed} embeddings in {duration:.2f}s",
-            "status": "success",
-            "metrics": {
-                "processed": processed,
-                "errors": result.get("errors", 0),
-                "duration": duration,
-                "throughput": result.get("throughput", 0),
-                "stale_reset": result.get("stale_reset", 0),
-                "time_limit_reached": result.get("time_limit_reached", False),
-                "size_limit_reached": result.get("size_limit_reached", False),
-                "queue_before": metrics_before,
-                "queue_after": metrics_after,
-            },
-        }
-
-    except Exception as e:
-        import traceback
-
-        error_message = traceback.format_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"Error processing embedding queue: {error_message}"},
-        )
+# Stage 2: Index Insertion (serial)
+INSERTION_DEFAULT_MAX_ITEMS = 12000  # For 3-minute schedule
+INSERTION_MAX_ITEMS_HARD_CAP = 20000
+INSERTION_DEFAULT_MAX_TIME = 150  # ~100s at 100/s + buffer
+INSERTION_MAX_TIME_HARD_CAP = 300
 
 
 @admin_router.post(
@@ -5121,10 +5537,14 @@ def process_embedding_queue(
             "content": {
                 "application/json": {
                     "example": {
-                        "message": "Index maintenance completed. Deleted 3562 embeddings.",
+                        "message": "Index maintenance completed in 95.5s. Deleted 3562 embeddings.",
                         "status": "success",
+                        "skipped": False,
                         "metrics": {
+                            "mode": "auto",
                             "soft_deleted_count": 3562,
+                            "total_embeddings": 2058127,
+                            "invalid_indexes_found": [],
                             "invalid_indexes_cleaned": [],
                             "deletion_metrics": {
                                 "total_deleted": 3562,
@@ -5134,15 +5554,21 @@ def process_embedding_queue(
                             "reindex_results": {
                                 "embedding_hnsw_cosine_openai_1536_idx": {
                                     "action": "reindexed",
-                                    "duration": 45.2,
+                                    "duration": 75.2,
                                     "success": True,
                                 },
                             },
+                            "phases_executed": [
+                                "invalid_index_cleanup",
+                                "batched_delete",
+                                "reindex",
+                                "vacuum",
+                            ],
                             "durations": {
                                 "invalid_index_cleanup": 0.1,
                                 "batched_delete": 12.5,
-                                "reindex": 85.0,
-                                "vacuum": 8.3,
+                                "reindex": 75.0,
+                                "vacuum": 7.9,
                             },
                         },
                     },
@@ -5155,40 +5581,97 @@ def process_embedding_queue(
     },
 )
 def run_index_maintenance(
+    mode: str = Query(
+        "auto",
+        description="Maintenance mode: "
+        "'auto' (smart threshold-based, default for nightly runs), "
+        "'full' (force all phases, good for weekly), "
+        "'cleanup_only' (delete soft-deleted rows, skip reindex), "
+        "'reindex_only' (reindex only, skip deletion), "
+        "'check' (dry run, report metrics only)",
+    ),
+    soft_delete_threshold: int = Query(
+        100,
+        ge=0,
+        description="Minimum soft-deleted rows before cleanup runs in 'auto' mode. "
+        "Default: 100. Set to 0 to always cleanup if any soft-deleted rows exist.",
+    ),
+    skip_vacuum: bool = Query(
+        False,
+        description="Skip VACUUM phase after maintenance. "
+        "Faster but doesn't immediately reclaim disk space.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """
-    Admin endpoint to manually trigger HNSW index maintenance.
+    Trigger HNSW index maintenance.
 
-    This endpoint performs comprehensive index maintenance:
-    1. Checks for and cleans up invalid indexes (left by failed CONCURRENTLY ops)
-    2. Hard-deletes soft-deleted embeddings in batches (avoids long locks)
-    3. Uses REINDEX CONCURRENTLY to rebuild indexes (no query downtime)
-    4. Runs VACUUM to reclaim disk space
+    **Maintenance Modes:**
+    - `auto` (default): Smart threshold-based. Cleanup if soft-deleted >= threshold,
+      reindex only if cleanup happened. Best for nightly runs.
+    - `full`: Run all phases regardless of thresholds. Best for weekly optimization.
+    - `cleanup_only`: Only delete soft-deleted rows, skip expensive reindex.
+      Good for emergency cleanup without downtime risk.
+    - `reindex_only`: Only reindex, skip deletion. Use when index is fragmented
+      but no soft deletes exist.
+    - `check`: Dry run - just report metrics without making any changes.
 
-    Key improvements over traditional DROP/CREATE:
-    - REINDEX CONCURRENTLY keeps old index usable during rebuild
-    - Batched deletes prevent long table locks
-    - Invalid index detection handles failed previous operations
+    **Cloud Scheduler Configuration:**
+    - Nightly: `0 2 * * *` with `mode=auto` (default)
+    - Weekly full: `0 3 * * 0` with `mode=full`
 
-    WARNING: This operation can take several minutes for large tables.
-    Recommended to run during low-traffic hours (e.g., 2 AM UTC).
+    **Phases (in order):**
+    1. Invalid index cleanup (always runs, handles failed CONCURRENTLY operations)
+    2. Batched soft-delete cleanup (if mode allows and threshold met)
+    3. REINDEX CONCURRENTLY (if mode allows, keeps index usable during rebuild)
+    4. VACUUM (if skip_vacuum=false and any work was done)
 
-    This endpoint is designed to be called by:
-    - Cloud Scheduler for nightly maintenance
-    - Administrators for manual triggering after large deletions
+    **WARNING:** Reindex can take several minutes for large indexes (~6GB).
+    Recommended for low-traffic hours (2-4 AM UTC).
     """
     try:
-        from orchestra.workers.index_maintenance import rebuild_hnsw_indexes
+        from orchestra.workers.index_maintenance import (
+            run_index_maintenance as do_maintenance,
+        )
 
-        metrics = rebuild_hnsw_indexes(session)
+        # Validate mode
+        valid_modes = ["auto", "full", "cleanup_only", "reindex_only", "check"]
+        if mode not in valid_modes:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": f"Invalid mode '{mode}'. Must be one of: {valid_modes}",
+                },
+            )
+
+        # Run maintenance with specified mode
+        metrics = do_maintenance(
+            session=session,
+            mode=mode,
+            soft_delete_threshold=soft_delete_threshold,
+            skip_vacuum=skip_vacuum,
+        )
 
         if metrics["success"]:
             deleted = metrics.get("deletion_metrics", {}).get("total_deleted", 0)
+            total_duration = sum(metrics.get("durations", {}).values())
+
+            if metrics.get("skipped"):
+                return {
+                    "message": f"Skipped: {metrics['soft_deleted_count']} soft-deleted rows "
+                    f"(threshold: {soft_delete_threshold}), "
+                    f"{len(metrics.get('invalid_indexes_found', []))} invalid indexes",
+                    "status": "success",
+                    "skipped": True,
+                    "metrics": metrics,
+                }
+
             return {
-                "message": f"Index maintenance completed. Deleted {deleted} embeddings.",
+                "message": f"Index maintenance completed in {total_duration:.1f}s. "
+                f"Deleted {deleted} embeddings. Phases: {metrics['phases_executed']}",
                 "status": "success",
+                "skipped": False,
                 "metrics": metrics,
             }
         else:
@@ -5207,4 +5690,264 @@ def run_index_maintenance(
         return JSONResponse(
             status_code=500,
             content={"detail": f"Error running index maintenance: {error_message}"},
+        )
+
+
+# =============================================================================
+# Decoupled Embedding Pipeline Endpoints (Stage 1 + Stage 2)
+# =============================================================================
+
+
+@admin_router.post(
+    "/generate_pending_embeddings",
+    responses={
+        200: {
+            "description": "Successfully processed pending embeddings",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Generated vectors for 4096 embeddings",
+                        "status": "success",
+                        "metrics": {
+                            "processed": 4096,
+                            "successful": 4096,
+                            "failed": 0,
+                            "stale_reset": 0,
+                            "duration_seconds": 18.5,
+                            "throughput_per_second": 221.4,
+                            "queue_drained": False,
+                            "queue_metrics": {
+                                "pending": 50000,
+                                "generating": 0,
+                                "vector_ready": 4096,
+                                "inserting": 0,
+                                "failed": 0,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+        },
+    },
+)
+def generate_pending_embeddings(
+    max_items: int = Query(
+        GENERATION_DEFAULT_MAX_ITEMS,
+        le=GENERATION_MAX_ITEMS_HARD_CAP,
+        description="Maximum items to process. Default: 4096 (2 OpenAI batches), Hard cap: 8192.",
+    ),
+    max_time_seconds: int = Query(
+        GENERATION_DEFAULT_MAX_TIME,
+        le=GENERATION_MAX_TIME_HARD_CAP,
+        description="Maximum processing time in seconds. Default: 40s, Hard cap: 120s.",
+    ),
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """
+    Stage 1: Generate embedding vectors for pending queue items.
+
+    This endpoint is **SAFE FOR PARALLEL EXECUTION**. Multiple workers can call
+    this endpoint simultaneously - FOR UPDATE SKIP LOCKED ensures each queue
+    item is processed by exactly one worker.
+
+    **Flow:**
+    1. Reset stale 'generating' items back to 'pending' (crash recovery)
+    2. Claim batch: pending → generating (atomic with FOR UPDATE SKIP LOCKED)
+    3. Generate vectors via OpenAI API (batched by model, 2048 max per API call)
+    4. Update queue: status='vector_ready', generated_vector=<vector>
+    5. On error: increment retry_count or mark 'failed'
+
+    **Cloud Scheduler Configuration (2 parallel jobs):**
+    - Job 1: Schedule "0,30 * * * * *" (at :00 and :30 of each minute)
+      POST /admin/generate_pending_embeddings?max_items=4096&max_time_seconds=40
+    - Job 2: Schedule "15,45 * * * * *" (at :15 and :45 of each minute)
+      POST /admin/generate_pending_embeddings?max_items=4096&max_time_seconds=40
+
+    **TODO:** Migrate to Cloud Tasks for dynamic scaling based on queue depth.
+    Cloud Tasks can automatically scale workers based on demand rather than
+    fixed scheduling intervals.
+    """
+    try:
+        from orchestra.workers.embedding_generator import (
+            get_generation_queue_metrics,
+            process_pending_embeddings,
+        )
+
+        # Get queue status before processing
+        metrics_before = get_generation_queue_metrics(session)
+        pending_before = metrics_before.get("pending", 0)
+
+        if pending_before == 0:
+            return {
+                "message": "No pending embeddings to generate",
+                "status": "success",
+                "queue_drained": True,
+                "metrics": {
+                    "processed": 0,
+                    "successful": 0,
+                    "failed": 0,
+                    "stale_reset": 0,
+                    "duration_seconds": 0,
+                    "throughput_per_second": 0,
+                    "queue_metrics": metrics_before,
+                },
+            }
+
+        # Process embeddings (generate vectors)
+        result = process_pending_embeddings(
+            session,
+            max_items=max_items,
+            max_time_seconds=max_time_seconds,
+        )
+
+        successful = result.get("successful", 0)
+        failed = result.get("failed", 0)
+        duration = result.get("duration_seconds", 0)
+
+        return {
+            "message": f"Generated vectors for {successful} embeddings"
+            + (f" ({failed} failed)" if failed else ""),
+            "status": "success",
+            "queue_drained": result.get("queue_drained", False),
+            "metrics": result,
+        }
+
+    except Exception as e:
+        import traceback
+
+        error_message = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error generating embeddings: {error_message}"},
+        )
+
+
+@admin_router.post(
+    "/index_ready_embeddings",
+    responses={
+        200: {
+            "description": "Successfully inserted embeddings into index",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Inserted 12000 embeddings into index",
+                        "status": "success",
+                        "metrics": {
+                            "processed": 12000,
+                            "inserted": 12000,
+                            "failed": 0,
+                            "stale_reset": 0,
+                            "duration_seconds": 110.5,
+                            "throughput_per_second": 108.6,
+                            "queue_drained": False,
+                            "queue_metrics": {
+                                "pending": 50000,
+                                "generating": 4096,
+                                "vector_ready": 38000,
+                                "inserting": 0,
+                                "failed": 0,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+        },
+    },
+)
+def index_ready_embeddings(
+    max_items: int = Query(
+        INSERTION_DEFAULT_MAX_ITEMS,
+        le=INSERTION_MAX_ITEMS_HARD_CAP,
+        description="Maximum items to insert. Default: 12000, Hard cap: 20000.",
+    ),
+    max_time_seconds: int = Query(
+        INSERTION_DEFAULT_MAX_TIME,
+        le=INSERTION_MAX_TIME_HARD_CAP,
+        description="Maximum processing time in seconds. Default: 150s, Hard cap: 300s.",
+    ),
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """
+    Stage 2: Bulk insert generated embeddings into the indexed Embedding table.
+
+    This endpoint should run **SERIALLY** (one worker at a time) for optimal
+    HNSW index performance. While technically safe with FOR UPDATE SKIP LOCKED,
+    parallel insertion degrades performance due to index lock contention.
+
+    **Flow:**
+    1. Reset stale 'inserting' items back to 'vector_ready' (crash recovery)
+    2. Claim batch: vector_ready → inserting (atomic with FOR UPDATE SKIP LOCKED)
+    3. Bulk INSERT into Embedding table (ON CONFLICT DO UPDATE for soft-delete resurrection)
+    4. DELETE successfully inserted items from queue
+    5. On error: mark items as 'failed' with error message
+
+    **Cloud Scheduler Configuration (1 serial job):**
+    - Schedule: "*/3 * * * *" (every 3 minutes)
+    - URL: POST /admin/index_ready_embeddings?max_items=12000&max_time_seconds=150
+    - Attempt deadline: 180s
+
+    **TODO:** Migrate to Cloud Tasks for dynamic scaling. With Cloud Tasks,
+    a single task can handle larger batches with longer timeouts, and tasks
+    can be dispatched based on queue depth.
+    """
+    try:
+        from orchestra.workers.embedding_inserter import (
+            get_insertion_queue_metrics,
+            process_ready_embeddings,
+        )
+
+        # Get queue status before processing
+        metrics_before = get_insertion_queue_metrics(session)
+        ready_before = metrics_before.get("vector_ready", 0)
+
+        if ready_before == 0:
+            return {
+                "message": "No ready embeddings to insert",
+                "status": "success",
+                "queue_drained": True,
+                "metrics": {
+                    "processed": 0,
+                    "inserted": 0,
+                    "failed": 0,
+                    "stale_reset": 0,
+                    "duration_seconds": 0,
+                    "throughput_per_second": 0,
+                    "queue_metrics": metrics_before,
+                },
+            }
+
+        # Process embeddings (bulk insert into index)
+        result = process_ready_embeddings(
+            session,
+            max_items=max_items,
+            max_time_seconds=max_time_seconds,
+        )
+
+        inserted = result.get("inserted", 0)
+        failed = result.get("failed", 0)
+        duration = result.get("duration_seconds", 0)
+
+        return {
+            "message": f"Inserted {inserted} embeddings into index"
+            + (f" ({failed} failed)" if failed else ""),
+            "status": "success",
+            "queue_drained": result.get("queue_drained", False),
+            "metrics": result,
+        }
+
+    except Exception as e:
+        import traceback
+
+        error_message = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error inserting embeddings: {error_message}"},
         )

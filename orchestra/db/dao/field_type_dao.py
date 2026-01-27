@@ -43,7 +43,7 @@ class FieldTypeDAO:
         field_name: str,
         value,
         context_id: int,
-        mutable: bool = False,
+        mutable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -191,7 +191,7 @@ class FieldTypeDAO:
         field_name: str,
         value,
         context_id: int,
-        mutable: bool = False,
+        mutable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -489,8 +489,6 @@ class FieldTypeDAO:
             context_id: The context ID
             fields: Dictionary mapping fields names to their definitions.
         """
-        from orchestra.web.api.log.schema import StandardFieldDefinition
-
         if not fields:
             return
 
@@ -498,8 +496,12 @@ class FieldTypeDAO:
         self._validate_description(description)
 
         # Prepare values for bulk insertion
-        # Import EnumType for isinstance check
-        from orchestra.web.api.log.schema import EnumType
+        # Import field definition types for isinstance checks
+        from orchestra.web.api.log.schema import (
+            EnumType,
+            JsonSchemaFieldDefinition,
+            StandardFieldDefinition,
+        )
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
             is_pydantic_schema,
@@ -511,7 +513,7 @@ class FieldTypeDAO:
         values_to_insert = []
         for field_name, field_info in fields.items():
             field_type = DEFAULT_FIELD_TYPE  # Default to DEFAULT_FIELD_TYPE ("Any")
-            mutable = False
+            mutable = True
             unique = False
             enum_values = None
             enum_restrict = False
@@ -544,6 +546,16 @@ class FieldTypeDAO:
                 if field_type.lower() == "enum":
                     enum_values = getattr(field_info, "values", None)
                     enum_restrict = getattr(field_info, "restrict", False)
+            elif isinstance(field_info, JsonSchemaFieldDefinition):
+                # Handle full JSON Schema field definitions
+                # Convert to dict (excluding None values) and store as JSON string
+                schema_dict = field_info.model_dump(exclude_none=True)
+                schema = normalize_pydantic_schema(schema_dict)
+                field_type = pydantic_schema_to_string(schema)
+                # Extract description from schema if present
+                field_description = schema_dict.get("description")
+                # Validate individual field description
+                self._validate_description(field_description)
             elif isinstance(field_info, str):
                 field_type = field_info
             elif isinstance(field_info, dict) and is_pydantic_schema(field_info):
@@ -613,7 +625,7 @@ class FieldTypeDAO:
                 - field_name: The name of the field
                 - value: The value (not used for type inference anymore)
                 - context_id: The context ID
-                - mutable: Optional, defaults to False
+                - mutable: Optional, defaults to True
                 - field_category: Optional, defaults to "entry". Valid values are:
                     - "entry": Regular entry fields
                     - "derived_entry": Derived field values
@@ -654,8 +666,13 @@ class FieldTypeDAO:
             project_id = data["project_id"]
             field_name = data["field_name"]
             context_id = data["context_id"]
-            mutable = data.get("mutable", True)
             field_category = data.get("field_category", "entry")
+            # Derived entries are always immutable; others default to mutable
+            mutable = (
+                False
+                if field_category == "derived_entry"
+                else data.get("mutable", True)
+            )
             unique = data.get("unique", False)
             field_description = data.get("description", description)
 
