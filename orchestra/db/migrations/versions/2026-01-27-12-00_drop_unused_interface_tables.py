@@ -14,7 +14,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "drop_unused_interface_tables"
-down_revision = "drop_legacy_tables"
+down_revision = "a9d21cb31092"
 branch_labels = None
 depends_on = None
 
