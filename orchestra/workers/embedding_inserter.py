@@ -41,15 +41,56 @@ logger = logging.getLogger(__name__)
 # Configuration Constants
 # =============================================================================
 
-# Items stuck in 'inserting' longer than this will be reset to 'vector_ready'
-STALE_INSERTING_TIMEOUT_MINUTES = 5
+# Safety multiplier for stale timeout calculation
+# If max_time_seconds=150, stale timeout = 150 * 2 = 300 seconds (5 minutes)
+STALE_TIMEOUT_SAFETY_MULTIPLIER = 2
+
+# Minimum stale timeout in minutes (floor value regardless of calculation)
+MIN_STALE_TIMEOUT_MINUTES = 3
+
+# Default stale timeout when processing time is unknown
+DEFAULT_STALE_TIMEOUT_MINUTES = 5
 
 # Default processing bounds (can be overridden by API endpoint)
 DEFAULT_MAX_ITEMS = 12000
 DEFAULT_MAX_TIME_SECONDS = 150
 
-# Batch size for chunked insertion (to avoid holding locks too long)
-INSERTION_CHUNK_SIZE = 2000
+# Chunk size for insertion as a fraction of max_items
+# Ensures chunks scale with batch size while keeping commits reasonable
+DEFAULT_CHUNK_FRACTION = 0.15  # 15% of max_items per chunk
+MIN_CHUNK_SIZE = 500
+MAX_CHUNK_SIZE = 5000
+
+
+def calculate_stale_timeout_minutes(max_time_seconds: int) -> int:
+    """
+    Calculate appropriate stale timeout based on expected processing time.
+
+    Args:
+        max_time_seconds: Maximum expected processing time in seconds
+
+    Returns:
+        Stale timeout in minutes with safety margin
+    """
+    calculated_minutes = (max_time_seconds * STALE_TIMEOUT_SAFETY_MULTIPLIER) // 60
+    return max(calculated_minutes, MIN_STALE_TIMEOUT_MINUTES)
+
+
+def calculate_chunk_size(max_items: int) -> int:
+    """
+    Calculate appropriate chunk size based on batch size.
+
+    Larger batches benefit from larger chunks (fewer commits),
+    but we cap to avoid holding locks too long.
+
+    Args:
+        max_items: Maximum items being processed
+
+    Returns:
+        Chunk size for insertion batching
+    """
+    calculated = int(max_items * DEFAULT_CHUNK_FRACTION)
+    return max(MIN_CHUNK_SIZE, min(calculated, MAX_CHUNK_SIZE))
 
 
 class ReadyQueueItem(NamedTuple):
@@ -80,18 +121,22 @@ RETURNING q.id, q.ref_id, q.key, q.model, q.generated_vector
 """
 
 
-def reset_stale_inserting_items(session: Session) -> int:
+def reset_stale_inserting_items(
+    session: Session,
+    stale_timeout_minutes: int = DEFAULT_STALE_TIMEOUT_MINUTES,
+) -> int:
     """
     Reset queue items stuck in 'inserting' state for too long.
 
     This handles worker crashes by resetting items that have been
-    in 'inserting' state for longer than STALE_INSERTING_TIMEOUT_MINUTES.
+    in 'inserting' state for longer than the specified timeout.
 
     Uses FOR UPDATE SKIP LOCKED to avoid lock contention when multiple
     workers run concurrently.
 
     Args:
         session: Database session
+        stale_timeout_minutes: Minutes after which 'inserting' items are considered stale.
 
     Returns:
         Number of items reset
@@ -111,7 +156,7 @@ def reset_stale_inserting_items(session: Session) -> int:
             )
         """.replace(
                 ":minutes",
-                str(STALE_INSERTING_TIMEOUT_MINUTES),
+                str(stale_timeout_minutes),
             ),
         ),
     )
@@ -303,6 +348,7 @@ def process_ready_embeddings(
     session: Session,
     max_items: int = DEFAULT_MAX_ITEMS,
     max_time_seconds: int = DEFAULT_MAX_TIME_SECONDS,
+    include_metrics: bool = False,
 ) -> dict:
     """
     Main entry point for Stage 2: Insert ready vectors into Embedding table.
@@ -311,43 +357,55 @@ def process_ready_embeddings(
     HNSW index performance. While technically safe with FOR UPDATE SKIP LOCKED,
     parallel insertion degrades performance due to index lock contention.
 
+    Performance characteristics:
+    - Bulk INSERT scales linearly with PostgreSQL/HNSW insertion rate
+    - Chunk size auto-scales with max_items (15% per chunk, 500-5000 range)
+    - Stale timeout auto-scales with max_time_seconds (2x safety margin)
+
     Args:
         session: Database session
         max_items: Maximum items to process in this invocation
-        max_time_seconds: Maximum time to spend processing
+        max_time_seconds: Maximum time to spend processing (also determines stale timeout)
+        include_metrics: If True, include queue status counts (adds ~50ms overhead)
 
     Returns:
         Dictionary with processing metrics
     """
     start_time = time.time()
 
+    # Calculate dynamic parameters based on inputs
+    stale_timeout = calculate_stale_timeout_minutes(max_time_seconds)
+    chunk_size = calculate_chunk_size(max_items)
+
     # Step 1: Reset any stale 'inserting' items (crash recovery)
-    stale_reset = reset_stale_inserting_items(session)
+    stale_reset = reset_stale_inserting_items(
+        session,
+        stale_timeout_minutes=stale_timeout,
+    )
 
-    # Step 2: Get initial metrics
-    initial_metrics = get_insertion_queue_metrics(session)
-
-    # Step 3: Claim batch of vector_ready items
+    # Step 2: Claim batch of vector_ready items
     claimed_items = claim_ready_batch(session, max_items)
 
     if not claimed_items:
-        return {
+        result = {
             "processed": 0,
             "inserted": 0,
             "failed": 0,
             "stale_reset": stale_reset,
-            "queue_metrics": initial_metrics,
             "duration_seconds": round(time.time() - start_time, 2),
-            "queue_drained": initial_metrics.get("vector_ready", 0) == 0,
+            "queue_drained": True,
         }
+        if include_metrics:
+            result["queue_metrics"] = get_insertion_queue_metrics(session)
+        return result
 
-    # Step 4: Process in chunks to avoid holding locks too long
+    # Step 3: Process in dynamically-sized chunks to avoid holding locks too long
     total_inserted = 0
     total_failed = 0
     successful_ids: List[int] = []
     failed_ids: List[int] = []
 
-    for chunk_start in range(0, len(claimed_items), INSERTION_CHUNK_SIZE):
+    for chunk_start in range(0, len(claimed_items), chunk_size):
         # Check time limit
         elapsed = time.time() - start_time
         if elapsed >= max_time_seconds:
@@ -372,7 +430,7 @@ def process_ready_embeddings(
                 session.commit()
             break
 
-        chunk = claimed_items[chunk_start : chunk_start + INSERTION_CHUNK_SIZE]
+        chunk = claimed_items[chunk_start : chunk_start + chunk_size]
         chunk_ids = [item.id for item in chunk]
 
         try:
@@ -402,19 +460,22 @@ def process_ready_embeddings(
     # Commit all changes
     session.commit()
 
-    # Step 7: Get final metrics
-    final_metrics = get_insertion_queue_metrics(session)
     duration = round(time.time() - start_time, 2)
 
-    return {
+    result = {
         "processed": len(claimed_items),
         "inserted": total_inserted,
         "failed": total_failed,
         "stale_reset": stale_reset,
-        "queue_metrics": final_metrics,
+        "chunk_size_used": chunk_size,
         "duration_seconds": duration,
         "throughput_per_second": round(total_inserted / duration, 1)
         if duration > 0
         else 0,
-        "queue_drained": final_metrics.get("vector_ready", 0) == 0,
     }
+
+    # Only fetch metrics if explicitly requested (saves ~50ms per invocation)
+    if include_metrics:
+        result["queue_metrics"] = get_insertion_queue_metrics(session)
+
+    return result
