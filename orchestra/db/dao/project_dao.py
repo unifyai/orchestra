@@ -163,10 +163,17 @@ class ProjectDAO:
         self.update(id=project_id, name=new_name, description=description)
 
     # Default batch size for project deletion
-    # Balance between transaction size and commit frequency
-    DEFAULT_DELETE_BATCH_SIZE = 5000
-    MIN_DELETE_BATCH_SIZE = 500
-    MAX_DELETE_BATCH_SIZE = 20000
+    # Tuned for lock_timeout = 10000ms with 2.5x load safety margin
+    #
+    # Calculation:
+    #   - Estimated per-row cost (with CASCADE): ~0.25ms at normal load
+    #   - Under 2.5x load: ~0.625ms per row
+    #   - 10000 rows × 0.625ms = 6250ms, leaving 3750ms headroom
+    #   - Under 4x load: 10000 × 1.0ms = 10000ms (at limit, but unlikely)
+    #
+    DEFAULT_DELETE_BATCH_SIZE = 10000
+    MIN_DELETE_BATCH_SIZE = 1000
+    MAX_DELETE_BATCH_SIZE = 20000  # 20k × 0.5ms (2x load) = 10s, at timeout limit
 
     def delete(self, id: int, batch_size: int = None):
         """
