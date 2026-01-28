@@ -90,11 +90,11 @@ from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_phone_number,
     create_pubsub_topic,
-    create_windows_vm,
+    create_vm,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    delete_windows_vm,
+    delete_vm,
     get_running_jobs,
     get_social_platforms_costs,
     log_pre_hire_chat,
@@ -439,7 +439,7 @@ async def create_assistant(
         created_phone = None
         created_pubsub = None
         assigned_whatsapp = None
-        created_windows_vm = None
+        created_vm = None
 
         if assistant_in.create_infra:
             current_infra_step = "initializing"
@@ -519,23 +519,24 @@ async def create_assistant(
                 created_pubsub = True
                 print(f"PUBSUB CREATED: {assistant_id}")
 
-                # Step 6: Create Windows VM if is_user_desktop=False and desktop_mode="windows"
+                # Step 6: Create VM if is_user_desktop=False and desktop_mode is windows/ubuntu
                 if (
-                    assistant_in.desktop_mode == "windows"
+                    assistant_in.desktop_mode in ("windows", "ubuntu")
                     and assistant_in.is_user_desktop is False
                 ):
-                    current_infra_step = "create_windows_vm"
-                    vm_response = await create_windows_vm(
+                    current_infra_step = "create_vm"
+                    vm_response = await create_vm(
                         assistant_id=str(assistant_id),
                         unify_apikey=request.state.api_key,
                         assistant_name=f"{assistant_in.first_name}{assistant_in.surname}",
+                        vm_type=assistant_in.desktop_mode,
                     )
                     if "detail" in vm_response or "error" in vm_response:
                         raise Exception(
-                            f"Windows VM creation failed: {vm_response.get('detail') or vm_response.get('error')}",
+                            f"VM creation failed: {vm_response.get('detail') or vm_response.get('error')}",
                         )
-                    created_windows_vm = vm_response
-                    print(f"WINDOWS VM CREATED: {assistant_id}")
+                    created_vm = vm_response
+                    print(f"VM CREATED ({assistant_in.desktop_mode}): {assistant_id}")
 
                 # Refresh database session after long infrastructure operations
                 logging.info(
@@ -554,8 +555,8 @@ async def create_assistant(
                     "assistant_whatsapp_number": assigned_whatsapp,
                 }
                 # Add desktop_url from VM creation if applicable
-                if created_windows_vm and created_windows_vm.get("desktop_url"):
-                    update_data["desktop_url"] = created_windows_vm["desktop_url"]
+                if created_vm and created_vm.get("desktop_url"):
+                    update_data["desktop_url"] = created_vm["desktop_url"]
                 assistant_dao.update_assistant(
                     user_id=user_id,
                     agent_id=assistant_id,
@@ -599,13 +600,16 @@ async def create_assistant(
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
 
-                # Delete Windows VM first (created last)
-                if created_windows_vm:
+                # Delete VM first (created last)
+                if created_vm:
                     try:
-                        await delete_windows_vm(str(assistant_id))
+                        await delete_vm(
+                            str(assistant_id),
+                            vm_type=assistant_in.desktop_mode,
+                        )
                     except Exception as e:
-                        rollback_errors.append(f"Failed to delete Windows VM: {str(e)}")
-                    print(f"WINDOWS VM DELETED: {assistant_id}")
+                        rollback_errors.append(f"Failed to delete VM: {str(e)}")
+                    print(f"VM DELETED ({assistant_in.desktop_mode}): {assistant_id}")
 
                 if created_pubsub:
                     try:
@@ -1183,18 +1187,24 @@ async def delete_assistant(
             logging.error(f"Failed to stop job: {str(e)}")
             cleanup_errors.append(f"Failed to stop job: {str(e)}")
 
-        # Delete Windows VM if assistant has one (is_user_desktop=False AND desktop_mode="windows")
-        if assistant.desktop_mode == "windows" and assistant.is_user_desktop is False:
+        # Delete VM if assistant has one (is_user_desktop=False AND desktop_mode is windows/ubuntu)
+        if (
+            assistant.desktop_mode in ("windows", "ubuntu")
+            and assistant.is_user_desktop is False
+        ):
             try:
-                vm_response = await delete_windows_vm(str(assistant_id))
+                vm_response = await delete_vm(
+                    str(assistant_id),
+                    vm_type=assistant.desktop_mode,
+                )
                 if not vm_response.get("vm_deleted"):
                     cleanup_errors.append(
                         f"VM deletion reported issues: {vm_response}",
                     )
             except Exception as e:
-                logging.error(f"Failed to delete Windows VM: {str(e)}")
-                cleanup_errors.append(f"Failed to delete Windows VM: {str(e)}")
-            print(f"WINDOWS VM DELETED: {assistant_id}")
+                logging.error(f"Failed to delete VM: {str(e)}")
+                cleanup_errors.append(f"Failed to delete VM: {str(e)}")
+            print(f"VM DELETED ({assistant.desktop_mode}): {assistant_id}")
 
         # Delete the associated chat transcript context from the "Assistants" project
         try:
