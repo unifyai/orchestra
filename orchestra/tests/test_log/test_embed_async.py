@@ -55,10 +55,11 @@ async def test_embed_default_sync_behavior(
     assert response.status_code == 200
 
     # Verify embedding was created synchronously (should exist in Embedding table)
+    # Note: Embedding.key should be the TARGET key (key="text_embed"), not the source field
     embedding_result = dbsession.execute(
         select(Embedding).where(
             Embedding.ref_id == log_id,
-            Embedding.key == "text_field",
+            Embedding.key == key,  # TARGET key, not source "text_field"
             Embedding.is_deleted == False,  # noqa: E712
         ),
     ).scalar_one_or_none()
@@ -107,10 +108,11 @@ async def test_embed_explicit_sync(client: AsyncClient, dbsession):
     assert response.status_code == 200
 
     # Verify embedding was created synchronously
+    # Note: Embedding.key should be the TARGET key (key="text_embed"), not the source field
     embedding_result = dbsession.execute(
         select(Embedding).where(
             Embedding.ref_id == log_id,
-            Embedding.key == "text_field",
+            Embedding.key == key,  # TARGET key, not source "text_field"
             Embedding.is_deleted == False,  # noqa: E712
         ),
     ).scalar_one_or_none()
@@ -275,10 +277,11 @@ async def test_embed_sync_with_model_and_dimensions(
     assert response.status_code == 200
 
     # Verify embedding was created synchronously
+    # Note: Embedding.key should be the TARGET key (key="text_embed"), not the source field
     embedding_result = dbsession.execute(
         select(Embedding).where(
             Embedding.ref_id == log_id,
-            Embedding.key == "text_field",
+            Embedding.key == key,  # TARGET key, not source "text_field"
             Embedding.is_deleted == False,  # noqa: E712
         ),
     ).scalar_one_or_none()
