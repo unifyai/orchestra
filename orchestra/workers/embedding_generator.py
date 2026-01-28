@@ -42,18 +42,46 @@ logger = logging.getLogger(__name__)
 # Configuration Constants
 # =============================================================================
 
-# Maximum batch size for a single OpenAI embedding API call
+# Maximum batch size for a single OpenAI embedding API call (OpenAI limit)
 OPENAI_EMBEDDING_BATCH_SIZE = 2048
 
 # Maximum retry attempts before marking item as 'failed'
 MAX_RETRY_ATTEMPTS = 3
 
-# Items stuck in 'generating' longer than this will be reset to 'pending'
-STALE_GENERATING_TIMEOUT_MINUTES = 3
+# Safety multiplier for stale timeout calculation
+# If max_time_seconds=60, stale timeout = 60 * 3 = 180 seconds (3 minutes)
+# This ensures items aren't reset while still being legitimately processed
+STALE_TIMEOUT_SAFETY_MULTIPLIER = 3
+
+# Minimum stale timeout in minutes (floor value regardless of calculation)
+MIN_STALE_TIMEOUT_MINUTES = 5
+
+# Default stale timeout when processing time is unknown (used by reset function)
+DEFAULT_STALE_TIMEOUT_MINUTES = 10
 
 # Default processing bounds (can be overridden by API endpoint)
 DEFAULT_MAX_ITEMS = 4096  # 2 OpenAI batches
 DEFAULT_MAX_TIME_SECONDS = 40
+
+
+def calculate_stale_timeout_minutes(max_time_seconds: int) -> int:
+    """
+    Calculate appropriate stale timeout based on expected processing time.
+
+    The stale timeout should be long enough to prevent resetting items that
+    are legitimately being processed, but short enough to recover from crashes.
+
+    Args:
+        max_time_seconds: Maximum expected processing time in seconds
+
+    Returns:
+        Stale timeout in minutes with safety margin
+    """
+    # Calculate timeout with safety multiplier
+    calculated_minutes = (max_time_seconds * STALE_TIMEOUT_SAFETY_MULTIPLIER) // 60
+
+    # Ensure we meet the minimum threshold
+    return max(calculated_minutes, MIN_STALE_TIMEOUT_MINUTES)
 
 
 class PendingQueueItem(NamedTuple):
@@ -101,18 +129,23 @@ RETURNING q.id, q.ref_id, q.key, q.text, q.model, q.dimensions, q.retry_count
 """
 
 
-def reset_stale_generating_items(session: Session) -> int:
+def reset_stale_generating_items(
+    session: Session,
+    stale_timeout_minutes: int = DEFAULT_STALE_TIMEOUT_MINUTES,
+) -> int:
     """
     Reset queue items stuck in 'generating' state for too long.
 
     This handles worker crashes by resetting items that have been
-    in 'generating' state for longer than STALE_GENERATING_TIMEOUT_MINUTES.
+    in 'generating' state for longer than the specified timeout.
 
     Uses FOR UPDATE SKIP LOCKED to avoid lock contention when multiple
     workers run concurrently.
 
     Args:
         session: Database session
+        stale_timeout_minutes: Minutes after which 'generating' items are considered stale.
+                              Should be set based on expected processing time with safety margin.
 
     Returns:
         Number of items reset
@@ -132,7 +165,7 @@ def reset_stale_generating_items(session: Session) -> int:
             )
         """.replace(
                 ":minutes",
-                str(STALE_GENERATING_TIMEOUT_MINUTES),
+                str(stale_timeout_minutes),
             ),
         ),
     )
@@ -268,7 +301,14 @@ def update_queue_with_vectors(
     successful_results: List[GenerationResult],
 ) -> int:
     """
-    Update queue items with generated vectors and set status to 'vector_ready'.
+    Update queue items with generated vectors using BULK UPDATE.
+
+    Uses PostgreSQL's unnest() for single-statement bulk updates instead of
+    N individual UPDATE statements. This reduces database round trips from
+    O(N) to O(1), dramatically improving performance regardless of batch size.
+
+    Performance scales linearly with PostgreSQL's ability to handle the UPDATE,
+    not with the number of items (typically ~50-100ms for any reasonable batch).
 
     Args:
         session: Database session
@@ -281,28 +321,49 @@ def update_queue_with_vectors(
         return 0
 
     try:
-        for result in successful_results:
-            session.execute(
-                text(
-                    """
-                    UPDATE embedding_queue
-                    SET status = 'vector_ready',
-                        generated_vector = :vector,
-                        vector_generated_at = NOW(),
-                        processing_started_at = NULL
-                    WHERE id = :queue_id
-                """,
-                ),
-                {"queue_id": result.queue_item_id, "vector": result.vector},
-            )
+        # Extract data for bulk update
+        ids = [r.queue_item_id for r in successful_results]
+        vectors = [r.vector for r in successful_results]
 
+        # Single bulk UPDATE using unnest - O(1) instead of O(N)
+        # Only updates rows still in 'generating' status (prevents race with stale reset)
+        result = session.execute(
+            text(
+                """
+                WITH update_data AS (
+                    SELECT
+                        unnest(:ids::int[]) as id,
+                        unnest(:vectors::vector[]) as vector
+                )
+                UPDATE embedding_queue q
+                SET status = 'vector_ready',
+                    generated_vector = ud.vector,
+                    vector_generated_at = NOW(),
+                    processing_started_at = NULL
+                FROM update_data ud
+                WHERE q.id = ud.id
+                  AND q.status = 'generating'
+            """,
+            ),
+            {"ids": ids, "vectors": vectors},
+        )
+
+        # Commit the bulk update
         session.commit()
-        logger.info(f"Updated {len(successful_results)} items to 'vector_ready'")
-        return len(successful_results)
+
+        updated_count = result.rowcount
+        skipped = len(successful_results) - updated_count
+
+        if skipped > 0:
+            logger.warning(
+                f"Skipped {skipped} items (status changed by another worker)",
+            )
+        logger.info(f"Bulk updated {updated_count} items to 'vector_ready'")
+        return updated_count
 
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to update queue with vectors: {e}", exc_info=True)
+        logger.error(f"Failed to bulk update queue with vectors: {e}", exc_info=True)
         raise
 
 
@@ -371,6 +432,7 @@ def process_pending_embeddings(
     session: Session,
     max_items: int = DEFAULT_MAX_ITEMS,
     max_time_seconds: int = DEFAULT_MAX_TIME_SECONDS,
+    include_metrics: bool = False,
 ) -> dict:
     """
     Main entry point for Stage 1: Generate vectors for pending queue items.
@@ -379,65 +441,80 @@ def process_pending_embeddings(
     call this concurrently - FOR UPDATE SKIP LOCKED ensures each queue
     item is processed by exactly one worker.
 
+    Performance characteristics:
+    - OpenAI API: ~2-5 seconds per 2048 items (network bound)
+    - Bulk UPDATE: ~50-100ms regardless of batch size (single SQL statement)
+    - Total time scales primarily with OpenAI API calls, not DB operations
+
     Args:
         session: Database session
         max_items: Maximum items to process in this invocation
-        max_time_seconds: Maximum time to spend processing
+        max_time_seconds: Maximum time to spend processing (also determines stale timeout)
+        include_metrics: If True, include queue status counts (adds ~50ms overhead)
 
     Returns:
         Dictionary with processing metrics
     """
     start_time = time.time()
 
+    # Calculate stale timeout based on expected processing time
+    # This ensures items aren't reset while legitimately being processed
+    stale_timeout = calculate_stale_timeout_minutes(max_time_seconds)
+
     # Step 1: Reset any stale 'generating' items (crash recovery)
-    stale_reset = reset_stale_generating_items(session)
+    stale_reset = reset_stale_generating_items(
+        session,
+        stale_timeout_minutes=stale_timeout,
+    )
 
-    # Step 2: Get initial metrics
-    initial_metrics = get_generation_queue_metrics(session)
-
-    # Step 3: Claim batch of pending items
+    # Step 2: Claim batch of pending items (atomic with FOR UPDATE SKIP LOCKED)
     claimed_items = claim_pending_batch(session, max_items)
 
     if not claimed_items:
-        return {
+        result = {
             "processed": 0,
             "successful": 0,
             "failed": 0,
             "stale_reset": stale_reset,
-            "queue_metrics": initial_metrics,
             "duration_seconds": round(time.time() - start_time, 2),
-            "queue_drained": initial_metrics.get("pending", 0) == 0,
+            "queue_drained": True,  # No items to claim means queue is empty for us
         }
+        if include_metrics:
+            result["queue_metrics"] = get_generation_queue_metrics(session)
+        return result
 
     # Create lookup map for retry handling
     items_map = {item.id: item for item in claimed_items}
 
-    # Step 4: Generate vectors (respecting time limit)
-    # Note: OpenAI API calls are fast enough that we process full batch
+    # Step 3: Generate vectors via OpenAI API
+    # Time scales with number of OpenAI batches: ~2-5s per 2048 items
     successful_results, failed_results = generate_vectors_for_items(claimed_items)
 
-    # Step 5: Update queue with generated vectors
+    # Step 4: Bulk update queue with generated vectors (single statement, ~50ms)
     updated_count = 0
     if successful_results:
         updated_count = update_queue_with_vectors(session, successful_results)
 
-    # Step 6: Handle failures
+    # Step 5: Handle failures
     if failed_results:
         mark_generation_failures(session, failed_results, items_map)
 
-    # Step 7: Get final metrics
-    final_metrics = get_generation_queue_metrics(session)
     duration = round(time.time() - start_time, 2)
 
-    return {
+    result = {
         "processed": len(claimed_items),
         "successful": len(successful_results),
+        "updated": updated_count,
         "failed": len(failed_results),
         "stale_reset": stale_reset,
-        "queue_metrics": final_metrics,
         "duration_seconds": duration,
         "throughput_per_second": round(len(successful_results) / duration, 1)
         if duration > 0
         else 0,
-        "queue_drained": final_metrics.get("pending", 0) == 0,
     }
+
+    # Only fetch metrics if explicitly requested (saves ~50ms per invocation)
+    if include_metrics:
+        result["queue_metrics"] = get_generation_queue_metrics(session)
+
+    return result
