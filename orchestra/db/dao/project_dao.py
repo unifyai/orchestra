@@ -207,6 +207,32 @@ class ProjectDAO:
                 f"with batch_size={batch_size}",
             )
 
+            # Phase 0: Cancel all pending embedding queue items for this project
+            # This prevents embedding workers from processing items during deletion,
+            # avoiding race conditions and FK violations
+            cancelled_result = self.session.execute(
+                text(
+                    """
+                    UPDATE embedding_queue eq
+                    SET status = 'cancelled',
+                        error_message = 'Project deleted'
+                    FROM log_event le
+                    WHERE eq.ref_id = le.id
+                      AND le.project_id = :project_id
+                      AND eq.status IN ('pending', 'generating', 'vector_ready', 'inserting')
+                """,
+                ),
+                {"project_id": id},
+            )
+            cancelled_count = cancelled_result.rowcount
+            self.session.commit()
+
+            if cancelled_count > 0:
+                logger.info(
+                    f"Phase 0: Cancelled {cancelled_count} embedding queue items "
+                    f"for project {id}",
+                )
+
             # Phase 1: Soft-delete embeddings (fast, no HNSW index surgery)
             # This marks embeddings as deleted so they're excluded from searches
             soft_delete_result = self.session.execute(
@@ -313,9 +339,9 @@ class ProjectDAO:
 
             logger.info(
                 f"Project {id} ('{project_name}') deleted successfully. "
-                f"Removed {total_log_events_deleted} log_events, "
-                f"soft-deleted {soft_deleted_count} embeddings. "
-                f"Index maintenance will clean up orphaned embeddings on next run.",
+                f"Cancelled {cancelled_count} queue items, "
+                f"removed {total_log_events_deleted} log_events, "
+                f"soft-deleted {soft_deleted_count} embeddings.",
             )
 
         except Exception as e:
