@@ -5752,41 +5752,27 @@ def generate_pending_embeddings(
     fixed scheduling intervals.
     """
     try:
-        from orchestra.workers.embedding_generator import (
-            get_generation_queue_metrics,
-            process_pending_embeddings,
-        )
-
-        # Get queue status before processing
-        metrics_before = get_generation_queue_metrics(session)
-        pending_before = metrics_before.get("pending", 0)
-
-        if pending_before == 0:
-            return {
-                "message": "No pending embeddings to generate",
-                "status": "success",
-                "queue_drained": True,
-                "metrics": {
-                    "processed": 0,
-                    "successful": 0,
-                    "failed": 0,
-                    "stale_reset": 0,
-                    "duration_seconds": 0,
-                    "throughput_per_second": 0,
-                    "queue_metrics": metrics_before,
-                },
-            }
+        from orchestra.workers.embedding_generator import process_pending_embeddings
 
         # Process embeddings (generate vectors)
+        # Uses bulk UPDATE for O(1) database operations instead of O(N)
         result = process_pending_embeddings(
             session,
             max_items=max_items,
             max_time_seconds=max_time_seconds,
+            include_metrics=True,  # Include queue status counts in response
         )
 
         successful = result.get("successful", 0)
         failed = result.get("failed", 0)
-        duration = result.get("duration_seconds", 0)
+
+        if successful == 0 and failed == 0 and result.get("processed", 0) == 0:
+            return {
+                "message": "No pending embeddings to generate",
+                "status": "success",
+                "queue_drained": True,
+                "metrics": result,
+            }
 
         return {
             "message": f"Generated vectors for {successful} embeddings"
@@ -5879,47 +5865,32 @@ def index_ready_embeddings(
     can be dispatched based on queue depth.
     """
     try:
-        from orchestra.workers.embedding_inserter import (
-            get_insertion_queue_metrics,
-            process_ready_embeddings,
-        )
-
-        # Get queue status before processing
-        metrics_before = get_insertion_queue_metrics(session)
-        ready_before = metrics_before.get("vector_ready", 0)
-
-        if ready_before == 0:
-            return {
-                "message": "No ready embeddings to insert",
-                "status": "success",
-                "queue_drained": True,
-                "metrics": {
-                    "processed": 0,
-                    "inserted": 0,
-                    "failed": 0,
-                    "stale_reset": 0,
-                    "duration_seconds": 0,
-                    "throughput_per_second": 0,
-                    "queue_metrics": metrics_before,
-                },
-            }
+        from orchestra.workers.embedding_inserter import process_ready_embeddings
 
         # Process embeddings (bulk insert into index)
+        # Uses dynamic chunk sizing based on max_items
         result = process_ready_embeddings(
             session,
             max_items=max_items,
             max_time_seconds=max_time_seconds,
+            include_metrics=True,  # Include queue status counts in response
         )
 
         inserted = result.get("inserted", 0)
         failed = result.get("failed", 0)
-        duration = result.get("duration_seconds", 0)
+
+        if inserted == 0 and failed == 0 and result.get("processed", 0) == 0:
+            return {
+                "message": "No ready embeddings to insert",
+                "status": "success",
+                "queue_drained": True,
+                "metrics": result,
+            }
 
         return {
             "message": f"Inserted {inserted} embeddings into index"
             + (f" ({failed} failed)" if failed else ""),
             "status": "success",
-            "queue_drained": result.get("queue_drained", False),
             "metrics": result,
         }
 
