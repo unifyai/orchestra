@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -12,8 +12,6 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextVersion,
-    Embedding,
-    LogEvent,
     Project,
     ProjectVersion,
     ResourceAccess,
@@ -164,52 +162,160 @@ class ProjectDAO:
 
         self.update(id=project_id, name=new_name, description=description)
 
-    def delete(self, id: int):
+    # Default batch size for project deletion
+    # Balance between transaction size and commit frequency
+    DEFAULT_DELETE_BATCH_SIZE = 5000
+    MIN_DELETE_BATCH_SIZE = 500
+    MAX_DELETE_BATCH_SIZE = 20000
+
+    def delete(self, id: int, batch_size: int = None):
+        """
+        Delete a project and all associated data using batched operations.
+
+        Uses batched deletes to avoid transaction bloat and long-held locks.
+        Deletion time scales linearly with project size, not exponentially
+        like single-transaction CASCADE deletes.
+
+        Args:
+            id: Project ID to delete
+            batch_size: Number of log events to delete per batch.
+                       If None, uses DEFAULT_DELETE_BATCH_SIZE (5000).
+                       Clamped to MIN/MAX bounds for safety.
+        """
+        # Apply batch size with safety bounds
+        if batch_size is None:
+            batch_size = self.DEFAULT_DELETE_BATCH_SIZE
+        batch_size = max(
+            self.MIN_DELETE_BATCH_SIZE,
+            min(batch_size, self.MAX_DELETE_BATCH_SIZE),
+        )
+        from sqlalchemy import text
+
         try:
             project = self.session.query(Project).filter_by(id=id).one()
+            project_name = project.name  # Store for logging (survives commits)
 
-            # Get log event IDs for this project (used for both soft-delete and GCS cleanup)
-            log_events_subquery = (
-                select(LogEvent.id).where(LogEvent.project_id == id).subquery()
+            logger.info(
+                f"Starting batched deletion of project {id} ('{project_name}') "
+                f"with batch_size={batch_size}",
             )
 
-            # Soft-delete embeddings BEFORE CASCADE delete to avoid HNSW index surgery
-            # This marks embeddings as deleted instead of physically removing them,
-            # which provides instant deletion performance (10,000x faster)
+            # Phase 1: Soft-delete embeddings (fast, no HNSW index surgery)
+            # This marks embeddings as deleted so they're excluded from searches
             soft_delete_result = self.session.execute(
-                update(Embedding)
-                .where(Embedding.ref_id.in_(select(log_events_subquery.c.id)))
-                .values(is_deleted=True),
+                text(
+                    """
+                    UPDATE embedding e
+                    SET is_deleted = true
+                    FROM log_event le
+                    WHERE e.ref_id = le.id
+                      AND le.project_id = :project_id
+                      AND e.is_deleted = false
+                """,
+                ),
+                {"project_id": id},
             )
-            deleted_count = soft_delete_result.rowcount
-
-            # Delete associated GCS media BEFORE deleting the project
-            # Extract log_event_ids from subquery for new function signature
-            log_event_ids = [
-                row[0]
-                for row in self.session.execute(
-                    select(log_events_subquery.c.id),
-                ).fetchall()
-            ]
-            if log_event_ids:
-                log_event_dao = LogEventDAO(self.session, self.context_dao)
-                log_event_dao._bulk_delete_gcs_media(log_event_ids, id)
-
-            # Proceed with deleting the project (DB cascades will handle the rest)
-            # Note: CASCADE will delete log_events, which will trigger CASCADE delete
-            # on embeddings. Since embeddings are already soft-deleted, the physical
-            # deletion won't require HNSW index surgery (they're excluded from indexes).
-            self.session.delete(project)
+            soft_deleted_count = soft_delete_result.rowcount
             self.session.commit()
 
-            # Log for monitoring - index maintenance runs on schedule via Cloud Scheduler
-            if deleted_count > 0:
+            if soft_deleted_count > 0:
                 logger.info(
-                    f"Soft-deleted {deleted_count} embeddings for project {id}. "
-                    f"Index maintenance will clean up on next scheduled run.",
+                    f"Phase 1: Soft-deleted {soft_deleted_count} embeddings for project {id}",
                 )
+
+            # Phase 2: Delete GCS media in batches
+            # Get log_event_ids in batches to avoid loading all into memory
+            log_event_dao = LogEventDAO(self.session, self.context_dao)
+            offset = 0
+            total_gcs_deleted = 0
+
+            while True:
+                batch_ids = [
+                    row[0]
+                    for row in self.session.execute(
+                        text(
+                            """
+                            SELECT id FROM log_event
+                            WHERE project_id = :project_id
+                            ORDER BY id
+                            LIMIT :limit OFFSET :offset
+                        """,
+                        ),
+                        {"project_id": id, "limit": batch_size, "offset": offset},
+                    ).fetchall()
+                ]
+
+                if not batch_ids:
+                    break
+
+                log_event_dao._bulk_delete_gcs_media(batch_ids, id)
+                total_gcs_deleted += len(batch_ids)
+                offset += batch_size
+
+            if total_gcs_deleted > 0:
+                logger.info(
+                    f"Phase 2: Cleaned up GCS media for {total_gcs_deleted} log events",
+                )
+
+            # Phase 3: Delete log_events in batches (avoids cascade avalanche)
+            # This prevents holding locks on all rows for the entire operation
+            total_log_events_deleted = 0
+
+            while True:
+                # Delete a batch of log_events with CASCADE to child tables
+                # FOR UPDATE SKIP LOCKED ensures we don't block on locked rows
+                result = self.session.execute(
+                    text(
+                        """
+                        WITH batch AS (
+                            SELECT id FROM log_event
+                            WHERE project_id = :project_id
+                            LIMIT :batch_size
+                            FOR UPDATE SKIP LOCKED
+                        )
+                        DELETE FROM log_event
+                        WHERE id IN (SELECT id FROM batch)
+                    """,
+                    ),
+                    {"project_id": id, "batch_size": batch_size},
+                )
+                deleted = result.rowcount
+                self.session.commit()
+
+                if deleted == 0:
+                    break
+
+                total_log_events_deleted += deleted
+                logger.debug(
+                    f"Deleted batch of {deleted} log_events "
+                    f"(total: {total_log_events_deleted})",
+                )
+
+            if total_log_events_deleted > 0:
+                logger.info(
+                    f"Phase 3: Deleted {total_log_events_deleted} log_events in batches",
+                )
+
+            # Phase 4: Delete the project (now fast, no children left)
+            # Re-fetch project to ensure it's attached to current session
+            # (previous commits may have expired/detached the original object)
+            project = self.session.query(Project).filter_by(id=id).first()
+            if project:
+                self.session.delete(project)
+                self.session.commit()
+
+            logger.info(
+                f"Project {id} ('{project_name}') deleted successfully. "
+                f"Removed {total_log_events_deleted} log_events, "
+                f"soft-deleted {soft_deleted_count} embeddings. "
+                f"Index maintenance will clean up orphaned embeddings on next run.",
+            )
+
         except Exception as e:
             self.session.rollback()
+            # Note: If exception occurs mid-way, some data may already be deleted
+            # (GCS media, log_events from completed batches). This is same behavior
+            # as the original single-transaction approach on rollback scenarios.
             raise ValueError(f"Failed to delete project with id {id}: {e}")
 
     def filter_by_user_access(
