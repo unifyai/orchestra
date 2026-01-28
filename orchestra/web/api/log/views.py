@@ -66,7 +66,6 @@ from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
 
 from .python2SQL import (
-    DEFAULT_EMBEDDING_MODEL,
     _compute_expression,
     _extract_placeholders,
     _substitute_placeholders,
@@ -691,6 +690,11 @@ def create_from_logs(
                 field_names=list(field_types.keys()),
             )
 
+            # Pass target key for embedding operations (SYNC workflow)
+            # This ensures embeddings are created with the correct key (body.key)
+            # instead of the source field name from the equation
+            filter_dict["embed_target_key"] = body.key
+
             resolved_ids_dict = {}
             for key, ids in resolved_ids.items():
                 resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
@@ -768,26 +772,41 @@ def create_from_logs(
                             # Check for vector FIRST to skip expensive JSON serialization
                             if isinstance(value, np.ndarray):
                                 # Vectors are stored in Embedding table, not in LogEvent.data
+                                # (JSONB can't hold numpy arrays; we store NULL as a marker)
                                 val = None
                                 non_null_val = value.tolist()
 
+                                # NOTE: This special handling for image embeddings is confusing.
+                                #
+                                # For some reason, embed() and embed_image() have inconsistent
+                                # storage flows:
+                                #
+                                # - embed(): Storage happens inside _handle_embed_jsonb via
+                                #   _ensure_vectors_exist() - embeddings are stored BEFORE
+                                #   results are returned here.
+                                #
+                                # - embed_image(): Storage does NOT happen in the handler
+                                #   (_handle_embed_image_jsonb). It only computes embeddings
+                                #   on-the-fly and returns them, so we MUST store them here.
+                                #
+                                # TODO: Consider unifying this. Why should image embeddings have
+                                # a completely different storage path than text embeddings? This
+                                # bespoke logic is error-prone and adds maintenance burden. Ideally
+                                # both should follow the same pattern (either both store in their
+                                # handlers, or both store here).
                                 is_image_embedding = "embed_image(" in body.equation
                                 if is_image_embedding:
                                     from orchestra.web.api.log.python2SQL.helpers import (
                                         DEFAULT_IMAGE_EMBEDDING_MODEL,
                                     )
 
-                                    model_name = DEFAULT_IMAGE_EMBEDDING_MODEL
-                                else:
-                                    model_name = DEFAULT_EMBEDDING_MODEL
-
-                                embeddings = Embedding(
-                                    ref_id=log_event_id,
-                                    key=body.key,
-                                    model=model_name,
-                                    vector=value,
-                                )
-                                embedding_objects.append(embeddings)
+                                    embedding_obj = Embedding(
+                                        ref_id=log_event_id,
+                                        key=body.key,
+                                        model=DEFAULT_IMAGE_EMBEDDING_MODEL,
+                                        vector=value,
+                                    )
+                                    embedding_objects.append(embedding_obj)
                             else:
                                 # Standard path for non-vector data
                                 val = json.loads(
@@ -862,7 +881,8 @@ def create_from_logs(
             session.commit()
 
             # Create field type with appropriate category
-            is_embedding = len(embedding_objects) > 0
+            # Check if this is an embedding field based on the equation
+            is_embedding = "embed(" in body.equation or "embed_image(" in body.equation
             field_category = "derived_entry" if body.derived else "entry"
             field_type_dao.create_field_type_if_absent(
                 project_id=project_obj.id,
