@@ -29,7 +29,7 @@ tasks can be dispatched based on queue depth.
 
 import logging
 import time
-from typing import List, NamedTuple, Tuple
+from typing import List, NamedTuple
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
@@ -219,7 +219,7 @@ def claim_ready_batch(session: Session, limit: int) -> List[ReadyQueueItem]:
 def bulk_insert_to_embedding_table(
     session: Session,
     items: List[ReadyQueueItem],
-) -> Tuple[int, int]:
+) -> int:
     """
     Perform bulk upsert of embeddings into the indexed Embedding table.
 
@@ -227,45 +227,21 @@ def bulk_insert_to_embedding_table(
     - Duplicates (same ref_id, model, key)
     - Soft-deleted rows (resurrects them with new vector)
 
-    Defense in depth: Verifies log_events still exist before inserting.
-    This handles race conditions where log_events are deleted between
-    queue claim and embedding insertion (e.g., during project deletion).
+    NOTE: Items should be pre-validated (log_events exist) before calling.
+    The existence check is done once in process_ready_embeddings() for all
+    items, not per-chunk, to avoid N queries for N chunks.
 
     Args:
         session: Database session
-        items: List of ReadyQueueItem objects to insert
+        items: List of ReadyQueueItem objects to insert (pre-validated)
 
     Returns:
-        Tuple of (inserted_count, skipped_count)
+        Number of embeddings inserted/updated
     """
     from orchestra.db.models.orchestra_models import Embedding
 
     if not items:
-        return 0, 0
-
-    # Defense in depth: Verify log_events still exist before inserting
-    # This prevents FK violations when log_events are deleted during processing
-    ref_ids = [item.ref_id for item in items]
-    existing_ref_ids = set(
-        row[0]
-        for row in session.execute(
-            text("SELECT id FROM log_event WHERE id = ANY(:ids)"),
-            {"ids": ref_ids},
-        ).fetchall()
-    )
-
-    # Filter out items where log_event no longer exists
-    valid_items = [item for item in items if item.ref_id in existing_ref_ids]
-    skipped_count = len(items) - len(valid_items)
-
-    if skipped_count > 0:
-        logger.warning(
-            f"Skipping {skipped_count} items with deleted log_events "
-            f"(project likely being deleted)",
-        )
-
-    if not valid_items:
-        return 0, skipped_count
+        return 0
 
     # Prepare embedding objects for bulk insert
     embedding_dicts = [
@@ -276,7 +252,7 @@ def bulk_insert_to_embedding_table(
             "vector": item.generated_vector,
             "is_deleted": False,
         }
-        for item in valid_items
+        for item in items
     ]
 
     # Bulk upsert embeddings (handles duplicates and soft-deleted rows)
@@ -290,7 +266,7 @@ def bulk_insert_to_embedding_table(
     )
     result = session.execute(stmt)
 
-    return len(valid_items), skipped_count
+    return len(items)
 
 
 def delete_processed_queue_items(session: Session, item_ids: List[int]) -> int:
@@ -427,13 +403,56 @@ def process_ready_embeddings(
             result["queue_metrics"] = get_insertion_queue_metrics(session)
         return result
 
-    # Step 3: Process in dynamically-sized chunks to avoid holding locks too long
+    # Step 2.5: Defense in depth - verify log_events exist ONCE for all items
+    # This is done once here instead of per-chunk to avoid N queries for N chunks
+    # Prevents FK violations when log_events are deleted during project deletion
+    all_ref_ids = [item.ref_id for item in claimed_items]
+    existing_ref_ids = set(
+        row[0]
+        for row in session.execute(
+            text("SELECT id FROM log_event WHERE id = ANY(:ids)"),
+            {"ids": all_ref_ids},
+        ).fetchall()
+    )
+
+    # Filter out items where log_event no longer exists
+    valid_items = [item for item in claimed_items if item.ref_id in existing_ref_ids]
+    skipped_ids = [
+        item.id for item in claimed_items if item.ref_id not in existing_ref_ids
+    ]
+    total_skipped = len(skipped_ids)
+
+    if total_skipped > 0:
+        logger.warning(
+            f"Skipping {total_skipped} items with deleted log_events "
+            f"(project likely being deleted)",
+        )
+        # Remove skipped items from queue (their log_events don't exist)
+        if skipped_ids:
+            delete_processed_queue_items(session, skipped_ids)
+
+    if not valid_items:
+        result = {
+            "processed": len(claimed_items),
+            "inserted": 0,
+            "failed": 0,
+            "skipped_deleted": total_skipped,
+            "stale_reset": stale_reset,
+            "duration_seconds": round(time.time() - start_time, 2),
+            "queue_drained": True,
+        }
+        if include_metrics:
+            result["queue_metrics"] = get_insertion_queue_metrics(session)
+        return result
+
+    # Step 3: Process valid items in dynamically-sized chunks
+    # (invalid items with deleted log_events were already filtered out above)
     total_inserted = 0
     total_failed = 0
     successful_ids: List[int] = []
     failed_ids: List[int] = []
 
-    for chunk_start in range(0, len(claimed_items), chunk_size):
+    for chunk_start in range(0, len(valid_items), chunk_size):
         # Check time limit
         elapsed = time.time() - start_time
         if elapsed >= max_time_seconds:
@@ -442,7 +461,7 @@ def process_ready_embeddings(
                 f"stopping after {total_inserted} insertions",
             )
             # Return unprocessed items to vector_ready
-            remaining_ids = [item.id for item in claimed_items[chunk_start:]]
+            remaining_ids = [item.id for item in valid_items[chunk_start:]]
             if remaining_ids:
                 session.execute(
                     text(
@@ -458,20 +477,18 @@ def process_ready_embeddings(
                 session.commit()
             break
 
-        chunk = claimed_items[chunk_start : chunk_start + chunk_size]
+        chunk = valid_items[chunk_start : chunk_start + chunk_size]
         chunk_ids = [item.id for item in chunk]
 
         try:
-            # Bulk insert chunk (returns inserted count and skipped count)
-            inserted, skipped = bulk_insert_to_embedding_table(session, chunk)
+            # Bulk insert chunk (items are pre-validated, no skipping needed)
+            inserted = bulk_insert_to_embedding_table(session, chunk)
             total_inserted += inserted
-            # Both inserted and skipped items should be removed from queue
-            # (skipped items' log_events no longer exist, so no point keeping them)
             successful_ids.extend(chunk_ids)
 
             logger.info(
                 f"Inserted chunk of {inserted} embeddings "
-                f"(skipped {skipped}, total {total_inserted}/{len(claimed_items)})",
+                f"(total {total_inserted}/{len(valid_items)})",
             )
 
         except Exception as e:
@@ -496,6 +513,7 @@ def process_ready_embeddings(
         "processed": len(claimed_items),
         "inserted": total_inserted,
         "failed": total_failed,
+        "skipped_deleted": total_skipped,
         "stale_reset": stale_reset,
         "chunk_size_used": chunk_size,
         "duration_seconds": duration,
