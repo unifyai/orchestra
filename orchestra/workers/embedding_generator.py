@@ -323,17 +323,20 @@ def update_queue_with_vectors(
     try:
         # Extract data for bulk update
         ids = [r.queue_item_id for r in successful_results]
-        vectors = [r.vector for r in successful_results]
+        # Convert vectors to pgvector string format: [0.1, 0.2, ...] -> '[0.1, 0.2, ...]'
+        # This format is required for CAST to vector[] to work correctly
+        vector_strings = [str(v) for v in [r.vector for r in successful_results]]
 
         # Single bulk UPDATE using unnest - O(1) instead of O(N)
         # Only updates rows still in 'generating' status (prevents race with stale reset)
+        # NOTE: Using CAST() instead of :: to avoid SQLAlchemy parameter binding conflict
         result = session.execute(
             text(
                 """
                 WITH update_data AS (
                     SELECT
-                        unnest(:ids::int[]) as id,
-                        unnest(:vectors::vector[]) as vector
+                        unnest(CAST(:ids AS int[])) as id,
+                        unnest(CAST(:vectors AS vector[])) as vector
                 )
                 UPDATE embedding_queue q
                 SET status = 'vector_ready',
@@ -345,7 +348,7 @@ def update_queue_with_vectors(
                   AND q.status = 'generating'
             """,
             ),
-            {"ids": ids, "vectors": vectors},
+            {"ids": ids, "vectors": vector_strings},
         )
 
         # Commit the bulk update
