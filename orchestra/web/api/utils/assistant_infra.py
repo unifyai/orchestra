@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Literal
 
 import httpx
 from sqlalchemy import and_
@@ -211,18 +211,20 @@ async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
         return response.json()
 
 
-async def create_windows_vm(
+async def create_vm(
     assistant_id: str,
     unify_apikey: str,
     assistant_name: str,
+    vm_type: Literal["windows", "ubuntu"],
 ):
     """
-    Create a Windows VM for the assistant via the infra service.
+    Create a VM for the assistant via the infra service.
 
     Args:
         assistant_id: Numeric assistant ID (e.g., "12345")
-        unify_apikey: API key used for VNC/Windows password
-        assistant_name: Used for Windows username
+        unify_apikey: API key used for VNC password
+        assistant_name: Used for VM username
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         JSON response with vm_name, ip_address, hostname, desktop_url, status
@@ -235,18 +237,23 @@ async def create_windows_vm(
                 "assistant_id": assistant_id,
                 "unify_apikey": unify_apikey,
                 "assistant_name": assistant_name,
+                "vm_type": vm_type,
             },
             timeout=60,
         )
         return response.json()
 
 
-async def delete_windows_vm(assistant_id: str):
+async def delete_vm(
+    assistant_id: str,
+    vm_type: Literal["windows", "ubuntu"],
+):
     """
-    Delete a Windows VM and associated resources (DNS, static IP).
+    Delete a VM and associated resources (DNS, static IP).
 
     Args:
         assistant_id: Numeric assistant ID (e.g., "12345")
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         JSON response with vm_deleted, dns_deleted, ip_released flags
@@ -256,7 +263,7 @@ async def delete_windows_vm(assistant_id: str):
             "DELETE",
             f"{COMMS_URL}/infra/vm/delete",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={"assistant_id": assistant_id},
+            json={"assistant_id": assistant_id, "vm_type": vm_type},
             timeout=60,
         )
         return response.json()
