@@ -292,12 +292,12 @@ class Settings(BaseSettings):
         """
         mode_str = os.environ.get(
             "ORCHESTRA_UNIQUE_VALIDATION_MODE",
-            UniqueValidationMode.JSONB_SCAN.value,
+            UniqueValidationMode.LOOKUP_TABLE.value,
         )
         try:
             return UniqueValidationMode(mode_str)
         except ValueError:
-            return UniqueValidationMode.JSONB_SCAN
+            return UniqueValidationMode.LOOKUP_TABLE
 
     model_config = SettingsConfigDict(
         env_file=".env",
