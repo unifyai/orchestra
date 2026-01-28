@@ -94,13 +94,23 @@ class AssistantCreate(BaseModel):
     )
     desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Desktop operating system mode",
+        description="Desktop operating system mode for assistant's VM creation",
         example="windows",
     )
-    is_user_desktop: Optional[bool] = Field(
+    user_desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Whether the desktop is user-owned",
-        example=True,
+        description="Operating system mode of the user's own desktop",
+        example="macos",
+    )
+    user_desktop_filesys_sync: Optional[bool] = Field(
+        False,
+        description="Whether to enable filesystem sync with user's desktop",
+        example=False,
+    )
+    user_desktop_url: Optional[str] = Field(
+        None,
+        description="URL for communication with user's desktop",
+        example="https://user-desktop.example.com",
     )
     about: Optional[str] = Field(
         None,
@@ -197,7 +207,9 @@ class AssistantCreate(BaseModel):
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
-                "is_user_desktop": True,
+                "user_desktop_mode": "macos",
+                "user_desktop_filesys_sync": False,
+                "user_desktop_url": "https://user-desktop.example.com",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -296,7 +308,9 @@ class AssistantRead(AssistantCreate):
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
-                "is_user_desktop": True,
+                "user_desktop_mode": "macos",
+                "user_desktop_filesys_sync": False,
+                "user_desktop_url": "https://user-desktop.example.com",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -355,13 +369,23 @@ class AssistantUpdate(BaseModel):
     )
     desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Desktop operating system mode",
+        description="Desktop operating system mode for VM creation",
         example="macos",
     )
-    is_user_desktop: Optional[bool] = Field(
+    user_desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Whether the desktop is user-owned",
-        example=True,
+        description="Operating system mode of the user's own desktop",
+        example="macos",
+    )
+    user_desktop_filesys_sync: Optional[bool] = Field(
+        None,
+        description="Whether to enable filesystem sync with user's desktop",
+        example=False,
+    )
+    user_desktop_url: Optional[str] = Field(
+        None,
+        description="URL for communication with user's desktop",
+        example="https://user-desktop.example.com",
     )
     about: Optional[str] = Field(
         None,
@@ -486,7 +510,9 @@ class AssistantUpdate(BaseModel):
                 "profile_video": "https://example.com/videos/ada_new.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "macos",
-                "is_user_desktop": True,
+                "user_desktop_mode": "macos",
+                "user_desktop_filesys_sync": True,
+                "user_desktop_url": "https://user-desktop.example.com",
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",

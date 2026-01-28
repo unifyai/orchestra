@@ -478,7 +478,7 @@ async def test_update_desktop_mode_only(client: AsyncClient):
     created_data = create_resp.json()["info"]
     agent_id = created_data["agent_id"]
     assert created_data["desktop_mode"] is None
-    assert created_data["is_user_desktop"] is None
+    assert created_data["user_desktop_mode"] is None
 
     # Now, update only the desktop_mode field
     new_desktop_mode = "macos"
@@ -493,33 +493,33 @@ async def test_update_desktop_mode_only(client: AsyncClient):
     assert patch_resp.status_code == 200
     updated_data = patch_resp.json()["info"]
     assert updated_data["desktop_mode"] == new_desktop_mode
-    assert updated_data["is_user_desktop"] is None
+    assert updated_data["user_desktop_mode"] is None
     assert updated_data["first_name"] == payload["first_name"]
     assert updated_data["nationality"] == payload["nationality"]
     assert updated_data["weekly_limit"] == payload["weekly_limit"]
 
 
 @pytest.mark.anyio
-async def test_update_is_user_desktop_only(client: AsyncClient):
+async def test_update_user_desktop_mode_only(client: AsyncClient):
     # Create an assistant with default values
     payload = {
-        "first_name": "DesktopBool",
+        "first_name": "DesktopMode",
         "surname": "Tester",
         "age": 32,
         "weekly_limit": 12.0,
         "max_parallel": 2,
         "nationality": "Germany",
-        "about": "An assistant for testing is_user_desktop.",
+        "about": "An assistant for testing user_desktop_mode.",
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
     agent_id = created_data["agent_id"]
-    assert created_data["is_user_desktop"] is None
+    assert created_data["user_desktop_mode"] is None
 
-    # Update only is_user_desktop field
-    update_payload = {"is_user_desktop": True, "create_infra": False}
+    # Update only user_desktop_mode field
+    update_payload = {"user_desktop_mode": "macos", "create_infra": False}
     patch_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json=update_payload,
@@ -528,13 +528,13 @@ async def test_update_is_user_desktop_only(client: AsyncClient):
 
     assert patch_resp.status_code == 200
     updated_data = patch_resp.json()["info"]
-    assert updated_data["is_user_desktop"] is True
+    assert updated_data["user_desktop_mode"] == "macos"
     assert updated_data["desktop_mode"] is None
 
 
 @pytest.mark.anyio
 async def test_create_assistant_with_desktop_fields(client: AsyncClient):
-    # Create an assistant with both desktop fields set
+    # Create an assistant with desktop fields set
     payload = {
         "first_name": "FullDesktop",
         "surname": "Tester",
@@ -544,14 +544,18 @@ async def test_create_assistant_with_desktop_fields(client: AsyncClient):
         "nationality": "Canada",
         "about": "An assistant with full desktop configuration.",
         "desktop_mode": "ubuntu",
-        "is_user_desktop": False,
+        "user_desktop_mode": "macos",
+        "user_desktop_filesys_sync": True,
+        "user_desktop_url": "https://my-desktop.example.com",
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
     assert created_data["desktop_mode"] == "ubuntu"
-    assert created_data["is_user_desktop"] is False
+    assert created_data["user_desktop_mode"] == "macos"
+    assert created_data["user_desktop_filesys_sync"] is True
+    assert created_data["user_desktop_url"] == "https://my-desktop.example.com"
 
 
 @pytest.mark.anyio

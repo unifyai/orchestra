@@ -925,12 +925,11 @@ async def test_create_assistant_with_windows_vm(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test creating assistant with Windows VM (is_user_desktop=False + desktop_mode=windows)."""
+    """Test creating assistant with Windows VM (desktop_mode=windows)."""
     payload = {
         "first_name": "WindowsVM",
         "surname": "Test",
         "desktop_mode": "windows",
-        "is_user_desktop": False,
         "create_infra": True,
     }
 
@@ -942,7 +941,6 @@ async def test_create_assistant_with_windows_vm(
     # Verify desktop_url was populated from VM creation response
     assert data["desktop_url"] == "https://unity-assistant-123.vm.unify.ai/desktop/"
     assert data["desktop_mode"] == "windows"
-    assert data["is_user_desktop"] is False
 
     # Verify VM was created with correct vm_type
     mock_all_infra["create_vm"].assert_called_once()
@@ -955,41 +953,15 @@ async def test_create_assistant_with_windows_vm(
 
 
 @pytest.mark.anyio
-async def test_create_assistant_with_user_desktop_skips_vm(
-    client: AsyncClient,
-    mock_all_infra,
-):
-    """Test that is_user_desktop=True skips VM creation even with desktop_mode=windows."""
-    payload = {
-        "first_name": "UserDesktop",
-        "surname": "Test",
-        "desktop_mode": "windows",
-        "is_user_desktop": True,
-        "create_infra": True,
-    }
-
-    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_200_OK, resp.json()
-
-    data = resp.json()["info"]
-    assert data["desktop_mode"] == "windows"
-    assert data["is_user_desktop"] is True
-
-    # Verify VM was NOT created (user provides their own)
-    mock_all_infra["create_vm"].assert_not_called()
-
-
-@pytest.mark.anyio
 async def test_create_assistant_with_ubuntu_vm(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test creating assistant with Ubuntu VM (is_user_desktop=False + desktop_mode=ubuntu)."""
+    """Test creating assistant with Ubuntu VM (desktop_mode=ubuntu)."""
     payload = {
         "first_name": "UbuntuVM",
         "surname": "Test",
         "desktop_mode": "ubuntu",
-        "is_user_desktop": False,
         "create_infra": True,
     }
 
@@ -1001,7 +973,6 @@ async def test_create_assistant_with_ubuntu_vm(
     # Verify desktop_url was populated from VM creation response
     assert data["desktop_url"] == "https://unity-assistant-123.vm.unify.ai/desktop/"
     assert data["desktop_mode"] == "ubuntu"
-    assert data["is_user_desktop"] is False
 
     # Verify VM was created with correct vm_type
     mock_all_infra["create_vm"].assert_called_once()
@@ -1024,7 +995,6 @@ async def test_delete_assistant_with_windows_vm(
         "first_name": "DeleteWindowsVM",
         "surname": "Test",
         "desktop_mode": "windows",
-        "is_user_desktop": False,
         "create_infra": True,
     }
 
@@ -1048,36 +1018,6 @@ async def test_delete_assistant_with_windows_vm(
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_user_desktop_skips_vm_deletion(
-    client: AsyncClient,
-    mock_all_infra,
-):
-    """Test deleting assistant with is_user_desktop=True does not call delete_vm."""
-    # Create assistant with user-provided desktop
-    payload = {
-        "first_name": "DeleteUserDesktop",
-        "surname": "Test",
-        "desktop_mode": "windows",
-        "is_user_desktop": True,
-        "create_infra": True,
-    }
-
-    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
-    agent_id = create_resp.json()["info"]["agent_id"]
-
-    # Reset mocks
-    mock_all_infra["delete_vm"].reset_mock()
-
-    # Delete assistant
-    delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
-    assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
-
-    # Verify VM was NOT deleted (user provides their own)
-    mock_all_infra["delete_vm"].assert_not_called()
-
-
-@pytest.mark.anyio
 async def test_delete_assistant_with_ubuntu_vm(
     client: AsyncClient,
     mock_all_infra,
@@ -1088,7 +1028,6 @@ async def test_delete_assistant_with_ubuntu_vm(
         "first_name": "DeleteUbuntuVM",
         "surname": "Test",
         "desktop_mode": "ubuntu",
-        "is_user_desktop": False,
         "create_infra": True,
     }
 

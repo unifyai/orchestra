@@ -309,7 +309,9 @@ async def create_assistant(
             profile_video=assistant_in.profile_video,
             desktop_url=assistant_in.desktop_url,
             desktop_mode=assistant_in.desktop_mode,
-            is_user_desktop=assistant_in.is_user_desktop,
+            user_desktop_mode=assistant_in.user_desktop_mode,
+            user_desktop_filesys_sync=assistant_in.user_desktop_filesys_sync or False,
+            user_desktop_url=assistant_in.user_desktop_url,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -519,11 +521,8 @@ async def create_assistant(
                 created_pubsub = True
                 print(f"PUBSUB CREATED: {assistant_id}")
 
-                # Step 6: Create VM if is_user_desktop=False and desktop_mode is windows/ubuntu
-                if (
-                    assistant_in.desktop_mode in ("windows", "ubuntu")
-                    and assistant_in.is_user_desktop is False
-                ):
+                # Step 6: Create VM if desktop_mode is windows/ubuntu
+                if assistant_in.desktop_mode in ("windows", "ubuntu"):
                     current_infra_step = "create_vm"
                     vm_response = await create_vm(
                         assistant_id=str(assistant_id),
@@ -768,7 +767,9 @@ async def create_assistant(
             profile_video=assistant.profile_video,
             desktop_url=assistant.desktop_url,
             desktop_mode=assistant.desktop_mode,
-            is_user_desktop=assistant.is_user_desktop,
+            user_desktop_mode=assistant.user_desktop_mode,
+            user_desktop_filesys_sync=assistant.user_desktop_filesys_sync,
+            user_desktop_url=assistant.user_desktop_url,
             about=assistant.about,
             weekly_limit=(
                 float(assistant.weekly_limit)
@@ -931,7 +932,9 @@ def list_assistants(
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
                     desktop_mode=a.desktop_mode,
-                    is_user_desktop=a.is_user_desktop,
+                    user_desktop_mode=a.user_desktop_mode,
+                    user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+                    user_desktop_url=a.user_desktop_url,
                     about=a.about,
                     phone_country=a.phone_country,
                     weekly_limit=(
@@ -1072,7 +1075,9 @@ async def delete_assistant_contact(
                 profile_video=updated_assistant.profile_video,
                 desktop_url=updated_assistant.desktop_url,
                 desktop_mode=updated_assistant.desktop_mode,
-                is_user_desktop=updated_assistant.is_user_desktop,
+                user_desktop_mode=updated_assistant.user_desktop_mode,
+                user_desktop_filesys_sync=updated_assistant.user_desktop_filesys_sync,
+                user_desktop_url=updated_assistant.user_desktop_url,
                 about=updated_assistant.about,
                 phone_country=updated_assistant.phone_country,
                 weekly_limit=(
@@ -1187,11 +1192,8 @@ async def delete_assistant(
             logging.error(f"Failed to stop job: {str(e)}")
             cleanup_errors.append(f"Failed to stop job: {str(e)}")
 
-        # Delete VM if assistant has one (is_user_desktop=False AND desktop_mode is windows/ubuntu)
-        if (
-            assistant.desktop_mode in ("windows", "ubuntu")
-            and assistant.is_user_desktop is False
-        ):
+        # Delete VM if assistant has one (desktop_mode is windows/ubuntu)
+        if assistant.desktop_mode in ("windows", "ubuntu"):
             try:
                 vm_response = await delete_vm(
                     str(assistant_id),
@@ -1711,7 +1713,9 @@ async def update_assistant_config(
                 profile_video=updated.profile_video,
                 desktop_url=updated.desktop_url,
                 desktop_mode=updated.desktop_mode,
-                is_user_desktop=updated.is_user_desktop,
+                user_desktop_mode=updated.user_desktop_mode,
+                user_desktop_filesys_sync=updated.user_desktop_filesys_sync,
+                user_desktop_url=updated.user_desktop_url,
                 about=updated.about,
                 phone_country=updated.phone_country,
                 weekly_limit=(
@@ -4465,7 +4469,9 @@ def admin_list_all_assistants(
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
                     desktop_mode=a.desktop_mode,
-                    is_user_desktop=a.is_user_desktop,
+                    user_desktop_mode=a.user_desktop_mode,
+                    user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+                    user_desktop_url=a.user_desktop_url,
                     about=a.about,
                     weekly_limit=float(a.weekly_limit)
                     if a.weekly_limit is not None
@@ -4609,7 +4615,9 @@ def admin_update_assistant_by_filter(
             profile_video=updated.profile_video,
             desktop_url=updated.desktop_url,
             desktop_mode=updated.desktop_mode,
-            is_user_desktop=updated.is_user_desktop,
+            user_desktop_mode=updated.user_desktop_mode,
+            user_desktop_filesys_sync=updated.user_desktop_filesys_sync,
+            user_desktop_url=updated.user_desktop_url,
             about=updated.about,
             phone_country=updated.phone_country,
             weekly_limit=float(updated.weekly_limit)
@@ -4715,7 +4723,9 @@ def admin_list_assistants_for_user(
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
                     desktop_mode=a.desktop_mode,
-                    is_user_desktop=a.is_user_desktop,
+                    user_desktop_mode=a.user_desktop_mode,
+                    user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+                    user_desktop_url=a.user_desktop_url,
                     about=a.about,
                     weekly_limit=float(a.weekly_limit)
                     if a.weekly_limit is not None
