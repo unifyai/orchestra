@@ -128,6 +128,26 @@ WHERE q.id = c.id
 RETURNING q.id, q.ref_id, q.key, q.text, q.model, q.dimensions, q.retry_count
 """
 
+# SQL query for claiming FAILED items for retry
+# Resets retry_count to 0 and sets status to 'generating'
+CLAIM_FAILED_QUERY = """
+WITH claimable AS (
+    SELECT id FROM embedding_queue
+    WHERE status = 'failed'
+    ORDER BY created_at
+    LIMIT :limit
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE embedding_queue q
+SET status = 'generating',
+    retry_count = 0,
+    error_message = NULL,
+    processing_started_at = NOW()
+FROM claimable c
+WHERE q.id = c.id
+RETURNING q.id, q.ref_id, q.key, q.text, q.model, q.dimensions, q.retry_count
+"""
+
 
 def reset_stale_generating_items(
     session: Session,
@@ -195,6 +215,44 @@ def claim_pending_batch(session: Session, limit: int) -> List[PendingQueueItem]:
     result = session.execute(
         text(CLAIM_PENDING_QUERY),
         {"max_retries": MAX_RETRY_ATTEMPTS, "limit": limit},
+    )
+    session.commit()
+
+    rows = result.fetchall()
+    return [
+        PendingQueueItem(
+            id=row[0],
+            ref_id=row[1],
+            key=row[2],
+            text=row[3],
+            model=row[4],
+            dimensions=row[5],
+            retry_count=row[6],
+        )
+        for row in rows
+    ]
+
+
+def claim_failed_batch(session: Session, limit: int) -> List[PendingQueueItem]:
+    """
+    Atomically claim a batch of FAILED queue items for retry.
+
+    Resets retry_count to 0 and clears error_message, giving items
+    a fresh set of retry attempts.
+
+    Uses FOR UPDATE SKIP LOCKED to prevent race conditions when
+    multiple workers are running concurrently.
+
+    Args:
+        session: Database session
+        limit: Maximum number of failed items to retry
+
+    Returns:
+        List of claimed PendingQueueItem objects (retry_count will be 0)
+    """
+    result = session.execute(
+        text(CLAIM_FAILED_QUERY),
+        {"limit": limit},
     )
     session.commit()
 
@@ -436,6 +494,7 @@ def process_pending_embeddings(
     max_items: int = DEFAULT_MAX_ITEMS,
     max_time_seconds: int = DEFAULT_MAX_TIME_SECONDS,
     include_metrics: bool = False,
+    retry_failed: bool = False,
 ) -> dict:
     """
     Main entry point for Stage 1: Generate vectors for pending queue items.
@@ -454,24 +513,33 @@ def process_pending_embeddings(
         max_items: Maximum items to process in this invocation
         max_time_seconds: Maximum time to spend processing (also determines stale timeout)
         include_metrics: If True, include queue status counts (adds ~50ms overhead)
+        retry_failed: If True, retry items with status='failed' instead of 'pending'.
+                     Failed items get their retry_count reset to 0 and error_message cleared.
 
     Returns:
         Dictionary with processing metrics
     """
     start_time = time.time()
+    mode = "retry_failed" if retry_failed else "pending"
 
     # Calculate stale timeout based on expected processing time
     # This ensures items aren't reset while legitimately being processed
     stale_timeout = calculate_stale_timeout_minutes(max_time_seconds)
 
     # Step 1: Reset any stale 'generating' items (crash recovery)
-    stale_reset = reset_stale_generating_items(
-        session,
-        stale_timeout_minutes=stale_timeout,
-    )
+    # Skip for retry_failed mode since those items are already in a terminal state
+    stale_reset = 0
+    if not retry_failed:
+        stale_reset = reset_stale_generating_items(
+            session,
+            stale_timeout_minutes=stale_timeout,
+        )
 
-    # Step 2: Claim batch of pending items (atomic with FOR UPDATE SKIP LOCKED)
-    claimed_items = claim_pending_batch(session, max_items)
+    # Step 2: Claim batch of items (atomic with FOR UPDATE SKIP LOCKED)
+    if retry_failed:
+        claimed_items = claim_failed_batch(session, max_items)
+    else:
+        claimed_items = claim_pending_batch(session, max_items)
 
     if not claimed_items:
         result = {
@@ -479,6 +547,7 @@ def process_pending_embeddings(
             "successful": 0,
             "failed": 0,
             "stale_reset": stale_reset,
+            "mode": mode,
             "duration_seconds": round(time.time() - start_time, 2),
             "queue_drained": True,  # No items to claim means queue is empty for us
         }
@@ -510,6 +579,7 @@ def process_pending_embeddings(
         "updated": updated_count,
         "failed": len(failed_results),
         "stale_reset": stale_reset,
+        "mode": mode,
         "duration_seconds": duration,
         "throughput_per_second": round(len(successful_results) / duration, 1)
         if duration > 0

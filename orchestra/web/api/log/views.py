@@ -5724,6 +5724,11 @@ def generate_pending_embeddings(
         le=GENERATION_MAX_TIME_HARD_CAP,
         description="Maximum processing time in seconds. Default: 40s, Hard cap: 120s.",
     ),
+    retry_failed: bool = Query(
+        False,
+        description="If true, retry items with status='failed' instead of 'pending'. "
+        "Failed items get retry_count reset to 0 and error_message cleared.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -5741,15 +5746,21 @@ def generate_pending_embeddings(
     4. Update queue: status='vector_ready', generated_vector=<vector>
     5. On error: increment retry_count or mark 'failed'
 
-    **Cloud Scheduler Configuration (2 parallel jobs):**
+    **Modes:**
+    - `retry_failed=false` (default): Process items with status='pending'
+    - `retry_failed=true`: Retry items with status='failed', resetting retry_count to 0
+
+    **Cloud Scheduler Configuration (2 parallel jobs for pending):**
     - Job 1: Schedule "0,30 * * * * *" (at :00 and :30 of each minute)
       POST /admin/generate_pending_embeddings?max_items=4096&max_time_seconds=40
     - Job 2: Schedule "15,45 * * * * *" (at :15 and :45 of each minute)
       POST /admin/generate_pending_embeddings?max_items=4096&max_time_seconds=40
 
+    **Cloud Scheduler Configuration (1 job for retry_failed every 30 min):**
+    - Schedule: "0,30 * * * *" (at :00 and :30 of each hour)
+      POST /admin/generate_pending_embeddings?max_items=2048&max_time_seconds=60&retry_failed=true
+
     **TODO:** Migrate to Cloud Tasks for dynamic scaling based on queue depth.
-    Cloud Tasks can automatically scale workers based on demand rather than
-    fixed scheduling intervals.
     """
     try:
         from orchestra.workers.embedding_generator import process_pending_embeddings
@@ -5761,21 +5772,29 @@ def generate_pending_embeddings(
             max_items=max_items,
             max_time_seconds=max_time_seconds,
             include_metrics=True,  # Include queue status counts in response
+            retry_failed=retry_failed,
         )
 
         successful = result.get("successful", 0)
         failed = result.get("failed", 0)
+        mode = result.get("mode", "pending")
 
         if successful == 0 and failed == 0 and result.get("processed", 0) == 0:
+            msg = (
+                "No failed embeddings to retry"
+                if retry_failed
+                else "No pending embeddings to generate"
+            )
             return {
-                "message": "No pending embeddings to generate",
+                "message": msg,
                 "status": "success",
                 "queue_drained": True,
                 "metrics": result,
             }
 
+        action = "Retried" if retry_failed else "Generated vectors for"
         return {
-            "message": f"Generated vectors for {successful} embeddings"
+            "message": f"{action} {successful} embeddings"
             + (f" ({failed} failed)" if failed else ""),
             "status": "success",
             "queue_drained": result.get("queue_drained", False),
