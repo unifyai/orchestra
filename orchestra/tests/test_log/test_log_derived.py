@@ -1453,6 +1453,79 @@ async def test_derived_embedding_and_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_derived_embedding_no_duplicates(client: AsyncClient, dbsession):
+    """
+    BUG VERIFICATION TEST: Verify that creating a derived embedding column
+    does NOT create duplicate embeddings with different keys.
+
+    The bug: PATH 1 (_ensure_vectors_exist) creates embedding with source key (e.g., "desc"),
+    then PATH 2 (views.py) creates ANOTHER embedding with target key (e.g., "desc_vec").
+    Both have identical vectors but different keys.
+
+    Expected behavior: Only ONE embedding should exist per (ref_id, model) pair.
+    """
+    from sqlalchemy import func, select
+
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project = "test_no_duplicate_embeddings"
+    await _create_project(client, project)
+
+    # Create a single base log
+    response = await _create_log(client, project, entries={"desc": "a cute little cat"})
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Create derived embedding column
+    # key="desc_vec" is the TARGET key (what we want in Embedding.key)
+    # equation uses "desc" which is the SOURCE key
+    target_key = "desc_vec"
+    source_key = "desc"
+    equation = f"embed({{log:{source_key}}})"
+
+    response = await _create_derived_entry(
+        client,
+        project,
+        target_key,
+        equation,
+        referenced_logs={"log": [log_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    # Query the Embedding table to check for duplicates
+    dbsession.expire_all()  # Clear cache
+
+    # Count embeddings for this log_event_id
+    embedding_count = dbsession.execute(
+        select(func.count(Embedding.id)).where(Embedding.ref_id == log_id),
+    ).scalar()
+
+    # Get all embeddings for this log to inspect their keys
+    embeddings = (
+        dbsession.execute(select(Embedding).where(Embedding.ref_id == log_id))
+        .scalars()
+        .all()
+    )
+
+    embedding_keys = [e.key for e in embeddings]
+
+    # THE BUG CHECK: If there are duplicates, this will fail
+    assert embedding_count == 1, (
+        f"BUG DETECTED: Expected exactly 1 embedding for log_id={log_id}, "
+        f"but found {embedding_count} embeddings with keys: {embedding_keys}. "
+        f"This indicates duplicate embeddings are being created."
+    )
+
+    # Verify the embedding has the correct TARGET key (not source key)
+    assert len(embeddings) == 1
+    actual_key = embeddings[0].key
+    assert actual_key == target_key, (
+        f"Embedding should have target key '{target_key}', but has '{actual_key}'. "
+        f"This indicates the wrong key is being used."
+    )
+
+
+@pytest.mark.anyio
 @pytest.mark.xdist_group(name="gcs_serial")
 async def test_derived_image_embedding_and_filtering(
     client: AsyncClient,
