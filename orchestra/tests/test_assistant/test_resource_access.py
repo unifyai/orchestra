@@ -12,7 +12,12 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+from orchestra.tests.utils import (
+    ADMIN_HEADERS,
+    HEADERS,
+    create_test_user,
+    to_unity_name,
+)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -1114,7 +1119,10 @@ async def test_transfer_personal_to_org_with_logs_transfer(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # Create logs for this assistant in the personal Assistants project
     # Use the exact naming convention the transfer code expects
@@ -1210,7 +1218,10 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # Define 3-tier context names
     tier3_context = f"{user_name}/{assistant_name}/Transcripts"
@@ -1333,7 +1344,10 @@ async def test_transfer_org_to_personal_with_logs_deletion(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # Create logs for this assistant in the org Assistants project
     # Use exact context name pattern the transfer code expects
@@ -1413,7 +1427,10 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = assistant_info["agent_id"]
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # Create logs for this assistant using exact context name pattern
     context_name = assistant_name  # Just the assistant name
@@ -1499,7 +1516,10 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = assistant_info["agent_id"]
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # Set up 3-tier context structure
     user_name = "TestUser"
@@ -2477,7 +2497,10 @@ async def test_transfer_shared_all_context_logs(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # Create logs in assistant-specific context (AssistantName)
     specific_log_payload = {
@@ -2737,7 +2760,10 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # Define 3-tier context names
     tier3_context = f"{user_name}/{assistant_name}/Transcripts"

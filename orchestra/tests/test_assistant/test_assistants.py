@@ -6,7 +6,12 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+from orchestra.tests.utils import (
+    ADMIN_HEADERS,
+    HEADERS,
+    create_test_user,
+    to_unity_name,
+)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -1229,7 +1234,10 @@ async def test_delete_assistant_deletes_contexts(
     # Using 3-tier context structure: User/Assistant/Ctx, User/All/Ctx, All/Ctx
     project_name = "Assistants"
     user_name = "TestUser"
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    assistant_name = to_unity_name(
+        assistant_info["first_name"],
+        assistant_info["surname"],
+    )
 
     # 3-tier contexts
     user_assistant_context = f"{user_name}/{assistant_name}/Transcripts"

@@ -265,3 +265,16 @@ def _create_context(client: AsyncClient, project: str, name: str, description: s
         json={"name": name, "description": description},
         headers=HEADERS,
     )
+
+
+def to_unity_name(first_name: str | None, surname: str | None) -> str:
+    """
+    Convert first_name and surname to Unity convention:
+    1. Split on space
+    2. Capitalize each word
+    3. Join (remove spaces)
+
+    Example: ("ada marie", "lovelace smith") -> "AdaMarieLovelaceSmith"
+    """
+    full = f"{first_name or ''} {surname or ''}".strip()
+    return "".join(word.capitalize() for word in full.split())
