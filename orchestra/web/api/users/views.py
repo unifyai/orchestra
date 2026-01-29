@@ -171,6 +171,7 @@ def get_user(
                     "role_id": member.role_id,
                     "role_name": member_role_name,
                     "api_key": org_api_key,
+                    "timezone": org_result.timezone,
                 },
             )
 
@@ -249,6 +250,7 @@ def get_user_by_email(
                     "role_id": member.role_id,
                     "role_name": member_role_name,
                     "api_key": org_api_key,
+                    "timezone": org_result.timezone,
                 },
             )
 
