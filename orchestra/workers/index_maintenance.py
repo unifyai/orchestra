@@ -7,9 +7,33 @@ This worker performs periodic maintenance on HNSW indexes to:
 3. Use REINDEX CONCURRENTLY to rebuild indexes (keeps old index usable during rebuild)
 4. Run VACUUM to reclaim disk space
 
-The worker is triggered by:
-- Cloud Scheduler for nightly maintenance (e.g., 2 AM UTC)
-- Manual API calls to /run_index_maintenance endpoint
+The worker is triggered by Cloud Scheduler jobs or manual API calls.
+
+Recommended Cloud Scheduler Configuration (4 separate jobs):
+
+1. **Health Check** (twice daily) - Quick monitoring, no changes
+   - Cron: `0 8,20 * * *`
+   - Endpoint: `run_index_maintenance?mode=check`
+   - Attempt deadline: 2m
+   - Max retries: 3
+
+2. **Cleanup** (every 4 hours) - Frequent soft-delete cleanup
+   - Cron: `0 */4 * * *`
+   - Endpoint: `run_index_maintenance?mode=cleanup_only&skip_vacuum=true`
+   - Attempt deadline: 15m
+   - Max retries: 2
+
+3. **Cleanup + Vacuum** (nightly) - Reclaim disk space
+   - Cron: `0 3 * * *`
+   - Endpoint: `run_index_maintenance?mode=cleanup_only`
+   - Attempt deadline: 30m
+   - Max retries: 1
+
+4. **Full Reindex** (weekly) - Optimize index structure
+   - Cron: `0 4 * * 0`
+   - Endpoint: `run_index_maintenance?mode=full&skip_vacuum=true`
+   - Attempt deadline: 180m (3 hours)
+   - Max retries: 0
 
 Usage:
     python -m orchestra.workers.index_maintenance
@@ -47,6 +71,13 @@ logger = logging.getLogger(__name__)
 # Delete soft-deleted rows in batches to avoid long table locks
 BATCH_DELETE_SIZE = 10000
 MAX_DELETE_BATCHES = 1000  # Safety limit: max 10M rows per maintenance run
+
+# --- Time Limits ---
+# Default time budget for batched deletion (seconds). Jobs will stop early
+# to leave time for other phases. Set via max_duration parameter.
+DEFAULT_DELETION_TIME_BUDGET = 600  # 10 minutes default
+# Safety margin before deadline to allow graceful completion (seconds)
+DEADLINE_SAFETY_MARGIN = 60  # Stop 1 minute before deadline
 
 # --- Default Thresholds ---
 # Minimum soft-deleted rows before triggering cleanup in 'auto' mode
@@ -223,7 +254,10 @@ def cleanup_invalid_indexes(conn) -> List[str]:
     return cleaned
 
 
-def batched_delete_soft_deleted(conn) -> dict:
+def batched_delete_soft_deleted(
+    conn,
+    time_budget_seconds: int = DEFAULT_DELETION_TIME_BUDGET,
+) -> dict:
     """
     Delete soft-deleted and orphaned embeddings in batches to avoid long locks.
 
@@ -231,21 +265,45 @@ def batched_delete_soft_deleted(conn) -> dict:
     - Soft-deleted (is_deleted = true): Marked for deletion by application code
     - Orphaned (ref_id IS NULL): Parent LogEvent was deleted, FK set ref_id to NULL
 
+    Args:
+        conn: Database connection
+        time_budget_seconds: Maximum time to spend on deletion. The function will
+            stop early if approaching this limit to allow other phases to run.
+            Set to 0 for unlimited (bounded only by MAX_DELETE_BATCHES).
+
     Returns:
-        Dictionary with deletion metrics
+        Dictionary with deletion metrics including whether it stopped early
     """
     start_time = time.time()
     total_deleted = 0
     batch_count = 0
+    stopped_early = False
+    stop_reason = None
+
+    effective_budget = time_budget_seconds if time_budget_seconds > 0 else float("inf")
 
     logger.info(
         f"Starting batched deletion of soft-deleted/orphaned embeddings "
-        f"(batch_size={BATCH_DELETE_SIZE})",
+        f"(batch_size={BATCH_DELETE_SIZE}, time_budget={time_budget_seconds}s)",
     )
 
     while batch_count < MAX_DELETE_BATCHES:
+        # Check shutdown flag
         if shutdown_flag:
             logger.info("Shutdown requested, stopping batched delete")
+            stopped_early = True
+            stop_reason = "shutdown_requested"
+            break
+
+        # Check time budget (with safety margin for batch completion)
+        elapsed = time.time() - start_time
+        if elapsed >= effective_budget - 30:  # 30s margin per batch
+            logger.info(
+                f"Time budget approaching ({elapsed:.1f}s / {effective_budget}s), "
+                f"stopping to leave time for other phases",
+            )
+            stopped_early = True
+            stop_reason = "time_budget_exceeded"
             break
 
         # Delete a batch using ctid for efficient row identification
@@ -267,6 +325,7 @@ def batched_delete_soft_deleted(conn) -> dict:
 
         deleted_in_batch = result.rowcount
         if deleted_in_batch == 0:
+            stop_reason = "all_deleted"
             break
 
         total_deleted += deleted_in_batch
@@ -278,16 +337,23 @@ def batched_delete_soft_deleted(conn) -> dict:
                 f"({batch_count} batches, {time.time() - start_time:.1f}s elapsed)",
             )
 
+    if batch_count >= MAX_DELETE_BATCHES:
+        stopped_early = True
+        stop_reason = "batch_limit_reached"
+
     duration = time.time() - start_time
     logger.info(
         f"Batched deletion complete: deleted={total_deleted}, "
-        f"batches={batch_count}, duration={duration:.2f}s",
+        f"batches={batch_count}, duration={duration:.2f}s, "
+        f"stopped_early={stopped_early}, reason={stop_reason}",
     )
 
     return {
         "total_deleted": total_deleted,
         "batch_count": batch_count,
         "duration": round(duration, 2),
+        "stopped_early": stopped_early,
+        "stop_reason": stop_reason,
     }
 
 
@@ -398,6 +464,7 @@ def run_index_maintenance(
     mode: MaintenanceMode = "auto",
     soft_delete_threshold: int = DEFAULT_SOFT_DELETE_THRESHOLD,
     skip_vacuum: bool = False,
+    max_duration_seconds: int = 0,
 ) -> dict:
     """
     Perform HNSW index maintenance with configurable modes.
@@ -414,14 +481,24 @@ def run_index_maintenance(
         mode: Maintenance mode
         soft_delete_threshold: Min soft-deleted rows for 'auto' mode cleanup
         skip_vacuum: Skip VACUUM phase (faster but doesn't reclaim disk)
+        max_duration_seconds: Maximum total duration for this job. When set,
+            the job will allocate time budgets to phases and stop gracefully
+            before the deadline. Set to 0 for unlimited (default).
+            Recommended values:
+            - cleanup_only: 600-900 (10-15 min)
+            - full: 3600-7200 (1-2 hours)
+            - check: 60 (1 min)
 
     Returns:
         Dictionary with metrics from the maintenance operation
     """
+    job_start_time = time.time()
+
     metrics = {
         "start_time": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
         "soft_delete_threshold": soft_delete_threshold,
+        "max_duration_seconds": max_duration_seconds,
         "soft_deleted_count": 0,
         "total_embeddings": 0,
         "invalid_indexes_found": [],
@@ -433,6 +510,7 @@ def run_index_maintenance(
         "durations": {},
         "phases_executed": [],
         "skipped": False,
+        "stopped_early": False,
         "success": False,
         "error": None,
     }
@@ -497,22 +575,73 @@ def run_index_maintenance(
 
         # Phase 2: Batched deletion of soft-deleted embeddings
         if should_cleanup and metrics["soft_deleted_count"] > 0:
-            logger.info("Phase 2: Batched deletion of soft-deleted embeddings...")
+            # Calculate time budget for deletion phase
+            if max_duration_seconds > 0:
+                elapsed = time.time() - job_start_time
+                remaining = max_duration_seconds - elapsed - DEADLINE_SAFETY_MARGIN
+                # Reserve time for reindex (if applicable) and vacuum
+                # Reindex can take 30+ min for large indexes, vacuum ~1 min
+                if should_reindex:
+                    # Leave most time for reindex, cap deletion at 20% of remaining
+                    deletion_budget = min(remaining * 0.2, 600)  # Max 10 min
+                else:
+                    # No reindex, use most of remaining time
+                    deletion_budget = remaining - 120  # Leave 2 min for vacuum
+                deletion_budget = max(60, deletion_budget)  # At least 1 minute
+            else:
+                deletion_budget = DEFAULT_DELETION_TIME_BUDGET
+
+            logger.info(
+                f"Phase 2: Batched deletion of soft-deleted embeddings "
+                f"(time_budget={deletion_budget:.0f}s)...",
+            )
             start = time.time()
-            metrics["deletion_metrics"] = batched_delete_soft_deleted(conn)
+            metrics["deletion_metrics"] = batched_delete_soft_deleted(
+                conn,
+                time_budget_seconds=int(deletion_budget),
+            )
             metrics["durations"]["batched_delete"] = round(time.time() - start, 2)
             metrics["phases_executed"].append("batched_delete")
+
+            if metrics["deletion_metrics"].get("stopped_early"):
+                metrics["stopped_early"] = True
         else:
             logger.info("Phase 2: Skipped (no cleanup needed or mode is reindex_only)")
             metrics["deletion_metrics"] = {"total_deleted": 0, "skipped": True}
 
         # Phase 3: Reindex HNSW indexes
         if should_reindex:
-            logger.info("Phase 3: Reindexing HNSW indexes...")
-            start = time.time()
-            metrics["reindex_results"] = reindex_hnsw_indexes(conn)
-            metrics["durations"]["reindex"] = round(time.time() - start, 2)
-            metrics["phases_executed"].append("reindex")
+            # Check if we have enough time remaining for reindex
+            if max_duration_seconds > 0:
+                elapsed = time.time() - job_start_time
+                remaining = max_duration_seconds - elapsed - DEADLINE_SAFETY_MARGIN
+                # Reindex needs at least 5 minutes to be worthwhile
+                if remaining < 300:
+                    logger.warning(
+                        f"Skipping reindex: only {remaining:.0f}s remaining, "
+                        f"need at least 300s. Consider running reindex_only separately.",
+                    )
+                    metrics["reindex_results"] = {
+                        "skipped": True,
+                        "reason": "insufficient_time",
+                        "remaining_seconds": round(remaining, 0),
+                    }
+                    metrics["stopped_early"] = True
+                else:
+                    logger.info(
+                        f"Phase 3: Reindexing HNSW indexes "
+                        f"({remaining:.0f}s remaining)...",
+                    )
+                    start = time.time()
+                    metrics["reindex_results"] = reindex_hnsw_indexes(conn)
+                    metrics["durations"]["reindex"] = round(time.time() - start, 2)
+                    metrics["phases_executed"].append("reindex")
+            else:
+                logger.info("Phase 3: Reindexing HNSW indexes...")
+                start = time.time()
+                metrics["reindex_results"] = reindex_hnsw_indexes(conn)
+                metrics["durations"]["reindex"] = round(time.time() - start, 2)
+                metrics["phases_executed"].append("reindex")
         else:
             logger.info("Phase 3: Skipped (mode is cleanup_only)")
             metrics["reindex_results"] = {"skipped": True}
