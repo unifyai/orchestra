@@ -154,9 +154,10 @@ class CreateLogConfig(BaseModel):
         description="Dictionary containing one or more key:value pairs that "
         "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
         "for batch processing. "
-        "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
+        "Values must be JSON serializable. If an `explicit_types` dictionary is present, "
         "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
         "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding). "
+        "If `infer_untyped_fields` is set to True, fields with type 'Any' (untyped) will have their type inferred from the logged values and updated, locking in the type. "
         "For contexts with nested unique IDs, parent ID values for the leftmost N-1 unique columns can be supplied as normal entry keys. "
         "The rightmost column is always auto-incremented. For example, if unique columns are ['user', 'session', 'step'], "
         "you can provide 'user' and 'session' values in entries, and 'step' will be auto-generated.",
@@ -190,6 +191,11 @@ class CreateLogConfig(BaseModel):
                     {"user": 100, "session": 4, "data": "step1"},
                     {"user": 100, "session": 4, "data": "step2"},
                 ],
+                # Example with infer_untyped_fields - locks in types for 'Any' fields
+                {
+                    "score": 42,
+                    "infer_untyped_fields": True,
+                },
             ],
         },
     )

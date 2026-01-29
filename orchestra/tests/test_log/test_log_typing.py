@@ -1731,3 +1731,471 @@ async def test_mixed_empty_and_populated_nested(client: AsyncClient):
         f"[[], ['a', 'b'], []] should be accepted for List[List[str]] field. "
         f"Got {response.status_code}: {response.json()}"
     )
+
+
+# =============================================================================
+# Tests for infer_untyped_fields (deferred type inference)
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_basic(client: AsyncClient):
+    """Test that infer_untyped_fields updates 'Any' fields to inferred types."""
+    project_name = "test_infer_untyped_basic"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create fields with type "Any" (untyped)
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "score": {"type": "Any", "mutable": True},
+                "name": {"type": "Any", "mutable": True},
+                "is_active": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify fields are "Any"
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["score"]["data_type"] == "Any"
+    assert field_types["name"]["data_type"] == "Any"
+    assert field_types["is_active"]["data_type"] == "Any"
+
+    # Step 2: Log with infer_untyped_fields=True
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "score": 42,
+            "name": "test_user",
+            "is_active": True,
+            "infer_untyped_fields": True,
+        },
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify fields are now typed
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["score"]["data_type"] == "int"
+    assert field_types["name"]["data_type"] == "str"
+    assert field_types["is_active"]["data_type"] == "bool"
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_does_not_change_typed_fields(client: AsyncClient):
+    """Test that infer_untyped_fields does NOT change already-typed fields."""
+    project_name = "test_infer_untyped_no_change"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create fields with explicit types
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "score": {"type": "int", "mutable": True},
+                "name": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Log with infer_untyped_fields=True (should not change types)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "score": 42,
+            "name": "test_user",
+            "infer_untyped_fields": True,
+        },
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify fields still have their original types
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["score"]["data_type"] == "int"
+    assert field_types["name"]["data_type"] == "str"
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_false_keeps_any(client: AsyncClient):
+    """Test that infer_untyped_fields=False (default) keeps 'Any' fields as 'Any'."""
+    project_name = "test_infer_untyped_false"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create fields with type "Any"
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "score": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Log WITHOUT infer_untyped_fields (default is False)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"score": 42},
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify field is still "Any"
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["score"]["data_type"] == "Any"
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_mixed_typed_and_untyped(client: AsyncClient):
+    """Test infer_untyped_fields with a mix of typed and untyped fields."""
+    project_name = "test_infer_untyped_mixed"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create a mix of typed and untyped fields
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "typed_int": {"type": "int", "mutable": True},
+                "untyped_field": {"type": "Any", "mutable": True},
+                "typed_str": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Log with infer_untyped_fields=True
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "typed_int": 100,
+            "untyped_field": 3.14,  # Will be inferred as float
+            "typed_str": "hello",
+            "infer_untyped_fields": True,
+        },
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify: typed fields unchanged, untyped field now has inferred type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["typed_int"]["data_type"] == "int"
+    assert field_types["typed_str"]["data_type"] == "str"
+    assert field_types["untyped_field"]["data_type"] == "float"
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_enforces_type_after_inference(client: AsyncClient):
+    """Test that once a type is inferred, subsequent logs must match that type."""
+    project_name = "test_infer_untyped_enforce"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create an untyped field
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "dynamic_field": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: First log with infer_untyped_fields=True - locks in the type as int
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"dynamic_field": 42, "infer_untyped_fields": True},
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify type is now int
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["dynamic_field"]["data_type"] == "int"
+
+    # Step 3: Second log with matching type - should succeed
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "dynamic_field": 100,
+        },  # No infer_untyped_fields needed, type is already locked
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 4: Third log with mismatched type - should fail
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"dynamic_field": "not_an_int"},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert "Type mismatch for field" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_with_complex_types(client: AsyncClient):
+    """Test infer_untyped_fields with complex types like lists and dicts."""
+    project_name = "test_infer_untyped_complex"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create untyped fields
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "my_list": {"type": "Any", "mutable": True},
+                "my_dict": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Log with complex values and infer_untyped_fields=True
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "my_list": [1, 2, 3],
+            "my_dict": {"key": "value"},
+            "infer_untyped_fields": True,
+        },
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify types are inferred
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    # List of ints should be inferred as List[int]
+    assert "List" in field_types["my_list"]["data_type"]
+    # Dict should be inferred as Dict[str, str]
+    assert "Dict" in field_types["my_dict"]["data_type"]
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_with_datetime(client: AsyncClient):
+    """Test infer_untyped_fields correctly infers datetime from ISO strings."""
+    project_name = "test_infer_untyped_datetime"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create an untyped field
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "timestamp": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Log with ISO datetime string and infer_untyped_fields=True
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "infer_untyped_fields": True,
+        },
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify type is inferred as datetime
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["timestamp"]["data_type"] == "datetime"
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_batch_logs(client: AsyncClient):
+    """Test infer_untyped_fields works correctly with batch log creation."""
+    project_name = "test_infer_untyped_batch"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create an untyped field
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "batch_field": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Batch log with infer_untyped_fields=True (set per-entry)
+    # The first log's value should lock in the type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [
+                {
+                    "batch_field": 1,
+                    "explicit_types": {"batch_field": {"mutable": True}},
+                    "infer_untyped_fields": True,
+                },
+                {
+                    "batch_field": 2,
+                    "explicit_types": {"batch_field": {"mutable": True}},
+                    "infer_untyped_fields": True,
+                },
+                {
+                    "batch_field": 3,
+                    "explicit_types": {"batch_field": {"mutable": True}},
+                    "infer_untyped_fields": True,
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert len(response.json()["log_event_ids"]) == 3
+
+    # Step 3: Verify type is inferred as int
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["batch_field"]["data_type"] == "int"
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_with_none_value(client: AsyncClient):
+    """Test that None values don't change the type when infer_untyped_fields=True."""
+    project_name = "test_infer_untyped_none"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create an untyped field
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "nullable_field": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Log with None value and infer_untyped_fields=True
+    # NoneType is a weak type, so the field should remain "Any" or become "NoneType"
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"nullable_field": None, "infer_untyped_fields": True},
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify field type (NoneType is inferred from None)
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    # NoneType is a valid inferred type from None
+    assert field_types["nullable_field"]["data_type"] in ("NoneType", "Any")
+
+
+@pytest.mark.anyio
+async def test_infer_untyped_fields_with_context(client: AsyncClient):
+    """Test infer_untyped_fields works correctly with contexts."""
+    project_name = "test_infer_untyped_context"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create a context with an untyped field
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "context": "my_context",
+            "fields": {
+                "context_field": {"type": "Any", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Log to the context with infer_untyped_fields=True
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"context_field": "hello world", "infer_untyped_fields": True},
+        context="my_context",
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify type is inferred in the context
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context=my_context",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["context_field"]["data_type"] == "str"

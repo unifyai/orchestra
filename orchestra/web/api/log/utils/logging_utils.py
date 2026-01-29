@@ -1674,6 +1674,14 @@ def _create_logs_internal(
                 else None
             )
 
+            # Extract infer_untyped_fields flag from entries
+            # If True, fields with type "Any" will have their type inferred from values
+            infer_untyped_fields = (
+                current_entries.pop("infer_untyped_fields", False)
+                if isinstance(current_entries, dict)
+                else False
+            )
+
             # Use entries explicit types
             merged_explicit_types = entries_explicit_types or {}
 
@@ -1746,19 +1754,38 @@ def _create_logs_internal(
                         },
                     )
                 else:
-                    # Field exists - enforce types (cannot modify existing field types)
-                    enforce_types(
-                        k,
-                        v,
-                        field_types=field_types,
-                        field_type_dao=field_type_dao,
-                        context_dao=context_dao,
-                        project_id=project_id,
-                        batch_index=i,
-                        explicit_types=entries_explicit_types,
-                        context_id=context_id,
-                        is_param=False,
-                    )
+                    # Field exists - check if we should infer type for untyped fields
+                    from orchestra.web.api.log.utils.type_utils import is_untyped_field
+
+                    field_info = field_types.get(k, {})
+                    current_field_type = field_info.get("field_type", "Any")
+
+                    if infer_untyped_fields and is_untyped_field(current_field_type):
+                        # Infer type from value and update the field
+                        inferred_type = LogEventDAO.infer_type(k, v, explicit_type=None)
+                        updated = field_type_dao.update_untyped_field_to_inferred(
+                            project_id,
+                            k,
+                            context_id,
+                            inferred_type,
+                        )
+                        if updated:
+                            # Update local cache so subsequent logs see the new type
+                            field_types[k]["field_type"] = inferred_type
+                    else:
+                        # Normal path: enforce types (cannot modify existing field types)
+                        enforce_types(
+                            k,
+                            v,
+                            field_types=field_types,
+                            field_type_dao=field_type_dao,
+                            context_dao=context_dao,
+                            project_id=project_id,
+                            batch_index=i,
+                            explicit_types=entries_explicit_types,
+                            context_id=context_id,
+                            is_param=False,
+                        )
 
             # Build log_data dictionary from entries
             log_data = {}
