@@ -273,6 +273,107 @@ class FieldTypeDAO:
         self.session.execute(stmt)
         self.session.commit()
 
+    def update_untyped_field_to_inferred(
+        self,
+        project_id: int,
+        field_name: str,
+        context_id: int,
+        inferred_type: str,
+    ) -> bool:
+        """
+        Update a field's type from "Any" (untyped) to an inferred type.
+
+        Only updates if the current field type is "Any" (untyped).
+        This allows "locking in" a type for fields that were created without
+        explicit types, based on the actual data being logged.
+
+        Args:
+            project_id: The project ID
+            field_name: The name of the field to update
+            context_id: The context ID
+            inferred_type: The type inferred from the logged value
+
+        Returns:
+            True if the field was updated (was untyped and is now typed)
+            False if the field doesn't exist or was already typed
+        """
+        from orchestra.web.api.log.utils.type_utils import (
+            is_untyped_field,
+            normalize_type_string,
+        )
+
+        existing = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+
+        if not existing:
+            return False
+
+        # Only update if currently untyped ("Any")
+        if not is_untyped_field(existing.field_type):
+            return False
+
+        existing.field_type = normalize_type_string(inferred_type)
+        self.session.flush()
+        return True
+
+    def bulk_update_untyped_fields_to_inferred(
+        self,
+        project_id: int,
+        context_id: int,
+        field_type_updates: Dict[str, str],
+    ) -> Dict[str, bool]:
+        """
+        Batch update multiple untyped fields to their inferred types.
+
+        Only updates fields that currently have type "Any" (untyped).
+
+        Args:
+            project_id: The project ID
+            context_id: The context ID
+            field_type_updates: Dict mapping field_name -> inferred_type
+
+        Returns:
+            Dict mapping field_name -> True if updated, False if skipped
+        """
+        from orchestra.web.api.log.utils.type_utils import (
+            is_untyped_field,
+            normalize_type_string,
+        )
+
+        if not field_type_updates:
+            return {}
+
+        # Fetch all relevant fields in one query
+        field_names = list(field_type_updates.keys())
+        existing_fields = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.context_id == context_id,
+                FieldType.field_name.in_(field_names),
+            )
+            .all()
+        )
+
+        results = {fname: False for fname in field_names}
+
+        for field in existing_fields:
+            if is_untyped_field(field.field_type):
+                inferred = field_type_updates.get(field.field_name)
+                if inferred:
+                    field.field_type = normalize_type_string(inferred)
+                    results[field.field_name] = True
+
+        self.session.flush()
+        return results
+
     def update_field_mutability(
         self,
         project_id: int,
