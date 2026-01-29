@@ -4104,14 +4104,13 @@ def _handle_embed_jsonb(
         async_embeddings = filter_dict.get("async_embeddings", False)
 
         if async_embeddings:
-            # Async: queue for background generation
-            # NOTE: Async workflow still uses source key - fix separately
+            # Async: queue for background generation with TARGET key
             _queue_embeddings_for_generation(
                 session=session,
                 id_to_text=id_to_text,
                 model=model,
                 dimensions=dimensions,
-                key=key,
+                key=target_key,  # Target key for Embedding.key
             )
         else:
             # Sync: generate embeddings immediately with TARGET key
