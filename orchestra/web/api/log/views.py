@@ -5601,6 +5601,14 @@ def run_index_maintenance(
         description="Skip VACUUM phase after maintenance. "
         "Faster but doesn't immediately reclaim disk space.",
     ),
+    max_duration: int = Query(
+        0,
+        ge=0,
+        description="Maximum duration in seconds. When set, the job will allocate "
+        "time budgets to phases and stop gracefully before the deadline. "
+        "Set to 0 for unlimited (default). Recommended: 600-900 for cleanup_only, "
+        "3600+ for full maintenance. Should be less than Cloud Scheduler attempt deadline.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -5612,14 +5620,32 @@ def run_index_maintenance(
       reindex only if cleanup happened. Best for nightly runs.
     - `full`: Run all phases regardless of thresholds. Best for weekly optimization.
     - `cleanup_only`: Only delete soft-deleted rows, skip expensive reindex.
-      Good for emergency cleanup without downtime risk.
+      Good for frequent cleanup without downtime risk.
     - `reindex_only`: Only reindex, skip deletion. Use when index is fragmented
       but no soft deletes exist.
     - `check`: Dry run - just report metrics without making any changes.
 
-    **Cloud Scheduler Configuration:**
-    - Nightly: `0 2 * * *` with `mode=auto` (default)
-    - Weekly full: `0 3 * * 0` with `mode=full`
+    **Recommended Cloud Scheduler Configuration (4 jobs):**
+
+    1. **Health Check** (twice daily) - Quick monitoring
+       - Cron: `0 8,20 * * *`
+       - Params: `mode=check`
+       - Attempt deadline: 2m, Max retries: 3
+
+    2. **Cleanup** (every 4 hours) - Frequent soft-delete cleanup
+       - Cron: `0 */4 * * *`
+       - Params: `mode=cleanup_only&skip_vacuum=true&max_duration=600`
+       - Attempt deadline: 15m, Max retries: 2
+
+    3. **Cleanup + Vacuum** (nightly) - Reclaim disk space
+       - Cron: `0 3 * * *`
+       - Params: `mode=cleanup_only&max_duration=1500`
+       - Attempt deadline: 30m, Max retries: 1
+
+    4. **Full Reindex** (weekly) - Optimize index structure
+       - Cron: `0 4 * * 0`
+       - Params: `mode=full&skip_vacuum=true&max_duration=9000`
+       - Attempt deadline: 180m (3 hours), Max retries: 0
 
     **Phases (in order):**
     1. Invalid index cleanup (always runs, handles failed CONCURRENTLY operations)
@@ -5627,7 +5653,7 @@ def run_index_maintenance(
     3. REINDEX CONCURRENTLY (if mode allows, keeps index usable during rebuild)
     4. VACUUM (if skip_vacuum=false and any work was done)
 
-    **WARNING:** Reindex can take several minutes for large indexes (~6GB).
+    **WARNING:** Reindex can take 30+ minutes for large indexes (~6GB).
     Recommended for low-traffic hours (2-4 AM UTC).
     """
     try:
@@ -5651,6 +5677,7 @@ def run_index_maintenance(
             mode=mode,
             soft_delete_threshold=soft_delete_threshold,
             skip_vacuum=skip_vacuum,
+            max_duration_seconds=max_duration,
         )
 
         if metrics["success"]:
