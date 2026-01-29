@@ -105,6 +105,19 @@ from orchestra.web.api.utils.assistant_infra import (
 )
 
 
+def to_unity_name(first_name: str | None, surname: str | None) -> str:
+    """
+    Convert first_name and surname to Unity convention:
+    1. Split on space
+    2. Capitalize each word
+    3. Join (remove spaces)
+
+    Example: ("ada marie", "lovelace smith") -> "AdaMarieLovelaceSmith"
+    """
+    full = f"{first_name or ''} {surname or ''}".strip()
+    return "".join(word.capitalize() for word in full.split())
+
+
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     """
     Normalize phone parameter that may have been URL-decoded.
@@ -527,7 +540,10 @@ async def create_assistant(
                     vm_response = await create_vm(
                         assistant_id=str(assistant_id),
                         unify_apikey=request.state.api_key,
-                        assistant_name=f"{assistant_in.first_name}{assistant_in.surname}",
+                        assistant_name=to_unity_name(
+                            assistant_in.first_name,
+                            assistant_in.surname,
+                        ),
                         vm_type=assistant_in.desktop_mode,
                     )
                     if "detail" in vm_response or "error" in vm_response:
@@ -641,7 +657,7 @@ async def create_assistant(
                     # First, delete the chat context if it was created
                     if assistant_in.pre_hire_chat:
                         try:
-                            context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcripts"
+                            context_name = f"{to_unity_name(assistant_in.first_name, assistant_in.surname)}/Transcripts"
                             assistants_project = project_dao.get_by_user_and_name(
                                 user_id=user_id,
                                 name="Assistants",
@@ -1229,7 +1245,10 @@ async def delete_assistant(
                     organization_id=None,
                 )
             if assistants_project:
-                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                assistant_context_prefix = to_unity_name(
+                    assistant.first_name,
+                    assistant.surname,
+                )
                 # Find all contexts related to the assistant
                 # Supports both old 2-tier and new 3-tier context structures:
                 # - 2-tier: "AdaLovelace", "AdaLovelace/Transcripts"
@@ -1934,7 +1953,10 @@ def transfer_assistant_to_org(
                             )
 
             if personal_project and org_project:
-                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                assistant_context_prefix = to_unity_name(
+                    assistant.first_name,
+                    assistant.surname,
+                )
                 # Find all contexts related to the assistant
                 contexts_to_transfer = (
                     session.query(Context)
@@ -2180,7 +2202,10 @@ def transfer_assistant_to_personal(
             )
             org_project = org_projects[0][0] if org_projects else None
             if org_project:
-                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                assistant_context_prefix = to_unity_name(
+                    assistant.first_name,
+                    assistant.surname,
+                )
                 contexts_to_delete = (
                     session.query(Context)
                     .filter(
