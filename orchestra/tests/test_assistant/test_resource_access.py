@@ -2886,7 +2886,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     )
     assert create_resp_a.status_code == 200
     agent_id_a = int(create_resp_a.json()["info"]["agent_id"])
-    assistant_name_a = "AssistantATransfer"
+    assistant_name_a = "AssistantaTransfer"
 
     create_resp_b = await client.post(
         "/v0/assistant",
@@ -2895,7 +2895,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     )
     assert create_resp_b.status_code == 200
     agent_id_b = int(create_resp_b.json()["info"]["agent_id"])
-    assistant_name_b = "AssistantBKeep"
+    assistant_name_b = "AssistantbKeep"
 
     # Create 3-tier contexts for Assistant A
     tier3_a = f"{user_name}/{assistant_name_a}/Transcripts"
