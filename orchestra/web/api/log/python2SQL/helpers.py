@@ -2061,7 +2061,7 @@ def _queue_embeddings_for_generation(
         id_to_text: Dictionary mapping log_event_id to text string
         model: Embedding model to use (defaults to DEFAULT_EMBEDDING_MODEL if None)
         dimensions: Optional number of dimensions for the embedding
-        key: The key identifier for these embeddings
+        key: The TARGET key for Embedding.key (e.g., "desc_emb")
     """
     from orchestra.db.models.orchestra_models import EmbeddingQueue
 
@@ -2101,7 +2101,7 @@ def _queue_embeddings_for_generation(
     queue_entries = [
         {
             "ref_id": log_event_id,
-            "key": key,
+            "key": key,  # Target key for Embedding.key
             "text": id_to_text[log_event_id],
             "model": model_name,
             "dimensions": dimensions,
