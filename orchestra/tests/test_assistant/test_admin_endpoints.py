@@ -674,3 +674,579 @@ async def test_admin_update_assistant_org_assistant(client: AsyncClient, dbsessi
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
     assert assistant.timezone == "America/Los_Angeles"
     assert assistant.about == "Org assistant updated by admin"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_single_email(client: AsyncClient):
+    """
+    Test that requesting only 'email' field returns objects with email plus required fields.
+
+    When from_fields=email is specified:
+    - Response should contain objects with the 'email' key plus required fields
+      (agent_id, user_id, created_at)
+    - Optional fields not in the request should NOT be present
+    - Null emails should still be returned as null values
+    """
+    owner = await create_test_user(
+        client,
+        "fields_single_email@test.com",
+        hiring_approved=True,
+    )
+
+    # Create assistant with email
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "FieldTest",
+            "surname": "Single",
+            "email": "field.single@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+
+    # Request only email field
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=email",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    body = admin_resp.json()
+    assert "info" in body
+    results = body["info"]
+    assert isinstance(results, list)
+    assert len(results) >= 1
+
+    # Verify each result has email plus required fields only
+    # Required fields (agent_id, user_id, created_at) are always included
+    REQUIRED_FIELDS = {"agent_id", "user_id", "created_at"}
+    EXPECTED_FIELDS = REQUIRED_FIELDS | {"email"}
+
+    for item in results:
+        # Should have exactly the expected fields
+        assert (
+            set(item.keys()) == EXPECTED_FIELDS
+        ), f"Expected exactly {EXPECTED_FIELDS}, got {set(item.keys())}"
+        # Optional fields not requested should NOT be present
+        assert "first_name" not in item, "first_name should not be in response"
+        assert "api_key" not in item, "api_key should not be in response"
+        assert "secrets" not in item, "secrets should not be in response"
+        assert "user_email" not in item, "user_email should not be in response"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_multiple(client: AsyncClient):
+    """
+    Test requesting multiple fields returns objects with those fields plus required fields.
+
+    When from_fields=email,first_name is specified:
+    - Response should contain requested fields plus required fields (agent_id, user_id, created_at)
+    - Order of fields in response doesn't matter
+    - Optional fields not requested should NOT be present
+    """
+    owner = await create_test_user(
+        client,
+        "fields_multiple@test.com",
+        hiring_approved=True,
+    )
+
+    # Create assistant with email
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "MultiField",
+            "surname": "Test",
+            "email": "multi.field@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    created_agent_id = create_resp.json()["info"]["agent_id"]
+
+    # Request multiple fields (note: agent_id is required so always included anyway)
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=email,first_name",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    body = admin_resp.json()
+    results = body["info"]
+
+    # Find our created assistant
+    our_assistant = next(
+        (a for a in results if a.get("agent_id") == created_agent_id),
+        None,
+    )
+    assert our_assistant is not None, "Created assistant not found in results"
+
+    # Verify it has requested fields plus required fields
+    REQUIRED_FIELDS = {"agent_id", "user_id", "created_at"}
+    EXPECTED_FIELDS = REQUIRED_FIELDS | {"email", "first_name"}
+    assert (
+        set(our_assistant.keys()) == EXPECTED_FIELDS
+    ), f"Expected {EXPECTED_FIELDS}, got {set(our_assistant.keys())}"
+    assert our_assistant["email"] == "multi.field@example.com"
+    assert our_assistant["first_name"] == "MultiField"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_excludes_expensive_lookups(
+    client: AsyncClient,
+):
+    """
+    Test that field selection avoids expensive lookups when those fields aren't requested.
+
+    Fields like 'api_key', 'secrets', 'user_email', 'user_first_name', 'user_last_name'
+    require additional database queries. When these fields aren't requested,
+    they should not be computed or returned.
+    """
+    owner = await create_test_user(
+        client,
+        "fields_no_expensive@test.com",
+        hiring_approved=True,
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "NoExpensive",
+            "surname": "Lookups",
+            "email": "no.expensive@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+
+    # Request only basic fields that don't require additional queries
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=agent_id,email,phone",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    results = admin_resp.json()["info"]
+
+    # Verify expensive fields are NOT in the response
+    for item in results:
+        assert (
+            "api_key" not in item
+        ), "api_key requires extra lookup, should not be present"
+        assert (
+            "secrets" not in item
+        ), "secrets requires extra lookup, should not be present"
+        assert (
+            "user_email" not in item
+        ), "user_email requires extra lookup, should not be present"
+        assert "user_first_name" not in item, "user_first_name requires extra lookup"
+        assert "user_last_name" not in item, "user_last_name requires extra lookup"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_with_filter_combination(
+    client: AsyncClient,
+):
+    """
+    Test that field selection works correctly when combined with existing filters.
+
+    Using both email filter and fields parameter:
+    - Should filter by email
+    - Should return only requested fields
+    """
+    owner = await create_test_user(
+        client,
+        "fields_filter_combo@test.com",
+        hiring_approved=True,
+    )
+
+    unique_email = "filter.combo.unique@example.com"
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "FilterCombo",
+            "surname": "Test",
+            "email": unique_email,
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    created_agent_id = create_resp.json()["info"]["agent_id"]
+
+    # Filter by email AND select specific fields
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?email={unique_email}&from_fields=first_name",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    results = admin_resp.json()["info"]
+
+    # Should return exactly one result (the filtered assistant)
+    assert len(results) == 1, f"Expected 1 result, got {len(results)}"
+
+    # Result should have requested fields plus required fields
+    REQUIRED_FIELDS = {"agent_id", "user_id", "created_at"}
+    EXPECTED_FIELDS = REQUIRED_FIELDS | {"first_name"}
+    assert (
+        set(results[0].keys()) == EXPECTED_FIELDS
+    ), f"Expected {EXPECTED_FIELDS}, got {set(results[0].keys())}"
+    assert results[0]["agent_id"] == created_agent_id
+    assert results[0]["first_name"] == "FilterCombo"
+
+    # Note: email was used for filtering but NOT requested in fields,
+    # so it should NOT be in the response (it's not a required field)
+    assert "email" not in results[0], "email was not requested in fields"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_no_fields_returns_full_objects(
+    client: AsyncClient,
+):
+    """
+    Test backward compatibility: when 'from_fields' parameter is omitted,
+    full AssistantRead objects should be returned (existing behavior).
+    """
+    owner = await create_test_user(
+        client,
+        "fields_full_objects@test.com",
+        hiring_approved=True,
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "FullObject",
+            "surname": "Test",
+            "email": "full.object@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    created_agent_id = create_resp.json()["info"]["agent_id"]
+
+    # No from_fields parameter - should return full objects
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    results = admin_resp.json()["info"]
+
+    # Find our created assistant
+    our_assistant = next(
+        (a for a in results if a.get("agent_id") == created_agent_id),
+        None,
+    )
+    assert our_assistant is not None
+
+    # Full object should have many fields (existing behavior)
+    expected_fields = {
+        "agent_id",
+        "first_name",
+        "surname",
+        "email",
+        "user_id",
+        "created_at",
+    }
+    for field in expected_fields:
+        assert field in our_assistant, f"Full object should have '{field}' field"
+
+    # Should also have the expensive lookup fields
+    assert "api_key" in our_assistant, "Full object should have api_key"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_null_values_handled(client: AsyncClient):
+    """
+    Test that null/None field values are properly handled in field selection.
+
+    When an assistant has null email (no email set), requesting from_fields=email
+    should return the null value, not skip the record.
+    """
+    owner = await create_test_user(
+        client,
+        "fields_null_values@test.com",
+        hiring_approved=True,
+    )
+
+    # Create assistant WITHOUT email
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "NullEmail",
+            "surname": "Test",
+            "create_infra": False,
+            # No email field - will be null
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    created_agent_id = create_resp.json()["info"]["agent_id"]
+
+    # Request email field
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=agent_id,email",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    results = admin_resp.json()["info"]
+
+    # Find our assistant with null email
+    our_assistant = next(
+        (a for a in results if a.get("agent_id") == created_agent_id),
+        None,
+    )
+    assert (
+        our_assistant is not None
+    ), "Assistant with null email should still be in results"
+
+    # email field should be present with null value
+    assert "email" in our_assistant, "email field should be present even if null"
+    assert our_assistant["email"] is None, "email should be null for this assistant"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_with_spaces_trimmed(client: AsyncClient):
+    """
+    Test that field names with spaces are properly trimmed.
+
+    from_fields=email, agent_id, first_name (with spaces) should work like
+    from_fields=email,agent_id,first_name (without spaces)
+    """
+    owner = await create_test_user(
+        client,
+        "fields_spaces@test.com",
+        hiring_approved=True,
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SpaceTrim",
+            "surname": "Test",
+            "email": "space.trim@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    created_agent_id = create_resp.json()["info"]["agent_id"]
+
+    # Request with spaces around field names
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=email, agent_id, first_name",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    results = admin_resp.json()["info"]
+
+    # Find our assistant
+    our_assistant = next(
+        (a for a in results if a.get("agent_id") == created_agent_id),
+        None,
+    )
+    assert our_assistant is not None
+
+    # Should have requested fields plus required fields (spaces trimmed)
+    REQUIRED_FIELDS = {"agent_id", "user_id", "created_at"}
+    EXPECTED_FIELDS = REQUIRED_FIELDS | {"email", "first_name"}
+    assert (
+        set(our_assistant.keys()) == EXPECTED_FIELDS
+    ), f"Expected {EXPECTED_FIELDS}, got {set(our_assistant.keys())}"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_invalid_field_returns_422(
+    client: AsyncClient,
+):
+    """
+    Test that requesting a non-existent field returns 422 error.
+
+    Invalid field names should be rejected with a clear error message
+    listing the invalid fields and the valid options.
+    """
+    owner = await create_test_user(
+        client,
+        "fields_invalid@test.com",
+        hiring_approved=True,
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "InvalidField",
+            "surname": "Test",
+            "email": "invalid.field@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+
+    # Request a non-existent field mixed with valid ones
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=email,nonexistent_field_xyz,agent_id",
+        headers=ADMIN_HEADERS,
+    )
+
+    # Should return 422 for invalid field names
+    assert admin_resp.status_code == 422, f"Expected 422, got {admin_resp.status_code}"
+
+    # Error message should mention the invalid field
+    error_detail = admin_resp.json().get("detail", "")
+    assert (
+        "nonexistent_field_xyz" in error_detail
+    ), f"Error should mention the invalid field name. Got: {error_detail}"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_empty_string_returns_422(
+    client: AsyncClient,
+):
+    """
+    Test that an empty from_fields parameter returns 422 error.
+
+    from_fields= (empty string) should return an error rather than
+    silently returning empty objects or full objects.
+    """
+    owner = await create_test_user(
+        client,
+        "fields_empty_string@test.com",
+        hiring_approved=True,
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "EmptyFields",
+            "surname": "Test",
+            "email": "empty.fields@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+
+    # Request with empty from_fields string
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=",
+        headers=ADMIN_HEADERS,
+    )
+
+    # Should return 422 for empty from_fields parameter
+    assert admin_resp.status_code == 422, f"Expected 422, got {admin_resp.status_code}"
+
+    # Error message should be descriptive
+    error_detail = admin_resp.json().get("detail", "")
+    assert (
+        "empty" in error_detail.lower() or "cannot" in error_detail.lower()
+    ), f"Error should mention that from_fields cannot be empty. Got: {error_detail}"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_agent_id_filter_with_field_selection(
+    client: AsyncClient,
+):
+    """
+    Test combining agent_id filter with field selection.
+
+    This ensures the filter still works when we're returning partial objects.
+    """
+    owner = await create_test_user(
+        client,
+        "fields_agent_filter@test.com",
+        hiring_approved=True,
+    )
+
+    # Create two assistants
+    resp1 = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "AgentFilter",
+            "surname": "One",
+            "email": "agent.filter.one@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    resp2 = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "AgentFilter",
+            "surname": "Two",
+            "email": "agent.filter.two@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    agent_id_1 = resp1.json()["info"]["agent_id"]
+
+    # Filter by agent_id and select only email
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id_1}&from_fields=email,surname",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    results = admin_resp.json()["info"]
+
+    # Should return exactly one result
+    assert (
+        len(results) == 1
+    ), f"Expected 1 result for agent_id filter, got {len(results)}"
+
+    # Result should have requested fields plus required fields
+    REQUIRED_FIELDS = {"agent_id", "user_id", "created_at"}
+    EXPECTED_FIELDS = REQUIRED_FIELDS | {"email", "surname"}
+    assert (
+        set(results[0].keys()) == EXPECTED_FIELDS
+    ), f"Expected {EXPECTED_FIELDS}, got {set(results[0].keys())}"
+    assert results[0]["email"] == "agent.filter.one@example.com"
+    assert results[0]["surname"] == "One"
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_fields_case_sensitivity_returns_422(
+    client: AsyncClient,
+):
+    """
+    Test that field names are case-sensitive.
+
+    'Email' and 'Agent_Id' are not valid field names (should be 'email' and 'agent_id'),
+    so the endpoint should return 422.
+    """
+    owner = await create_test_user(
+        client,
+        "fields_case@test.com",
+        hiring_approved=True,
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "CaseSensitive",
+            "surname": "Test",
+            "email": "case.sensitive@example.com",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+
+    # Request with wrong case - these should be treated as invalid fields
+    admin_resp = await client.get(
+        "/v0/admin/assistant?from_fields=Email,Agent_Id",
+        headers=ADMIN_HEADERS,
+    )
+
+    # Field names are case-sensitive, so 'Email' and 'Agent_Id' are invalid
+    assert admin_resp.status_code == 422, f"Expected 422, got {admin_resp.status_code}"
+
+    # Error message should list the invalid fields
+    error_detail = admin_resp.json().get("detail", "")
+    assert (
+        "Email" in error_detail or "Agent_Id" in error_detail
+    ), f"Error should mention the invalid field names. Got: {error_detail}"
