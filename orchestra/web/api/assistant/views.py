@@ -4404,9 +4404,9 @@ def admin_update_assistant(
 
 @admin_router.get(
     "/assistant",
-    response_model=InfoResponse[List[AssistantRead]],
     summary="Admin: list all assistants",
-    description="Retrieve every assistant in the system, optionally filtered by phone or email.",
+    description="Retrieve every assistant in the system, optionally filtered by phone or email. "
+    "Use 'fields' parameter for selective field retrieval to improve performance.",
     tags=["Assistants", "Admin"],
 )
 def admin_list_all_assistants(
@@ -4434,10 +4434,22 @@ def admin_list_all_assistants(
         None,
         description="Only return assistants whose agent_id matches this value.",
     ),
+    from_fields: Optional[str] = Query(
+        None,
+        description="Comma-separated list of fields to return (e.g., 'email,agent_id,phone'). "
+        "If omitted, returns full AssistantRead objects. Using this parameter skips "
+        "expensive lookups (api_key, secrets, user info) when those fields aren't requested.",
+        example="email,agent_id,first_name",
+    ),
     session: Session = Depends(get_db_session),
-) -> InfoResponse[List[AssistantRead]]:
+):
     """
-    List all assistants in the system with optional filtering by phone or email.
+    List all assistants in the system with optional filtering and field selection.
+
+    When 'from_fields' is specified, returns only the requested fields, skipping expensive
+    database lookups for unrequested fields like api_key, secrets, and user details.
+
+    When 'from_fields' is omitted, returns full AssistantRead objects.
     """
     # Normalize filter parameters to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
@@ -4448,6 +4460,31 @@ def admin_list_all_assistants(
     api_key_dao = ApiKeyDAO(session)
     auth_user_dao = AuthUserDAO(session)
     secret_dao = AssistantSecretDAO(session)
+
+    # Dynamically get all valid field names from AssistantRead model
+    VALID_FIELDS = set(AssistantRead.model_fields.keys())
+
+    # Parse and validate requested fields before any database operations
+    requested_fields: Optional[set] = None
+    if from_fields is not None and from_fields.strip():
+        raw_fields = [f.strip() for f in from_fields.split(",") if f.strip()]
+
+        if not raw_fields:
+            raise HTTPException(
+                status_code=422,
+                detail="The 'from_fields' parameter cannot be empty. Provide comma-separated field names.",
+            )
+
+        invalid_fields = [f for f in raw_fields if f not in VALID_FIELDS]
+        if invalid_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid field name(s): {', '.join(sorted(invalid_fields))}. "
+                f"Valid fields are: {', '.join(sorted(VALID_FIELDS))}",
+            )
+
+        requested_fields = set(raw_fields)
+
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -4461,10 +4498,8 @@ def admin_list_all_assistants(
         # Get API key based on assistant type (personal vs organizational)
         def get_api_key_for_assistant(assistant):
             if assistant.organization_id is None:
-                # Personal assistant - get user's personal API key
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
-                # Org assistant - get org API key
                 keys = api_key_dao.filter(organization_id=assistant.organization_id)
             return keys[0][0].key if keys else None
 
@@ -4476,52 +4511,86 @@ def admin_list_all_assistants(
             )
             return {s.secret_name: s.secret_value for s in secrets}
 
-        api_keys = [get_api_key_for_assistant(a) for a in assistants]
-        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
-        user_ids = [a.user_id for a in assistants]
-        auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
-        return InfoResponse(
-            info=[
-                AssistantRead(
-                    agent_id=str(a.agent_id),
-                    user_id=a.user_id,
-                    organization_id=a.organization_id,
-                    first_name=a.first_name,
-                    surname=a.surname,
-                    age=a.age,
-                    nationality=a.nationality,
-                    profile_photo=a.profile_photo,
-                    profile_video=a.profile_video,
-                    desktop_url=a.desktop_url,
-                    desktop_mode=a.desktop_mode,
-                    user_desktop_mode=a.user_desktop_mode,
-                    user_desktop_filesys_sync=a.user_desktop_filesys_sync,
-                    user_desktop_url=a.user_desktop_url,
-                    about=a.about,
-                    weekly_limit=float(a.weekly_limit)
-                    if a.weekly_limit is not None
-                    else None,
-                    max_parallel=a.max_parallel,
-                    created_at=a.created_at,
-                    updated_at=a.updated_at,
-                    phone=a.phone,
-                    user_phone=a.user_phone,
-                    email=a.email,
-                    user_whatsapp_number=a.user_whatsapp_number,
-                    assistant_whatsapp_number=a.assistant_whatsapp_number,
-                    voice_id=a.voice_id,
-                    voice_provider=a.voice_provider,
-                    voice_mode=a.voice_mode,
-                    timezone=a.timezone,
-                    api_key=api_keys[i],
-                    user_first_name=auth_users[i].name,
-                    user_last_name=auth_users[i].last_name,
-                    user_email=auth_users[i].email,
-                    secrets=secrets_list[i],
-                )
-                for i, a in enumerate(assistants)
-            ],
+        # Perform expensive lookups only if needed
+        api_keys = (
+            [get_api_key_for_assistant(a) for a in assistants]
+            if (requested_fields is None or "api_key" in requested_fields)
+            else None
         )
+        secrets_list = (
+            [get_secrets_for_assistant(a) for a in assistants]
+            if (requested_fields is None or "secrets" in requested_fields)
+            else None
+        )
+        auth_users = (
+            [auth_user_dao.get_by_id(a.user_id)[0] for a in assistants]
+            if (
+                requested_fields is None
+                or bool(
+                    requested_fields
+                    & {"user_email", "user_first_name", "user_last_name"}
+                )
+            )
+            else None
+        )
+
+        # Build AssistantRead objects
+        assistant_reads = [
+            AssistantRead(
+                agent_id=str(a.agent_id),
+                user_id=a.user_id,
+                organization_id=a.organization_id,
+                first_name=a.first_name,
+                surname=a.surname,
+                age=a.age,
+                nationality=a.nationality,
+                profile_photo=a.profile_photo,
+                profile_video=a.profile_video,
+                desktop_url=a.desktop_url,
+                desktop_mode=a.desktop_mode,
+                user_desktop_mode=a.user_desktop_mode,
+                user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+                user_desktop_url=a.user_desktop_url,
+                about=a.about,
+                weekly_limit=float(a.weekly_limit)
+                if a.weekly_limit is not None
+                else None,
+                max_parallel=a.max_parallel,
+                created_at=a.created_at,
+                updated_at=a.updated_at,
+                phone=a.phone,
+                user_phone=a.user_phone,
+                email=a.email,
+                user_whatsapp_number=a.user_whatsapp_number,
+                assistant_whatsapp_number=a.assistant_whatsapp_number,
+                voice_id=a.voice_id,
+                voice_provider=a.voice_provider,
+                voice_mode=a.voice_mode,
+                timezone=a.timezone,
+                phone_country=a.phone_country,
+                monthly_spending_cap=(
+                    float(a.monthly_spending_cap)
+                    if a.monthly_spending_cap is not None
+                    else None
+                ),
+                # Expensive fields - only populated if needed
+                api_key=api_keys[i] if api_keys else None,
+                user_first_name=auth_users[i].name if auth_users else None,
+                user_last_name=auth_users[i].last_name if auth_users else None,
+                user_email=auth_users[i].email if auth_users else None,
+                secrets=secrets_list[i] if secrets_list else None,
+            )
+            for i, a in enumerate(assistants)
+        ]
+
+        # If from_fields were requested, filter using Pydantic's model_dump
+        if requested_fields is not None:
+            result = [ar.model_dump(include=requested_fields) for ar in assistant_reads]
+            return InfoResponse(info=result)
+
+        # No from_fields parameter - return full AssistantRead objects
+        return InfoResponse(info=assistant_reads)
+
     except Exception as e:
         raise HTTPException(
             status_code=400,
