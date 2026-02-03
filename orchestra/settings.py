@@ -194,16 +194,11 @@ class Settings(BaseSettings):
         "https://console.unify.ai/",
     ).rstrip("/")
 
-    vertexai_service_acc_json: str = ""
-    vertexai_project: str = (
-        os.environ.get("ORCHESTRA_VERTEXAI_PROJECT")
-        if os.environ.get("ON_PREM")
-        else "saas-368716"
+    gcp_project: str = (
+        os.environ.get("GCP_PROJECT_ID") if os.environ.get("ON_PREM") else "saas-368716"
     )
-    vertexai_location: str = (
-        os.environ.get("ORCHESTRA_VERTEXAI_LOCATION")
-        if os.environ.get("ON_PREM")
-        else "europe-west1"
+    gcp_location: str = (
+        os.environ.get("GCP_LOCATION") if os.environ.get("ON_PREM") else "europe-west1"
     )
 
     # Variables for email sending
