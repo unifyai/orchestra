@@ -130,7 +130,7 @@ def upload_to_bucket(
     blob.upload_from_string(data, content_type=content_type)
 
 
-# VertexAI
+# GCP Vertex AI endpoint management (used for model deployment)
 
 
 def vertex_ai_endpoint_exists(name: str) -> bool:
