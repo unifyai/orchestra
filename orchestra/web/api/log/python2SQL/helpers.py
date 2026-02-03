@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import threading
 from typing import Optional, Union
@@ -120,31 +121,30 @@ MAX_EMBEDDING_DIMS = 1536
 MAX_TOKENS_PER_REQUEST = 2970000
 MAX_TOKENS_PER_INPUT = 8000
 
-# Vertex AI configuration
-# Uses get_env for fallback: ORCHESTRA_VERTEXAI_PROJECT -> GCP_PROJECT_ID
-VERTEXAI_PROJECT = get_env("ORCHESTRA_VERTEXAI_PROJECT")
-VERTEXAI_LOCATION = get_env("ORCHESTRA_VERTEXAI_LOCATION", "us-central1")
+# GCP configuration for image embeddings
+GCP_PROJECT = os.getenv("GCP_PROJECT_ID")
+GCP_REGION = os.getenv("GCP_LOCATION", "us-central1")
 
 # Cache for Google Cloud credentials
-_vertexai_credentials = None
-_vertexai_credentials_lock = threading.Lock()
+_gcp_credentials = None
+_gcp_credentials_lock = threading.Lock()
 
 
-def _reset_vertexai_credentials():
+def _reset_gcp_credentials():
     """
-    Reset the Vertex AI credentials cache. Used when connection or auth errors occur.
+    Reset the GCP credentials cache. Used when connection or auth errors occur.
     This forces credentials to be re-fetched on the next API call.
     Thread-safe: Uses a lock to prevent race conditions.
     """
-    global _vertexai_credentials
-    with _vertexai_credentials_lock:
-        _vertexai_credentials = None
-        logging.info("Reset Vertex AI credentials cache")
+    global _gcp_credentials
+    with _gcp_credentials_lock:
+        _gcp_credentials = None
+        logging.info("Reset GCP credentials cache")
 
 
-def _get_vertexai_credentials():
+def _get_gcp_credentials():
     """
-    Get Google Cloud credentials for Vertex AI API calls.
+    Get Google Cloud credentials for GCP API calls (e.g., image embeddings).
     Credentials are cached and refreshed when needed.
 
     Thread-safe: Uses a lock to prevent race conditions during initialization.
@@ -152,25 +152,25 @@ def _get_vertexai_credentials():
     Returns:
         Credentials object with an access token
     """
-    global _vertexai_credentials
+    global _gcp_credentials
 
     # Double-checked locking pattern for thread safety
-    if _vertexai_credentials is None:
-        with _vertexai_credentials_lock:
-            if _vertexai_credentials is None:
+    if _gcp_credentials is None:
+        with _gcp_credentials_lock:
+            if _gcp_credentials is None:
                 try:
-                    if not VERTEXAI_PROJECT:
+                    if not GCP_PROJECT:
                         raise RuntimeError(
-                            "GCP_PROJECT_ID or ORCHESTRA_VERTEXAI_PROJECT environment variable must be set to use image embeddings",
+                            "GCP_PROJECT_ID environment variable must be set to use image embeddings",
                         )
 
-                    # Get credentials with proper scopes for Vertex AI
+                    # Get credentials with proper scopes for GCP APIs
                     from google.auth import default
 
-                    # Request the cloud-platform scope which is needed for Vertex AI
+                    # Request the cloud-platform scope which is needed for GCP APIs
                     scopes = ["https://www.googleapis.com/auth/cloud-platform"]
                     credentials, project = default(scopes=scopes)
-                    _vertexai_credentials = credentials
+                    _gcp_credentials = credentials
                 except Exception as e:
                     raise RuntimeError(
                         f"Failed to get Google Cloud credentials for Vertex AI. "
@@ -178,10 +178,10 @@ def _get_vertexai_credentials():
                     )
 
     # Refresh token if expired
-    if not _vertexai_credentials.valid:
-        _vertexai_credentials.refresh(Request())
+    if not _gcp_credentials.valid:
+        _gcp_credentials.refresh(Request())
 
-    return _vertexai_credentials
+    return _gcp_credentials
 
 
 def count_tokens_per_utf_byte(document: str) -> int:
@@ -442,7 +442,7 @@ def _get_image_embedding_from_url(
     """
     try:
         # Get credentials for authentication
-        credentials = _get_vertexai_credentials()
+        credentials = _get_gcp_credentials()
 
         # Check if this is a GCS URL or base64 string
         if image_url and isinstance(image_url, str):
@@ -485,8 +485,8 @@ def _get_image_embedding_from_url(
 
             # Construct the REST API endpoint
             endpoint = (
-                f"https://{VERTEXAI_LOCATION}-aiplatform.googleapis.com/v1/"
-                f"projects/{VERTEXAI_PROJECT}/locations/{VERTEXAI_LOCATION}/"
+                f"https://{GCP_REGION}-aiplatform.googleapis.com/v1/"
+                f"projects/{GCP_PROJECT}/locations/{GCP_REGION}/"
                 f"publishers/google/models/{DEFAULT_IMAGE_EMBEDDING_MODEL}:predict"
             )
 
@@ -548,7 +548,7 @@ def _get_image_embedding_from_url(
             logging.warning(
                 f"Retryable error during image embedding ({error_type}), retrying with fresh credentials...",
             )
-            _reset_vertexai_credentials()
+            _reset_gcp_credentials()
             return _get_image_embedding_from_url(
                 image_url,
                 bucket_service,

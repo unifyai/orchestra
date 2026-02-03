@@ -484,8 +484,8 @@ def register_startup_event(
         _setup_db(app)
         setup_observability(app)
         aiplatform.init(
-            project=settings.vertexai_project,
-            location=settings.vertexai_location,
+            project=settings.gcp_project,
+            location=settings.gcp_location,
         )
         app.middleware_stack = app.build_middleware_stack()
         # ensure_production_traffic_project_exists(app)

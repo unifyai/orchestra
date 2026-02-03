@@ -198,9 +198,8 @@ jobs:
         # Logging
         ORCHESTRA_LOG_DIR: ${{ env.LOGS_DIR }}/orchestra
         # GCP configuration (from org-level variables)
-        ORCHESTRA_VERTEXAI_PROJECT: ${{ vars.GCP_PROJECT_ID }}
-        # Use step output from google-github-actions/auth@v2 (more explicit than env.GOOGLE_APPLICATION_CREDENTIALS)
-        ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON: ${{ steps.gcp-auth.outputs.credentials_file_path }}
+        GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.gcp-auth.outputs.credentials_file_path }}
         ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
         ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
         ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}

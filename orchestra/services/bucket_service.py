@@ -11,7 +11,6 @@ from google.api_core import exceptions
 from google.cloud import storage
 from google.oauth2 import service_account
 
-from orchestra.env import get_env
 from orchestra.web.api.utils.gcp import parse_gcs_url
 
 
@@ -19,18 +18,18 @@ class BucketService:
     def __init__(self):
         """Initialize the bucket service with GCP credentials and bucket configuration."""
 
-        # GCP credentials: ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON -> GOOGLE_APPLICATION_CREDENTIALS
-        self.credentials_path = get_env("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON")
+        # GCP credentials
+        self.credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         if not self.credentials_path:
             raise ValueError(
-                "Missing required GCP credentials (set GOOGLE_APPLICATION_CREDENTIALS or ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON)",
+                "Missing required GCP credentials (set GOOGLE_APPLICATION_CREDENTIALS)",
             )
 
-        # GCP project: ORCHESTRA_VERTEXAI_PROJECT -> GCP_PROJECT_ID
-        self.project_id = get_env("ORCHESTRA_VERTEXAI_PROJECT")
+        # GCP project
+        self.project_id = os.getenv("GCP_PROJECT_ID")
         if not self.project_id:
             raise ValueError(
-                "Missing required GCP project ID (set GCP_PROJECT_ID or ORCHESTRA_VERTEXAI_PROJECT)",
+                "Missing required GCP project ID (set GCP_PROJECT_ID)",
             )
 
         self.credentials = service_account.Credentials.from_service_account_file(
