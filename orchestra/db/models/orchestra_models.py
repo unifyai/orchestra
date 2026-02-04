@@ -220,6 +220,8 @@ class AuthUser(Base):
     # Monthly spending limit for this user's assistants (NULL = no limit)
     # Cannot exceed the org's monthly_spending_cap if user is in an org
     monthly_spending_cap = Column(Numeric, nullable=True)
+    # When the spending cap was last changed (for notification deduplication)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     # Business classification fields for B2B/B2C tax compliance
     account_type = Column(
@@ -396,6 +398,8 @@ class Organization(Base):
 
     # Monthly spending limit for all users/assistants in the org (NULL = no limit)
     monthly_spending_cap = Column(Numeric, nullable=True)
+    # When the spending cap was last changed (for notification deduplication)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     # Relationships
     interfaces = relationship(
@@ -443,6 +447,8 @@ class OrganizationMember(Base):
     # Monthly spending limit for this member within this org (NULL = no limit)
     # Set by org admins; cannot exceed org's monthly_spending_cap
     monthly_spending_cap = Column(Numeric, nullable=True)
+    # When the spending cap was last changed (for notification deduplication)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class OrganizationInvite(Base):
@@ -1117,6 +1123,8 @@ class Assistant(Base):
     # Monthly spending limit for this assistant (NULL = no limit)
     # Cannot exceed the user's monthly_spending_cap
     monthly_spending_cap = Column(Numeric, nullable=True)
+    # When the spending cap was last changed (for notification deduplication)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
     max_parallel = Column(Integer, nullable=True)
     email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
@@ -1786,4 +1794,101 @@ class TableView(Base):
         Index("idx_table_view_project_id", "project_id"),
         Index("idx_table_view_user_id", "user_id"),
         Index("idx_table_view_organization_id", "organization_id"),
+    )
+
+
+class SpendingLimitNotification(Base):
+    """
+    Tracks spending limit notifications to prevent duplicate emails.
+
+    When a spending limit is reached, we record the notification here.
+    Subsequent limit breaches for the same (entity_type, entity_id, month, limit_value)
+    are deduplicated unless the limit was re-configured (limit_set_at > notified_at).
+
+    This table is intentionally NOT linked via foreign keys to entity tables
+    so that notification records are preserved when entities are deleted (audit trail).
+    """
+
+    __tablename__ = "spending_limit_notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Which entity hit the limit
+    entity_type = Column(
+        String(20),
+        nullable=False,
+        comment="'assistant', 'user', 'member', or 'organization'",
+    )
+    entity_id = Column(
+        String,
+        nullable=False,
+        comment="ID of the entity (agent_id, user_id, or org_id)",
+    )
+
+    # When and at what limit
+    month = Column(
+        String(7),
+        nullable=False,
+        comment="Billing month in YYYY-MM format",
+    )
+    limit_value = Column(
+        Numeric,
+        nullable=False,
+        comment="The limit value that was reached",
+    )
+
+    # When the limit was configured (for re-enable detection)
+    limit_set_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment="When the limit was configured",
+    )
+
+    # Notification metadata
+    notified_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    notified_user_ids = Column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="List of user IDs who received the notification email",
+    )
+
+    # Entity name for auditing (may become stale if entity renamed)
+    entity_name = Column(
+        String,
+        nullable=True,
+        comment="Name of the entity at time of notification (for auditing)",
+    )
+
+    # Current spend at time of notification (for auditing)
+    current_spend = Column(
+        Numeric,
+        nullable=True,
+        comment="Spend amount when notification was triggered",
+    )
+
+    __table_args__ = (
+        # Index for deduplication lookups
+        Index(
+            "ix_spending_limit_notifications_dedupe",
+            "entity_type",
+            "entity_id",
+            "month",
+            "limit_value",
+        ),
+        # Index for entity lookups
+        Index(
+            "ix_spending_limit_notifications_entity",
+            "entity_type",
+            "entity_id",
+        ),
+        # Index for cleanup queries
+        Index(
+            "ix_spending_limit_notifications_month",
+            "month",
+        ),
     )
