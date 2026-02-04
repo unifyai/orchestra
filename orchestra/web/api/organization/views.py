@@ -2252,6 +2252,7 @@ def admin_get_org_spend(
         month=month,
         cumulative_spend=cumulative_spend,
         limit=limit,
+        limit_set_at=org.monthly_spending_cap_set_at,
         percent_used=percent_used,
     )
 
@@ -2306,5 +2307,6 @@ def admin_get_member_spend(
         month=month,
         cumulative_spend=cumulative_spend,
         limit=limit,
+        limit_set_at=member.monthly_spending_cap_set_at,
         percent_used=percent_used,
     )

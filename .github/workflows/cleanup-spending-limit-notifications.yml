@@ -1,0 +1,41 @@
+name: Cleanup Old Spending Limit Notifications
+
+on:
+  schedule:
+    # Monthly on the 1st at 5:00 AM UTC
+  - cron: '0 5 1 * *'
+  workflow_dispatch:
+    inputs:
+      months_to_keep:
+        description: 'Number of months to retain'
+        required: false
+        default: '6'
+
+jobs:
+  cleanup_notifications:
+    name: Cleanup Old Notifications
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Call cleanup endpoint
+      run: |
+        MONTHS="${{ github.event.inputs.months_to_keep || '6' }}"
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/cleanup/spending-limit-notifications?months_to_keep=${MONTHS}" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Cleanup failed with status $http_code"
+          exit 1
+        fi
+
+        # Extract and display the deleted count
+        deleted=$(echo "$body" | jq -r '.deleted_count // "unknown"')
+        echo "::notice::Deleted $deleted old spending limit notification(s)"

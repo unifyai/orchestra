@@ -1762,5 +1762,6 @@ def admin_get_user_spend(
         month=month,
         cumulative_spend=cumulative_spend,
         limit=limit,
+        limit_set_at=user.monthly_spending_cap_set_at,
         percent_used=percent_used,
     )

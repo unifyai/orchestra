@@ -533,6 +533,7 @@ class AuthUserDAO:
             return result
 
         user = user_row[0]
+        old_limit = user.monthly_spending_cap
         new_limit = (
             Decimal(str(monthly_spending_cap))
             if monthly_spending_cap is not None
@@ -555,6 +556,13 @@ class AuthUserDAO:
                 result.assistants_capped += 1
 
         user.monthly_spending_cap = new_limit
+
+        # Track when the limit value changes (for notification deduplication)
+        if old_limit != new_limit:
+            from datetime import datetime, timezone
+
+            user.monthly_spending_cap_set_at = datetime.now(timezone.utc)
+
         return result
 
     def get_spending_cap(self, user_id: str) -> Optional[float]:

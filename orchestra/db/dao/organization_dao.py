@@ -219,6 +219,8 @@ class OrganizationDAO:
         if not org:
             return result
 
+        old_limit = org.monthly_spending_cap
+
         if monthly_spending_cap is not None:
             new_limit = Decimal(str(monthly_spending_cap))
 
@@ -251,6 +253,12 @@ class OrganizationDAO:
             org.monthly_spending_cap = new_limit
         else:
             org.monthly_spending_cap = None
+
+        # Track when the limit value changes (for notification deduplication)
+        if old_limit != org.monthly_spending_cap:
+            from datetime import datetime, timezone
+
+            org.monthly_spending_cap_set_at = datetime.now(timezone.utc)
 
         return result
 

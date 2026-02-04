@@ -1344,6 +1344,11 @@ class AssistantSpendResponse(BaseModel):
         description="Monthly spending limit for this assistant.",
         example=100.00,
     )
+    limit_set_at: Optional[datetime] = Field(
+        None,
+        description="When the spending limit was last changed.",
+        example="2026-02-01T10:00:00Z",
+    )
     percent_used: Optional[float] = Field(
         None,
         description="Percentage of limit used (null if no limit set).",
@@ -1401,4 +1406,82 @@ class OrgSpendingLimitResponse(BaseModel):
         None,
         description="Count of child entities that had their limits capped.",
         example={"users_capped": 3, "assistants_capped": 7},
+    )
+
+
+# ============================================================================
+# Spending Limit Notification Schemas
+# ============================================================================
+
+
+class SpendingLimitReachedRequest(BaseModel):
+    """Request body for notifying that a spending limit was reached."""
+
+    limit_type: Literal["assistant", "user", "member", "organization"] = Field(
+        ...,
+        description="Type of limit that was reached.",
+        example="assistant",
+    )
+    entity_id: str = Field(
+        ...,
+        description="ID of the entity whose limit was reached.",
+        example="123",
+    )
+    limit_value: float = Field(
+        ...,
+        description="The limit value that was reached.",
+        example=100.00,
+        ge=0,
+    )
+    current_spend: float = Field(
+        ...,
+        description="Current spend amount.",
+        example=100.50,
+        ge=0,
+    )
+    month: str = Field(
+        ...,
+        description="Billing month in YYYY-MM format.",
+        example="2026-02",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    )
+    limit_set_at: Optional[datetime] = Field(
+        None,
+        description="When the limit was last configured (for re-enable detection).",
+        example="2026-02-01T10:00:00Z",
+    )
+    entity_name: Optional[str] = Field(
+        None,
+        description="Name of the entity (for email content).",
+        example="Ada Lovelace",
+    )
+    organization_id: Optional[int] = Field(
+        None,
+        description="Organization ID (required for member limits, entity_id is the user_id).",
+        example=123,
+    )
+
+
+class SpendingLimitReachedResponse(BaseModel):
+    """Response for spending limit notification endpoint."""
+
+    notified: bool = Field(
+        ...,
+        description="Whether a notification was sent.",
+        example=True,
+    )
+    reason: Optional[str] = Field(
+        None,
+        description="Reason for skipping notification (if notified=False).",
+        example="already_notified",
+    )
+    recipient_count: Optional[int] = Field(
+        None,
+        description="Number of users who received the notification.",
+        example=1,
+    )
+    notified_user_ids: Optional[List[str]] = Field(
+        None,
+        description="List of user IDs who received the notification.",
+        example=["user_abc123"],
     )

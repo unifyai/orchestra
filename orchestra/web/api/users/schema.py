@@ -288,6 +288,10 @@ class UserSpendResponse(BaseModel):
         None,
         description="Monthly spending limit for the user.",
     )
+    limit_set_at: Optional[datetime] = Field(
+        None,
+        description="When the spending limit was last changed.",
+    )
     percent_used: Optional[float] = Field(
         None,
         description="Percentage of limit used (null if no limit).",

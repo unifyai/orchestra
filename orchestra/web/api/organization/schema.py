@@ -325,6 +325,10 @@ class OrgSpendResponse(BaseModel):
         None,
         description="Monthly spending limit for the org.",
     )
+    limit_set_at: Optional[datetime] = Field(
+        None,
+        description="When the spending limit was last changed.",
+    )
     percent_used: Optional[float] = Field(None, description="Percentage of limit used.")
 
 
@@ -340,5 +344,9 @@ class MemberSpendResponse(BaseModel):
     limit: Optional[float] = Field(
         None,
         description="Member's spending limit in this org.",
+    )
+    limit_set_at: Optional[datetime] = Field(
+        None,
+        description="When the spending limit was last changed.",
     )
     percent_used: Optional[float] = Field(None, description="Percentage of limit used.")
