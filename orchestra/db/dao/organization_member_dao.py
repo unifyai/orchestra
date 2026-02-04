@@ -213,6 +213,7 @@ class OrganizationMemberDAO:
                     f"Member limit cannot exceed organization limit (${org_spending_cap:.2f})",
                 )
 
+        old_limit = member.monthly_spending_cap
         new_limit = (
             Decimal(str(monthly_spending_cap))
             if monthly_spending_cap is not None
@@ -235,6 +236,13 @@ class OrganizationMemberDAO:
                 result.assistants_capped += 1
 
         member.monthly_spending_cap = new_limit
+
+        # Track when the limit value changes (for notification deduplication)
+        if old_limit != new_limit:
+            from datetime import datetime, timezone
+
+            member.monthly_spending_cap_set_at = datetime.now(timezone.utc)
+
         return result
 
     def get_spending_cap(

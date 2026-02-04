@@ -4528,7 +4528,7 @@ def admin_list_all_assistants(
                 requested_fields is None
                 or bool(
                     requested_fields
-                    & {"user_email", "user_first_name", "user_last_name"}
+                    & {"user_email", "user_first_name", "user_last_name"},
                 )
             )
             else None
@@ -5148,5 +5148,6 @@ def admin_get_assistant_spend(
         month=month,
         cumulative_spend=cumulative_spend,
         limit=limit,
+        limit_set_at=assistant.monthly_spending_cap_set_at,
         percent_used=percent_used,
     )

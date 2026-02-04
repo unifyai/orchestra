@@ -534,9 +534,15 @@ class AssistantDAO:
                     )
 
         # Update the assistant's spending limit
-        assistant.monthly_spending_cap = (
-            Decimal(str(new_limit)) if new_limit is not None else None
-        )
+        old_limit = assistant.monthly_spending_cap
+        new_limit = Decimal(str(new_limit)) if new_limit is not None else None
+        assistant.monthly_spending_cap = new_limit
+
+        # Track when the limit value changes (for notification deduplication)
+        if old_limit != new_limit:
+            from datetime import datetime, timezone
+
+            assistant.monthly_spending_cap_set_at = datetime.now(timezone.utc)
 
         # Calculate effective limit
         effective_limit = new_limit

@@ -5,6 +5,7 @@ from typing import List, Optional
 import stripe
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
@@ -20,6 +21,9 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     Users,
 )
+from orchestra.services.spending_limit_notification_service import (
+    SpendingLimitNotificationService,
+)
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     CreditCardFingerprintModelResponse,
     OrganizationListItem,
@@ -29,6 +33,10 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     RechargeTypeModelRequest,
     RechargeTypeModelResponse,
     UsersModelResponse,
+)
+from orchestra.web.api.assistant.schema import (
+    SpendingLimitReachedRequest,
+    SpendingLimitReachedResponse,
 )
 
 router = APIRouter()
@@ -926,3 +934,111 @@ def admin_cleanup_expired_invites(
             status_code=500,
             detail=f"Failed to cleanup expired invites: {str(e)}",
         )
+
+
+# ============================================================================
+# Spending Limit Notification Endpoints
+# ============================================================================
+
+
+@router.post(
+    "/cleanup/spending-limit-notifications",
+    summary="Cleanup old spending limit notifications",
+    description="Delete spending limit notifications older than 6 months. "
+    "Called by scheduled cleanup job.",
+)
+def admin_cleanup_spending_limit_notifications(
+    months_to_keep: int = 6,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Clean up old spending limit notifications.
+
+    This endpoint is designed to be called by a scheduled job (e.g., GitHub Actions cron).
+    It deletes all spending limit notification records where the month is older than
+    the specified retention period.
+
+    :param months_to_keep: Number of months of notifications to retain (default: 6).
+    :param session: Database session.
+    :return: Count of deleted notifications and timestamp.
+    """
+    from orchestra.db.dao.spending_limit_notification_dao import (
+        SpendingLimitNotificationDAO,
+    )
+
+    notification_dao = SpendingLimitNotificationDAO(session)
+
+    try:
+        deleted_count = notification_dao.cleanup_old_notifications(months_to_keep)
+        session.commit()
+
+        return {
+            "deleted_count": deleted_count,
+            "months_retained": months_to_keep,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Successfully deleted {deleted_count} old notification(s)",
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cleanup spending limit notifications: {str(e)}",
+        )
+
+
+@router.post(
+    "/spending-limit-reached",
+    response_model=SpendingLimitReachedResponse,
+    summary="Notify users when a spending limit is reached",
+    description="""
+    Called by Unity when a spending limit blocks an LLM call.
+    Sends email notifications to relevant users and records the notification
+    for deduplication.
+
+    **Entity Types:**
+    - `assistant`: Notifies the assistant owner
+    - `user`: Notifies the user
+    - `member`: Notifies the organization member
+    - `organization`: Notifies all org members who have assistants
+
+    **Deduplication:**
+    - Notifications are deduplicated by (entity_type, entity_id, month, limit_value)
+    - If `limit_set_at` is provided and is after the last notification, a new
+      notification is sent (handles the "limit removed then re-enabled" scenario)
+    """,
+)
+async def admin_spending_limit_reached(
+    body: SpendingLimitReachedRequest,
+    session: Session = Depends(get_db_session),
+) -> SpendingLimitReachedResponse:
+    """
+    Handle spending limit reached notification.
+
+    This endpoint:
+    1. Checks if we've already notified for this limit (deduplication)
+    2. Gets the relevant recipients based on entity type
+    3. Sends emails asynchronously (fire-and-forget)
+    4. Records the notification for future deduplication
+    """
+    notification_service = SpendingLimitNotificationService(session)
+
+    result = notification_service.process_limit_reached(
+        limit_type=body.limit_type,
+        entity_id=body.entity_id,
+        limit_value=body.limit_value,
+        current_spend=body.current_spend,
+        month=body.month,
+        limit_set_at=body.limit_set_at,
+        entity_name=body.entity_name,
+        organization_id=body.organization_id,
+    )
+
+    if result.notified:
+        session.commit()
+
+    return SpendingLimitReachedResponse(
+        notified=result.notified,
+        reason=result.reason,
+        recipient_count=result.recipient_count,
+        notified_user_ids=result.notified_user_ids,
+    )
