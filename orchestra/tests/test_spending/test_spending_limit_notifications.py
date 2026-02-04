@@ -1067,7 +1067,10 @@ async def test_hierarchical_limits_all_independent(
     # All three limits reached - using the personal assistant for assistant limit
     # (We need a separate personal assistant for this test)
     personal_assistant = await _create_assistant(
-        client, "PersonalHierarchy", "Bot", HEADERS
+        client,
+        "PersonalHierarchy",
+        "Bot",
+        HEADERS,
     )
     personal_agent_id = personal_assistant["agent_id"]
     await _set_assistant_limit(client, personal_agent_id, 100.00, HEADERS)
