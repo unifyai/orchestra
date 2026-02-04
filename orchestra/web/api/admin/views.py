@@ -986,6 +986,72 @@ def admin_cleanup_spending_limit_notifications(
         )
 
 
+@router.get(
+    "/spending-limit-notifications",
+    summary="Get recent spending limit notifications",
+    description="Query the spending_limit_notifications table for debugging. "
+    "Returns recent notifications with optional filters.",
+)
+def admin_get_spending_limit_notifications(
+    entity_type: Optional[str] = Query(None, description="Filter by entity type"),
+    entity_id: Optional[str] = Query(None, description="Filter by entity ID"),
+    month: Optional[str] = Query(None, description="Filter by month (YYYY-MM)"),
+    limit: int = Query(50, ge=1, le=500),
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Get recent spending limit notifications for debugging.
+
+    :param entity_type: Optional filter by entity type (assistant, user, member, organization)
+    :param entity_id: Optional filter by entity ID
+    :param month: Optional filter by month in YYYY-MM format
+    :param limit: Maximum number of results (default: 50, max: 500)
+    :param session: Database session
+    :return: List of notification records
+    """
+    from orchestra.db.dao.spending_limit_notification_dao import (
+        SpendingLimitNotificationDAO,
+    )
+
+    notification_dao = SpendingLimitNotificationDAO(session)
+
+    try:
+        notifications = notification_dao.get_recent_notifications(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            month=month,
+            limit=limit,
+        )
+
+        return {
+            "count": len(notifications),
+            "notifications": [
+                {
+                    "id": n.id,
+                    "entity_type": n.entity_type,
+                    "entity_id": n.entity_id,
+                    "entity_name": n.entity_name,
+                    "month": n.month,
+                    "limit_value": float(n.limit_value) if n.limit_value else None,
+                    "current_spend": float(n.current_spend)
+                    if n.current_spend
+                    else None,
+                    "notified_user_ids": n.notified_user_ids,
+                    "notified_at": n.notified_at.isoformat() if n.notified_at else None,
+                    "limit_set_at": n.limit_set_at.isoformat()
+                    if n.limit_set_at
+                    else None,
+                }
+                for n in notifications
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get spending limit notifications: {str(e)}",
+        )
+
+
 @router.post(
     "/spending-limit-reached",
     response_model=SpendingLimitReachedResponse,
