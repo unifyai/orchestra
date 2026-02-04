@@ -123,7 +123,16 @@ class SpendingLimitNotificationService:
                 current_spend=current_spend,
                 is_org_admin=recipient.is_org_admin,
             )
-            asyncio.create_task(send_email_async(recipient.email, subject, body, from_email="noreply@unify.ai"))
+            # Send from noreply@unify.ai (an alias), but impersonate hello@unify.ai (the real user)
+            asyncio.create_task(
+                send_email_async(
+                    recipient.email,
+                    subject,
+                    body,
+                    from_email="noreply@unify.ai",
+                    impersonate_email="hello@unify.ai",
+                ),
+            )
             notified_user_ids.append(recipient.user_id)
 
         # Record the notification for deduplication
@@ -174,7 +183,8 @@ class SpendingLimitNotificationService:
 
         elif limit_type == "user":
             recipients, resolved_name = self._get_user_recipients(
-                entity_id, entity_name
+                entity_id,
+                entity_name,
             )
 
         elif limit_type == "member":
@@ -340,7 +350,7 @@ class SpendingLimitNotificationService:
         Returns:
             Tuple of (subject, body)
         """
-        subject = f"${entity_type.capitalize()} Spending Limit Reached"
+        subject = f"{entity_type.capitalize()} Spending Limit Reached"
 
         entity_label = {
             "assistant": "assistant",
