@@ -186,6 +186,44 @@ class SpendingLimitNotificationDAO:
 
         return query.order_by(SpendingLimitNotification.notified_at.desc()).all()
 
+    def get_recent_notifications(
+        self,
+        entity_type: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        month: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[SpendingLimitNotification]:
+        """
+        Get recent notifications with optional filters.
+
+        Useful for debugging via admin endpoint.
+
+        Args:
+            entity_type: Optional filter by entity type
+            entity_id: Optional filter by entity ID
+            month: Optional filter by month (YYYY-MM format)
+            limit: Maximum number of results
+
+        Returns:
+            List of notification records, ordered by notified_at descending
+        """
+        query = self.session.query(SpendingLimitNotification)
+
+        if entity_type is not None:
+            query = query.filter(SpendingLimitNotification.entity_type == entity_type)
+
+        if entity_id is not None:
+            query = query.filter(SpendingLimitNotification.entity_id == entity_id)
+
+        if month is not None:
+            query = query.filter(SpendingLimitNotification.month == month)
+
+        return (
+            query.order_by(SpendingLimitNotification.notified_at.desc())
+            .limit(limit)
+            .all()
+        )
+
     def cleanup_old_notifications(self, months_to_keep: int = 6) -> int:
         """
         Delete notifications older than the specified number of months.
