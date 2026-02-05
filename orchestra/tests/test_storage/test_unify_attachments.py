@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # =============================================================================
 # BucketService - Attachment Cleanup Tests
 # =============================================================================
@@ -58,7 +57,9 @@ class TestBucketServiceAttachmentCleanup:
             deleted_count = service.delete_message_attachments_for_user(user_id=12345)
 
             assert deleted_count == 2
-            mock_storage_client["bucket"].list_blobs.assert_called_once_with(prefix="12345/")
+            mock_storage_client["bucket"].list_blobs.assert_called_once_with(
+                prefix="12345/"
+            )
             for blob in mock_storage_client["blobs"]:
                 blob.delete.assert_called_once()
 
@@ -76,9 +77,13 @@ class TestBucketServiceAttachmentCleanup:
             deleted_count = service.delete_message_attachments_for_user(user_id=99999)
 
             assert deleted_count == 0
-            mock_storage_client["bucket"].list_blobs.assert_called_once_with(prefix="99999/")
+            mock_storage_client["bucket"].list_blobs.assert_called_once_with(
+                prefix="99999/"
+            )
 
-    def test_delete_attachments_handles_deletion_errors_gracefully(self, mock_storage_client):
+    def test_delete_attachments_handles_deletion_errors_gracefully(
+        self, mock_storage_client
+    ):
         """Deletion continues even if individual file deletion fails."""
         from google.api_core.exceptions import GoogleAPIError
 
@@ -103,18 +108,26 @@ class TestBucketServiceAttachmentCleanup:
         from orchestra.services.bucket_service import BucketService
 
         # Verify the bucket is configured via env var or default
-        with patch.dict(os.environ, {
-            "GOOGLE_APPLICATION_CREDENTIALS": "/fake/path",
-            "GCP_PROJECT_ID": "test-project",
-            "ORCHESTRA_GCP_BUCKET_NAME": "test-bucket",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "GOOGLE_APPLICATION_CREDENTIALS": "/fake/path",
+                "GCP_PROJECT_ID": "test-project",
+                "ORCHESTRA_GCP_BUCKET_NAME": "test-bucket",
+            },
+        ):
             with patch("orchestra.services.bucket_service.service_account"):
-                with patch("orchestra.services.bucket_service.storage.Client") as mock_client:
+                with patch(
+                    "orchestra.services.bucket_service.storage.Client"
+                ) as mock_client:
                     mock_client.return_value = MagicMock()
                     service = BucketService()
 
                     # Check the bucket name attribute is set
-                    assert service.unify_attachments_bucket_name == "unify-message-attachments"
+                    assert (
+                        service.unify_attachments_bucket_name
+                        == "unify-message-attachments"
+                    )
                     assert service.unify_attachments_bucket is not None
 
 
@@ -128,7 +141,9 @@ class TestUserDeletionAttachmentCleanup:
 
     def test_user_deletion_calls_attachment_cleanup(self):
         """UserAccountCleanupService.delete_user_account should call attachment cleanup."""
-        from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
+        from orchestra.services.user_account_cleanup_service import (
+            UserAccountCleanupService,
+        )
 
         mock_session = MagicMock()
         # Mock check_deletion_blockers to return no blockers
@@ -140,11 +155,13 @@ class TestUserDeletionAttachmentCleanup:
         mock_result.owns_organizations = False
         mock_result.owned_org_names = None
         mock_session.execute.return_value.fetchone.return_value = mock_result
-        mock_session.execute.return_value.scalar.return_value = None  # No stripe customer
+        mock_session.execute.return_value.scalar.return_value = (
+            None  # No stripe customer
+        )
 
         # Patch BucketService in the bucket_service module where it's imported from
         with patch(
-            "orchestra.services.bucket_service.BucketService"
+            "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
             mock_bucket_service = MagicMock()
             mock_bucket_service.delete_message_attachments_for_user.return_value = 5
@@ -155,13 +172,15 @@ class TestUserDeletionAttachmentCleanup:
 
             # Verify attachment cleanup was called
             mock_bucket_service.delete_message_attachments_for_user.assert_called_once_with(
-                "user-123"
+                "user-123",
             )
             assert result.success is True
 
     def test_user_deletion_continues_if_attachment_cleanup_fails(self):
         """User deletion should succeed even if attachment cleanup fails."""
-        from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
+        from orchestra.services.user_account_cleanup_service import (
+            UserAccountCleanupService,
+        )
 
         mock_session = MagicMock()
         # Mock check_deletion_blockers to return no blockers
@@ -173,11 +192,13 @@ class TestUserDeletionAttachmentCleanup:
         mock_result.owns_organizations = False
         mock_result.owned_org_names = None
         mock_session.execute.return_value.fetchone.return_value = mock_result
-        mock_session.execute.return_value.scalar.return_value = None  # No stripe customer
+        mock_session.execute.return_value.scalar.return_value = (
+            None  # No stripe customer
+        )
 
         # Patch BucketService in the bucket_service module where it's imported from
         with patch(
-            "orchestra.services.bucket_service.BucketService"
+            "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
             mock_bucket_cls.side_effect = Exception("GCS error")
 
@@ -205,7 +226,9 @@ class TestStorageEndpointsAttachmentsBucket:
         """parse_gcs_url correctly parses unify-message-attachments bucket URIs."""
         from orchestra.web.api.utils.gcp import parse_gcs_url
 
-        bucket, path = parse_gcs_url("gs://unify-message-attachments/12345/uuid_document.pdf")
+        bucket, path = parse_gcs_url(
+            "gs://unify-message-attachments/12345/uuid_document.pdf"
+        )
         assert bucket == "unify-message-attachments"
         assert path == "12345/uuid_document.pdf"
 
@@ -214,7 +237,7 @@ class TestStorageEndpointsAttachmentsBucket:
         from orchestra.web.api.utils.gcp import parse_gcs_url
 
         bucket, path = parse_gcs_url(
-            "gs://unify-message-attachments/user123/uuid1_document.pdf"
+            "gs://unify-message-attachments/user123/uuid1_document.pdf",
         )
         assert bucket == "unify-message-attachments"
         assert path == "user123/uuid1_document.pdf"
@@ -260,7 +283,9 @@ class TestAttachmentCleanupEdgeCases:
             service.unify_attachments_bucket = mock_bucket
 
             # Should handle string user_id
-            deleted_count = service.delete_message_attachments_for_user(user_id="user-abc-123")
+            deleted_count = service.delete_message_attachments_for_user(
+                user_id="user-abc-123"
+            )
 
             assert deleted_count == 0
             mock_bucket.list_blobs.assert_called_once_with(prefix="user-abc-123/")
@@ -290,4 +315,3 @@ class TestAttachmentCleanupEdgeCases:
             assert deleted_count == 100
             for blob in mock_blobs:
                 blob.delete.assert_called_once()
-
