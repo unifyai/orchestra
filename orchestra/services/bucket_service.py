@@ -74,6 +74,15 @@ class BucketService:
             self.assistant_recordings_bucket_name,
         )
 
+        # Unify message attachments bucket
+        self.unify_attachments_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
+            "unify-message-attachments",
+        )
+        self.unify_attachments_bucket = self.storage_client.bucket(
+            self.unify_attachments_bucket_name,
+        )
+
     def _generate_unique_filename(self, content: bytes, extension: str = "") -> str:
         """Generate a unique filename using content hash, UUID, and an optional extension."""
         content_hash = hashlib.md5(content).hexdigest()
@@ -358,3 +367,54 @@ class BucketService:
         except exceptions.GoogleAPIError as e:
             logging.error(f"Failed to delete assistant photo/file {gcs_url}: {str(e)}")
             raise Exception(f"Failed to delete assistant photo/file: {str(e)}")
+
+    # -------------------------------------------------------------
+    #            Unify message attachment operations
+    # -------------------------------------------------------------
+    def delete_message_attachments_for_user(self, user_id: str | int) -> int:
+        """
+        Delete all message attachments for a user from GCS.
+
+        Attachments are stored with user-scoped paths: {user_id}/{attachment_id}_{filename}
+        This method deletes all objects with the user's prefix.
+
+        Args:
+            user_id: The user's ID (can be string or int)
+
+        Returns:
+            Number of successfully deleted files
+
+        Note:
+            This is a best-effort operation. Individual deletion failures are logged
+            but don't stop the cleanup process. The method continues deleting other
+            files even if some fail.
+        """
+        prefix = f"{user_id}/"
+        deleted_count = 0
+
+        try:
+            blobs = self.unify_attachments_bucket.list_blobs(prefix=prefix)
+
+            for blob in blobs:
+                try:
+                    blob.delete()
+                    deleted_count += 1
+                    logging.debug(f"Deleted attachment: {blob.name}")
+                except exceptions.GoogleAPIError as e:
+                    logging.error(f"Failed to delete attachment {blob.name}: {str(e)}")
+                    # Continue with other files
+
+            if deleted_count > 0:
+                logging.info(
+                    f"Deleted {deleted_count} message attachments for user {user_id}"
+                )
+            else:
+                logging.debug(f"No message attachments found for user {user_id}")
+
+            return deleted_count
+
+        except exceptions.GoogleAPIError as e:
+            logging.error(
+                f"Failed to list attachments for user {user_id}: {str(e)}"
+            )
+            return deleted_count
