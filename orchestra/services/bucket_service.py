@@ -406,7 +406,7 @@ class BucketService:
 
             if deleted_count > 0:
                 logging.info(
-                    f"Deleted {deleted_count} message attachments for user {user_id}"
+                    f"Deleted {deleted_count} message attachments for user {user_id}",
                 )
             else:
                 logging.debug(f"No message attachments found for user {user_id}")
@@ -415,6 +415,6 @@ class BucketService:
 
         except exceptions.GoogleAPIError as e:
             logging.error(
-                f"Failed to list attachments for user {user_id}: {str(e)}"
+                f"Failed to list attachments for user {user_id}: {str(e)}",
             )
             return deleted_count
