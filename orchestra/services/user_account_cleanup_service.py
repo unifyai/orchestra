@@ -174,8 +174,11 @@ class UserAccountCleanupService:
 
         self.session.commit()
 
+        # Post-commit cleanup operations (best-effort, don't block on failure)
         if stripe_customer_id:
             self._archive_stripe_customer(stripe_customer_id)
+
+        self._cleanup_user_attachments(user_id)
 
         logger.info(f"Successfully deleted user account: {user_id}")
         return DeletionResult(success=True, message="Account deleted successfully")
@@ -220,3 +223,23 @@ class UserAccountCleanupService:
             logger.info(f"Archived Stripe customer: {stripe_customer_id}")
         except Exception as e:
             logger.error(f"Failed to archive Stripe customer {stripe_customer_id}: {e}")
+
+    def _cleanup_user_attachments(self, user_id: str) -> None:
+        """
+        Delete user's message attachments from GCS.
+
+        Best-effort operation - logs errors but doesn't fail the deletion.
+        Attachments are stored in the unify-message-attachments bucket with
+        user-scoped paths: {user_id}/{attachment_id}_{filename}
+        """
+        try:
+            from orchestra.services.bucket_service import BucketService
+
+            bucket_service = BucketService()
+            deleted_count = bucket_service.delete_message_attachments_for_user(user_id)
+            if deleted_count > 0:
+                logger.info(
+                    f"Cleaned up {deleted_count} message attachments for user {user_id}"
+                )
+        except Exception as e:
+            logger.error(f"Failed to cleanup attachments for user {user_id}: {e}")
