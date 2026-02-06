@@ -16,16 +16,11 @@ RUN pip install poetry>=2.1.0
 RUN poetry config virtualenvs.create false
 RUN poetry config cache-dir /tmp/poetry-cache
 
-# Copy dependency repos first (from build context root)
-# These are cloned as siblings in Cloud Build
-COPY unify/ /app/unify/
-COPY unillm/ /app/unillm/
-
-# Copying requirements of a project (from orchestra subdirectory)
-COPY orchestra/pyproject.toml orchestra/poetry.lock /app/src/
+# Copying requirements of a project
+COPY pyproject.toml poetry.lock /app/src/
 WORKDIR /app/src
 
-# Installing requirements (../unify resolves to /app/unify/)
+# Installing requirements
 RUN poetry install --only main --no-root
 
 # Removing gcc
@@ -34,7 +29,7 @@ RUN apt-get purge -y \
   && rm -rf /var/lib/apt/lists/*
 
 # Copying actual application
-COPY orchestra/ /app/src/
+COPY . /app/src/
 RUN poetry install --only main
 
 CMD if [ "$ON_PREM" = "true" ]; then \
