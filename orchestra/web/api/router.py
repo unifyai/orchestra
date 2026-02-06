@@ -16,7 +16,6 @@ from orchestra.web.api import (  # noqa: WPS235
     roles,
     storage,
     teams,
-    unillm,
     users,
 )
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
@@ -177,15 +176,6 @@ api_router.include_router(
 api_router.include_router(
     storage.router,
     tags=["Storage"],
-    dependencies=API_KEY_AUTH,
-)
-
-# UniLLM OpenAI-compatible proxy
-
-api_router.include_router(
-    unillm.router,
-    prefix="/unillm",
-    tags=["UniLLM"],
     dependencies=API_KEY_AUTH,
 )
 
