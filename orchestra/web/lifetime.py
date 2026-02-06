@@ -15,7 +15,7 @@ from opentelemetry.sdk.resources import (
     TELEMETRY_SDK_LANGUAGE,
     Resource,
 )
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.trace import get_tracer_provider, set_tracer_provider
 from sqlalchemy import create_engine
@@ -146,10 +146,20 @@ def _create_tracer_provider() -> TracerProvider:
 
     tracer_provider = TracerProvider(resource=resource)
 
+    def _add_processor(proc: SpanProcessor) -> None:
+        """Wrap processor with filtering if exclude patterns are configured."""
+        if settings.otel_exclude_patterns:
+            from orchestra.web.api.utils.filtering_span_processor import (
+                FilteringSpanProcessor,
+            )
+
+            proc = FilteringSpanProcessor(proc, settings.otel_exclude_patterns)
+        tracer_provider.add_span_processor(proc)
+
     # Add OTLP exporter if configured
     if settings.otel_endpoint:
         try:
-            tracer_provider.add_span_processor(
+            _add_processor(
                 BatchSpanProcessor(
                     OTLPSpanExporter(
                         endpoint=settings.otel_endpoint,
@@ -197,7 +207,7 @@ def _create_tracer_provider() -> TracerProvider:
                 )
                 logger.info(f"Configured Tempo HTTP exporter at {tempo_endpoint}")
 
-            tracer_provider.add_span_processor(BatchSpanProcessor(tempo_exporter))
+            _add_processor(BatchSpanProcessor(tempo_exporter))
 
         except Exception as e:
             logger.warning(f"Failed to configure Tempo exporter: {e}")
@@ -215,7 +225,7 @@ def _create_tracer_provider() -> TracerProvider:
                 settings.otel_log_dir,
                 service_name="orchestra",
             )
-            tracer_provider.add_span_processor(SimpleSpanProcessor(jsonl_exporter))
+            _add_processor(SimpleSpanProcessor(jsonl_exporter))
             logger.info(
                 f"Configured JSONL span exporter at {settings.otel_log_dir}",
             )
@@ -228,7 +238,7 @@ def _create_tracer_provider() -> TracerProvider:
             from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
 
             file_exporter = FileSpanExporter(settings.log_dir)
-            tracer_provider.add_span_processor(BatchSpanProcessor(file_exporter))
+            _add_processor(BatchSpanProcessor(file_exporter))
             logger.info(
                 f"Configured per-request JSON exporter at {settings.log_dir}",
             )

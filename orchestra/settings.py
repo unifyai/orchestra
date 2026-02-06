@@ -157,6 +157,20 @@ class Settings(BaseSettings):
         None,
     )
 
+    # Comma-separated span name patterns to exclude from OTel export.
+    # Matched as substrings against span names. Default excludes repetitive
+    # auth/connection overhead that adds noise without diagnostic value.
+    # Set to empty string (ORCHESTRA_OTEL_EXCLUDE_PATTERNS="") to disable.
+    otel_exclude_patterns: list[str] = [
+        p.strip()
+        for p in os.environ.get(
+            "ORCHESTRA_OTEL_EXCLUDE_PATTERNS",
+            "connect,db.query.select.users,db.query.select.api_key,"
+            "db.query.select.team_member,db.query.select.resource_access",
+        ).split(",")
+        if p.strip()
+    ]
+
     # Production Traffic Project (for internal monitoring)
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
