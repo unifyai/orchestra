@@ -1,62 +1,11 @@
 steps:
-# Step 1: Reorganize workspace - move orchestra into subdirectory
-- name: 'gcr.io/cloud-builders/git'
-  id: Reorganize workspace
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    mkdir -p /tmp/orchestra-files
-    shopt -s dotglob
-    mv * /tmp/orchestra-files/ 2>/dev/null || true
-    mkdir orchestra
-    mv /tmp/orchestra-files/* orchestra/
-
-# Step 2: Clone unify as sibling
-- name: 'gcr.io/cloud-builders/git'
-  id: Clone unify
-  secretEnv: ['GITHUB_TOKEN']
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    git clone --depth 1 -b staging https://x-access-token:$$GITHUB_TOKEN@github.com/unifyai/unify.git unify
-  waitFor: ['Reorganize workspace']
-
-# Step 3: Clone unillm as sibling
-- name: 'gcr.io/cloud-builders/git'
-  id: Clone unillm
-  secretEnv: ['GITHUB_TOKEN']
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    git clone --depth 1 -b staging https://x-access-token:$$GITHUB_TOKEN@github.com/unifyai/unillm.git unillm
-  waitFor: ['Clone unify']
-
-# Step 4: Pull Docker cache
 - name: gcr.io/cloud-builders/docker
   entrypoint: 'bash'
   args: ['-c', 'docker pull $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH || exit 0']
   id: Pull Docker Cache
-  waitFor: ['Clone unillm']
-
-# Step 5: Build Docker (context is workspace root with orchestra/, unify/, unillm/)
 - name: gcr.io/cloud-builders/docker
-  args:
-  - 'build'
-  - '-t'
-  - '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA'
-  - '--cache-from'
-  - '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH'
-  - '-f'
-  - 'orchestra/deploy/Dockerfile'
-  - '--target'
-  - 'prod'
-  - '.'
+  args: ['build', '-t', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA', '--cache-from', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH', '.', '-f', 'deploy/Dockerfile', '--target', 'prod']
   id: Build Orchestra
-  waitFor: ['Pull Docker Cache']
-
 - name: gcr.io/cloud-builders/docker
   args:
   - push
@@ -65,13 +14,11 @@ steps:
   id: Push Orchestra
   waitFor:
   - 'Build Orchestra'
-
 - name: gcr.io/cloud-builders/docker
   args: ['tag', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest']
   id: Build Orchestra Latest
   waitFor:
   - 'Push Orchestra'
-
 - name: gcr.io/cloud-builders/docker
   args:
   - push
@@ -80,7 +27,6 @@ steps:
   id: Push Orchestra Latest
   waitFor:
   - 'Build Orchestra Latest'
-
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - run
@@ -97,7 +43,6 @@ steps:
   entrypoint: gcloud
   waitFor:
   - 'Push Orchestra'
-
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - run
@@ -110,7 +55,6 @@ steps:
   entrypoint: gcloud
   waitFor:
   - 'Update migration image'
-
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - run
@@ -132,15 +76,12 @@ steps:
   entrypoint: gcloud
   waitFor:
   - 'Migrate'
-
 images:
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
-
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
-
 substitutions:
   _JOB_REGION: europe-west3
   _SERVICE_NAME: orchestra-staging
@@ -151,12 +92,6 @@ substitutions:
   _PLATFORM: managed
   _JOB_NAME: orchestra-staging-migrator
   _FIXED_COMMIT_HASH: 8f98f587e9081412d4570356c3e43441d0ff1705
-
-availableSecrets:
-  secretManager:
-  - versionName: projects/$PROJECT_ID/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
-    env: 'GITHUB_TOKEN'
-
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
