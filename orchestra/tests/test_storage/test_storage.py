@@ -122,7 +122,8 @@ async def test_signed_url_with_download_flag(client: AsyncClient, mock_bucket_se
 
 @pytest.mark.anyio
 async def test_signed_url_with_download_and_custom_filename(
-    client: AsyncClient, mock_bucket_service
+    client: AsyncClient,
+    mock_bucket_service,
 ):
     """Test signed URL with download=True and custom filename."""
     payload = {
@@ -142,12 +143,16 @@ async def test_signed_url_with_download_and_custom_filename(
     # Verify the custom filename is used in Content-Disposition
     call_kwargs = mock_bucket_service["blob"].generate_signed_url.call_args.kwargs
     assert "response_disposition" in call_kwargs
-    assert call_kwargs["response_disposition"] == 'attachment; filename="quarterly_report.pdf"'
+    assert (
+        call_kwargs["response_disposition"]
+        == 'attachment; filename="quarterly_report.pdf"'
+    )
 
 
 @pytest.mark.anyio
 async def test_signed_url_without_download_flag(
-    client: AsyncClient, mock_bucket_service
+    client: AsyncClient,
+    mock_bucket_service,
 ):
     """Test signed URL generation without download flag does not set Content-Disposition."""
     payload = {
