@@ -106,8 +106,13 @@ def generate_signed_url(
 
         # Add response_disposition to force download if requested
         if request.download:
-            # Extract filename from object path for Content-Disposition header
-            filename = object_path.split("/")[-1] if "/" in object_path else object_path
+            # Use provided filename, or extract from object path
+            if request.filename:
+                filename = request.filename
+            else:
+                filename = (
+                    object_path.split("/")[-1] if "/" in object_path else object_path
+                )
             signed_url_kwargs[
                 "response_disposition"
             ] = f'attachment; filename="{filename}"'

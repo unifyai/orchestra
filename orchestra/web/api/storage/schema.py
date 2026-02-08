@@ -23,6 +23,10 @@ class SignedUrlRequest(BaseModel):
         default=False,
         description="If true, the signed URL will force download with Content-Disposition: attachment",
     )
+    filename: Optional[str] = Field(
+        default=None,
+        description="Override the filename in Content-Disposition header (only used when download=True)",
+    )
 
 
 class SignedUrlResponse(BaseModel):
