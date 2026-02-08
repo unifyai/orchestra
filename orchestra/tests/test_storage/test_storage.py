@@ -121,6 +121,31 @@ async def test_signed_url_with_download_flag(client: AsyncClient, mock_bucket_se
 
 
 @pytest.mark.anyio
+async def test_signed_url_with_download_and_custom_filename(
+    client: AsyncClient, mock_bucket_service
+):
+    """Test signed URL with download=True and custom filename."""
+    payload = {
+        "gcs_uri": "gs://test-bucket/123/att-456_quarterly_report.pdf",
+        "download": True,
+        "filename": "quarterly_report.pdf",  # Original filename without ID prefix
+    }
+
+    resp = await client.post(
+        "/v0/storage/signed-url",
+        json=payload,
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK
+
+    # Verify the custom filename is used in Content-Disposition
+    call_kwargs = mock_bucket_service["blob"].generate_signed_url.call_args.kwargs
+    assert "response_disposition" in call_kwargs
+    assert call_kwargs["response_disposition"] == 'attachment; filename="quarterly_report.pdf"'
+
+
+@pytest.mark.anyio
 async def test_signed_url_without_download_flag(
     client: AsyncClient, mock_bucket_service
 ):
