@@ -96,11 +96,23 @@ def generate_signed_url(
 
         # Generate the signed URL
         expiration = datetime.timedelta(minutes=request.expiration_minutes)
-        signed_url = blob.generate_signed_url(
-            version="v4",
-            expiration=expiration,
-            method="GET",
-        )
+
+        # Build signed URL kwargs
+        signed_url_kwargs = {
+            "version": "v4",
+            "expiration": expiration,
+            "method": "GET",
+        }
+
+        # Add response_disposition to force download if requested
+        if request.download:
+            # Extract filename from object path for Content-Disposition header
+            filename = object_path.split("/")[-1] if "/" in object_path else object_path
+            signed_url_kwargs[
+                "response_disposition"
+            ] = f'attachment; filename="{filename}"'
+
+        signed_url = blob.generate_signed_url(**signed_url_kwargs)
 
         return SignedUrlResponse(
             signed_url=signed_url,
