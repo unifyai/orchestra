@@ -287,21 +287,43 @@ def enforce_types(
                         detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but explicit_type '{comparable_type}' was provided.",
                     )
             else:
-                inferred_type = LogEventDAO.infer_type(
-                    field_name,
-                    value,
-                    explicit_type=None,
-                )
-                if not types_match(field_type, inferred_type):
-                    batch_info = (
-                        f" (in batch entry {batch_index})"
-                        if batch_index is not None
-                        else ""
+                # When the value's Python runtime type directly matches the
+                # declared field type, skip content-based inference.  This
+                # prevents e.g. a date-formatted string like "2024-01-15"
+                # from being re-classified as 'date' and rejected when the
+                # field is declared as 'str'.
+                #
+                # Only scalar types are included here.  Container types
+                # (list, dict) are excluded because they need inference to
+                # validate inner/element types (e.g. List[int] vs List[str]).
+                _PYTHON_TYPE_TO_FIELD = {
+                    str: "str",
+                    int: "int",
+                    float: "float",
+                    bool: "bool",
+                }
+                python_type_name = _PYTHON_TYPE_TO_FIELD.get(type(value))
+                if python_type_name is not None and types_match(
+                    field_type,
+                    python_type_name,
+                ):
+                    pass  # runtime type matches declared type — accept as-is
+                else:
+                    inferred_type = LogEventDAO.infer_type(
+                        field_name,
+                        value,
+                        explicit_type=None,
                     )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but value has inferred type '{inferred_type}'. Value: {str(value)[:100]}",
-                    )
+                    if not types_match(field_type, inferred_type):
+                        batch_info = (
+                            f" (in batch entry {batch_index})"
+                            if batch_index is not None
+                            else ""
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but value has inferred type '{inferred_type}'. Value: {str(value)[:100]}",
+                        )
     else:
         # Field doesn't exist - create it
         # New policy: We CAN create new fields, but we CANNOT modify existing fields
