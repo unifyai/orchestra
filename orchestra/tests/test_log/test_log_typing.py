@@ -2264,3 +2264,101 @@ async def test_str_field_accepts_date_like_strings(client: AsyncClient):
     assert field_types_response.status_code == 200
     field_types = field_types_response.json()
     assert field_types["date"]["data_type"] == "str"
+
+
+@pytest.mark.anyio
+async def test_float_field_accepts_int_values(client: AsyncClient):
+    """A field declared as 'float' must accept Python int values.
+
+    Every integer is a valid float (numeric widening). Orchestra should
+    not reject ``1250`` for a ``float`` field just because inference
+    returns ``int``.
+    """
+    project_name = "test_project-float-int"
+    await _create_project(client, project_name)
+
+    # Step 1: Create a 'cost' field typed as float
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "cost": {"type": "float", "mutable": True},
+                "label": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Insert an integer value — should succeed (int is a valid float)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"cost": 1250, "label": "integer"},
+    )
+    assert (
+        response.status_code == 200
+    ), f"Integer value rejected for float field: {response.json()}"
+
+    # Step 3: Insert a float value — should succeed (exact type match)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"cost": 99.99, "label": "float"},
+    )
+    assert (
+        response.status_code == 200
+    ), f"Float value rejected for float field: {response.json()}"
+
+    # Step 4: Verify the field type is still 'float'
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["cost"]["data_type"] == "float"
+
+
+@pytest.mark.anyio
+async def test_int_field_rejects_bool_values(client: AsyncClient):
+    """A field declared as 'int' must reject Python bool values.
+
+    Although ``bool`` is a subclass of ``int`` in Python, accepting
+    ``True``/``False`` for an integer field is almost always a bug.
+    The type system should treat bool as a distinct type.
+    """
+    project_name = "test_project-int-bool"
+    await _create_project(client, project_name)
+
+    # Step 1: Create a 'count' field typed as int
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "count": {"type": "int", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Insert an int value — should succeed
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"count": 42},
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Insert a bool value — should be rejected
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"count": True},
+    )
+    assert (
+        response.status_code == 400
+    ), f"Bool value accepted for int field (should be rejected): {response.json()}"

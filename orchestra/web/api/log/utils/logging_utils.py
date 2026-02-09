@@ -287,27 +287,34 @@ def enforce_types(
                         detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but explicit_type '{comparable_type}' was provided.",
                     )
             else:
-                # When the value's Python runtime type directly matches the
-                # declared field type, skip content-based inference.  This
-                # prevents e.g. a date-formatted string like "2024-01-15"
+                # When the value's Python runtime type is compatible with
+                # the declared field type, skip content-based inference.
+                # This prevents e.g. a date-formatted string "2024-01-15"
                 # from being re-classified as 'date' and rejected when the
                 # field is declared as 'str'.
                 #
-                # Only scalar types are included here.  Container types
-                # (list, dict) are excluded because they need inference to
-                # validate inner/element types (e.g. List[int] vs List[str]).
-                _PYTHON_TYPE_TO_FIELD = {
-                    str: "str",
-                    int: "int",
-                    float: "float",
-                    bool: "bool",
+                # Compatibility follows standard Python numeric semantics:
+                #   - bool  → only 'bool' (not promoted to int/float)
+                #   - int   → 'int' or 'float' (numeric widening)
+                #   - float → 'float'
+                #   - str   → 'str'
+                #
+                # Container types (list, dict) are excluded because they
+                # need inference to validate inner/element types
+                # (e.g. List[int] vs List[str]).
+                _PYTHON_TYPE_TO_COMPATIBLE_FIELDS: dict[type, tuple[str, ...]] = {
+                    bool: ("bool",),
+                    int: ("int", "float"),
+                    float: ("float",),
+                    str: ("str",),
                 }
-                python_type_name = _PYTHON_TYPE_TO_FIELD.get(type(value))
-                if python_type_name is not None and types_match(
-                    field_type,
-                    python_type_name,
+                compatible_fields = _PYTHON_TYPE_TO_COMPATIBLE_FIELDS.get(
+                    type(value),
+                )
+                if compatible_fields is not None and any(
+                    types_match(field_type, ft) for ft in compatible_fields
                 ):
-                    pass  # runtime type matches declared type — accept as-is
+                    pass  # runtime type compatible with declared type
                 else:
                     inferred_type = LogEventDAO.infer_type(
                         field_name,
