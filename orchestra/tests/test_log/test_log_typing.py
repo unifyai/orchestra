@@ -2199,3 +2199,68 @@ async def test_infer_untyped_fields_with_context(client: AsyncClient):
     assert field_types_response.status_code == 200
     field_types = field_types_response.json()
     assert field_types["context_field"]["data_type"] == "str"
+
+
+@pytest.mark.anyio
+async def test_str_field_accepts_date_like_strings(client: AsyncClient):
+    """A field declared as 'str' must accept string values regardless of content.
+
+    Strings like "2024-01-15" or "Jan 15, 2024" are valid Python strings.
+    The type inference layer should not re-classify them as 'date' and reject
+    them when the field's declared type is 'str'.
+    """
+    project_name = "test_project-str-date"
+    await _create_project(client, project_name)
+
+    # Step 1: Explicitly create a 'date' field typed as str
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "date": {"type": "str", "mutable": True},
+                "label": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Insert ISO-format date string — should succeed
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"date": "2024-01-15", "label": "iso"},
+    )
+    assert (
+        response.status_code == 200
+    ), f"ISO date string rejected for str field: {response.json()}"
+
+    # Step 3: Insert abbreviated-month date string — should succeed
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"date": "Jan 15, 2024", "label": "abbrev"},
+    )
+    assert (
+        response.status_code == 200
+    ), f"Abbreviated date string rejected for str field: {response.json()}"
+
+    # Step 4: Insert a plain non-date string — should succeed (sanity check)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"date": "not-a-date", "label": "plain"},
+    )
+    assert (
+        response.status_code == 200
+    ), f"Plain string rejected for str field: {response.json()}"
+
+    # Step 5: Verify the field type is still 'str' after all inserts
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["date"]["data_type"] == "str"
