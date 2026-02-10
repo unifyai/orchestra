@@ -55,7 +55,8 @@ def mock_assistant_infra_calls(request):
 
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_create_phone.return_value = "+14155551234"  # Return a mock phone number
+        # Return a dict matching the actual create_phone_number response format
+        mock_create_phone.return_value = {"phoneNumber": "+14155551234"}
         mock_create_pubsub.return_value = None
 
         yield mock_wake_up, mock_reawaken
@@ -259,6 +260,75 @@ class TestDemoAssistantCreationEndpoint:
         # Will fail due to org check, but should NOT fail due to validation
         # (403 means it passed validation and reached the org check)
         assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+class TestDemoAssistantSpendingCapPersistence:
+    """Tests for demo assistant spending cap persistence."""
+
+    @pytest.mark.anyio
+    async def test_demo_spending_cap_is_saved_on_creation(
+        self,
+        client: AsyncClient,
+        source_assistant: dict,
+    ):
+        """Spending cap should be persisted when creating a demo assistant."""
+        # Mock the Unify organization membership check to allow creation
+        with patch(
+            "orchestra.web.api.assistant.views.is_unify_org_member",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            payload = {
+                "source_assistant_id": int(source_assistant["agent_id"]),
+                "label": "Spending Cap Test",
+                "first_name": "SpendTest",
+                "surname": "Demo",
+                "demoer_phone": "+14155559999",
+                "monthly_spending_cap": 25.0,  # Custom spending cap
+            }
+            resp = await client.post(
+                "/v0/demo/assistant", json=payload, headers=HEADERS
+            )
+            assert (
+                resp.status_code == status.HTTP_200_OK
+            ), f"Creation failed: {resp.json()}"
+
+            created = resp.json()["info"]
+            assert (
+                created["monthly_spending_cap"] == 25.0
+            ), f"Expected spending cap 25.0 but got {created.get('monthly_spending_cap')}"
+
+    @pytest.mark.anyio
+    async def test_demo_spending_cap_default_is_saved(
+        self,
+        client: AsyncClient,
+        source_assistant: dict,
+    ):
+        """Default spending cap ($10) should be persisted when not specified."""
+        with patch(
+            "orchestra.web.api.assistant.views.is_unify_org_member",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            payload = {
+                "source_assistant_id": int(source_assistant["agent_id"]),
+                "label": "Default Cap Test",
+                "first_name": "DefaultTest",
+                "surname": "Demo",
+                "demoer_phone": "+14155559999",
+                # monthly_spending_cap not provided - should default to 10.0
+            }
+            resp = await client.post(
+                "/v0/demo/assistant", json=payload, headers=HEADERS
+            )
+            assert (
+                resp.status_code == status.HTTP_200_OK
+            ), f"Creation failed: {resp.json()}"
+
+            created = resp.json()["info"]
+            assert (
+                created["monthly_spending_cap"] == 10.0
+            ), f"Expected default spending cap 10.0 but got {created.get('monthly_spending_cap')}"
 
 
 class TestDemoAssistantMetaEndpoint:
