@@ -293,6 +293,11 @@ class AssistantRead(AssistantCreate):
         description="Monthly spending limit in dollars for this assistant.",
         example=100.00,
     )
+    demo_id: Optional[int] = Field(
+        None,
+        description="ID of demo metadata if this is a demo assistant, None for regular assistants.",
+        example=None,
+    )
 
     class Config:
         orm_mode = True
@@ -332,6 +337,105 @@ class AssistantRead(AssistantCreate):
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
                 "secrets": {"openai_api_key": "sk-..."},
+            },
+        }
+
+
+class DemoAssistantCreate(BaseModel):
+    """
+    Schema for creating a demo assistant.
+
+    Demo assistants are used by Unify employees to demonstrate the product
+    to prospects who haven't signed up yet. They are cloned from a source
+    assistant and configured for phone-only demo calls.
+    """
+
+    source_assistant_id: int = Field(
+        ...,
+        description="ID of the assistant to clone configuration from",
+        example=12345,
+    )
+    label: str = Field(
+        ...,
+        description="Human-readable label for this demo (e.g., 'Richard Branson demo')",
+        example="Richard Branson demo",
+    )
+    first_name: str = Field(
+        ...,
+        description="First name of the demo assistant",
+        example="Lucy",
+    )
+    surname: str = Field(
+        ...,
+        description="Surname of the demo assistant",
+        example="Branson-Demo",
+    )
+    demoer_phone: str = Field(
+        ...,
+        description="Phone number of the demoer (used as user_phone for contact validation)",
+        example="+14155559999",
+    )
+    monthly_spending_cap: Optional[float] = Field(
+        default=10.0,
+        ge=1.0,
+        le=100.0,
+        description="Monthly spending cap in USD for the demo assistant (default: $10, max: $100)",
+        example=10.0,
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "source_assistant_id": 12345,
+                "label": "Richard Branson demo",
+                "first_name": "Lucy",
+                "surname": "Branson-Demo",
+                "demoer_phone": "+14155559999",
+                "monthly_spending_cap": 10.0,
+            },
+        }
+
+
+class DemoAssistantMetaRead(BaseModel):
+    """
+    Schema for reading demo assistant metadata.
+    """
+
+    id: int = Field(
+        ...,
+        description="Unique identifier for the demo metadata",
+        example=42,
+    )
+    source_assistant_id: Optional[int] = Field(
+        None,
+        description="ID of the assistant this demo was cloned from (may be None if source was deleted)",
+        example=12345,
+    )
+    demoer_user_id: str = Field(
+        ...,
+        description="ID of the user who created this demo assistant",
+        example="user_abc123",
+    )
+    label: str = Field(
+        ...,
+        description="Human-readable label for this demo",
+        example="Richard Branson demo",
+    )
+    created_at: datetime = Field(
+        ...,
+        description="When the demo assistant was created",
+        example="2026-02-10T14:30:00Z",
+    )
+
+    class Config:
+        orm_mode = True
+        schema_extra = {
+            "example": {
+                "id": 42,
+                "source_assistant_id": 12345,
+                "demoer_user_id": "user_abc123",
+                "label": "Richard Branson demo",
+                "created_at": "2026-02-10T14:30:00Z",
             },
         }
 
