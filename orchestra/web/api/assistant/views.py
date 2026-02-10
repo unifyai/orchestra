@@ -5258,8 +5258,7 @@ async def create_demo_assistant(
 
     # Get the source assistant
     assistant_dao = AssistantDAO(session)
-    source_assistant = assistant_dao.get_assistant(
-        user_id=user_id,
+    source_assistant = assistant_dao.get_assistant_by_agent_id(
         agent_id=demo_create.source_assistant_id,
     )
 
