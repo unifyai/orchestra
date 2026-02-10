@@ -31,19 +31,23 @@ async def create_phone_number(phone_country: str = "US", is_staging: bool = Fals
     voice_url = ADAPTERS_URL + "/twilio/call"
     sms_url = ADAPTERS_URL + "/twilio/sms"
     status_callback = ADAPTERS_URL + "/twilio/call-status"
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{COMMS_URL}/phone/create",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "voice_url": voice_url,
-                "sms_url": sms_url,
-                "status_callback": status_callback,
-                "phone_country": phone_country,
-            },
-            timeout=20,
-        )
-        return response.json()
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        try:
+            response = await client.post(
+                f"{COMMS_URL}/phone/create",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                json={
+                    "voice_url": voice_url,
+                    "sms_url": sms_url,
+                    "status_callback": status_callback,
+                    "phone_country": phone_country,
+                },
+            )
+            return response.json()
+        except httpx.TimeoutException:
+            raise Exception(
+                "Phone creation timed out - comms service may be cold starting"
+            )
 
 
 async def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
