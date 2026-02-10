@@ -813,6 +813,11 @@ async def create_assistant(
             user_phone=assistant.user_phone,
             timezone=assistant.timezone,
             demo_id=assistant.demo_id,
+            monthly_spending_cap=(
+                float(assistant.monthly_spending_cap)
+                if assistant.monthly_spending_cap is not None
+                else None
+            ),
         ),
     )
 
@@ -989,6 +994,11 @@ def list_assistants(
                     voice_mode=a.voice_mode,
                     timezone=a.timezone,
                     demo_id=a.demo_id,
+                    monthly_spending_cap=(
+                        float(a.monthly_spending_cap)
+                        if a.monthly_spending_cap is not None
+                        else None
+                    ),
                 )
                 for a in assistants
             ],
@@ -1135,6 +1145,11 @@ async def delete_assistant_contact(
                 voice_mode=updated_assistant.voice_mode,
                 timezone=updated_assistant.timezone,
                 demo_id=updated_assistant.demo_id,
+                monthly_spending_cap=(
+                    float(updated_assistant.monthly_spending_cap)
+                    if updated_assistant.monthly_spending_cap is not None
+                    else None
+                ),
             ),
         )
 
@@ -1792,6 +1807,11 @@ async def update_assistant_config(
                 voice_mode=updated.voice_mode,
                 timezone=updated.timezone,
                 demo_id=updated.demo_id,
+                monthly_spending_cap=(
+                    float(updated.monthly_spending_cap)
+                    if updated.monthly_spending_cap is not None
+                    else None
+                ),
             ),
         )
     except HTTPException:
@@ -4769,6 +4789,11 @@ def admin_update_assistant_by_filter(
             voice_mode=updated.voice_mode,
             timezone=updated.timezone,
             demo_id=updated.demo_id,
+            monthly_spending_cap=(
+                float(updated.monthly_spending_cap)
+                if updated.monthly_spending_cap is not None
+                else None
+            ),
             api_key=api_key,
             secrets=secrets_dict,
         ),
@@ -4877,6 +4902,11 @@ def admin_list_assistants_for_user(
                     voice_mode=a.voice_mode,
                     timezone=a.timezone,
                     demo_id=a.demo_id,
+                    monthly_spending_cap=(
+                        float(a.monthly_spending_cap)
+                        if a.monthly_spending_cap is not None
+                        else None
+                    ),
                     api_key=api_keys[i],
                     secrets=secrets_list[i],
                 )
