@@ -37,10 +37,14 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    Assistant,
     AuthUser,
     Context,
+    DemoAssistantMeta,
     LogEvent,
     LogEventContext,
+    Organization,
+    OrganizationMember,
     Project,
 )
 from orchestra.services.bucket_service import BucketService
@@ -69,6 +73,8 @@ from orchestra.web.api.assistant.schema import (
     AssistantUpdate,
     AssistantVideoUploadResponse,
     Contact,
+    DemoAssistantCreate,
+    DemoAssistantMetaRead,
     InfoResponse,
     PhotoGenerateRequest,
     RecordingCreate,
@@ -150,6 +156,7 @@ def check_assistant_hiring_approval(
 
 router = APIRouter()
 admin_router = APIRouter()
+demo_router = APIRouter()
 
 
 @router.post(
@@ -805,6 +812,7 @@ async def create_assistant(
             assistant_whatsapp_number=assistant.assistant_whatsapp_number,
             user_phone=assistant.user_phone,
             timezone=assistant.timezone,
+            demo_id=assistant.demo_id,
         ),
     )
 
@@ -887,6 +895,14 @@ def list_assistants(
         False,
         description="If True and using an org API key, list ALL assistants in the organization (not just those created by the current user). Requires assistant:read permission.",
     ),
+    demo: bool = Query(
+        False,
+        description="If True, include demo assistants in results.",
+    ),
+    demo_only: bool = Query(
+        False,
+        description="If True, only return demo assistants.",
+    ),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List assistants based on API key context.
@@ -923,6 +939,8 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                include_demo=demo,
+                demo_only=demo_only,
             )
         else:
             # Personal context OR org context with list_all_org=False
@@ -931,6 +949,8 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                include_demo=demo,
+                demo_only=demo_only,
             )
         voice_dao = VoiceDAO(session)
 
@@ -968,6 +988,7 @@ def list_assistants(
                     voice_provider=a.voice_provider,
                     voice_mode=a.voice_mode,
                     timezone=a.timezone,
+                    demo_id=a.demo_id,
                 )
                 for a in assistants
             ],
@@ -1113,6 +1134,7 @@ async def delete_assistant_contact(
                 voice_provider=updated_assistant.voice_provider,
                 voice_mode=updated_assistant.voice_mode,
                 timezone=updated_assistant.timezone,
+                demo_id=updated_assistant.demo_id,
             ),
         )
 
@@ -1343,6 +1365,21 @@ async def delete_assistant(
             except Exception as e:
                 cleanup_errors.append(f"Failed to delete email: {str(e)}")
         print(f"EMAIL DELETED: {assistant.email}")
+
+        # Delete demo assistant metadata if this is a demo assistant
+        if assistant.demo_id:
+            try:
+                demo_meta = (
+                    session.query(DemoAssistantMeta)
+                    .filter(
+                        DemoAssistantMeta.id == assistant.demo_id,
+                    )
+                    .first()
+                )
+                if demo_meta:
+                    session.delete(demo_meta)
+            except Exception as e:
+                cleanup_errors.append(f"Failed to delete demo metadata: {str(e)}")
 
         # Finally delete the assistant record (matching rollback error handling)
         try:
@@ -1754,6 +1791,7 @@ async def update_assistant_config(
                 voice_provider=updated.voice_provider,
                 voice_mode=updated.voice_mode,
                 timezone=updated.timezone,
+                demo_id=updated.demo_id,
             ),
         )
     except HTTPException:
@@ -4573,6 +4611,7 @@ def admin_list_all_assistants(
                     if a.monthly_spending_cap is not None
                     else None
                 ),
+                demo_id=a.demo_id,
                 # Expensive fields - only populated if needed
                 api_key=api_keys[i] if api_keys else None,
                 user_first_name=auth_users[i].name if auth_users else None,
@@ -4729,6 +4768,7 @@ def admin_update_assistant_by_filter(
             voice_provider=updated.voice_provider,
             voice_mode=updated.voice_mode,
             timezone=updated.timezone,
+            demo_id=updated.demo_id,
             api_key=api_key,
             secrets=secrets_dict,
         ),
@@ -4836,6 +4876,7 @@ def admin_list_assistants_for_user(
                     voice_provider=a.voice_provider,
                     voice_mode=a.voice_mode,
                     timezone=a.timezone,
+                    demo_id=a.demo_id,
                     api_key=api_keys[i],
                     secrets=secrets_list[i],
                 )
@@ -5150,4 +5191,279 @@ def admin_get_assistant_spend(
         limit=limit,
         limit_set_at=assistant.monthly_spending_cap_set_at,
         percent_used=percent_used,
+    )
+
+
+# ============================================================================
+# Demo Assistant Endpoints
+# ============================================================================
+
+
+@demo_router.post(
+    "/assistant",
+    response_model=InfoResponse[AssistantRead],
+    status_code=status.HTTP_200_OK,
+    summary="Create a demo assistant",
+    description="Create a demo assistant by cloning from a source assistant. Only available to Unify organization members.",
+    tags=["Demo Assistants"],
+    include_in_schema=False,  # Hidden from public API docs
+)
+async def create_demo_assistant(
+    request: Request,
+    demo_create: DemoAssistantCreate,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    """
+    Create a demo assistant for product demonstrations.
+
+    This endpoint is only available to members of the Unify organization.
+    It clones configuration from a source assistant and provisions phone
+    infrastructure for demo calls.
+    """
+    user_id = request.state.user_id
+
+    # Validate user is in Unify organization
+    unify_org_name = settings.orchestra_organization_name
+
+    # Get the Unify organization
+    org_query = (
+        session.query(Organization)
+        .filter(
+            Organization.name == unify_org_name,
+        )
+        .first()
+    )
+
+    if not org_query:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo assistant creation requires Unify organization membership.",
+        )
+
+    # Check if user is a member of the Unify organization
+    member = (
+        session.query(OrganizationMember)
+        .filter(
+            OrganizationMember.user_id == user_id,
+            OrganizationMember.organization_id == org_query.id,
+        )
+        .first()
+    )
+
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a member of the Unify organization to create demo assistants.",
+        )
+
+    # Get the source assistant
+    assistant_dao = AssistantDAO(session)
+    source_assistant = assistant_dao.get_assistant(
+        user_id=user_id,
+        agent_id=demo_create.source_assistant_id,
+    )
+
+    if not source_assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source assistant {demo_create.source_assistant_id} not found or you don't have access to it.",
+        )
+
+    # Check name uniqueness for the new assistant
+    existing = assistant_dao.get_assistant_by_name(
+        user_id=user_id,
+        first_name=demo_create.first_name,
+        surname=demo_create.surname,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"An assistant with name '{demo_create.first_name} {demo_create.surname}' already exists.",
+        )
+
+    try:
+        # Create the demo metadata
+        demo_meta = DemoAssistantMeta(
+            source_assistant_id=source_assistant.agent_id,
+            demoer_user_id=user_id,
+            label=demo_create.label,
+        )
+        session.add(demo_meta)
+        session.flush()  # Get the demo_meta.id
+
+        # Create the demo assistant, cloning config from source
+        demo_assistant = Assistant(
+            user_id=user_id,
+            organization_id=None,  # Personal assistant for the demoer
+            first_name=demo_create.first_name,
+            surname=demo_create.surname,
+            # Clone from source
+            age=source_assistant.age,
+            nationality=source_assistant.nationality,
+            about=source_assistant.about,
+            profile_photo=source_assistant.profile_photo,
+            profile_video=source_assistant.profile_video,
+            voice_id=source_assistant.voice_id,
+            voice_provider=source_assistant.voice_provider,
+            voice_mode=source_assistant.voice_mode,
+            # Demo-specific settings
+            user_phone=demo_create.demoer_phone,
+            timezone="UTC",  # Default timezone for demos
+            monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),
+            # Link to demo metadata
+            demo_id=demo_meta.id,
+        )
+        session.add(demo_assistant)
+        session.flush()  # Get the agent_id
+
+        # Provision phone infrastructure
+        try:
+            phone_number = await create_phone_number(
+                str(demo_assistant.agent_id),
+                source_assistant.phone_country or "US",
+                is_staging=settings.is_staging,
+            )
+            demo_assistant.phone = phone_number
+            demo_assistant.phone_country = source_assistant.phone_country or "US"
+        except Exception as e:
+            logging.error(f"Failed to provision phone for demo assistant: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to provision phone number: {str(e)}",
+            )
+
+        # Create pubsub topic
+        try:
+            await create_pubsub_topic(str(demo_assistant.agent_id))
+        except Exception as e:
+            logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
+
+        # Wake up the assistant with demo mode
+        try:
+            await wake_up_assistant(
+                str(demo_assistant.agent_id),
+                is_staging=settings.is_staging,
+            )
+        except Exception as e:
+            logging.warning(f"Failed to wake up demo assistant: {e}")
+
+        session.commit()
+
+        return InfoResponse(
+            info=AssistantRead(
+                agent_id=str(demo_assistant.agent_id),
+                user_id=demo_assistant.user_id,
+                organization_id=demo_assistant.organization_id,
+                first_name=demo_assistant.first_name,
+                surname=demo_assistant.surname,
+                age=demo_assistant.age,
+                nationality=demo_assistant.nationality,
+                profile_photo=demo_assistant.profile_photo,
+                profile_video=demo_assistant.profile_video,
+                desktop_url=demo_assistant.desktop_url,
+                desktop_mode=demo_assistant.desktop_mode,
+                user_desktop_mode=demo_assistant.user_desktop_mode,
+                user_desktop_filesys_sync=demo_assistant.user_desktop_filesys_sync,
+                user_desktop_url=demo_assistant.user_desktop_url,
+                about=demo_assistant.about,
+                phone_country=demo_assistant.phone_country,
+                weekly_limit=None,
+                max_parallel=demo_assistant.max_parallel,
+                created_at=demo_assistant.created_at,
+                updated_at=demo_assistant.updated_at,
+                phone=demo_assistant.phone,
+                user_phone=demo_assistant.user_phone,
+                user_whatsapp_number=demo_assistant.user_whatsapp_number,
+                assistant_whatsapp_number=demo_assistant.assistant_whatsapp_number,
+                email=demo_assistant.email,
+                voice_id=demo_assistant.voice_id,
+                voice_provider=demo_assistant.voice_provider,
+                voice_mode=demo_assistant.voice_mode,
+                timezone=demo_assistant.timezone,
+                demo_id=demo_assistant.demo_id,
+                monthly_spending_cap=float(demo_assistant.monthly_spending_cap)
+                if demo_assistant.monthly_spending_cap
+                else None,
+            ),
+        )
+
+    except IntegrityError as e:
+        session.rollback()
+        logging.error(f"Database integrity error creating demo assistant: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to create demo assistant due to a constraint violation.",
+        )
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Unexpected error creating demo assistant: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create demo assistant: {str(e)}",
+        )
+
+
+@demo_router.get(
+    "/assistant/{demo_id}/meta",
+    response_model=InfoResponse[DemoAssistantMetaRead],
+    status_code=status.HTTP_200_OK,
+    summary="Get demo assistant metadata",
+    description="Get metadata for a demo assistant.",
+    tags=["Demo Assistants"],
+    include_in_schema=False,  # Hidden from public API docs
+)
+async def get_demo_assistant_meta(
+    request: Request,
+    demo_id: int,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[DemoAssistantMetaRead]:
+    """
+    Get metadata for a demo assistant.
+
+    The caller must own an assistant with this demo_id.
+    """
+    user_id = request.state.user_id
+
+    # Verify the user owns an assistant with this demo_id
+    assistant = (
+        session.query(Assistant)
+        .filter(
+            Assistant.demo_id == demo_id,
+            Assistant.user_id == user_id,
+        )
+        .first()
+    )
+
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Demo assistant not found or you don't have access to it.",
+        )
+
+    # Get the demo metadata
+    demo_meta = (
+        session.query(DemoAssistantMeta)
+        .filter(
+            DemoAssistantMeta.id == demo_id,
+        )
+        .first()
+    )
+
+    if not demo_meta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Demo metadata not found.",
+        )
+
+    return InfoResponse(
+        info=DemoAssistantMetaRead(
+            id=demo_meta.id,
+            source_assistant_id=demo_meta.source_assistant_id,
+            demoer_user_id=demo_meta.demoer_user_id,
+            label=demo_meta.label,
+            created_at=demo_meta.created_at,
+        ),
     )

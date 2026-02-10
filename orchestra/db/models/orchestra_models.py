@@ -1083,6 +1083,39 @@ class FavoriteProject(Base):
     )
 
 
+class DemoAssistantMeta(Base):
+    """Model class for demo assistant metadata.
+
+    Stores metadata about demo assistants created by Unify employees
+    for demonstrating the product to prospects. Each demo assistant
+    has a corresponding entry in this table linked via demo_id.
+    """
+
+    __tablename__ = "demo_assistant_meta"
+
+    id = Column(Integer, primary_key=True)
+    source_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    demoer_user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    label = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Relationships
+    demoer = relationship(
+        "AuthUser",
+        foreign_keys=[demoer_user_id],
+        backref="created_demos",
+    )
+
+
 class Assistant(Base):
     """Model class for the assistants table.
 
@@ -1145,6 +1178,21 @@ class Assistant(Base):
     )
     voice_provider = Column(String, nullable=True)
     voice_mode = Column(String, nullable=True)
+
+    # Demo assistant metadata FK (NULL for regular assistants)
+    demo_id = Column(
+        Integer,
+        ForeignKey("demo_assistant_meta.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Relationship to demo metadata
+    demo_meta = relationship(
+        "DemoAssistantMeta",
+        backref=backref("assistant", uselist=False),
+        foreign_keys=[demo_id],
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(

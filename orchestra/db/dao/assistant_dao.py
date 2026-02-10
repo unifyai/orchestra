@@ -157,6 +157,40 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
 
+    def get_assistant_by_name(
+        self,
+        user_id: str,
+        first_name: str,
+        surname: str,
+        organization_id: Optional[int] = None,
+    ) -> Optional[Assistant]:
+        """
+        Retrieve an Assistant by name within a user/org context.
+
+        Used to check for name uniqueness when creating assistants.
+
+        :param user_id: User ID.
+        :param first_name: Assistant first name.
+        :param surname: Assistant surname.
+        :param organization_id: Organization ID (None for personal assistants).
+        :return: Assistant if found, None otherwise.
+        """
+        if organization_id is not None:
+            stmt = select(Assistant).where(
+                Assistant.organization_id == organization_id,
+                Assistant.first_name == first_name,
+                Assistant.surname == surname,
+            )
+        else:
+            stmt = select(Assistant).where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+                Assistant.first_name == first_name,
+                Assistant.surname == surname,
+            )
+        result = self.session.execute(stmt).scalar_one_or_none()
+        return result
+
     def list_assistants_for_user(
         self,
         user_id: str,
@@ -166,6 +200,8 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        include_demo: bool = False,
+        demo_only: bool = False,
     ) -> List[Assistant]:
         """
         List assistants accessible to a user based on API key context.
@@ -180,6 +216,8 @@ class AssistantDAO:
 
         :param user_id: User ID.
         :param organization_id: Organization ID from API key context (None = personal).
+        :param include_demo: If True, include demo assistants in results.
+        :param demo_only: If True, only return demo assistants.
         :return: List of assistants.
         """
         if organization_id is not None:
@@ -194,6 +232,12 @@ class AssistantDAO:
                 Assistant.user_id == user_id,
                 Assistant.organization_id.is_(None),
             )
+
+        # Demo filtering
+        if demo_only:
+            stmt = stmt.where(Assistant.demo_id.isnot(None))
+        elif not include_demo:
+            stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if phone is not None:
             stmt = stmt.where(Assistant.phone == phone)
@@ -218,6 +262,8 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        include_demo: bool = False,
+        demo_only: bool = False,
     ) -> List[Assistant]:
         """
         List ALL assistants in an organization (for list_all_org=True).
@@ -226,11 +272,19 @@ class AssistantDAO:
         Should only be called after verifying the user has assistant:read permission.
 
         :param organization_id: Organization ID.
+        :param include_demo: If True, include demo assistants in results.
+        :param demo_only: If True, only return demo assistants.
         :return: List of all assistants in the organization.
         """
         stmt = select(Assistant).where(
             Assistant.organization_id == organization_id,
         )
+
+        # Demo filtering
+        if demo_only:
+            stmt = stmt.where(Assistant.demo_id.isnot(None))
+        elif not include_demo:
+            stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if phone is not None:
             stmt = stmt.where(Assistant.phone == phone)
