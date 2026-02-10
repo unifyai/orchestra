@@ -5317,12 +5317,13 @@ async def create_demo_assistant(
 
         # Provision phone infrastructure
         try:
-            phone_number = await create_phone_number(
-                str(demo_assistant.agent_id),
-                source_assistant.phone_country or "US",
+            phone_response = await create_phone_number(
+                phone_country=source_assistant.phone_country or "US",
                 is_staging=settings.is_staging,
             )
-            demo_assistant.phone = phone_number
+            if "detail" in phone_response:
+                raise Exception(f"Phone creation failed: {phone_response['detail']}")
+            demo_assistant.phone = phone_response.get("phoneNumber")
             demo_assistant.phone_country = source_assistant.phone_country or "US"
         except Exception as e:
             logging.error(f"Failed to provision phone for demo assistant: {e}")
@@ -5333,7 +5334,10 @@ async def create_demo_assistant(
 
         # Create pubsub topic
         try:
-            await create_pubsub_topic(str(demo_assistant.agent_id))
+            await create_pubsub_topic(
+                str(demo_assistant.agent_id),
+                is_staging=settings.is_staging,
+            )
         except Exception as e:
             logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
 
