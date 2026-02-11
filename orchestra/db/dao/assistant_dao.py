@@ -682,3 +682,52 @@ class AssistantDAO:
         if result and result.spend:
             return float(result.spend)
         return 0.0
+
+    def generate_unique_email_local(
+        self,
+        first_name: str,
+        surname: str,
+    ) -> str:
+        """
+        Generate a unique email local part for demo assistants.
+
+        Uses {first_name.lower()}.{surname.lower()} as base.
+        If a collision exists, appends .1, .2, etc. until unique.
+
+        :param first_name: Assistant's first name
+        :param surname: Assistant's surname
+        :return: Unique email local part (without @domain)
+        """
+        import re
+
+        # Normalize names: lowercase, remove non-alphanumeric, limit length
+        def normalize(s: str) -> str:
+            s = re.sub(r"[^a-z0-9]", "", s.lower())
+            return s[:30] if len(s) > 30 else s
+
+        base_local = f"{normalize(first_name)}.{normalize(surname)}"
+
+        # Query existing emails to check for collisions
+        existing_emails = (
+            self.session.query(Assistant.email)
+            .filter(Assistant.email.isnot(None))
+            .all()
+        )
+        existing_locals = {
+            email[0].lower().split("@")[0] for email in existing_emails if email[0]
+        }
+
+        # Check if base is unique
+        if base_local not in existing_locals:
+            return base_local
+
+        # Find unique suffix
+        for i in range(1, 1000):
+            candidate = f"{base_local}.{i}"
+            if candidate not in existing_locals:
+                return candidate
+
+        # Extremely unlikely fallback
+        import uuid
+
+        return f"{base_local}.{uuid.uuid4().hex[:8]}"
