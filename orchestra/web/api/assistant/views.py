@@ -5413,7 +5413,12 @@ async def create_demo_assistant(
         except Exception as e:
             logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
 
+        # Commit the transaction BEFORE waking up the assistant
+        # This ensures the assistant is visible to Adapters when it queries Orchestra
+        session.commit()
+
         # Wake up the assistant with demo mode
+        # This must happen AFTER commit so Adapters can find the assistant in the database
         try:
             await wake_up_assistant(
                 str(demo_assistant.agent_id),
@@ -5421,8 +5426,6 @@ async def create_demo_assistant(
             )
         except Exception as e:
             logging.warning(f"Failed to wake up demo assistant: {e}")
-
-        session.commit()
 
         return InfoResponse(
             info=AssistantRead(
