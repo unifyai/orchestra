@@ -1108,6 +1108,12 @@ class DemoAssistantMeta(Base):
     label = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
+    # Optional prospect details (for pre-populating boss contact in Unity)
+    prospect_first_name = Column(String, nullable=True)
+    prospect_surname = Column(String, nullable=True)
+    prospect_email = Column(String, nullable=True)
+    prospect_phone = Column(String, nullable=True)
+
     # Relationships
     demoer = relationship(
         "AuthUser",

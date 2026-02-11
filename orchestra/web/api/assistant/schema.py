@@ -382,6 +382,38 @@ class DemoAssistantCreate(BaseModel):
         description="Monthly spending cap in USD for the demo assistant (default: $10, max: $100)",
         example=10.0,
     )
+    phone_country: Optional[str] = Field(
+        None,
+        description="Country code for phone number provisioning (e.g., US, GB). If not provided, uses source assistant's country or defaults to US.",
+        example="US",
+    )
+    # Optional email provisioning
+    provision_email: bool = Field(
+        default=False,
+        description="Whether to provision an email address for the demo assistant (default: false)",
+        example=False,
+    )
+    # Optional prospect details - if provided, Unity will pre-populate the boss contact
+    prospect_first_name: Optional[str] = Field(
+        None,
+        description="Prospect's first name (optional, for pre-populating boss contact in Unity)",
+        example="Richard",
+    )
+    prospect_surname: Optional[str] = Field(
+        None,
+        description="Prospect's surname (optional, for pre-populating boss contact in Unity)",
+        example="Branson",
+    )
+    prospect_email: Optional[str] = Field(
+        None,
+        description="Prospect's email address (optional, for pre-populating boss contact in Unity)",
+        example="richard@virgin.com",
+    )
+    prospect_phone: Optional[str] = Field(
+        None,
+        description="Prospect's phone number in E.164 format (optional, for pre-populating boss contact in Unity)",
+        example="+447700900000",
+    )
 
     class Config:
         schema_extra = {
@@ -392,6 +424,11 @@ class DemoAssistantCreate(BaseModel):
                 "surname": "Branson-Demo",
                 "demoer_phone": "+14155559999",
                 "monthly_spending_cap": 10.0,
+                "provision_email": False,
+                "prospect_first_name": "Richard",
+                "prospect_surname": "Branson",
+                "prospect_email": "richard@virgin.com",
+                "prospect_phone": "+447700900000",
             },
         }
 
@@ -426,6 +463,27 @@ class DemoAssistantMetaRead(BaseModel):
         description="When the demo assistant was created",
         example="2026-02-10T14:30:00Z",
     )
+    # Optional prospect details - stored if provided during creation
+    prospect_first_name: Optional[str] = Field(
+        None,
+        description="Prospect's first name (if provided during creation)",
+        example="Richard",
+    )
+    prospect_surname: Optional[str] = Field(
+        None,
+        description="Prospect's surname (if provided during creation)",
+        example="Branson",
+    )
+    prospect_email: Optional[str] = Field(
+        None,
+        description="Prospect's email address (if provided during creation)",
+        example="richard@virgin.com",
+    )
+    prospect_phone: Optional[str] = Field(
+        None,
+        description="Prospect's phone number in E.164 format (if provided during creation)",
+        example="+447700900000",
+    )
 
     class Config:
         orm_mode = True
@@ -436,6 +494,10 @@ class DemoAssistantMetaRead(BaseModel):
                 "demoer_user_id": "user_abc123",
                 "label": "Richard Branson demo",
                 "created_at": "2026-02-10T14:30:00Z",
+                "prospect_first_name": "Richard",
+                "prospect_surname": "Branson",
+                "prospect_email": "richard@virgin.com",
+                "prospect_phone": "+447700900000",
             },
         }
 
