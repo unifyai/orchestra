@@ -46,7 +46,7 @@ async def create_phone_number(phone_country: str = "US", is_staging: bool = Fals
             return response.json()
         except httpx.TimeoutException:
             raise Exception(
-                "Phone creation timed out - comms service may be cold starting"
+                "Phone creation timed out - comms service may be cold starting",
             )
 
 
@@ -243,7 +243,7 @@ async def create_vm(
                 "assistant_name": assistant_name,
                 "vm_type": vm_type,
             },
-            timeout=60,
+            timeout=120,
         )
         return response.json()
 
@@ -268,7 +268,7 @@ async def delete_vm(
             f"{COMMS_URL}/infra/vm/delete",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={"assistant_id": assistant_id, "vm_type": vm_type},
-            timeout=60,
+            timeout=120,
         )
         return response.json()
 
