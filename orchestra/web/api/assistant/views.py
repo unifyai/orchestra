@@ -5311,11 +5311,16 @@ async def create_demo_assistant(
         )
 
     try:
-        # Create the demo metadata
+        # Create the demo metadata (including optional prospect details)
         demo_meta = DemoAssistantMeta(
             source_assistant_id=source_assistant.agent_id,
             demoer_user_id=user_id,
             label=demo_create.label,
+            # Optional prospect details for pre-populating boss contact
+            prospect_first_name=demo_create.prospect_first_name,
+            prospect_surname=demo_create.prospect_surname,
+            prospect_email=demo_create.prospect_email,
+            prospect_phone=demo_create.prospect_phone,
         )
         session.add(demo_meta)
         session.flush()  # Get the demo_meta.id
@@ -5346,21 +5351,58 @@ async def create_demo_assistant(
         session.flush()  # Get the agent_id
 
         # Provision phone infrastructure
+        # Use provided phone_country, fallback to source assistant's country, then default to US
+        phone_country = demo_create.phone_country or "US"
         try:
             phone_response = await create_phone_number(
-                phone_country=source_assistant.phone_country or "US",
+                phone_country=phone_country,
                 is_staging=settings.is_staging,
             )
             if "detail" in phone_response:
                 raise Exception(f"Phone creation failed: {phone_response['detail']}")
             demo_assistant.phone = phone_response.get("phoneNumber")
-            demo_assistant.phone_country = source_assistant.phone_country or "US"
+            demo_assistant.phone_country = phone_country
         except Exception as e:
             logging.error(f"Failed to provision phone for demo assistant: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to provision phone number: {str(e)}",
             )
+
+        # Optionally provision email infrastructure
+        if demo_create.provision_email:
+            try:
+                email_local = assistant_dao.generate_unique_email_local(
+                    demo_create.first_name,
+                    demo_create.surname,
+                )
+                email_response = await create_email(
+                    email_local,
+                    demo_create.first_name,
+                    demo_create.surname,
+                )
+                if "detail" in email_response:
+                    raise Exception(
+                        f"Email creation failed: {email_response['detail']}",
+                    )
+                created_email = email_response.get("user", {}).get("primaryEmail")
+                demo_assistant.email = created_email
+                logging.info(f"Email provisioned for demo assistant: {created_email}")
+
+                # Wait and set up email watch
+                await asyncio.sleep(10)
+                watch_response = await watch_email(
+                    created_email,
+                    is_staging=settings.is_staging,
+                )
+                if "detail" in watch_response:
+                    logging.warning(
+                        f"Email watch setup failed for demo assistant: {watch_response['detail']}",
+                    )
+            except Exception as e:
+                logging.error(f"Failed to provision email for demo assistant: {e}")
+                # Don't fail the whole creation - email is optional
+                # The phone is already provisioned, so we continue
 
         # Create pubsub topic
         try:
@@ -5498,5 +5540,62 @@ async def get_demo_assistant_meta(
             demoer_user_id=demo_meta.demoer_user_id,
             label=demo_meta.label,
             created_at=demo_meta.created_at,
+            prospect_first_name=demo_meta.prospect_first_name,
+            prospect_surname=demo_meta.prospect_surname,
+            prospect_email=demo_meta.prospect_email,
+            prospect_phone=demo_meta.prospect_phone,
         ),
+    )
+
+
+@demo_router.get(
+    "/assistant/meta/list",
+    response_model=InfoResponse[List[DemoAssistantMetaRead]],
+    status_code=status.HTTP_200_OK,
+    summary="List all demo assistant metadata for current user",
+    description="List all demo assistant metadata for the authenticated user.",
+    tags=["Demo Assistants"],
+    include_in_schema=False,  # Hidden from public API docs
+)
+async def list_demo_assistant_meta(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[List[DemoAssistantMetaRead]]:
+    """
+    List all demo assistant metadata for the authenticated user.
+
+    Returns metadata for all demo assistants owned by the current user,
+    including labels and prospect details for UI display.
+    """
+    user_id = request.state.user_id
+
+    # Get all demo meta entries for assistants owned by this user
+    demo_metas = (
+        session.query(DemoAssistantMeta)
+        .join(
+            Assistant,
+            Assistant.demo_id == DemoAssistantMeta.id,
+        )
+        .filter(
+            Assistant.user_id == user_id,
+        )
+        .order_by(DemoAssistantMeta.created_at.desc())
+        .all()
+    )
+
+    return InfoResponse(
+        info=[
+            DemoAssistantMetaRead(
+                id=meta.id,
+                source_assistant_id=meta.source_assistant_id,
+                demoer_user_id=meta.demoer_user_id,
+                label=meta.label,
+                created_at=meta.created_at,
+                prospect_first_name=meta.prospect_first_name,
+                prospect_surname=meta.prospect_surname,
+                prospect_email=meta.prospect_email,
+                prospect_phone=meta.prospect_phone,
+            )
+            for meta in demo_metas
+        ],
     )
