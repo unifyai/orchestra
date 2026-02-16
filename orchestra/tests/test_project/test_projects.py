@@ -415,7 +415,7 @@ async def test_share_project(client: AsyncClient):
 
     # create a new user
     response = await client.post(
-        "v0/admin/auth-user",
+        "v0/admin/user",
         json={
             "email": "test_recipient_user@example.com",
             "name": "test_recipient_user",
@@ -471,7 +471,7 @@ async def test_share_project(client: AsyncClient):
     # get the org api key for the new user (project is now org-owned)
     # Use by-email endpoint which returns organizations list with API keys
     response = await client.get(
-        "/v0/admin/auth-user/by-email?email=test_recipient_user@example.com",
+        "/v0/admin/user/by-email?email=test_recipient_user@example.com",
         headers=admin_headers,
     )
     data = response.json()
@@ -566,7 +566,7 @@ async def test_duplicate_project(client: AsyncClient):
 
     # Create a new target user
     response = await client.post(
-        "v0/admin/auth-user",
+        "v0/admin/user",
         json={
             "email": "test_new_duplicate_target_with_new_interfaces@example.com",
             "name": "test_new_duplicate_target_with_new_interfaces",
@@ -779,7 +779,7 @@ async def test_duplicate_project(client: AsyncClient):
 
     # Get the API key for the target user
     response = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={target_user_id}",
+        f"/v0/admin/user/by-user-id?user_id={target_user_id}",
         headers=admin_headers,
     )
     data = response.json()

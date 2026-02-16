@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -13,37 +12,94 @@ import stripe
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.lib.time import month_end_utc
+from orchestra.settings import settings
 
 
-def recharge_and_generate_invoice(user, users_dao):
+def recharge_and_generate_invoice(billing_account, db_session):
+    """
+    Generate a Stripe invoice for auto-recharge and credit a BillingAccount.
+
+    Works identically for user and organization billing accounts.
+
+    Args:
+        billing_account: The BillingAccount to recharge (must have stripe_customer_id).
+        db_session: SQLAlchemy session for DB operations.
+    """
     try:
         # Configure Stripe API key
-        stripe_key = os.environ.get("STRIPE_SECRET_KEY")
-        if not stripe_key:
-            logging.error("STRIPE_SECRET_KEY environment variable not set")
+        if not settings.stripe_secret_key:
+            logging.error("stripe_secret_key not configured in settings")
             return None
 
-        stripe.api_key = stripe_key
-        customer_id = user.stripe_customer_id
+        stripe.api_key = settings.stripe_secret_key
+
+        if not billing_account or not billing_account.stripe_customer_id:
+            logging.error(
+                f"BillingAccount {getattr(billing_account, 'id', '?')} "
+                f"has no stripe_customer_id",
+            )
+            return None
+
+        customer_id = billing_account.stripe_customer_id
+        autorecharge_qty = float(billing_account.autorecharge_qty)
+        ba_id = billing_account.id
+
         customer = stripe.Customer.retrieve(customer_id)
         if not customer.invoice_settings.default_payment_method:
             logging.warning("Customer does not have a default payment method set.")
             return
 
-        # Create an invoice with metadata at creation time
-        invoice = stripe.Invoice.create(
-            customer=customer_id,
-            auto_advance=False,
-            metadata={
-                "user_id": user.id,
-                "credits_purchased": user.autorecharge_qty,
+        # Deterministic idempotency key to prevent duplicate invoices on retries
+        invoice_group = month_end_utc(date.today())
+        idem_key = f"autorecharge-ba{ba_id}-{invoice_group}-{int(autorecharge_qty)}"
+
+        # Build invoice params with tax support
+        invoice_params = {
+            "customer": customer_id,
+            "auto_advance": False,
+            "automatic_tax": {"enabled": True},
+            "description": (f"Auto-recharge: {int(autorecharge_qty)} credits"),
+            "payment_settings": {
+                "payment_method_options": {
+                    "card": {"request_three_d_secure": "any"},
+                },
             },
+            "metadata": {
+                "billing_account_id": str(ba_id),
+                "credits_purchased": autorecharge_qty,
+                "type": "auto_recharge",
+            },
+        }
+
+        # Include customer tax IDs if available on the billing account
+        if billing_account.tax_id:
+            from orchestra.web.api.utils.business_validation import (
+                get_stripe_tax_id_type,
+            )
+
+            tax_id_type = billing_account.tax_id_type
+            if not tax_id_type:
+                country = None
+                if billing_account.billing_address and isinstance(
+                    billing_account.billing_address,
+                    dict,
+                ):
+                    country = billing_account.billing_address.get("country")
+                tax_id_type = get_stripe_tax_id_type(country)
+
+            invoice_params["customer_tax_ids"] = [
+                {"type": tax_id_type, "value": billing_account.tax_id},
+            ]
+
+        invoice = stripe.Invoice.create(
+            **invoice_params,
+            idempotency_key=idem_key,
         )
 
         # Add an invoice item
         stripe.InvoiceItem.create(
             customer=customer_id,
-            amount=int(user.autorecharge_qty * 100),  # stripe takes amount in cents
+            amount=int(autorecharge_qty * 100),  # stripe takes amount in cents
             currency="usd",
             description="Unify Credits",
             invoice=invoice.id,
@@ -57,8 +113,8 @@ def recharge_and_generate_invoice(user, users_dao):
             stripe.PaymentIntent.modify(
                 payment_intent_id,
                 metadata={
-                    "user_id": user.id,
-                    "credits_purchased": user.autorecharge_qty,
+                    "billing_account_id": str(ba_id),
+                    "credits_purchased": autorecharge_qty,
                 },
             )
         logging.info(f"Finalized invoice: {finalized_invoice}")
@@ -72,25 +128,25 @@ def recharge_and_generate_invoice(user, users_dao):
             )
 
             # Record the paid transaction in the Recharge table
-            # Since we paid immediately, mark it as PAID and add credits immediately
             recharge = Recharge(
-                user_id=user.id,
-                quantity=user.autorecharge_qty,
-                amount_usd=Decimal(user.autorecharge_qty),  # 1 credit = $1
-                invoice_group=month_end_utc(date.today()),
+                billing_account_id=ba_id,
+                quantity=autorecharge_qty,
+                amount_usd=Decimal(str(autorecharge_qty)),  # 1 credit = $1
+                invoice_group=invoice_group,
                 type="invoice",
                 transaction_id=finalized_invoice.id,
-                status=RechargeStatus.PAID,  # Mark as PAID since we paid immediately
+                status=RechargeStatus.PAID,
                 stripe_invoice_id=finalized_invoice.id,
             )
-            users_dao.session.add(recharge)
+            db_session.add(recharge)
 
-            # Add credits immediately since payment succeeded
-            users_dao.recharge_credit(user.id, int(user.autorecharge_qty))
-            users_dao.session.commit()
+            # Add credits directly to the billing account
+            billing_account.credits += Decimal(str(int(autorecharge_qty)))
+            db_session.commit()
         else:
             logging.warning(
-                f"Invoice {finalized_invoice.number} did not pay as expected. Status: {pay_invoice.status}",
+                f"Invoice {finalized_invoice.number} did not pay as expected. "
+                f"Status: {pay_invoice.status}",
             )
             return
 

@@ -26,7 +26,7 @@ async def approve_default_user(client: AsyncClient):
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
     user_id = credits_resp.json()["id"]
 
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert approve_resp.status_code == status.HTTP_200_OK
 
@@ -156,7 +156,6 @@ async def test_org_assistant_create_grants_owner_role(client: AsyncClient, dbses
     owner = await create_test_user(
         client,
         "org_asst_owner@test.com",
-        hiring_approved=True,
     )
 
     # Create organization - API key is included in response
@@ -200,7 +199,6 @@ async def test_org_assistant_update_with_org_key(client: AsyncClient, dbsession)
     owner = await create_test_user(
         client,
         "org_asst_update@test.com",
-        hiring_approved=True,
     )
 
     # Create organization - API key is included in response
@@ -259,12 +257,10 @@ async def test_org_assistant_update_by_member_with_permission(
     owner = await create_test_user(
         client,
         "org_member_update_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "org_member_update_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -336,12 +332,10 @@ async def test_org_assistant_update_by_member_without_permission(
     owner = await create_test_user(
         client,
         "org_noperm_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "org_noperm_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -394,12 +388,10 @@ async def test_org_assistant_list_own_only(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "org_list_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "org_list_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization - owner gets API key in response
@@ -450,12 +442,10 @@ async def test_org_assistant_list_all_org(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "org_listall_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "org_listall_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization - owner gets API key in response
@@ -509,12 +499,10 @@ async def test_org_assistant_permission_checks(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "org_perm_owner@test.com",
-        hiring_approved=True,
     )
     viewer = await create_test_user(
         client,
         "org_perm_viewer@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -559,7 +547,6 @@ async def test_transfer_personal_to_org(client: AsyncClient, dbsession):
     user = await create_test_user(
         client,
         "transfer_to_org@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant
@@ -615,7 +602,6 @@ async def test_transfer_org_to_personal(client: AsyncClient, dbsession):
     user = await create_test_user(
         client,
         "transfer_to_personal@test.com",
-        hiring_approved=True,
     )
 
     # Create organization - API key included in response
@@ -667,7 +653,6 @@ async def test_transfer_to_org_requires_personal_api_key(
     user = await create_test_user(
         client,
         "transfer_key_check@test.com",
-        hiring_approved=True,
     )
 
     # Create organization - API key included in response
@@ -699,7 +684,6 @@ async def test_transfer_to_personal_requires_org_api_key(
     user = await create_test_user(
         client,
         "transfer_org_key@test.com",
-        hiring_approved=True,
     )
 
     # Try to transfer using personal API key - should fail
@@ -718,12 +702,10 @@ async def test_transfer_to_org_requires_permission(client: AsyncClient, dbsessio
     owner = await create_test_user(
         client,
         "transfer_perm_owner@test.com",
-        hiring_approved=True,
     )
     viewer = await create_test_user(
         client,
         "transfer_perm_viewer@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -773,7 +755,6 @@ async def test_personal_assistant_owner_has_full_access(client: AsyncClient, dbs
     user = await create_test_user(
         client,
         "personal_full_access@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant using DAO
@@ -825,12 +806,10 @@ async def test_personal_assistant_other_users_no_access(client: AsyncClient, dbs
     owner = await create_test_user(
         client,
         "personal_owner_access@test.com",
-        hiring_approved=True,
     )
     other = await create_test_user(
         client,
         "other_no_access@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant
@@ -869,12 +848,10 @@ async def test_org_assistant_explicit_grant_overrides_implicit(
     owner = await create_test_user(
         client,
         "org_explicit_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "org_explicit_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -954,7 +931,6 @@ async def test_filter_accessible_assistants(client: AsyncClient, dbsession):
     user = await create_test_user(
         client,
         "filter_assistants@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant
@@ -1028,7 +1004,6 @@ async def test_personal_and_org_assistants_isolated(client: AsyncClient, dbsessi
     user = await create_test_user(
         client,
         "isolation_test@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant
@@ -1099,7 +1074,7 @@ async def test_transfer_personal_to_org_with_logs_transfer(
     dbsession,
 ):
     """Test that transferring to org with transfer_logs=True moves logs correctly."""
-    user = await create_test_user(client, "log_transfer@test.com", hiring_approved=True)
+    user = await create_test_user(client, "log_transfer@test.com")
 
     # Create the personal "Assistants" project FIRST (before assistant creation)
     project_name = "Assistants"
@@ -1197,7 +1172,6 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
     user = await create_test_user(
         client,
         "3tier_transfer@test.com",
-        hiring_approved=True,
     )
     user_name = "TransferUser"
 
@@ -1315,7 +1289,7 @@ async def test_transfer_org_to_personal_with_logs_deletion(
     dbsession,
 ):
     """Test that transferring to personal with delete_logs=True deletes org logs."""
-    user = await create_test_user(client, "log_delete@test.com", hiring_approved=True)
+    user = await create_test_user(client, "log_delete@test.com")
 
     # Create organization
     org_resp = await client.post(
@@ -1398,7 +1372,6 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
     user = await create_test_user(
         client,
         "org_delete_logs@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -1487,7 +1460,6 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
     user = await create_test_user(
         client,
         "org_3tier_cleanup@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -1624,7 +1596,6 @@ async def test_admin_list_personal_assistant_has_personal_api_key(
     user = await create_test_user(
         client,
         "admin_key_personal@test.com",
-        hiring_approved=True,
     )
 
     # Get user's personal API key
@@ -1659,7 +1630,6 @@ async def test_admin_list_org_assistant_has_org_api_key(client: AsyncClient, dbs
     user = await create_test_user(
         client,
         "admin_key_org@test.com",
-        hiring_approved=True,
     )
 
     # Create organization - get org API key
@@ -1700,7 +1670,7 @@ async def test_admin_list_mixed_assistants_correct_api_keys(
     dbsession,
 ):
     """Test that admin endpoint returns correct API keys for mixed assistant types."""
-    user = await create_test_user(client, "admin_mixed@test.com", hiring_approved=True)
+    user = await create_test_user(client, "admin_mixed@test.com")
     personal_api_key = user["headers"]["Authorization"].replace("Bearer ", "")
 
     # Create personal assistant
@@ -1768,7 +1738,6 @@ async def test_transfer_creates_assistants_project_if_missing(
     user = await create_test_user(
         client,
         "transfer_create_proj@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant
@@ -1817,7 +1786,6 @@ async def test_transfer_with_no_logs_succeeds(client: AsyncClient, dbsession):
     user = await create_test_user(
         client,
         "transfer_no_logs@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant (no logs created)
@@ -1855,12 +1823,10 @@ async def test_transfer_to_org_duplicate_name_fails(client: AsyncClient, dbsessi
     org_owner = await create_test_user(
         client,
         "dup_org_owner@test.com",
-        hiring_approved=True,
     )
     personal_user = await create_test_user(
         client,
         "dup_personal@test.com",
-        hiring_approved=True,
     )
 
     # Org owner creates organization
@@ -1912,7 +1878,6 @@ async def test_transfer_to_nonexistent_org_fails(client: AsyncClient, dbsession)
     user = await create_test_user(
         client,
         "transfer_noorg@test.com",
-        hiring_approved=True,
     )
 
     # Create personal assistant
@@ -1939,7 +1904,6 @@ async def test_transfer_already_org_assistant_fails(client: AsyncClient, dbsessi
     user = await create_test_user(
         client,
         "transfer_already_org@test.com",
-        hiring_approved=True,
     )
 
     # This test verifies the API key check - must use personal key for to-org transfer
@@ -1980,12 +1944,10 @@ async def test_transfer_personal_assistant_not_owned_fails(
     owner = await create_test_user(
         client,
         "transfer_owner@test.com",
-        hiring_approved=True,
     )
     other = await create_test_user(
         client,
         "transfer_other@test.com",
-        hiring_approved=True,
     )
 
     # Owner creates personal assistant
@@ -2023,12 +1985,10 @@ async def test_transfer_org_to_personal_requires_delete_permission(
     owner = await create_test_user(
         client,
         "delete_perm_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "delete_perm_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -2072,11 +2032,10 @@ async def test_transfer_org_to_personal_requires_delete_permission(
 @pytest.mark.anyio
 async def test_transfer_to_org_non_member_fails(client: AsyncClient, dbsession):
     """Test that non-member of org cannot transfer assistant to it."""
-    user = await create_test_user(client, "non_member@test.com", hiring_approved=True)
+    user = await create_test_user(client, "non_member@test.com")
     org_owner = await create_test_user(
         client,
         "org_owner_nm@test.com",
-        hiring_approved=True,
     )
 
     # Org owner creates organization (user is NOT a member)
@@ -2108,7 +2067,7 @@ async def test_transfer_to_org_non_member_fails(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_transfer_response_logs_transferred_flag(client: AsyncClient, dbsession):
     """Test that logs_transferred flag is correct in transfer response."""
-    user = await create_test_user(client, "logs_flag@test.com", hiring_approved=True)
+    user = await create_test_user(client, "logs_flag@test.com")
 
     # Create personal assistant
     create_resp = await client.post(
@@ -2141,7 +2100,7 @@ async def test_transfer_response_logs_transferred_flag(client: AsyncClient, dbse
 @pytest.mark.anyio
 async def test_transfer_response_logs_deleted_flag(client: AsyncClient, dbsession):
     """Test that logs_deleted flag is correct in transfer response."""
-    user = await create_test_user(client, "delete_flag@test.com", hiring_approved=True)
+    user = await create_test_user(client, "delete_flag@test.com")
 
     # Create organization
     org_resp = await client.post(
@@ -2186,7 +2145,6 @@ async def test_transfer_creates_assistants_project_with_owner_access(
     user = await create_test_user(
         client,
         "proj_owner_creator@test.com",
-        hiring_approved=True,
     )
 
     # Create personal Assistants project (so we can transfer logs)
@@ -2267,7 +2225,6 @@ async def test_transfer_grants_member_to_second_user_on_existing_project(
     user1 = await create_test_user(
         client,
         "proj_first_user@test.com",
-        hiring_approved=True,
     )
 
     # Create organization (user1 becomes owner)
@@ -2292,7 +2249,6 @@ async def test_transfer_grants_member_to_second_user_on_existing_project(
     user2 = await create_test_user(
         client,
         "proj_second_user@test.com",
-        hiring_approved=True,
     )
 
     # Add user2 to org (use user_id, not email - OrganizationMemberAdd schema)
@@ -2322,7 +2278,7 @@ async def test_transfer_grants_member_to_second_user_on_existing_project(
 
     # Get user2's org API key
     user2_info_resp = await client.get(
-        f"/v0/admin/auth-user/by-email?email=proj_second_user@test.com",
+        f"/v0/admin/user/by-email?email=proj_second_user@test.com",
         headers=ADMIN_HEADERS,
     )
     user2_info = user2_info_resp.json()
@@ -2390,7 +2346,6 @@ async def test_transfer_no_duplicate_grant_if_already_has_access(
     user = await create_test_user(
         client,
         "no_dup_grant@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -2477,7 +2432,6 @@ async def test_transfer_shared_all_context_logs(
     user = await create_test_user(
         client,
         "shared_ctx_transfer@test.com",
-        hiring_approved=True,
     )
 
     # Create personal Assistants project
@@ -2614,7 +2568,6 @@ async def test_transfer_shared_context_to_existing_org_context(
     user = await create_test_user(
         client,
         "existing_shared_ctx@test.com",
-        hiring_approved=True,
     )
 
     # Create personal Assistants project
@@ -2730,7 +2683,6 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
     user = await create_test_user(
         client,
         "shared_ctx_delete@test.com",
-        hiring_approved=True,
     )
     user_name = "TestUser"
 
@@ -2858,7 +2810,6 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     user = await create_test_user(
         client,
         "preserve_other_logs@test.com",
-        hiring_approved=True,
     )
     user_name = "PreserveUser"
 
@@ -3024,7 +2975,6 @@ async def test_org_assistant_create_creates_assistants_project_with_owner_access
     user = await create_test_user(
         client,
         "org_asst_proj_owner@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -3091,7 +3041,6 @@ async def test_new_org_member_gets_assistants_project_access_on_join(
     user1 = await create_test_user(
         client,
         "org_asst_proj_owner2@test.com",
-        hiring_approved=True,
     )
 
     org_resp = await client.post(
@@ -3120,7 +3069,6 @@ async def test_new_org_member_gets_assistants_project_access_on_join(
     user2 = await create_test_user(
         client,
         "org_asst_member@test.com",
-        hiring_approved=True,
     )
 
     add_member_resp = await client.post(
@@ -3180,7 +3128,6 @@ async def test_org_assistant_create_grants_member_access_to_existing_org_members
     user1 = await create_test_user(
         client,
         "org_asst_proj_creator@test.com",
-        hiring_approved=True,
     )
 
     org_resp = await client.post(
@@ -3197,12 +3144,10 @@ async def test_org_assistant_create_grants_member_access_to_existing_org_members
     user2 = await create_test_user(
         client,
         "org_asst_member2@test.com",
-        hiring_approved=True,
     )
     user3 = await create_test_user(
         client,
         "org_asst_member3@test.com",
-        hiring_approved=True,
     )
 
     add_member2_resp = await client.post(
@@ -3310,7 +3255,6 @@ async def test_new_org_member_via_invite_gets_assistants_project_access(
     user1 = await create_test_user(
         client,
         "org_invite_owner@test.com",
-        hiring_approved=True,
     )
 
     org_resp = await client.post(
@@ -3339,7 +3283,6 @@ async def test_new_org_member_via_invite_gets_assistants_project_access(
     user2 = await create_test_user(
         client,
         "org_invite_member@test.com",
-        hiring_approved=True,
     )
 
     invite_resp = await client.post(

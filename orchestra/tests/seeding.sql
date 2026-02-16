@@ -1,13 +1,37 @@
--- Users
-INSERT INTO users VALUES (:user_id, 10000, null, False, -1, 0);
-INSERT INTO users VALUES ('stripe_autorecharge', 10, null, False, -1, 0);
-INSERT INTO users VALUES ('user1', 1, null, False, -1, 0);
-INSERT INTO users VALUES ('user2', 9.99, null, False, -1, 0);
-INSERT INTO users VALUES ('user3', 10, null, False, -1, 0);
-INSERT INTO users VALUES ('user4', 20, null, False, -1, 0);
+-- Billing accounts (shared billing for users)
+INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
+VALUES (1, 10000, null, False, 0, 25, 'ACTIVE', False, 'developer');
+INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
+VALUES (2, 10, null, False, -1, 0, 'ACTIVE', False, 'developer');
+INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
+VALUES (3, 1, null, False, 0, 25, 'ACTIVE', False, 'developer');
+INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
+VALUES (4, 9.99, null, False, 0, 25, 'ACTIVE', False, 'developer');
+INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
+VALUES (5, 10, null, False, 0, 25, 'ACTIVE', False, 'developer');
+INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
+VALUES (6, 20, null, False, 0, 25, 'ACTIVE', False, 'developer');
+INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
+VALUES (7, 0, null, False, 0, 25, 'ACTIVE', False, 'developer');
 
-INSERT INTO auth_user("id", "email") VALUES (:user_id, 'test@debug.com');
-INSERT INTO auth_user("id", "email") VALUES ('seconday_user', '2nd@user.com');
+-- Reset the sequence so new billing accounts get IDs after our seeded ones
+SELECT setval('billing_account_id_seq', 7);
+
+-- Users (consolidated user table) - now linked to billing_account
+INSERT INTO "user" (id, email, billing_account_id)
+VALUES (:user_id, 'test@debug.com', 1);
+INSERT INTO "user" (id, email, billing_account_id)
+VALUES ('stripe_autorecharge', 'stripe@test.com', 2);
+INSERT INTO "user" (id, email, billing_account_id)
+VALUES ('user1', 'user1@test.com', 3);
+INSERT INTO "user" (id, email, billing_account_id)
+VALUES ('user2', 'user2@test.com', 4);
+INSERT INTO "user" (id, email, billing_account_id)
+VALUES ('user3', 'user3@test.com', 5);
+INSERT INTO "user" (id, email, billing_account_id)
+VALUES ('user4', 'user4@test.com', 6);
+INSERT INTO "user" (id, email, billing_account_id)
+VALUES ('seconday_user', '2nd@user.com', 7);
 
 INSERT INTO api_key("user_id", "key") VALUES (:user_id, :api_key);
 INSERT INTO api_key("user_id", "key") VALUES ('seconday_user', '2nd_api_key');

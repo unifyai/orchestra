@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -33,12 +32,11 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    AuthUser,
     Context,
     DemoAssistantMeta,
     LogEvent,
@@ -47,6 +45,7 @@ from orchestra.db.models.orchestra_models import (
     OrganizationMember,
     Project,
 )
+from orchestra.lib.billing import get_billing_entity
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
@@ -134,26 +133,6 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     return raw_phone
 
 
-def check_assistant_hiring_approval(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    user_id = request.state.user_id
-    user = session.query(AuthUser).filter(AuthUser.id == user_id).one_or_none()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Authenticated user not found.",
-        )
-
-    if user.assistant_hiring_approval != "approved":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You need to request approval first by going to console.unify.ai/assistants",
-        )
-
-
 router = APIRouter()
 admin_router = APIRouter()
 demo_router = APIRouter()
@@ -232,7 +211,6 @@ async def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Create a new assistant for the authenticated user.
@@ -242,7 +220,7 @@ async def create_assistant(
     to the authenticated user's account. Creating an assistant incurs a credit cost.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    user_dao = UserDAO(session)
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
@@ -305,9 +283,14 @@ async def create_assistant(
                 )
 
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
-
-            if user.credits < total_creation_cost:
+            try:
+                billing_entity = get_billing_entity(session, user_id, organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Billing is not set up. Please add a payment method first.",
+                )
+            if billing_entity.credits < total_creation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -722,15 +705,13 @@ async def create_assistant(
             detail=f"Failed to create assistant: {str(e_prepare)}",
         )
 
-    # Phase 2: Deduct credits. The commit within recharge_credit will persist
-    # both the assistant and the credit change atomically.
+    # Phase 2: Deduct credits from the correct billing account (user or org).
     if not settings.is_staging:
         try:
-            # Refresh session before credit operation to ensure connection is valid
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(total_creation_cost),
-            )
+            from orchestra.lib.billing import deduct_credits
+
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(session, billing_entity, Decimal(str(total_creation_cost)))
             session.commit()
         except Exception as e_commit:
             raise HTTPException(
@@ -1036,7 +1017,6 @@ async def delete_assistant_contact(
     removal_payload: AssistantContactRemoval,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Remove a contact method from an assistant.
@@ -1191,7 +1171,6 @@ async def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
@@ -1505,7 +1484,6 @@ async def update_assistant_config(
     update: AssistantUpdate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
@@ -1515,7 +1493,7 @@ async def update_assistant_config(
     """
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    users_dao = UsersDAO(session)
+    user_dao = UserDAO(session)
     assistant_dao = AssistantDAO(session)
     bucket_service = BucketService()
 
@@ -1681,17 +1659,26 @@ async def update_assistant_config(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
                         )
-                    user = users_dao.get_user_with_id(user_id)
                     decimal_cost = Decimal(cost)
-                    if user.credits < decimal_cost:
+                    try:
+                        billing_entity = get_billing_entity(
+                            session,
+                            user_id,
+                            organization_id,
+                        )
+                    except ValueError:
+                        raise HTTPException(
+                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                            detail="Billing is not set up. Please add a payment method first.",
+                        )
+                    if billing_entity.credits < decimal_cost:
                         raise HTTPException(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
                             detail="Insufficient credits to add a WhatsApp number.",
                         )
-                    users_dao.recharge_credit(
-                        user_id=user_id,
-                        quantity=-float(decimal_cost),
-                    )
+                    from orchestra.lib.billing import deduct_credits
+
+                    deduct_credits(session, billing_entity, decimal_cost)
 
                 assistant_whatsapp_number = (
                     await assign_whatsapp_sender(
@@ -1869,7 +1856,6 @@ def transfer_assistant_to_org(
     transfer_request: AssistantTransferToOrgRequest,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantTransferResponse]:
     """
     Transfer a personal assistant to an organization.
@@ -2196,7 +2182,6 @@ def transfer_assistant_to_personal(
     transfer_request: AssistantTransferToPersonalRequest,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantTransferResponse]:
     """
     Transfer an organizational assistant to personal workspace.
@@ -2455,7 +2440,6 @@ def list_recordings(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[RecordingInfo]]:
     """
     List all call recordings for the specified assistant.
@@ -2525,7 +2509,6 @@ def delete_recording(
     recording_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Delete a call recording by ID for the specified assistant.
@@ -2616,7 +2599,6 @@ def register_voice(
     voice_in: VoiceCreate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     dao = VoiceDAO(session)
     try:
@@ -2690,7 +2672,6 @@ async def clone_voice(
     gender: Optional[str] = Form(None, example="female"),
     provider: str = Form("cartesia"),
     file: UploadFile = File(..., example="voice_sample.wav"),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -2866,7 +2847,6 @@ async def clone_voice(
 def list_voices(
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[VoiceRead]]:
     """
     List all voices saved by the authenticated user.
@@ -2929,7 +2909,6 @@ async def delete_voice(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -3035,7 +3014,6 @@ async def generate_speech(
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> Response:
     user_id = request.state.user_id
     audio_bytes: bytes
@@ -3113,7 +3091,6 @@ async def design_voice_generate_previews_endpoint(
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceDesignGeneratePreviewsAPIResponse]:
     user_id = request.state.user_id
     final_voice_description = request_data.voice_description
@@ -3198,7 +3175,6 @@ async def design_voice_create_from_preview_endpoint(
     elevenlabs_service: ElevenLabsService = Depends(),
     deepgram_service: DeepgramService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -3384,7 +3360,6 @@ def create_secret(
     secret_in: SecretCreate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[SecretRead]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -3451,7 +3426,6 @@ def update_secret(
     secret_in: SecretUpdate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[SecretRead]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -3510,7 +3484,6 @@ def delete_secret(
     secret_name: str,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[dict]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -3556,7 +3529,6 @@ def delete_secret(
 async def upload_assistant_photo(
     request: Request,
     file: UploadFile = File(..., example="assistant_photo.jpg"),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3616,7 +3588,6 @@ async def upload_assistant_photo(
 async def upload_assistant_video(
     request: Request,
     file: UploadFile = File(..., example="assistant_video.mp4"),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3679,7 +3650,6 @@ async def generate_assistant_photo(
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Generate a new assistant profile photo from a text prompt.
@@ -3688,7 +3658,7 @@ async def generate_assistant_photo(
     text prompt. The user's account is charged for this operation.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    organization_id = getattr(request.state, "organization_id", None)
 
     # 1. Moderate the prompt
     try:
@@ -3706,8 +3676,14 @@ async def generate_assistant_photo(
 
     # 2. Pre-check credits if not in staging
     if not settings.is_staging:
-        user = users_dao.get_user_with_id(user_id)
-        if user.credits < settings.photo_generation_cost:
+        try:
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Billing is not set up. Please add a payment method first.",
+            )
+        if billing_entity.credits < settings.photo_generation_cost:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Insufficient credits to generate a photo.",
@@ -3726,9 +3702,13 @@ async def generate_assistant_photo(
 
         # 4. Deduct credits after successful generation if not in staging
         if not settings.is_staging:
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(settings.photo_generation_cost),
+            from orchestra.lib.billing import deduct_credits
+
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(
+                session,
+                billing_entity,
+                Decimal(str(settings.photo_generation_cost)),
             )
             session.commit()
 
@@ -3774,7 +3754,6 @@ async def edit_assistant_photo(
     aspect_ratio: str = Form("match_input_image", example="1:1"),
     output_format: str = Form("jpg", example="jpg"),
     safety_tolerance: float = Form(2.0, example=2.0),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Edit an assistant profile photo using a text prompt and an input image.
@@ -3784,7 +3763,8 @@ async def edit_assistant_photo(
     The user's account is charged for this operation.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    organization_id = getattr(request.state, "organization_id", None)
+
     temp_gcs_url_to_delete: Optional[str] = None
     input_image_for_replicate: Optional[str] = None
 
@@ -3859,8 +3839,14 @@ async def edit_assistant_photo(
 
         # 2. Pre-check credits if not in staging
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.photo_generation_cost:
+            try:
+                billing_entity = get_billing_entity(session, user_id, organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Billing is not set up. Please add a payment method first.",
+                )
+            if billing_entity.credits < settings.photo_generation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to edit a photo.",
@@ -3877,9 +3863,13 @@ async def edit_assistant_photo(
 
         # 4. Deduct credits after successful edit if not in staging
         if not settings.is_staging:
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(settings.photo_generation_cost),
+            from orchestra.lib.billing import deduct_credits
+
+            edit_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(
+                session,
+                edit_entity,
+                Decimal(str(settings.photo_generation_cost)),
             )
             session.commit()
 
@@ -3936,10 +3926,9 @@ async def animate_video_endpoint(
     audio_file: Optional[UploadFile] = File(None),
     seed: Optional[int] = Form(None),
     duration: Optional[int] = Form(None),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    organization_id = getattr(request.state, "organization_id", None)
 
     temp_image_gcs_url: Optional[str] = None
     final_image_url_for_replicate: Optional[str] = None
@@ -4068,10 +4057,17 @@ async def animate_video_endpoint(
 
         # Pre-check credits (assuming video_generation_cost is defined in settings)
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.video_generation_cost * (
+            try:
+                billing_entity = get_billing_entity(session, user_id, organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Billing is not set up. Please add a payment method first.",
+                )
+            video_cost = settings.video_generation_cost * (
                 duration if duration is not None else settings.default_video_duration
-            ):
+            )
+            if billing_entity.credits < video_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to generate video.",
@@ -4088,9 +4084,13 @@ async def animate_video_endpoint(
 
         # Deduct credits after successful generation
         if not settings.is_staging:
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(settings.video_generation_cost),
+            from orchestra.lib.billing import deduct_credits
+
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(
+                session,
+                billing_entity,
+                Decimal(str(settings.video_generation_cost)),
             )
             session.commit()
 
@@ -4153,7 +4153,6 @@ def get_animation_prediction(
     prediction_id: str,
     request: Request,
     replicate_service: ReplicateService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.get_prediction(prediction_id)
@@ -4178,7 +4177,6 @@ def cancel_animation_prediction(
     prediction_id: str,
     request: Request,
     replicate_service: ReplicateService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.cancel_prediction(prediction_id)
@@ -4295,7 +4293,7 @@ def admin_update_user_by_assistant(
     For org assistants: finds the org member by email and updates their profile.
     """
     assistant_dao = AssistantDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
 
     # Get assistant without user/org context (admin bypass)
@@ -4312,13 +4310,13 @@ def admin_update_user_by_assistant(
     if assistant.organization_id is None:
         # Personal assistant: check if target_user_email matches owner
         assistant_type = "personal"
-        owner = auth_user_dao.get_by_id(assistant.user_id)
+        owner = user_dao.get_by_id(assistant.user_id)
         if not owner:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant owner not found.",
             )
-        # owner is a tuple (AuthUser,)
+        # owner is a tuple (User,)
         owner_user = owner[0]
         if owner_user.email != request_body.target_user_email:
             raise HTTPException(
@@ -4335,7 +4333,7 @@ def admin_update_user_by_assistant(
         # Find member whose email matches target_user_email
         for member_tuple in members:
             member = member_tuple[0]
-            user_row = auth_user_dao.get_by_id(member.user_id)
+            user_row = user_dao.get_by_id(member.user_id)
             if user_row:
                 user = user_row[0]
                 if user.email == request_body.target_user_email:
@@ -4364,7 +4362,7 @@ def admin_update_user_by_assistant(
 
     # Update the user
     try:
-        auth_user_dao.update(id=target_user_id, **update_kwargs)
+        user_dao.update(id=target_user_id, **update_kwargs)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -4516,7 +4514,7 @@ def admin_list_all_assistants(
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     secret_dao = AssistantSecretDAO(session)
 
     # Dynamically get all valid field names from AssistantRead model
@@ -4580,8 +4578,8 @@ def admin_list_all_assistants(
             if (requested_fields is None or "secrets" in requested_fields)
             else None
         )
-        auth_users = (
-            [auth_user_dao.get_by_id(a.user_id)[0] for a in assistants]
+        users = (
+            [user_dao.get_by_id(a.user_id)[0] for a in assistants]
             if (
                 requested_fields is None
                 or bool(
@@ -4634,9 +4632,9 @@ def admin_list_all_assistants(
                 demo_id=a.demo_id,
                 # Expensive fields - only populated if needed
                 api_key=api_keys[i] if api_keys else None,
-                user_first_name=auth_users[i].name if auth_users else None,
-                user_last_name=auth_users[i].last_name if auth_users else None,
-                user_email=auth_users[i].email if auth_users else None,
+                user_first_name=users[i].name if users else None,
+                user_last_name=users[i].last_name if users else None,
+                user_email=users[i].email if users else None,
                 secrets=secrets_list[i] if secrets_list else None,
             )
             for i, a in enumerate(assistants)
@@ -5089,7 +5087,7 @@ async def get_assistant_spending_limit(
                 effective_limit = min(effective_limit, parent_limit)
     else:
         # Personal assistant - check user limit
-        user_row = AuthUserDAO(session).get_by_id(user_id)
+        user_row = UserDAO(session).get_by_id(user_id)
         if user_row:
             user = user_row[0]
             if user.monthly_spending_cap is not None:

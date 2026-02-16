@@ -24,7 +24,7 @@ async def approve_default_user(client: AsyncClient):
     """Ensures the default test user for this module is approved for hiring."""
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
     user_id = credits_resp.json()["id"]
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
@@ -354,11 +354,14 @@ async def test_animate_video_with_urls_success(
     replicate_mock, bucket_mock, openai_mock = mock_media_services_factory
     # Ensure user has credits if staging is false
     if not settings.is_staging:
-        from orchestra.db.dao.users_dao import UsersDAO
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+        from orchestra.db.dao.user_dao import UserDAO
 
-        users_dao = UsersDAO(dbsession)
-        users_dao.recharge_credit(
-            "test-user",
+        user_dao = UserDAO(dbsession)
+        ba_dao = BillingAccountDAO(dbsession)
+        user_obj = user_dao.get_user_with_id("test-user")
+        ba_dao.add_credits(
+            user_obj.billing_account_id,
             (settings.video_generation_cost * settings.default_video_duration) * 2,
         )  # give enough credits
         dbsession.commit()
@@ -405,10 +408,16 @@ async def test_animate_video_with_files_success(
 ):
     replicate_mock, bucket_mock, openai_mock = mock_media_services_factory
     if not settings.is_staging:
-        from orchestra.db.dao.users_dao import UsersDAO
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+        from orchestra.db.dao.user_dao import UserDAO
 
-        users_dao = UsersDAO(dbsession)
-        users_dao.recharge_credit("test-user", settings.video_generation_cost * 2)
+        user_dao = UserDAO(dbsession)
+        ba_dao = BillingAccountDAO(dbsession)
+        user_obj = user_dao.get_user_with_id("test-user")
+        ba_dao.add_credits(
+            user_obj.billing_account_id,
+            settings.video_generation_cost * 2,
+        )
         dbsession.commit()
 
     image_content = b"fake image data"
