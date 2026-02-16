@@ -819,6 +819,45 @@ def is_billing_account_frozen(
     return result
 
 
+@router.get("/billing/account-info")
+def get_billing_account_info(
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Get billing account info (stripe customer ID, credits, auto-recharge
+    settings) for a user or organization.
+
+    Accepts ``user_id`` or ``organization_id`` (exactly one).
+
+    :param user_id: User ID (for personal billing accounts).
+    :param organization_id: Organization ID (for org billing accounts).
+    :return: Billing account details.
+    """
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    result: dict = {
+        "billing_account_id": ba.id,
+        "stripe_customer_id": ba.stripe_customer_id,
+        "credits": float(ba.credits) if ba.credits else 0,
+        "autorecharge": ba.autorecharge,
+        "autorecharge_threshold": float(ba.autorecharge_threshold)
+        if ba.autorecharge_threshold
+        else 0,
+        "autorecharge_qty": float(ba.autorecharge_qty) if ba.autorecharge_qty else 0,
+        "account_status": ba.account_status,
+    }
+    if user_id:
+        result["user_id"] = user_id
+    if organization_id:
+        result["organization_id"] = organization_id
+    return result
+
+
 @router.put("/billing/stripe-id")
 @router.put("/auth-user/stripe-id")  # backward-compat alias
 def set_stripe_id(
