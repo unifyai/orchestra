@@ -373,3 +373,46 @@ class ContextCommitHistory(BaseModel):
     type: Literal["project", "context"]
     prev_commit_hash: Optional[str] = None
     next_commit_hash: List[str] = []
+
+
+class CopyContextRequest(BaseModel):
+    """Request model for deep-copying a context (admin endpoint)."""
+
+    source_user_id: str = Field(
+        ...,
+        description="User ID of the source context's owner.",
+    )
+    source_project_name: str = Field(
+        ...,
+        description="Project name containing the source context.",
+    )
+    source_context_name: str = Field(
+        ...,
+        description="Name of the source context to copy.",
+    )
+    target_user_id: str = Field(
+        ...,
+        description="User ID for the target (can be the same as source).",
+    )
+    target_project_name: str = Field(
+        ...,
+        description="Project name for the target context.",
+    )
+    target_context_name: str = Field(
+        ...,
+        description="Name for the new copied context.",
+    )
+    copy_embeddings: bool = Field(
+        default=True,
+        description=(
+            "Whether to copy embeddings. If True, embeddings are queued via "
+            "EmbeddingQueue as 'vector_ready' for HNSW-safe batch insertion "
+            "by the existing background worker pipeline."
+        ),
+    )
+    batch_size: int = Field(
+        default=10000,
+        ge=1,
+        le=50000,
+        description="Number of log events to copy per batch.",
+    )

@@ -846,3 +846,50 @@ class FieldTypeDAO:
         )
         self.session.execute(stmt)
         self.session.commit()
+
+    def copy_field_types(
+        self,
+        source_context_id: int,
+        target_context_id: int,
+        target_project_id: int,
+    ) -> int:
+        """Copy all field types from one context to another.
+
+        Args:
+            source_context_id: The context to copy field types from.
+            target_context_id: The context to copy field types to.
+            target_project_id: The project ID for the target field types.
+
+        Returns:
+            The number of field types copied.
+        """
+        source_fields = (
+            self.session.query(FieldType)
+            .filter(FieldType.context_id == source_context_id)
+            .all()
+        )
+        if not source_fields:
+            return 0
+
+        values = [
+            {
+                "project_id": target_project_id,
+                "context_id": target_context_id,
+                "field_name": ft.field_name,
+                "field_type": ft.field_type,
+                "field_category": ft.field_category,
+                "mutable": ft.mutable,
+                "unique": ft.unique,
+                "enum_values": ft.enum_values,
+                "enum_restrict": ft.enum_restrict,
+                "description": ft.description,
+            }
+            for ft in source_fields
+        ]
+        stmt = pg_insert(FieldType).values(values)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name", "context_id"],
+        )
+        self.session.execute(stmt)
+        self.session.flush()
+        return len(values)

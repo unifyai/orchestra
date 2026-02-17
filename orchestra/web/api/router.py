@@ -21,6 +21,7 @@ from orchestra.web.api import (  # noqa: WPS235
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
 from orchestra.web.api.assistant import demo_router as assistant_demo_router
 from orchestra.web.api.assistant import router as assistant_router
+from orchestra.web.api.context.views import admin_router as context_admin_router
 from orchestra.web.api.dependencies import (
     auth_admin_key,
     auth_api_key,
@@ -63,6 +64,13 @@ api_router.include_router(
     users.router,
     tags=["Query Logging"],
     dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    context_admin_router,
+    prefix="/admin",
+    tags=["Contexts"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
     log_admin_router,
