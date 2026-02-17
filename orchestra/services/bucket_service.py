@@ -61,19 +61,6 @@ class BucketService:
             self.assistant_images_bucket_name,
         )
 
-        # Assistant call recordings bucket
-        self.assistant_recordings_bucket_name = os.getenv(
-            "ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME",
-            "assistant-call-recordings",
-        )
-        if not self.assistant_recordings_bucket_name:
-            raise ValueError(
-                "Missing required GCP assistant recordings bucket name configuration (ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME)",
-            )
-        self.assistant_recordings_bucket = self.storage_client.bucket(
-            self.assistant_recordings_bucket_name,
-        )
-
         # Unify message attachments bucket
         self.unify_attachments_bucket_name = os.getenv(
             "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
@@ -90,45 +77,6 @@ class BucketService:
         if extension:
             return f"{content_hash}_{unique_id}.{extension.lstrip('.')}"
         return f"{content_hash}_{unique_id}"
-
-    def upload_recording(
-        self,
-        content: bytes,
-        content_type: str,
-        file_path: str,
-        is_staging: bool = False,
-    ) -> Tuple[str, str]:
-        """
-        Upload raw audio bytes to GCS and return (url, filename).
-
-        Args:
-            content: Raw audio bytes to upload
-            content_type: MIME type of the audio content (e.g., 'audio/wav', 'audio/mp3')
-
-        Returns:
-            Tuple containing the recording URL and filename
-
-        Raises:
-            Exception: If upload fails
-        """
-        try:
-            # Generate file path
-            if is_staging:
-                file_path = "staging/" + file_path
-            else:
-                file_path = "production/" + file_path
-
-            # Upload to GCS
-            blob = self.assistant_recordings_bucket.blob(file_path)
-            blob.upload_from_string(content, content_type=content_type)
-
-            # Generate URL
-            url = blob.public_url
-
-            return url, file_path
-
-        except exceptions.GoogleAPIError as e:
-            raise Exception(f"Failed to upload recording: {str(e)}")
 
     # -------------------------------------------------------------
     #                   General media operations

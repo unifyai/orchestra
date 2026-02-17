@@ -722,60 +722,6 @@ class AssistantStatus(BaseModel):
         }
 
 
-class RecordingCreate(BaseModel):
-    user_id: str = Field(
-        ...,
-        description="ID of the user to associate the recording with",
-        example="123",
-    )
-    assistant_id: int = Field(
-        ...,
-        description="ID of the assistant to associate the recording with",
-        example=123,
-    )
-    conference_name: str = (
-        Field(
-            ...,
-            description="Name of the conference to associate the recording with",
-            example="Unity_Sample_Conference",
-        ),
-    )
-    recording_raw: str = Field(
-        ...,
-        description="Base64-encoded audio payload",
-        example="UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
-    )
-    content_type: Optional[str] = Field(
-        None,
-        description="Content type of the audio file",
-        example="audio/wav",
-    )
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "recording_raw": "UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
-                "content_type": "audio/wav",
-            },
-        }
-
-
-class RecordingInfo(BaseModel):
-    id: int
-    url: HttpUrl
-    created_at: datetime
-
-    class Config:
-        orm_mode = True
-        schema_extra = {
-            "example": {
-                "id": 123,
-                "url": "https://storage.example.com/recordings/call_123.wav",
-                "created_at": "2025-05-08T14:30:00Z",
-            },
-        }
-
-
 class VoiceCreate(BaseModel):
     """
     Schema for creating a new assistant voice entry in our DB.
