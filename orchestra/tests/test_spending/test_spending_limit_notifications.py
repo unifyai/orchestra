@@ -30,7 +30,7 @@ async def approve_default_user(client: AsyncClient):
     """Ensures the default test user is approved for hiring."""
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
     user_id = credits_resp.json()["id"]
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     await client.put(approve_url, headers=ADMIN_HEADERS)
 
 

@@ -14,7 +14,7 @@ async def test_create_organization_with_custom_timezone(client: AsyncClient):
 
     # Set the owner's timezone (admin endpoint)
     await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={"user_id": owner["id"], "timezone": "America/New_York"},
         headers=ADMIN_HEADERS,
     )
@@ -40,7 +40,7 @@ async def test_create_organization_inherits_owner_timezone(client: AsyncClient):
 
     # Set the owner's timezone (admin endpoint)
     update_response = await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={"user_id": owner["id"], "timezone": "America/New_York"},
         headers=ADMIN_HEADERS,
     )
@@ -101,7 +101,7 @@ async def test_get_organization_returns_timezone(client: AsyncClient):
 
     # Set the owner's timezone (admin endpoint)
     await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={"user_id": owner["id"], "timezone": "Europe/London"},
         headers=ADMIN_HEADERS,
     )
@@ -133,7 +133,7 @@ async def test_list_organizations_returns_timezone(client: AsyncClient):
 
     # Set the owner's timezone (admin endpoint)
     await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={"user_id": owner["id"], "timezone": "Asia/Tokyo"},
         headers=ADMIN_HEADERS,
     )
@@ -167,7 +167,7 @@ async def test_admin_create_organization_inherits_owner_timezone(client: AsyncCl
 
     # Set the owner's timezone (admin endpoint)
     await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={"user_id": owner["id"], "timezone": "Pacific/Auckland"},
         headers=ADMIN_HEADERS,
     )
@@ -258,7 +258,7 @@ async def test_update_organization_timezone_to_null(client: AsyncClient):
 
     # Set owner's timezone
     await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={"user_id": owner["id"], "timezone": "Europe/Paris"},
         headers=ADMIN_HEADERS,
     )

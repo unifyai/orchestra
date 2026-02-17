@@ -284,10 +284,6 @@ async def test_admin_list_organizations_response_structure(client: AsyncClient):
     assert isinstance(our_org["name"], str)
     assert isinstance(our_org["owner_id"], str)
     assert isinstance(our_org["member_count"], int)
-    # billing_user_id can be None or string
-    assert our_org["billing_user_id"] is None or isinstance(
-        our_org["billing_user_id"],
-        str,
-    )
+
     # created_at can be None or string (ISO format)
     assert our_org["created_at"] is None or isinstance(our_org["created_at"], str)

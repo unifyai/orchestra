@@ -97,7 +97,7 @@ async def test_user_timezone_sync_updates_contact_log(
 
     # Update user timezone via API
     update_resp = await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "user_id": user["id"],
             "email": user["email"],
@@ -186,7 +186,7 @@ async def test_user_timezone_sync_to_multiple_projects(
 
     # Update user timezone
     await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "user_id": user["id"],
             "email": user["email"],
@@ -220,7 +220,7 @@ async def test_user_timezone_sync_no_project_no_error(
 
     # Update timezone - should not raise error
     update_resp = await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "user_id": user["id"],
             "email": user["email"],
@@ -266,7 +266,7 @@ async def test_user_timezone_sync_no_matching_logs(
 
     # Update timezone - should succeed (0 logs updated)
     update_resp = await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "user_id": user["id"],
             "email": user["email"],
@@ -325,7 +325,7 @@ async def test_user_bio_sync_updates_contact_log(
 
     # Update user bio via API
     update_resp = await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "user_id": user["id"],
             "email": user["email"],
@@ -380,7 +380,7 @@ async def test_user_bio_and_timezone_sync_together(
 
     # Update both fields
     update_resp = await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "user_id": user["id"],
             "email": user["email"],
@@ -413,7 +413,7 @@ async def test_assistant_timezone_sync_updates_contact_log(
     dbsession: Session,
 ):
     """Test that updating assistant timezone syncs to Contact logs."""
-    user = await create_test_user(client, "asst_tz_sync@test.com", hiring_approved=True)
+    user = await create_test_user(client, "asst_tz_sync@test.com")
 
     # Create assistant
     assistant_resp = await client.post(
@@ -480,7 +480,6 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
     user = await create_test_user(
         client,
         "asst_tz_filter@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -546,7 +545,6 @@ async def test_assistant_bio_sync_updates_contact_log(
     user = await create_test_user(
         client,
         "asst_bio_sync@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -607,7 +605,6 @@ async def test_assistant_bio_and_timezone_sync_together(
     user = await create_test_user(
         client,
         "asst_both_sync@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -681,7 +678,6 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
     user = await create_test_user(
         client,
         "org_asst_tz_sync@test.com",
-        hiring_approved=True,
     )
 
     # Create org
@@ -780,7 +776,6 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
     owner = await create_test_user(
         client,
         "org_member_sync_owner@test.com",
-        hiring_approved=True,
     )
 
     # Create org members (Users B and C)
@@ -955,7 +950,6 @@ async def test_sync_with_null_name_fields(
     user = await create_test_user(
         client,
         "null_name_tz@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant (creates Assistants project)
@@ -1018,7 +1012,6 @@ async def test_sync_sets_null_timezone(
     user = await create_test_user(
         client,
         "null_tz_sync@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant (creates Assistants project)
@@ -1067,9 +1060,9 @@ async def test_sync_sets_null_timezone(
 
     # Update user timezone to null via admin endpoint
     # Note: /admin/assistant/update-user doesn't support null timezone,
-    # so we use /admin/auth-user for this specific null case
+    # so we use /admin/user for this specific null case
     update_resp = await client.put(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "user_id": user["id"],
             "email": user["email"],
@@ -1097,7 +1090,6 @@ async def test_sync_only_affects_is_system_true_logs(
     user = await create_test_user(
         client,
         "is_system_filter@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant (creates Assistants project)
@@ -1174,7 +1166,6 @@ async def test_assistant_sync_no_project_no_error(
     user = await create_test_user(
         client,
         "asst_no_proj@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant (Assistants project auto-created)
