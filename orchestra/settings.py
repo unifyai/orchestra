@@ -236,6 +236,18 @@ class Settings(BaseSettings):
     stripe_skip_signature_verification: bool = (
         os.environ.get("SKIP_STRIPE_SIGNATURE_VERIFICATION", "false").lower() == "true"
     )
+    stripe_unify_credits_product_id_personal: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRODUCT_ID_PERSONAL",
+    )
+    stripe_unify_credits_product_id_business: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRODUCT_ID_BUSINESS",
+    )
+    stripe_unify_credits_price_id_personal: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRICE_ID_PERSONAL",
+    )
+    stripe_unify_credits_price_id_business: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRICE_ID_BUSINESS",
+    )
 
     # Assistant creation
     assistant_creation_cost: float = 10.0
