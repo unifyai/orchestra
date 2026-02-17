@@ -9,12 +9,12 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.spending_limit_notification_dao import (
     SpendingLimitNotificationDAO,
 )
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.web.api.utils.email import send_email_async
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class SpendingLimitNotificationService:
         self.session = session
         self.notification_dao = SpendingLimitNotificationDAO(session)
         self.assistant_dao = AssistantDAO(session)
-        self.auth_user_dao = AuthUserDAO(session)
+        self.user_dao = UserDAO(session)
         self.org_dao = OrganizationDAO(session)
         self.org_member_dao = OrganizationMemberDAO(session)
 
@@ -210,7 +210,7 @@ class SpendingLimitNotificationService:
 
         assistant = self.assistant_dao.get_assistant_by_agent_id(int(entity_id))
         if assistant:
-            user_row = self.auth_user_dao.get_by_id(assistant.user_id)
+            user_row = self.user_dao.get_by_id(assistant.user_id)
             if user_row:
                 user = user_row[0]
                 if user.email:
@@ -233,7 +233,7 @@ class SpendingLimitNotificationService:
         recipients: List[NotificationRecipient] = []
         resolved_name = entity_name or "Unknown"
 
-        user_row = self.auth_user_dao.get_by_id(entity_id)
+        user_row = self.user_dao.get_by_id(entity_id)
         if user_row:
             user = user_row[0]
             if user.email:
@@ -268,7 +268,7 @@ class SpendingLimitNotificationService:
             # Use get_member with user_id and org_id
             member = self.org_member_dao.get_member(user_id, organization_id)
             if member:
-                user_row = self.auth_user_dao.get_by_id(user_id)
+                user_row = self.user_dao.get_by_id(user_id)
                 if user_row:
                     user = user_row[0]
                     if user.email:
@@ -277,7 +277,7 @@ class SpendingLimitNotificationService:
                         )
         else:
             # Fallback: just get user by user_id
-            user_row = self.auth_user_dao.get_by_id(user_id)
+            user_row = self.user_dao.get_by_id(user_id)
             if user_row:
                 user = user_row[0]
                 if user.email:
@@ -314,7 +314,7 @@ class SpendingLimitNotificationService:
             )
 
             for user_id in member_user_ids:
-                user_row = self.auth_user_dao.get_by_id(user_id)
+                user_row = self.user_dao.get_by_id(user_id)
                 if user_row:
                     user = user_row[0]
                     if user.email:

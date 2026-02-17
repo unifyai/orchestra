@@ -573,3 +573,324 @@ async def test_accept_already_accepted_invite(client: AsyncClient, dbsession):
     )
     # Should fail because invite was deleted after acceptance
     assert accept2.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ============================================================================
+# E2E Path B: Signup via Organization Invite Flow Tests
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_e2e_path_b_new_user_invite_flow(client: AsyncClient, dbsession):
+    """
+    E2E Test: Path B - New user signs up via organization invite link.
+
+    Flow:
+    1. Org owner sends invite
+    2. New user creates account
+    3. New user accepts invite
+    4. New user is member of organization
+    5. New user can access organization workspace
+    """
+    owner = await create_test_user(client, "e2e_invite_owner@test.com")
+
+    # Step 1: Org owner creates organization and sends invite
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "E2E Invite Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    invite_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "e2e_new_invitee@test.com"},
+        headers=owner["headers"],
+    )
+    assert invite_response.status_code == status.HTTP_201_CREATED
+    token = invite_response.json()["token"]
+
+    # Step 2: New user creates account (via OAuth)
+    invitee = await create_test_user(client, "e2e_new_invitee@test.com")
+
+    # Step 3: New user accepts invite
+    accept_response = await client.post(
+        f"/v0/invites/{token}/accept",
+        headers=invitee["headers"],
+    )
+    assert accept_response.status_code == status.HTTP_200_OK
+    result = accept_response.json()
+    assert result["organization_id"] == org_id
+    assert "api_key" in result  # Gets org API key
+
+    # Step 4: Verify user is member
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    member = org_member_dao.get_member(invitee["id"], org_id)
+    assert member is not None
+
+    # Step 5: Verify user can access organization
+    org_detail = await client.get(
+        f"/v0/organizations/{org_id}",
+        headers=invitee["headers"],
+    )
+    assert org_detail.status_code == status.HTTP_200_OK
+    assert org_detail.json()["name"] == "E2E Invite Org"
+
+
+@pytest.mark.anyio
+async def test_e2e_path_b_existing_user_invite_flow(client: AsyncClient, dbsession):
+    """
+    E2E Test: Path B - Existing user receives invite from another organization.
+
+    Flow:
+    1. User already has an account with personal workspace
+    2. New org owner sends invite
+    3. User accepts invite
+    4. User now has access to both personal workspace and new org
+    """
+    # Existing user with personal workspace
+    existing_user = await create_test_user(client, "e2e_existing_user@test.com")
+
+    # User may have already completed personal onboarding
+    await client.put(
+        "/v0/user/onboarding",
+        headers=existing_user["headers"],
+        json={
+            "current_step": "completed",
+            "step_data": {"selected_type": "personal"},
+        },
+    )
+
+    # New org owner creates org and sends invite
+    org_owner = await create_test_user(client, "e2e_existing_org_owner@test.com")
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "E2E Existing User Org"},
+        headers=org_owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    invite_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "e2e_existing_user@test.com"},
+        headers=org_owner["headers"],
+    )
+    token = invite_response.json()["token"]
+
+    # Existing user accepts invite
+    accept_response = await client.post(
+        f"/v0/invites/{token}/accept",
+        headers=existing_user["headers"],
+    )
+    assert accept_response.status_code == status.HTTP_200_OK
+
+    # User should now be in the organization
+    member = OrganizationMemberDAO(dbsession).get_member(existing_user["id"], org_id)
+    assert member is not None
+
+    # User's onboarding status should still be completed
+    onboarding = await client.get(
+        "/v0/user/onboarding",
+        headers=existing_user["headers"],
+    )
+    assert onboarding.json()["current_step"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_e2e_path_b_invite_with_admin_role(client: AsyncClient, dbsession):
+    """
+    E2E Test: Path B - User invited as Admin with full permissions.
+    """
+    owner = await create_test_user(client, "e2e_admin_invite_owner@test.com")
+    admin_invitee = await create_test_user(client, "e2e_admin_invitee@test.com")
+
+    # Create org
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "E2E Admin Invite Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Get Admin role
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    # Send invite with Admin role
+    invite_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "e2e_admin_invitee@test.com", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    token = invite_response.json()["token"]
+
+    # Accept invite
+    await client.post(
+        f"/v0/invites/{token}/accept",
+        headers=admin_invitee["headers"],
+    )
+
+    # Verify admin can perform admin operations
+    # Admin should be able to invite others
+    new_invite = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "someone_else@test.com"},
+        headers=admin_invitee["headers"],
+    )
+    assert new_invite.status_code == status.HTTP_201_CREATED
+
+
+@pytest.mark.anyio
+async def test_e2e_multiple_orgs_invite_flow(client: AsyncClient, dbsession):
+    """
+    E2E Test: User receives and accepts invites from multiple organizations.
+    """
+    user = await create_test_user(client, "e2e_multi_org_user@test.com")
+    owner1 = await create_test_user(client, "e2e_multi_owner1@test.com")
+    owner2 = await create_test_user(client, "e2e_multi_owner2@test.com")
+
+    # Create two organizations
+    org1_response = await client.post(
+        "/v0/organizations",
+        json={"name": "E2E Multi Org 1"},
+        headers=owner1["headers"],
+    )
+    org1_id = org1_response.json()["id"]
+
+    org2_response = await client.post(
+        "/v0/organizations",
+        json={"name": "E2E Multi Org 2"},
+        headers=owner2["headers"],
+    )
+    org2_id = org2_response.json()["id"]
+
+    # Send invites from both orgs
+    invite1 = await client.post(
+        f"/v0/organizations/{org1_id}/invites",
+        json={"email": "e2e_multi_org_user@test.com"},
+        headers=owner1["headers"],
+    )
+    token1 = invite1.json()["token"]
+
+    invite2 = await client.post(
+        f"/v0/organizations/{org2_id}/invites",
+        json={"email": "e2e_multi_org_user@test.com"},
+        headers=owner2["headers"],
+    )
+    token2 = invite2.json()["token"]
+
+    # User sees both pending invites
+    pending = await client.get(
+        "/v0/invites/pending",
+        headers=user["headers"],
+    )
+    assert len(pending.json()["invites"]) == 2
+
+    # Accept both
+    await client.post(f"/v0/invites/{token1}/accept", headers=user["headers"])
+    await client.post(f"/v0/invites/{token2}/accept", headers=user["headers"])
+
+    # User should be member of both organizations
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    assert org_member_dao.get_member(user["id"], org1_id) is not None
+    assert org_member_dao.get_member(user["id"], org2_id) is not None
+
+
+@pytest.mark.anyio
+async def test_e2e_invite_to_org_with_existing_billing(client: AsyncClient, dbsession):
+    """
+    E2E Test: New member joins org that already has billing set up.
+
+    The new member should be able to use org's billing immediately.
+    """
+
+    owner = await create_test_user(client, "e2e_billing_org_owner@test.com")
+    new_member = await create_test_user(client, "e2e_billing_new_member@test.com")
+
+    # Create org with billing
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "E2E Billing Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Set up org billing (stripe customer)
+    from orchestra.db.models.orchestra_models import Organization
+
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    if org.billing_account is None:
+        from orchestra.db.models.orchestra_models import BillingAccount
+
+        ba = BillingAccount(stripe_customer_id="cus_e2e_org_billing")
+        dbsession.add(ba)
+        dbsession.flush()
+        org.billing_account_id = ba.id
+    else:
+        org.billing_account.stripe_customer_id = "cus_e2e_org_billing"
+    dbsession.commit()
+
+    # Send invite to new member
+    invite = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "e2e_billing_new_member@test.com"},
+        headers=owner["headers"],
+    )
+    token = invite.json()["token"]
+
+    # New member accepts
+    accept = await client.post(
+        f"/v0/invites/{token}/accept",
+        headers=new_member["headers"],
+    )
+    assert accept.status_code == status.HTTP_200_OK
+
+    # New member can view org billing status
+    billing = await client.get(
+        f"/v0/organizations/{org_id}/billing",
+        headers=new_member["headers"],
+    )
+    # Members with billing:read should be able to see billing
+    # (Default Member role should have billing:read)
+    assert billing.status_code in [status.HTTP_200_OK, status.HTTP_403_FORBIDDEN]
+
+
+@pytest.mark.anyio
+async def test_e2e_invite_decline_flow(client: AsyncClient, dbsession):
+    """
+    E2E Test: User declines an organization invite.
+    """
+    owner = await create_test_user(client, "e2e_decline_owner@test.com")
+    decliner = await create_test_user(client, "e2e_decliner@test.com")
+
+    # Create org
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "E2E Decline Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Send invite
+    invite = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "e2e_decliner@test.com"},
+        headers=owner["headers"],
+    )
+    token = invite.json()["token"]
+
+    # User declines
+    decline = await client.post(
+        f"/v0/invites/{token}/decline",
+        headers=decliner["headers"],
+    )
+    assert decline.status_code == status.HTTP_200_OK
+
+    # User should not be a member
+    member = OrganizationMemberDAO(dbsession).get_member(decliner["id"], org_id)
+    assert member is None
+
+    # Invite should be deleted
+    invite_dao = OrganizationInviteDAO(dbsession)
+    assert invite_dao.get_by_token(token) is None

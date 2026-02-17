@@ -26,7 +26,7 @@ HEADERS = {
 async def create_test_user(client: AsyncClient, email: str) -> dict:
     """Create a test user and return their data including API key."""
     response = await client.post(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={"email": email},
         headers=HEADERS,
     )
@@ -34,7 +34,7 @@ async def create_test_user(client: AsyncClient, email: str) -> dict:
     user_id = response.json()["id"]
 
     response = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -43,12 +43,12 @@ async def create_test_user(client: AsyncClient, email: str) -> dict:
 
 @pytest.mark.anyio
 async def test_delete_user_happy_path(client: AsyncClient):
-    """Verify complete account deletion removes user from auth_user table."""
+    """Verify complete account deletion removes user from user table."""
     user = await create_test_user(client, "delete_happy@test.com")
     user_id = user["id"]
 
     response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}",
+        f"/v0/admin/user?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -57,7 +57,7 @@ async def test_delete_user_happy_path(client: AsyncClient):
     assert "deleted" in data["message"].lower()
 
     response = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 404
@@ -67,7 +67,7 @@ async def test_delete_user_happy_path(client: AsyncClient):
 async def test_delete_nonexistent_user(client: AsyncClient):
     """Deleting a non-existent user returns error."""
     response = await client.delete(
-        "/v0/admin/auth-user?user_id=nonexistent-user-id-12345",
+        "/v0/admin/user?user_id=nonexistent-user-id-12345",
         headers=HEADERS,
     )
     assert response.status_code == 400
@@ -79,14 +79,18 @@ async def test_delete_nonexistent_user(client: AsyncClient):
 async def test_delete_user_blocked_by_pending_bills(client: AsyncClient, dbsession):
     """Deletion blocked when user has pending invoices."""
     from orchestra.db.dao.recharge_dao import RechargeDAO
+    from orchestra.db.dao.user_dao import UserDAO
     from orchestra.db.models.orchestra_models import RechargeStatus
 
     user = await create_test_user(client, "pending_bills@test.com")
     user_id = user["id"]
 
+    user_dao = UserDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user_id)
+
     recharge_dao = RechargeDAO(dbsession)
     recharge_dao.create_recharge(
-        user_id=user_id,
+        billing_account_id=user_obj.billing_account_id,
         quantity=100,
         amount_usd=Decimal("50.00"),
         invoice_group=date.today(),
@@ -96,7 +100,7 @@ async def test_delete_user_blocked_by_pending_bills(client: AsyncClient, dbsessi
     dbsession.flush()
 
     response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}",
+        f"/v0/admin/user?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 400
@@ -117,7 +121,7 @@ async def test_delete_user_blocked_by_organization_ownership(client: AsyncClient
     assert response.status_code == 200, response.json()
 
     response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}",
+        f"/v0/admin/user?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 400
@@ -139,7 +143,7 @@ async def test_delete_user_force_bypasses_org_check(client: AsyncClient):
     assert response.status_code == 200
 
     response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}&force=true",
+        f"/v0/admin/user?user_id={user_id}&force=true",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -166,15 +170,19 @@ async def test_can_delete_account_no_blockers(client: AsyncClient):
 async def test_can_delete_account_with_pending_bills(client: AsyncClient, dbsession):
     """can-delete-account returns false when user has pending bills."""
     from orchestra.db.dao.recharge_dao import RechargeDAO
+    from orchestra.db.dao.user_dao import UserDAO
     from orchestra.db.models.orchestra_models import RechargeStatus
 
     user = await create_test_user(client, "can_delete_bills@test.com")
     user_id = user["id"]
     user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
+    user_dao = UserDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user_id)
+
     recharge_dao = RechargeDAO(dbsession)
     recharge_dao.create_recharge(
-        user_id=user_id,
+        billing_account_id=user_obj.billing_account_id,
         quantity=100,
         amount_usd=Decimal("25.00"),
         invoice_group=date.today(),
@@ -229,7 +237,7 @@ async def test_self_service_delete_success(client: AsyncClient):
     assert data["success"] is True
 
     response = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 404
@@ -255,7 +263,7 @@ async def test_delete_user_removes_projects(client: AsyncClient):
     assert "TestProject" in projects or any("TestProject" in str(p) for p in projects)
 
     response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}",
+        f"/v0/admin/user?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -278,7 +286,7 @@ async def test_delete_user_removes_api_keys(client: AsyncClient, dbsession):
     assert key_exists is not None
 
     response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}",
+        f"/v0/admin/user?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -293,14 +301,18 @@ async def test_delete_user_removes_api_keys(client: AsyncClient, dbsession):
 async def test_delete_user_with_paid_recharges_allowed(client: AsyncClient, dbsession):
     """User with only PAID recharges can be deleted."""
     from orchestra.db.dao.recharge_dao import RechargeDAO
+    from orchestra.db.dao.user_dao import UserDAO
     from orchestra.db.models.orchestra_models import RechargeStatus
 
     user = await create_test_user(client, "paid_recharges@test.com")
     user_id = user["id"]
 
+    user_dao = UserDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user_id)
+
     recharge_dao = RechargeDAO(dbsession)
     recharge_dao.create_recharge(
-        user_id=user_id,
+        billing_account_id=user_obj.billing_account_id,
         quantity=100,
         amount_usd=Decimal("50.00"),
         invoice_group=date.today(),
@@ -310,7 +322,7 @@ async def test_delete_user_with_paid_recharges_allowed(client: AsyncClient, dbse
     dbsession.flush()
 
     response = await client.delete(
-        f"/v0/admin/auth-user?user_id={user_id}",
+        f"/v0/admin/user?user_id={user_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200

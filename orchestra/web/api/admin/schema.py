@@ -6,18 +6,23 @@ from pydantic import BaseModel
 
 class RechargeModelRequest(BaseModel):
     """
-    Request model for creating new recharge model.
+    Request model for creating a new recharge.
+
+    Provide exactly one of ``user_id`` or ``organization_id`` to identify the
+    billing account to credit.
 
     Attributes:
-        user_id (str): The id of the user.
-        quantity (float): The quantity of the recharge.
-        type (str): The type of the recharge.
-        transaction_id (Optional[str]): The transaction id (required for payment type).
-        target_month (Optional[str]): Target month for invoice grouping (format: "2025-06").
-                                     Defaults to current month if not specified.
+        user_id: User ID (for personal billing accounts).
+        organization_id: Organization ID (for org billing accounts).
+        quantity: The number of credits to add.
+        type: Recharge type ("payment", "auto", "promo").
+        transaction_id: Stripe transaction id (required for "payment" type).
+        target_month: Target month for invoice grouping (format: "YYYY-MM").
+                      Defaults to current month if not specified.
     """
 
-    user_id: str
+    user_id: Optional[str] = None
+    organization_id: Optional[int] = None
     quantity: float
     type: str
     transaction_id: Optional[str] = None
@@ -41,15 +46,13 @@ class UsersModelResponse(BaseModel):
 
     Attributes:
         id (str): The id of the users.
-        credits (float): The credits of the users.
+        billing_account_id (Optional[int]): The billing account ID.
     """
 
+    model_config = {"from_attributes": True}
+
     id: str
-    credits: float
-    stripe_customer_id: Optional[str]
-    autorecharge: bool
-    autorecharge_threshold: float
-    autorecharge_qty: float
+    billing_account_id: Optional[int] = None
 
 
 class RechargeTypeModelResponse(BaseModel):
@@ -69,21 +72,25 @@ class RechargeModelResponse(BaseModel):
 
     Attributes:
         id (int): The id of the recharge.
-        user_id (str): The id of the user.
+        billing_account_id (int): The billing account ID.
         at (datetime): The time of the recharge.
         quantity (float): The quantity of the recharge.
         type (str): The type of the recharge.
     """
 
+    model_config = {"from_attributes": True}
+
     id: int
     at: datetime.datetime
-    user_id: str
+    billing_account_id: int
     quantity: float
     type: str
 
 
 class CreditCardFingerprintModelResponse(BaseModel):
-    user_id: str
+    model_config = {"from_attributes": True}
+
+    billing_account_id: int
     fingerprint: str
 
 
@@ -94,7 +101,6 @@ class OrganizationListItem(BaseModel):
     id: int
     name: str
     owner_id: str
-    billing_user_id: Optional[str]
     created_at: Optional[datetime.datetime]
     member_count: int
 

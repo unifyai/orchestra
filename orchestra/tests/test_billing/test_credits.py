@@ -6,59 +6,106 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from starlette import status
 
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+from orchestra.db.dao.user_dao import UserDAO
+from orchestra.settings import settings
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 from orchestra.web.api.admin.views import get_user
 
 
+@pytest.fixture(autouse=True)
+def _mock_stripe_settings(monkeypatch):
+    """Set Stripe settings for tests."""
+    monkeypatch.setattr(
+        settings,
+        "stripe_secret_key",
+        "sk_test_dummy_for_mocking",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "stripe_webhook_secret",
+        "whsec_test",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "stripe_skip_signature_verification",
+        True,
+        raising=False,
+    )
+
+
 # TODO: amount has to be stored in the user
 def test_positive_recharge(dbsession, worker_id) -> None:
-    users_dao = UsersDAO(dbsession)
+    user_dao = UserDAO(dbsession)
+    ba_dao = BillingAccountDAO(dbsession)
 
     # Recharge each test user with 2.5 credits
     test_users = ["user1", "user2", "user3", "user4"]
     for user_id in test_users:
-        users_dao.recharge_credit(user_id, 2.5)
+        user = user_dao.get_user_with_id(user_id)
+        ba_dao.add_credits(user.billing_account_id, 2.5)
 
     dbsession.commit()
 
-    # user1
-    simple = get_user("user1", dbsession)[0]
-    assert math.isclose(simple.credits, 3.5)  # 1 + 2.5 = 3.5
+    # user1 - get_user returns list of Row tuples, need [0][0] to get User object
+    simple = get_user("user1", dbsession)[0][0]
+    assert math.isclose(float(simple.billing_account.credits), 3.5)  # 1 + 2.5 = 3.5
     # user2
-    recharge_limited = get_user("user2", session=dbsession)[0]
-    assert math.isclose(recharge_limited.credits, 12.49)  # 9.99 + 2.5 = 12.49
+    recharge_limited = get_user("user2", session=dbsession)[0][0]
+    assert math.isclose(
+        float(recharge_limited.billing_account.credits),
+        12.49,
+    )  # 9.99 + 2.5 = 12.49
     # user3
-    recharge_not_needed_a = get_user("user3", session=dbsession)[0]
-    assert math.isclose(recharge_not_needed_a.credits, 12.5)  # 10 + 2.5 = 12.5
+    recharge_not_needed_a = get_user("user3", session=dbsession)[0][0]
+    assert math.isclose(
+        float(recharge_not_needed_a.billing_account.credits),
+        12.5,
+    )  # 10 + 2.5 = 12.5
     # user4
-    recharge_not_needed_b = get_user("user4", session=dbsession)[0]
-    assert math.isclose(recharge_not_needed_b.credits, 22.5)  # 20 + 2.5 = 22.5
+    recharge_not_needed_b = get_user("user4", session=dbsession)[0][0]
+    assert math.isclose(
+        float(recharge_not_needed_b.billing_account.credits),
+        22.5,
+    )  # 20 + 2.5 = 22.5
 
 
 # TODO: amount has to be stored in the user
 def test_negative_recharge(dbsession, worker_id) -> None:
-    users_dao = UsersDAO(dbsession)
+    user_dao = UserDAO(dbsession)
+    ba_dao = BillingAccountDAO(dbsession)
 
     # Negative recharge (deduct credits) for each test user
     test_users = ["user1", "user2", "user3", "user4"]
     for user_id in test_users:
-        users_dao.recharge_credit(user_id, -0.5)
+        user = user_dao.get_user_with_id(user_id)
+        ba_dao.deduct_credits(user.billing_account_id, 0.5)
 
     dbsession.commit()
 
-    # user1
-    simple = get_user("user1", session=dbsession)[0]
-    assert math.isclose(simple.credits, 0.5)  # 1 - 0.5 = 0.5
+    # user1 - get_user returns list of Row tuples, need [0][0] to get User object
+    simple = get_user("user1", session=dbsession)[0][0]
+    assert math.isclose(float(simple.billing_account.credits), 0.5)  # 1 - 0.5 = 0.5
     # user2
-    recharge_limited = get_user("user2", session=dbsession)[0]
-    assert math.isclose(recharge_limited.credits, 9.49)  # 9.99 - 0.5 = 9.49
+    recharge_limited = get_user("user2", session=dbsession)[0][0]
+    assert math.isclose(
+        float(recharge_limited.billing_account.credits),
+        9.49,
+    )  # 9.99 - 0.5 = 9.49
     # user3
-    recharge_not_needed_a = get_user("user3", session=dbsession)[0]
-    assert math.isclose(recharge_not_needed_a.credits, 9.5)  # 10 - 0.5 = 9.5
+    recharge_not_needed_a = get_user("user3", session=dbsession)[0][0]
+    assert math.isclose(
+        float(recharge_not_needed_a.billing_account.credits),
+        9.5,
+    )  # 10 - 0.5 = 9.5
     # user4
-    recharge_not_needed_b = get_user("user4", session=dbsession)[0]
-    assert math.isclose(recharge_not_needed_b.credits, 19.5)  # 20 - 0.5 = 19.5
+    recharge_not_needed_b = get_user("user4", session=dbsession)[0][0]
+    assert math.isclose(
+        float(recharge_not_needed_b.billing_account.credits),
+        19.5,
+    )  # 20 - 0.5 = 19.5
 
 
 @pytest.mark.anyio
@@ -231,18 +278,27 @@ async def test_stripe_customer_id(  # noqa: WPS218, E501
     dbsession,
 ) -> None:
     """Checks the stripe user id endpoint."""
-    url = fastapi_app.url_path_for("update_user_stripe_customer_id")
-    query = text("SELECT * FROM users WHERE users.id = 'stripe_autorecharge';")
+    url = fastapi_app.url_path_for("update_stripe_customer_id")
+
+    # Query the billing_account's stripe_customer_id via join
+    query = text(
+        """SELECT ba.stripe_customer_id
+           FROM "user" u
+           JOIN billing_account ba ON u.billing_account_id = ba.id
+           WHERE u.id = 'stripe_autorecharge';""",
+    )
+
     payload = {
         "id": "stripe_autorecharge",
         "stripe_customer_id": "stripe_id_1234",
     }
 
-    pre = dbsession.execute(query).all()[0][2]
-    assert pre == None
+    pre = dbsession.execute(query).scalar()
+    assert pre is None
     response = await client.put(url, headers=ADMIN_HEADERS, params=payload)
     assert response.status_code == status.HTTP_200_OK
-    post = dbsession.execute(query).all()[0][2]
+    dbsession.expire_all()  # Refresh to see committed changes
+    post = dbsession.execute(query).scalar()
     assert post == "stripe_id_1234"
 
 
@@ -253,18 +309,28 @@ async def test_autorecharge_threshold(  # noqa: WPS218, E501
     dbsession,
 ) -> None:
     """Checks the autorecharge threshold endpoint."""
-    url = fastapi_app.url_path_for("update_user_autorecharge_threshold")
-    query = text("SELECT * FROM users WHERE users.id = 'stripe_autorecharge';")
+    url = fastapi_app.url_path_for("update_autorecharge_threshold")
+
+    # Query the billing_account's autorecharge_threshold via join
+    query = text(
+        """SELECT ba.autorecharge_threshold
+           FROM "user" u
+           JOIN billing_account ba ON u.billing_account_id = ba.id
+           WHERE u.id = 'stripe_autorecharge';""",
+    )
+
     payload = {
         "id": "stripe_autorecharge",
         "threshold": 10,
     }
 
-    pre = dbsession.execute(query).all()[0][4]
-    assert pre == -1
+    pre = dbsession.execute(query).scalar()
+    # Test user stripe_autorecharge is seeded with -1 (see seeding.sql)
+    assert float(pre) == -1
     response = await client.put(url, headers=ADMIN_HEADERS, params=payload)
     assert response.status_code == status.HTTP_200_OK
-    post = dbsession.execute(query).all()[0][4]
+    dbsession.expire_all()  # Refresh to see committed changes
+    post = dbsession.execute(query).scalar()
     assert post == 10
 
 
@@ -291,6 +357,10 @@ async def test_autorecharge_qty(  # noqa: WPS218, E501
     )
     assert response.status_code == 400
 
+
+# ============================================================================
+# User Checkout Session Tests
+# ============================================================================
 
 if __name__ == "__main__":
     pass

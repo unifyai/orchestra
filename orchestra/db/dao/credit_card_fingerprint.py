@@ -7,27 +7,32 @@ from orchestra.db.models.orchestra_models import CreditCardFingerprint
 
 
 class CreditCardFingerprintDAO:
-    """Class for accessing custom api key table."""
+    """Class for accessing credit card fingerprint table."""
 
     def __init__(self, session: Session):
         self.session = session
 
-    def create(self, user_id: str, fingerprint: str) -> None:
+    def create(self, billing_account_id: int, fingerprint: str) -> None:
         self.session.add(
-            CreditCardFingerprint(user_id=user_id, fingerprint=fingerprint),
+            CreditCardFingerprint(
+                billing_account_id=billing_account_id,
+                fingerprint=fingerprint,
+            ),
         )
 
     def filter(
         self,
         id: Optional[int] = None,
-        user_id: Optional[str] = None,
+        billing_account_id: Optional[int] = None,
         fingerprint: Optional[str] = None,
     ) -> List[CreditCardFingerprint]:
         query = select(CreditCardFingerprint)
         if id:
             query = query.where(CreditCardFingerprint.id == id)
-        if user_id:
-            query = query.where(CreditCardFingerprint.user_id == user_id)
+        if billing_account_id:
+            query = query.where(
+                CreditCardFingerprint.billing_account_id == billing_account_id,
+            )
         if fingerprint:
             query = query.where(CreditCardFingerprint.fingerprint == fingerprint)
 

@@ -1,30 +1,25 @@
-import asyncio
 import base64
 import datetime
 import logging
 import secrets
+from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
-    AssistantHiringOneTimeApprovalLinkDAO,
-)
-from orchestra.db.dao.auth_user_dao import (
-    ASSISTANT_HIRING_APPROVAL_STATUSES,
-    AuthUser,
-    AuthUserDAO,
-)
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
+from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLinkDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
@@ -33,35 +28,28 @@ from orchestra.web.api.users.schema import (
     AccountDeletionConfirmation,
     AccountDeletionResponse,
     AccountRequest,
-    AssistantHiringApprovalCreateLinkRequest,
-    AssistantHiringApprovalResponse,
-    AssistantHiringApprovalUserStatus,
-    AssistantHiringOneTimeLinkClaimTokenRequest,
-    AssistantHiringOneTimeLinkResponse,
-    BusinessAddress,
-    BusinessVerificationRequest,
     CanDeleteAccountResponse,
+    CreditGrantClaimResponse,
+    CreditGrantLinkClaimRequest,
+    CreditGrantLinkCreateRequest,
+    CreditGrantLinkResponse,
     DeletionBlockerResponse,
-    FreezeAccountByStripeIdRequest,
-    FreezeAccountRequest,
+    OnboardingStatusDetailedResponse,
     OnboardingStatusResponse,
+    OnboardingStatusUpdateRequest,
+    OnboardingStepDataResponse,
     QueryLoggingStatus,
-    StripeIdRequest,
-    UpdateAccountTypeRequest,
-    UpdateBusinessInfoRequest,
     UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
-    UserBusinessStatusResponse,
+    UserBillingProfileResponse,
+    UserBillingProfileUpdate,
+    UserCheckoutRequest,
+    UserCheckoutResponse,
     UserRequest,
     UserSpendingLimitRequest,
     UserSpendingLimitResponse,
     UserSpendResponse,
 )
-from orchestra.web.api.utils.business_validation import (
-    format_business_address,
-    format_business_classification,
-)
-from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.tax_id_validator import (
     TaxIDValidator,
@@ -79,16 +67,16 @@ logger = logging.getLogger(__name__)
 # Endpoints used by next-auth
 
 
-@admin_router.post("/auth-user")
+@admin_router.post("/user")
+@admin_router.post("/auth-user")  # backward-compat alias
 def create_user(
     user: UserRequest,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     api_key_dao = ApiKeyDAO(session)
-    user_dao = UsersDAO(session)
 
-    auth_user_dao.create(
+    user_dao.create(
         email=user.email,
         name=user.name,
         last_name=user.last_name,
@@ -98,15 +86,14 @@ def create_user(
         timezone=user.timezone,
         phone_number=user.phone_number,
     )
-    user_row = auth_user_dao.filter(email=user.email)
+    user_row = user_dao.filter(email=user.email)
     new_user = user_row[0][0]
 
     new_api_key = generate_key()
     api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
-    # TODO: remove this after migrating
+
+    # Seed default Unity project, interface, tab, and table tile for tasks
     try:
-        user_dao.create_users(id=new_user.id, credits=0)
-        # Seed default Unity project, interface, tab, and table tile for tasks
         DefaultTasksSeeder.seed(session, user_id=new_user.id)
     except Exception as e:
         print(e)
@@ -121,18 +108,19 @@ def create_user(
     }
 
 
-@admin_router.get("/auth-user/by-user-id")
+@admin_router.get("/user/by-user-id")
+@admin_router.get("/auth-user/by-user-id")  # backward-compat alias
 def get_user(
     user_id: str,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     organization_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
 
-    user = auth_user_dao.filter(id=user_id)
+    user = user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
     user_instance = user[0][0]
@@ -140,41 +128,18 @@ def get_user(
     api_key = api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_members = organization_member_dao.filter(user_id=user[0][0].id)
-    org_name, org_role_id, org_role_name = None, None, None
-    if org_members:
-        org_role_id = org_members[0][0].role_id
-        role = role_dao.get(org_role_id)
-        org_role_name = role.name if role else None
-        org = organization_dao.filter(id=org_members[0][0].organization_id)
-        org_name = org[0][0].name
-
     # Build organizations list with org-specific API keys
-    organizations = []
-    for member_row in org_members:
-        member = member_row[0]
-        org_result = organization_dao.get(member.organization_id)
-        if org_result:
-            # Get org-specific API key for this user+org
-            org_keys = api_key_dao.get_organization_keys(
-                user_instance.id,
-                organization_id=member.organization_id,
-            )
-            org_api_key = org_keys[0][0].key if org_keys else None
-            # Get role name for this membership
-            member_role = role_dao.get(member.role_id)
-            member_role_name = member_role.name if member_role else None
-            organizations.append(
-                {
-                    "id": member.organization_id,
-                    "name": org_result.name,
-                    "role_id": member.role_id,
-                    "role_name": member_role_name,
-                    "api_key": org_api_key,
-                    "timezone": org_result.timezone,
-                },
-            )
+    organizations = user_dao.get_user_organizations(
+        user_instance.id,
+        organization_dao,
+        organization_member_dao,
+        api_key_dao,
+        role_dao,
+    )
 
+    has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
+        user_instance.id,
+    )
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -185,33 +150,30 @@ def get_user(
         "email": user_instance.email,
         "created_at": user_instance.created_at,
         "api_key": api_key_instance.key,
-        "organization": {
-            "name": org_name,
-            "role_id": org_role_id,
-            "role_name": org_role_name,
-        },
         "organizations": organizations,
-        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
-        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
-        "business_classification": format_business_classification(user_instance),
+        "has_claimed_credit_grant_link": has_claimed,
+        # backward-compat aliases (approval flow removed; always approved)
+        "assistant_hiring_approval": "approved",
+        "has_claimed_approval_link": has_claimed,
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
 
 
-@admin_router.get("/auth-user/by-email")
+@admin_router.get("/user/by-email")
+@admin_router.get("/auth-user/by-email")  # backward-compat alias
 def get_user_by_email(
     email: str,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     organization_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
 
-    user = auth_user_dao.filter(email=email)
+    user = user_dao.filter(email=email)
     if not user:
         return None
     user_instance = user[0][0]
@@ -219,41 +181,18 @@ def get_user_by_email(
     api_key = api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_members = organization_member_dao.filter(user_id=user[0][0].id)
-    org_name, org_role_id, org_role_name = None, None, None
-    if org_members:
-        org_role_id = org_members[0][0].role_id
-        role = role_dao.get(org_role_id)
-        org_role_name = role.name if role else None
-        org = organization_dao.filter(id=org_members[0][0].organization_id)
-        org_name = org[0][0].name
-
     # Build organizations list with org-specific API keys
-    organizations = []
-    for member_row in org_members:
-        member = member_row[0]
-        org_result = organization_dao.get(member.organization_id)
-        if org_result:
-            # Get org-specific API key for this user+org
-            org_keys = api_key_dao.get_organization_keys(
-                user_instance.id,
-                organization_id=member.organization_id,
-            )
-            org_api_key = org_keys[0][0].key if org_keys else None
-            # Get role name for this membership
-            member_role = role_dao.get(member.role_id)
-            member_role_name = member_role.name if member_role else None
-            organizations.append(
-                {
-                    "id": member.organization_id,
-                    "name": org_result.name,
-                    "role_id": member.role_id,
-                    "role_name": member_role_name,
-                    "api_key": org_api_key,
-                    "timezone": org_result.timezone,
-                },
-            )
+    organizations = user_dao.get_user_organizations(
+        user_instance.id,
+        organization_dao,
+        organization_member_dao,
+        api_key_dao,
+        role_dao,
+    )
 
+    has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
+        user_instance.id,
+    )
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -264,29 +203,26 @@ def get_user_by_email(
         "email": user_instance.email,
         "created_at": user_instance.created_at,
         "api_key": api_key_instance.key,
-        "organization": {
-            "name": org_name,
-            "role_id": org_role_id,
-            "role_name": org_role_name,
-        },
         "organizations": organizations,
-        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
-        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
-        "business_classification": format_business_classification(user_instance),
+        "has_claimed_credit_grant_link": has_claimed,
+        # backward-compat aliases (approval flow removed; always approved)
+        "assistant_hiring_approval": "approved",
+        "has_claimed_approval_link": has_claimed,
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
 
 
-@admin_router.get("/auth-user/by-account")
+@admin_router.get("/user/by-account")
+@admin_router.get("/auth-user/by-account")  # backward-compat alias
 def get_user_by_account(
     provider_account_id: str,
     provider: str,
     session: Session = Depends(get_db_session),
 ):
     account_dao = AccountDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     organization_dao = OrganizationDAO(session)
@@ -298,22 +234,25 @@ def get_user_by_account(
     )
     if not account:
         return None
-    user = auth_user_dao.filter(id=account[0][0].user_id)
+    user = user_dao.filter(id=account[0][0].user_id)
     if not user:
         return None
     user_instance = user[0][0]
 
     api_key = api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
+    # Build organizations list with org-specific API keys
+    organizations = user_dao.get_user_organizations(
+        user_instance.id,
+        organization_dao,
+        organization_member_dao,
+        api_key_dao,
+        role_dao,
+    )
 
-    org_member = organization_member_dao.filter(user_id=user[0][0].id)
-    org_name, org_role_id, org_role_name = None, None, None
-    if org_member:
-        org_role_id = org_member[0][0].role_id
-        role = role_dao.get(org_role_id)
-        org_role_name = role.name if role else None
-        org = organization_dao.filter(id=org_member[0][0].organization_id)
-        org_name = org[0][0].name
+    has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
+        user_instance.id,
+    )
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -324,30 +263,28 @@ def get_user_by_account(
         "email": user_instance.email,
         "created_at": user_instance.created_at,
         "api_key": api_key_instance.key,
-        "organization": {
-            "name": org_name,
-            "role_id": org_role_id,
-            "role_name": org_role_name,
-        },
-        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
-        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
-        "business_classification": format_business_classification(user_instance),
+        "organizations": organizations,
+        "has_claimed_credit_grant_link": has_claimed,
+        # backward-compat aliases (approval flow removed; always approved)
+        "assistant_hiring_approval": "approved",
+        "has_claimed_approval_link": has_claimed,
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
 
 
-@admin_router.put("/auth-user")
+@admin_router.put("/user")
+@admin_router.put("/auth-user")  # backward-compat alias
 def update_user(
     updated_user: UserRequest,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.filter(id=updated_user.user_id)
+    user_dao = UserDAO(session)
+    user = user_dao.filter(id=updated_user.user_id)
     if not user:
         raise not_found("User")
-    auth_user_dao.update(
+    user_dao.update(
         id=updated_user.user_id,
         name=updated_user.name,
         last_name=updated_user.last_name,
@@ -359,7 +296,11 @@ def update_user(
     return "User information updated successfully!"
 
 
-@admin_router.delete("/auth-user", response_model=AccountDeletionResponse)
+@admin_router.delete("/user", response_model=AccountDeletionResponse)
+@admin_router.delete(
+    "/auth-user",
+    response_model=AccountDeletionResponse,
+)  # backward-compat alias
 def delete_user(
     user_id: str,
     force: bool = Query(
@@ -424,99 +365,39 @@ def generate_key(size=32):
     return key.replace("/", "-")
 
 
-@admin_router.put("/auth-user/tier")
-def set_user_tier(
-    user_id: str,
-    tier: str,
-    session: Session = Depends(get_db_session),
-):
-    auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.filter(id=user_id)
-    if not user:
-        raise not_found("User ID")
-    if tier not in ["developer", "professional", "enterprise"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Tier must be one of developer, professional, or enterprise.",
-        )
-    auth_user_dao.update(id=user_id, tier=tier)
-    return "User tier updated successfully!"
+## Tier-setting endpoint has been moved to orchestra/web/api/admin/views.py
+## under generalized PUT /billing/tier.  Backward-compat alias PUT /user/tier
+## is registered there.
 
 
-@admin_router.put("/auth-user/quotas/reset")
+@admin_router.put("/user/quotas/reset")
+@admin_router.put("/auth-user/quotas/reset")  # backward-compat alias
 def reset_user_quotas(
     user_id: str,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.filter(id=user_id)
+    user_dao = UserDAO(session)
+    user = user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
-    auth_user_dao.update(id=user_id, queries_enabled=True, evaluations_enabled=True)
+    user_dao.update(id=user_id, queries_enabled=True, evaluations_enabled=True)
     return "User quotas reset successfully!"
 
 
-@admin_router.put("/auth-user/quotas/reset/all")
+@admin_router.put("/user/quotas/reset/all")
+@admin_router.put("/auth-user/quotas/reset/all")  # backward-compat alias
 def reset_all_user_quotas(
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
-    users = auth_user_dao.filter()
+    user_dao = UserDAO(session)
+    users = user_dao.filter()
     for user in users:
-        auth_user_dao.update(
+        user_dao.update(
             id=user[0].id,
             queries_enabled=True,
             evaluations_enabled=True,
         )
     return f"User quotas reset successfully for {len(users)} users"
-
-
-@admin_router.post("/auth-user/freeze")
-def freeze_account(
-    request: FreezeAccountRequest,
-    session: Session = Depends(get_db_session),
-):
-    users_dao = UsersDAO(session)
-    users_dao.set_frozen_status(request.user_id, request.freeze)
-    status_str = "frozen" if request.freeze else "unfrozen"
-    return {"message": f"Account {status_str} successfully!"}
-
-
-@admin_router.post("/auth-user/freeze-by-stripe-id")
-def freeze_account_by_stripe_id(
-    request: FreezeAccountByStripeIdRequest,
-    session: Session = Depends(get_db_session),
-):
-    users_dao = UsersDAO(session)
-    user = users_dao.get_user_by_stripe_id(request.stripe_id)
-    if not user:
-        raise not_found("User with specified Stripe ID")
-    users_dao.set_frozen_status(user.id, request.freeze)
-    status_str = "frozen" if request.freeze else "unfrozen"
-    return {
-        "message": f"Account with stripe_id {request.stripe_id} {status_str} successfully!",
-    }
-
-
-@admin_router.put("/auth-user/stripe-id")
-def set_stripe_id_for_user(
-    request: StripeIdRequest,
-    session: Session = Depends(get_db_session),
-):
-    users_dao = UsersDAO(session)
-    users_dao.set_stripe_customer_id(request.user_id, request.stripe_id)
-    session.commit()
-    return {"message": f"Stripe ID set for user {request.user_id}"}
-
-
-@admin_router.get("/auth-user/is-frozen")
-def is_account_frozen(
-    user_id: str,
-    session: Session = Depends(get_db_session),
-):
-    users_dao = UsersDAO(session)
-    frozen = users_dao.is_account_frozen(user_id)
-    return {"user_id": user_id, "is_frozen": frozen}
 
 
 @admin_router.get("/api_key/list")
@@ -630,7 +511,8 @@ def regenerate_api_key(
     }
 
 
-@admin_router.post("/auth-user/{user_id}/organization-api-key")
+@admin_router.post("/user/{user_id}/organization-api-key")
+@admin_router.post("/auth-user/{user_id}/organization-api-key")  # backward-compat alias
 def create_organization_api_key(
     user_id: str,
     organization_id: int,
@@ -642,7 +524,7 @@ def create_organization_api_key(
     Create an organization-specific API key for a user.
 
     This key will have organization context and billing will be charged to
-    the organization's billing_user_id.
+    the organization's account.
 
     Args:
         user_id: The user ID to create the key for.
@@ -731,7 +613,7 @@ def create_organization(
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
 
     existing_org = organization_dao.filter(owner_id=owner_id)
     if existing_org:
@@ -746,7 +628,7 @@ def create_organization(
         raise HTTPException(status_code=500, detail="Owner system role not found")
 
     # Get owner's timezone to initialize org timezone
-    owner_row = auth_user_dao.get_by_id(owner_id) if owner_id else None
+    owner_row = user_dao.get_by_id(owner_id) if owner_id else None
     owner_timezone = owner_row[0].timezone if owner_row else None
 
     organization_dao.create(name=name, owner_id=owner_id, timezone=owner_timezone)
@@ -766,12 +648,12 @@ def add_organization_member(
     role_id: Optional[int] = None,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
 
-    new_user = auth_user_dao.filter(email=new_member_email)
+    new_user = user_dao.filter(email=new_member_email)
     if not new_user:
         raise not_found("User")
     org = organization_dao.filter(name=name)
@@ -821,7 +703,7 @@ def update_organization_member_role(
     role_id: int,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
@@ -833,7 +715,7 @@ def update_organization_member_role(
     if not role.is_system_role:
         raise HTTPException(status_code=400, detail="Only system roles can be assigned")
 
-    user = auth_user_dao.filter(email=member_email)
+    user = user_dao.filter(email=member_email)
     if not user:
         raise not_found("User")
     org = organization_dao.filter(name=organization)
@@ -860,9 +742,9 @@ def get_query_logging_status(
     session: Session = Depends(get_db_session),
 ):
     """Get the current query logging status for the authenticated user."""
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     user_id = request.state.user_id
-    user = auth_user_dao.get_by_id(user_id)
+    user = user_dao.get_by_id(user_id)
     if not user:
         raise not_found("User")
 
@@ -875,9 +757,9 @@ def get_user_basic_info(
     session: Session = Depends(get_db_session),
 ):
     """Get basic information for the authenticated user."""
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     user_id = request.state.user_id
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = user_dao.get_by_id(user_id)
 
     if not user_row:
         raise not_found("User")
@@ -903,553 +785,108 @@ def update_query_logging_status(
     session: Session = Depends(get_db_session),
 ):
     """Update the query logging status for the authenticated user."""
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     user_id = request.state.user_id
-    user = auth_user_dao.get_by_id(user_id)
+    user = user_dao.get_by_id(user_id)
     if not user:
         raise not_found("User")
 
-    auth_user_dao.update(id=user_id, queries_enabled=body.enabled)
+    user_dao.update(id=user_id, queries_enabled=body.enabled)
 
     return QueryLoggingStatus(enabled=body.enabled)
 
 
-# -- Business Classification Endpoints --
-
-
-@router.get("/user/business-status", response_model=UserBusinessStatusResponse)
-def get_user_business_status(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Get the current user's business classification status."""
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    auth_user_dao = AuthUserDAO(session)
-    user_row = auth_user_dao.get_by_id(user_id)
-
-    if not user_row:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    auth_user = user_row[0]
-
-    # Use standardized business validation
-    business_address = format_business_address(auth_user)
-
-    # Convert dict to BusinessAddress object if address exists
-    business_address_obj = None
-    if business_address:
-        business_address_obj = BusinessAddress(
-            address_line1=business_address["address_line1"],
-            address_line2=business_address["address_line2"],
-            city=business_address["city"],
-            state=business_address["state"],
-            country=business_address["country"],
-            postal_code=business_address["postal_code"],
-        )
-
-    return UserBusinessStatusResponse(
-        account_type=auth_user.account_type,
-        business_name=auth_user.business_name,
-        tax_id=auth_user.tax_id,
-        business_type=auth_user.business_type,
-        business_verified=auth_user.business_verified,
-        tax_exempt=auth_user.tax_exempt,
-        tax_jurisdiction=auth_user.tax_jurisdiction,
-        business_address=business_address_obj,
-    )
-
-
-@router.put("/user/account-type")
-def update_user_account_type(
-    request: Request,
-    body: UpdateAccountTypeRequest,
-    session: Session = Depends(get_db_session),
-):
-    """Update user account type (individual vs business)."""
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    auth_user_dao = AuthUserDAO(session)
-
-    try:
-        if body.account_type == "business" and body.business_info:
-            # Update to business account with business information
-            auth_user_dao.update_account_type(
-                user_id=user_id,
-                account_type=body.account_type,
-                business_name=body.business_info.business_name,
-                tax_id=body.business_info.tax_id,
-                business_type=body.business_info.business_type,
-                business_address_line1=body.business_info.business_address.address_line1,
-                business_address_line2=body.business_info.business_address.address_line2,
-                business_city=body.business_info.business_address.city,
-                business_state=body.business_info.business_address.state,
-                business_country=body.business_info.business_address.country,
-                business_postal_code=body.business_info.business_address.postal_code,
-                tax_exempt=body.business_info.tax_exempt,
-            )
-        else:
-            # Update to individual account (clears business info)
-            auth_user_dao.update_account_type(
-                user_id=user_id,
-                account_type=body.account_type,
-            )
-
-        return {"message": f"Account type updated to {body.account_type} successfully"}
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.patch("/user/business-info")
-def update_user_business_info(
-    request: Request,
-    body: UpdateBusinessInfoRequest,
-    session: Session = Depends(get_db_session),
-):
-    """Update business information for business accounts."""
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    auth_user_dao = AuthUserDAO(session)
-
-    try:
-        auth_user_dao.update_business_info(
-            user_id=user_id,
-            business_name=body.business_name,
-            tax_id=body.tax_id,
-            business_type=body.business_type,
-            business_address_line1=(
-                body.business_address.address_line1 if body.business_address else None
-            ),
-            business_address_line2=(
-                body.business_address.address_line2 if body.business_address else None
-            ),
-            business_city=body.business_address.city if body.business_address else None,
-            business_state=(
-                body.business_address.state if body.business_address else None
-            ),
-            business_country=(
-                body.business_address.country if body.business_address else None
-            ),
-            business_postal_code=(
-                body.business_address.postal_code if body.business_address else None
-            ),
-            tax_exempt=body.tax_exempt,
-        )
-
-        return {"message": "Business information updated successfully"}
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@admin_router.post("/auth-user/verify-business")
-def verify_business_account(
-    body: BusinessVerificationRequest,
-    session: Session = Depends(get_db_session),
-):
-    """Admin endpoint to verify a business account."""
-    auth_user_dao = AuthUserDAO(session)
-
-    try:
-        # TODO: Add actual business verification logic here
-        # This could include:
-        # - Tax ID validation via external services
-        # - Business registration verification
-        # - Address verification
-
-        auth_user_dao.set_business_verified(
-            user_id=body.user_id,
-            verified=True,
-            tax_jurisdiction="Determined by verification process",  # Replace with actual logic
-        )
-
-        return {"message": f"Business account {body.user_id} verified successfully"}
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@admin_router.get("/auth-user/business-accounts")
-def list_business_accounts(
-    verified: Optional[bool] = Query(None, description="Filter by verification status"),
-    limit: int = Query(50, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-):
-    """Admin endpoint to list business accounts."""
-    auth_user_dao = AuthUserDAO(session)
-
-    if verified is not None:
-        users = auth_user_dao.get_business_users_by_verification_status(
-            verified=verified,
-            limit=limit,
-            offset=offset,
-        )
-    else:
-        users = auth_user_dao.get_users_by_account_type(
-            account_type="business",
-            limit=limit,
-            offset=offset,
-        )
-
-    return [
-        {
-            "id": user.id,
-            "email": user.email,
-            "business_name": user.business_name,
-            "tax_id": user.tax_id,
-            "business_verified": user.business_verified,
-            "tax_exempt": user.tax_exempt,
-            "created_at": user.created_at,
-        }
-        for user in users
-    ]
-
-
-@router.post("/user/create-with-business-info")
-def create_user_with_business_info(
-    body: UpdateAccountTypeRequest,
-    session: Session = Depends(get_db_session),
-):
-    """Create a new user with business classification (for signup flow)."""
-    auth_user_dao = AuthUserDAO(session)
-
-    # Check if user already exists
-    existing_user = auth_user_dao.filter(email=body.email)
-    if existing_user:
-        raise HTTPException(
-            status_code=400,
-            detail="A user with this email already exists.",
-        )
-
-    try:
-        if body.account_type == "business" and body.business_info:
-            # Create business user
-            auth_user_dao.create(
-                email=body.email,
-                name=body.name,
-                last_name=body.last_name,
-                account_type=body.account_type,
-                business_name=body.business_info.business_name,
-                tax_id=body.business_info.tax_id,
-                business_type=body.business_info.business_type,
-                business_address_line1=body.business_info.business_address.address_line1,
-                business_address_line2=body.business_info.business_address.address_line2,
-                business_city=body.business_info.business_address.city,
-                business_state=body.business_info.business_address.state,
-                business_country=body.business_info.business_address.country,
-                business_postal_code=body.business_info.business_address.postal_code,
-                tax_exempt=body.business_info.tax_exempt,
-            )
-        else:
-            # Create individual user
-            auth_user_dao.create(
-                email=body.email,
-                name=body.name,
-                last_name=body.last_name,
-                account_type=body.account_type or "individual",
-            )
-
-        session.commit()
-        return {
-            "message": f"User created successfully with account type: {body.account_type}",
-        }
-
-    except ValueError as e:
-        session.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# -- Manage the approval status for user access to hiring assistants --
+# -- Manage one-time credit grant links --
 @router.post(
-    "/user/assistant-hiring-approval",
-    response_model=AssistantHiringApprovalResponse,
+    "/user/claim-credit-grant-link",
+    response_model=CreditGrantClaimResponse,
     status_code=200,
 )
-def request_assistant_hiring_approval(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    auth_user_dao = AuthUserDAO(session)
-    user_id = request.state.user_id
-    user_row_proxy = auth_user_dao.get_by_id(user_id)  # This returns a RowProxy
-    if not user_row_proxy:
-        raise not_found("User")
-
-    user_instance = user_row_proxy[0]  # Get the AuthUser ORM instance from the RowProxy
-
-    current_status = user_instance.assistant_hiring_approval
-    if current_status == "approved":
-        return AssistantHiringApprovalResponse(
-            message="Assistant hiring is already approved.",
-            assistant_hiring_approval=current_status,
-        )
-    if current_status == "pending":
-        return AssistantHiringApprovalResponse(
-            message="Request for assistant hiring is already pending.",
-            assistant_hiring_approval=current_status,
-        )
-
-    if auth_user_dao.set_assistant_hiring_approval(user_instance.id, "pending"):
-        session.commit()
-        return AssistantHiringApprovalResponse(
-            message="Request for assistant hiring submitted. You've been added to the waitlist.",
-            assistant_hiring_approval="pending",
-        )
-    else:
-        session.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to update your hiring approval request status.",
-        )
-
-
-@admin_router.put(
-    "/auth-user/{target_user_id}/assistant-hiring-approval/{status}",
-    response_model=AssistantHiringApprovalResponse,
-)
-def set_user_assistant_hiring_status(
-    target_user_id: str,
-    status: str,  # e.g., "approved", "pending", "rejected", "revoked"
-    session: Session = Depends(get_db_session),
-):
-    if status not in ASSISTANT_HIRING_APPROVAL_STATUSES or status is None:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Invalid status. Must be one of {', '.join(s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None)}.",
-        )
-
-    auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.get_by_id(target_user_id)
-    if not user:
-        raise not_found(f"User ID: {target_user_id}")
-
-    user_instance = user[0]
-    if auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
-        session.commit()
-        if status == "approved":
-            try:
-                email_recipient = user_instance.name or "there"
-                to_email = user_instance.email
-                email_subject = "Hire your first assistant"
-                email_body = f"""
-                <html>
-                <body>
-                    <p>Hey {email_recipient}, Dan from Unify here,</p>
-                    <p>Just wanted to let you know that your request has been approved.</p>
-                    <p>You can now <a href="https://console.unify.ai/team">hire your first AI assistant</a>! 🤖</p>
-                    <p>Let me know if there's anything I can help with as you get started :)</p>
-                    <p>My inbox is always open,<br>
-                    Dan</p>
-                </body>
-                </html>
-                """
-                email_coroutine = send_email_async(to_email, email_subject, email_body)
-                email_sending_task = asyncio.create_task(email_coroutine)
-
-                def _log_email_task_exception(task: asyncio.Task) -> None:
-                    try:
-                        task.result()
-                        logger.info(
-                            f"Email sending task for user {target_user_id} completed (status: {task.done()}).",
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"Background email sending task for user {target_user_id} encountered an error: {e}",
-                            exc_info=True,
-                        )
-
-                email_sending_task.add_done_callback(_log_email_task_exception)
-                logger.info(f"Scheduled approval email for user {target_user_id}.")
-            except Exception as e:
-                logger.error(
-                    f"Failed to schedule email for user {target_user_id} approval: {e}",
-                )
-        return AssistantHiringApprovalResponse(
-            message=f"User {target_user_id} assistant hiring approval status set to '{status}'.",
-            assistant_hiring_approval=status,
-        )
-    else:
-        session.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to set hiring approval status for user {target_user_id}.",
-        )
-
-
-@admin_router.get(
-    "/auth-user/assistant-hiring-approval",
-    response_model=List[AssistantHiringApprovalUserStatus],
-)
-def list_users_by_assistant_hiring_approval(
-    status_filter: Optional[str] = Query(
-        None,
-        description=f"Filter by status: {', '.join(s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None)}, 'none', or 'all'",
-    ),
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-):
-    auth_user_dao = AuthUserDAO(session)
-
-    users_to_return: List[AuthUser] = []  # This will hold AuthUser ORM instances
-
-    if not status_filter or status_filter.lower() == "all":
-        user_rows = auth_user_dao.filter(
-            limit=limit,
-            offset=offset,
-        )  # No approval filter (uses sentinel default)
-        users_to_return = [row[0] for row in user_rows if row]
-    elif status_filter.lower() == "none":
-        user_rows = auth_user_dao.filter(
-            assistant_hiring_approval=None,
-            limit=limit,
-            offset=offset,
-        )  # Explicitly filter for None
-        users_to_return = [row[0] for row in user_rows if row]
-    else:
-        # For specific statuses like "pending", "approved", etc.
-        valid_statuses_for_direct_filter = [
-            s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None
-        ]
-        if status_filter not in valid_statuses_for_direct_filter:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status filter. Must be one of {', '.join(valid_statuses_for_direct_filter)}, 'none', or 'all'.",
-            )
-        # get_users_by_assistant_hiring_approval already returns List[AuthUser] (ORM instances)
-        users_to_return = auth_user_dao.get_users_by_assistant_hiring_approval(
-            status_filter,
-            limit=limit,
-            offset=offset,
-        )
-
-    return [
-        AssistantHiringApprovalUserStatus(
-            id=user.id,
-            email=user.email,
-            name=user.name,
-            assistant_hiring_approval=user.assistant_hiring_approval,
-            created_at=user.created_at,
-        )
-        for user in users_to_return
-    ]
-
-
-# -- Manage one time approval links that grant automatic approval to users for hiring assistants --
 @router.post(
-    "/user/claim-assistant-hiring-one-time-link",
-    response_model=AssistantHiringApprovalResponse,
+    "/user/claim-assistant-hiring-one-time-link",  # backward-compat alias
+    response_model=CreditGrantClaimResponse,
     status_code=200,
 )
-def claim_assistant_hiring_one_time_link(
+def claim_credit_grant_link(
     request: Request,
-    payload: AssistantHiringOneTimeLinkClaimTokenRequest,
+    payload: CreditGrantLinkClaimRequest,
     session: Session = Depends(get_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    """
+    Claim a one-time credit grant link.
+
+    When a user claims a valid link, they receive the credits specified in the link.
+    Each user can only benefit from one link ever (checked via OneTimeCreditGrantLink table).
+
+    Note: The approval-granting behavior has been removed. Access to assistant
+    endpoints is now controlled by rate limits instead of approval status.
+    """
+    user_dao = UserDAO(session)
     user_id = request.state.user_id
-    user_row_proxy = auth_user_dao.get_by_id(user_id)
+    user_row_proxy = user_dao.get_by_id(user_id)
     if not user_row_proxy:
         raise not_found("User")
 
     user_instance = user_row_proxy[0]
-    users_dao = UsersDAO(session)
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    token_dao = OneTimeCreditGrantLinkDAO(session)
 
     link = token_dao.get_by_token(payload.token)
     if not link:
-        raise not_found("Approval link token")
+        raise not_found("Credit grant link token")
 
-    # Check if user has ever claimed a link and received benefits
-    if user_instance.has_claimed_approval_link:
-        original_approval_status = user_instance.assistant_hiring_approval
-        updated_approval_status = original_approval_status
-        message = "You have already benefited from a one-time approval link. This link was not consumed, and no new credits were awarded."  # Default message
-
-        was_re_activated = False
-        if original_approval_status in ["revoked", "rejected", None, "pending"]:
-            if not auth_user_dao.set_assistant_hiring_approval(
-                user_instance.id,
-                "approved",
-            ):
-                session.rollback()
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to re-activate approval status.",
-                )
-            session.commit()
-            session.refresh(
-                user_instance,
-            )  # Refresh to get the latest state for user_instance
-            updated_approval_status = "approved"
-            was_re_activated = True  # Mark that re-activation happened
-
-        if was_re_activated and original_approval_status in [
-            "revoked",
-            "rejected",
-            None,
-            "pending",
-        ]:  # Check original status for message
-            message = "Your assistant hiring access has been re-activated as you previously benefited from an approval link. This link was not consumed, and no new credits were awarded."
-
-        return AssistantHiringApprovalResponse(
-            message=message,
-            assistant_hiring_approval=updated_approval_status,
+    # Check if user has already claimed any link before
+    if token_dao.has_user_claimed_any_link(user_id):
+        return CreditGrantClaimResponse(
+            message="You have already benefited from a one-time credit grant link. "
+            "This link was not consumed, and no new credits were awarded.",
+            credits_granted=None,
         )
 
-    # Link consumption logic (if user.has_claimed_approval_link is False)
+    # Check if link was already claimed by another user
     if link.user_id is not None:
         if link.user_id != user_instance.id:
             raise HTTPException(
                 status_code=400,
-                detail="Approval link has already been claimed by another user.",
+                detail="This link has already been claimed by another user.",
             )
-        return AssistantHiringApprovalResponse(
-            message="You already used this specific approval link, but had not been marked as benefited. Status corrected.",
-            assistant_hiring_approval=user_instance.assistant_hiring_approval,
+        # Edge case: same user, already claimed this specific link
+        return CreditGrantClaimResponse(
+            message="You already claimed this specific link.",
+            credits_granted=None,
         )
 
+    # Check if link has expired
     if link.expires_at < datetime.datetime.now(datetime.timezone.utc):
-        raise HTTPException(status_code=400, detail="Approval link has expired.")
+        raise HTTPException(status_code=400, detail="This link has expired.")
 
     try:
+        # Claim the link
         claimed_link = token_dao.claim_link(payload.token, user_instance.id)
         if not claimed_link:
             session.rollback()
             raise HTTPException(
                 status_code=400,
-                detail="Failed to claim approval link. It might be invalid, expired or already claimed by another.",
+                detail="Failed to claim link. It may be invalid, expired, or "
+                "already claimed by another user.",
             )
 
-        if not auth_user_dao.set_assistant_hiring_approval(
-            user_instance.id,
-            "approved",
-        ):
-            session.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to set approval status.",
-            )
+        # Grant credits to the user's billing account
+        credit_amount = float(link.credit_amount)
+        ba = user_instance.billing_account
+        if ba:
+            ba.credits += Decimal(str(credit_amount))
+        else:
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
-        auth_user_dao.update(id=user_instance.id, has_claimed_approval_link=True)
-
-        users_dao.recharge_credit(
-            user_id=user_instance.id,
-            quantity=float(settings.assistant_creation_cost),
-        )
+            ba_dao = BillingAccountDAO(session)
+            new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
+            user_instance.billing_account_id = new_ba.id
+            session.flush()
 
         session.commit()
-        return AssistantHiringApprovalResponse(
-            message="Approval link successfully claimed and credits awarded.",
-            assistant_hiring_approval="approved",
+        return CreditGrantClaimResponse(
+            message=f"Link successfully claimed! {credit_amount:.2f} credits awarded.",
+            credits_granted=credit_amount,
         )
     except HTTPException:
         session.rollback()
@@ -1458,74 +895,100 @@ def claim_assistant_hiring_one_time_link(
         session.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"An unexpected error occurred during link processing: {str(e)}",
+            detail=f"An unexpected error occurred: {str(e)}",
         )
 
 
 @admin_router.post(
-    "/assistant-hiring-one-time-link",
-    response_model=AssistantHiringOneTimeLinkResponse,
+    "/credit-grant-link",
+    response_model=CreditGrantLinkResponse,
     status_code=201,
 )
-def create_assistant_hiring_one_time_link(
-    payload: AssistantHiringApprovalCreateLinkRequest = Depends(),
+@admin_router.post(
+    "/assistant-hiring-one-time-link",  # backward-compat alias
+    response_model=CreditGrantLinkResponse,
+    status_code=201,
+)
+def create_credit_grant_link(
+    payload: CreditGrantLinkCreateRequest,
     session: Session = Depends(get_db_session),
 ):
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    """
+    Create a one-time credit grant link.
+
+    When a user claims this link, they receive the specified credit_amount.
+    If credit_amount is not provided, defaults to assistant_creation_cost.
+    """
+    token_dao = OneTimeCreditGrantLinkDAO(session)
     if payload.expires_in_days <= 0:
-        raise HTTPException(status_code=500, detail="Expiration days must be positive.")
+        raise HTTPException(status_code=400, detail="Expiration days must be positive.")
 
     expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
         days=payload.expires_in_days,
     )
-    link = token_dao.create(expires_at=expires_at)
+    link = token_dao.create(
+        expires_at=expires_at,
+        credit_amount=payload.credit_amount,
+    )
     session.commit()
     session.refresh(link)
-    return AssistantHiringOneTimeLinkResponse(
+    return CreditGrantLinkResponse(
         id=link.id,
         token=link.token,
         expires_at=link.expires_at,
         claimed_at=link.claimed_at,
         user_id=link.user_id,
+        credit_amount=link.credit_amount,
     )
 
 
 @admin_router.get(
-    "/assistant-hiring-one-time-link",
-    response_model=List[AssistantHiringOneTimeLinkResponse],
+    "/credit-grant-link",
+    response_model=List[CreditGrantLinkResponse],
 )
-def list_assistant_hiring_one_time_link(
+@admin_router.get(
+    "/assistant-hiring-one-time-link",  # backward-compat alias
+    response_model=List[CreditGrantLinkResponse],
+)
+def list_credit_grant_links(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ):
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    """List all one-time credit grant links."""
+    token_dao = OneTimeCreditGrantLinkDAO(session)
     links = token_dao.list_links(limit=limit, offset=offset)
     return [
-        AssistantHiringOneTimeLinkResponse(
+        CreditGrantLinkResponse(
             id=link.id,
             token=link.token,
             expires_at=link.expires_at,
             claimed_at=link.claimed_at,
             user_id=link.user_id,
+            credit_amount=link.credit_amount,
         )
         for link in links
     ]
 
 
-@admin_router.delete("/assistant-hiring-one-time-link/{link_id}", status_code=204)
-def delete_assistant_hiring_one_time_link(
+@admin_router.delete("/credit-grant-link/{link_id}", status_code=204)
+@admin_router.delete(
+    "/assistant-hiring-one-time-link/{link_id}",
+    status_code=204,
+)  # backward-compat alias
+def delete_credit_grant_link(
     link_id: str,
     session: Session = Depends(get_db_session),
 ):
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    token_dao = OneTimeCreditGrantLinkDAO(session)
     if not token_dao.delete_link(link_id):
-        raise not_found("One-time approval link")
+        raise not_found("One-time credit grant link")
     session.commit()
     return None
 
 
-@router.post("/user/validate-tax-id")
+@router.post("/billing/validate-tax-id")
+@router.post("/user/validate-tax-id")  # backward-compat alias
 def validate_tax_id(
     request: Request,
     tax_id: str = Query(..., description="Tax ID to validate"),
@@ -1549,7 +1012,8 @@ def validate_tax_id(
         raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
 
 
-@router.get("/user/supported-tax-countries")
+@router.get("/billing/supported-tax-countries")
+@router.get("/user/supported-tax-countries")  # backward-compat alias
 def get_supported_tax_countries():
     """Get list of countries supported for tax ID validation."""
     return {
@@ -1564,13 +1028,13 @@ def get_onboarding_status(
     session: Session = Depends(get_db_session),
 ):
     """Get the current user's onboarding status."""
-    auth_user_dao = AuthUserDAO(session)
-    user_row = auth_user_dao.get_by_id(request.state.user_id)
+    user_dao = UserDAO(session)
+    user_row = user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
-    auth_user = user_row[0]
-    return OnboardingStatusResponse(onboarded=auth_user.onboarded)
+    user = user_row[0]
+    return OnboardingStatusResponse(onboarded=user.onboarded)
 
 
 @router.put("/user/onboarding-status")
@@ -1580,15 +1044,121 @@ def update_onboarding_status(
     session: Session = Depends(get_db_session),
 ):
     """Update the current user's onboarding status."""
-    auth_user_dao = AuthUserDAO(session)
-    user_row = auth_user_dao.get_by_id(request.state.user_id)
+    user_dao = UserDAO(session)
+    user_row = user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
-    auth_user_dao.update(id=request.state.user_id, onboarded=body.onboarded)
+    user_dao.update(id=request.state.user_id, onboarded=body.onboarded)
     session.commit()
 
     return {"message": "Onboarding status updated successfully"}
+
+
+# -- Detailed Onboarding Progress (Step-by-Step) --
+
+
+@router.get("/user/onboarding", response_model=OnboardingStatusDetailedResponse)
+def get_onboarding_progress(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Get the current user's detailed onboarding progress.
+
+    Returns the current step and step-specific data that can be used
+    to resume onboarding from where the user left off.
+    """
+    user_dao = UserDAO(session)
+    onboarding_dao = OnboardingStatusDAO(session)
+
+    user_row = user_dao.get_by_id(request.state.user_id)
+    if not user_row:
+        raise not_found("User")
+
+    # Get or create onboarding status
+    status = onboarding_dao.get_or_create(request.state.user_id)
+    session.commit()
+
+    return OnboardingStatusDetailedResponse(
+        user_id=status.user_id,
+        current_step=status.current_step,
+        step_data=OnboardingStepDataResponse(**(status.step_data or {})),
+        created_at=status.created_at,
+        updated_at=status.updated_at,
+    )
+
+
+@router.put("/user/onboarding", response_model=OnboardingStatusDetailedResponse)
+def update_onboarding_progress(
+    request: Request,
+    body: OnboardingStatusUpdateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Update the current user's onboarding progress.
+
+    The step_data is validated based on the current_step to ensure
+    only valid fields are stored.
+    """
+    user_dao = UserDAO(session)
+    onboarding_dao = OnboardingStatusDAO(session)
+
+    user_row = user_dao.get_by_id(request.state.user_id)
+    if not user_row:
+        raise not_found("User")
+
+    # Get or create, then update
+    status = onboarding_dao.get_or_create(request.state.user_id)
+    status = onboarding_dao.update(
+        user_id=request.state.user_id,
+        current_step=body.current_step,
+        step_data=body.step_data,
+    )
+
+    # If step is "completed", also set the legacy onboarded flag
+    if body.current_step == "completed":
+        user_dao.update(id=request.state.user_id, onboarded=True)
+
+    session.commit()
+
+    return OnboardingStatusDetailedResponse(
+        user_id=status.user_id,
+        current_step=status.current_step,
+        step_data=OnboardingStepDataResponse(**(status.step_data or {})),
+        created_at=status.created_at,
+        updated_at=status.updated_at,
+    )
+
+
+@router.delete("/user/onboarding")
+def reset_onboarding_progress(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Reset the current user's onboarding progress.
+
+    This can be used if the user wants to restart the onboarding flow.
+    """
+    user_dao = UserDAO(session)
+    onboarding_dao = OnboardingStatusDAO(session)
+
+    user_row = user_dao.get_by_id(request.state.user_id)
+    if not user_row:
+        raise not_found("User")
+
+    status = onboarding_dao.reset(request.state.user_id)
+
+    # Also reset the legacy onboarded flag
+    user_dao.update(id=request.state.user_id, onboarded=False)
+
+    session.commit()
+
+    return {
+        "message": "Onboarding progress reset successfully",
+        "current_step": status.current_step,
+    }
 
 
 # -- Account Deletion (Self-Service) --
@@ -1634,8 +1204,8 @@ def delete_own_account(
     - User has pending bills
     - User owns organizations (must transfer ownership first)
     """
-    auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.get_by_id(request.state.user_id)
+    user_dao = UserDAO(session)
+    user = user_dao.get_by_id(request.state.user_id)
 
     if not user:
         raise not_found("User")
@@ -1674,15 +1244,15 @@ async def set_user_spending_limit(
     will be automatically capped.
     """
     user_id = request.state.user_id
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
 
     # Verify user exists
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = user_dao.get_by_id(user_id)
     if not user_row:
         raise not_found("User")
 
     # Use the DAO method which handles cascade logic
-    cascade_result = auth_user_dao.set_spending_cap(
+    cascade_result = user_dao.set_spending_cap(
         user_id=user_id,
         monthly_spending_cap=body.monthly_spending_cap,
     )
@@ -1704,21 +1274,435 @@ async def get_user_spending_limit(
     Get the monthly spending limit for the current user's personal usage.
     """
     user_id = request.state.user_id
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
 
     # Verify user exists
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = user_dao.get_by_id(user_id)
     if not user_row:
         raise not_found("User")
 
     # Use DAO method for consistency
-    spending_cap = auth_user_dao.get_spending_cap(user_id)
+    spending_cap = user_dao.get_spending_cap(user_id)
 
     return UserSpendingLimitResponse(
         user_id=user_id,
         monthly_spending_cap=spending_cap,
         assistants_capped=0,
     )
+
+
+# ============================================================================
+# User Billing / Checkout Endpoints
+# ============================================================================
+
+
+@router.post(
+    "/user/billing/checkout",
+    response_model=UserCheckoutResponse,
+    responses={
+        200: {
+            "description": "Checkout session created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "checkout_url": "https://checkout.stripe.com/...",
+                        "session_id": "cs_test_...",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid request",
+        },
+        500: {
+            "description": "Failed to create checkout session",
+        },
+    },
+)
+async def create_user_checkout_session(
+    request_fastapi: Request,
+    checkout_request: UserCheckoutRequest,
+    session: Session = Depends(get_db_session),
+) -> UserCheckoutResponse:
+    """
+    Create a Stripe checkout session for purchasing credits for the current user.
+
+    This endpoint creates a one-time payment checkout session for the
+    authenticated user's personal workspace. Upon successful payment,
+    credits will be added to the user's balance via webhook.
+
+    If the user doesn't have a Stripe customer ID yet, one will be
+    created during the checkout process.
+
+    Args:
+        amount: Amount of credits to purchase (1 credit = $1, min 5, max 10000)
+        success_url: URL to redirect to on successful payment
+        cancel_url: URL to redirect to on cancelled payment
+
+    Returns:
+        - checkout_url: URL to redirect the user to for payment
+        - session_id: Stripe checkout session ID
+    """
+    import stripe
+
+    user_id = request_fastapi.state.user_id
+    user_dao = UserDAO(session)
+
+    # Get user
+    user_row = user_dao.get_by_id(user_id)
+    if not user_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    user = user_row[0]
+
+    # Configure Stripe
+    if not settings.stripe_secret_key:
+        logger.error("Stripe secret key not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Payment system not configured",
+        )
+
+    stripe.api_key = settings.stripe_secret_key
+
+    try:
+        # Ensure user has a BillingAccount and Stripe customer (lazy creation)
+        billing_account_dao = BillingAccountDAO(session)
+        ba = user.billing_account
+        if ba is None:
+            ba = billing_account_dao.create()
+            user.billing_account_id = ba.id
+            session.flush()
+
+        if not ba.stripe_customer_id:
+            from orchestra.web.api.utils.business_validation import (
+                build_stripe_customer_name,
+                get_stripe_tax_exempt_status,
+                get_stripe_tax_id_data,
+            )
+
+            customer_params = {
+                "email": user.email,
+                "metadata": {"user_id": user_id},
+            }
+
+            # Include profile name — users are always individuals
+            if ba.name:
+                customer_params.update(
+                    build_stripe_customer_name(
+                        is_business=False,
+                        name=ba.name,
+                    ),
+                )
+            if ba.billing_email:
+                customer_params["email"] = ba.billing_email
+
+            # Include address if available
+            ba_address = ba.billing_address or {}
+            if ba_address.get("line1"):
+                customer_params["address"] = {
+                    "line1": ba_address.get("line1", ""),
+                    "line2": ba_address.get("line2", ""),
+                    "city": ba_address.get("city", ""),
+                    "state": ba_address.get("state", ""),
+                    "postal_code": ba_address.get("postal_code", ""),
+                    "country": ba_address.get("country", ""),
+                }
+                customer_params["tax"] = {"validate_location": "immediately"}
+
+            # Include tax ID if available
+            country_code = ba_address.get("country")
+            tax_id_data = get_stripe_tax_id_data(ba.tax_id, country_code)
+            if tax_id_data:
+                customer_params["tax_id_data"] = tax_id_data
+
+            customer_params["tax_exempt"] = get_stripe_tax_exempt_status(
+                ba.tax_id,
+                country_code,
+            )
+
+            customer = stripe.Customer.create(**customer_params)
+            ba.stripe_customer_id = customer.id
+            session.flush()
+            logger.info(
+                {
+                    "message": "Created Stripe customer for user",
+                    "user_id": user_id,
+                    "stripe_customer_id": customer.id,
+                },
+            )
+
+        # Build checkout session parameters
+        checkout_params = {
+            "mode": "payment",
+            "submit_type": "pay",
+            "customer": ba.stripe_customer_id,
+            "client_reference_id": user_id,
+            "line_items": [
+                {
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": 100,  # $1 = 100 cents = 1 credit
+                        "product_data": {
+                            "name": "Unify Credits",
+                            "description": "Credits for your personal workspace",
+                        },
+                    },
+                    "quantity": checkout_request.amount,
+                },
+            ],
+            "automatic_tax": {"enabled": True},
+            "customer_update": {
+                "address": "auto",
+                "name": "auto",
+            },
+            "billing_address_collection": "required",
+            "tax_id_collection": {"enabled": True},
+            "success_url": checkout_request.success_url,
+            "cancel_url": checkout_request.cancel_url,
+            "metadata": {
+                "user_id": user_id,
+                "credits_purchased": str(checkout_request.amount),
+            },
+            "payment_intent_data": {
+                "metadata": {
+                    "user_id": user_id,
+                    "credits_purchased": str(checkout_request.amount),
+                },
+            },
+            "payment_method_options": {
+                "card": {"request_three_d_secure": "any"},
+            },
+            "invoice_creation": {
+                "enabled": True,
+                "invoice_data": {
+                    "description": f"Unify Credits purchase ({checkout_request.amount} credits)",
+                },
+            },
+        }
+
+        checkout_session = stripe.checkout.Session.create(**checkout_params)
+
+        if not checkout_session.url:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create checkout session URL",
+            )
+
+        logger.info(
+            {
+                "message": "User checkout session created",
+                "user_id": user_id,
+                "amount": checkout_request.amount,
+                "session_id": checkout_session.id,
+            },
+        )
+
+        return UserCheckoutResponse(
+            checkout_url=checkout_session.url,
+            session_id=checkout_session.id,
+        )
+
+    except stripe.error.StripeError as e:
+        logger.error(
+            {
+                "message": "Failed to create checkout session",
+                "user_id": user_id,
+                "error": str(e),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create checkout session: {str(e)}",
+        )
+
+
+# ============================================================================
+# User Business Profile Endpoints
+# ============================================================================
+
+
+@router.get(
+    "/user/billing/billing-profile",
+    response_model=UserBillingProfileResponse,
+    summary="Get user business profile",
+    description="Get the current user's billing/business profile information.",
+)
+def get_user_billing_profile(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> UserBillingProfileResponse:
+    """
+    Get the current user's billing profile.
+
+    Returns billing_email, individual_name (+ business_name alias),
+    tax_id, tax_id_type, billing_address from the user's BillingAccount.
+    """
+    user_id = request.state.user_id
+    user_dao = UserDAO(session)
+    user = user_dao.get_user_with_id(user_id)
+
+    ba = user.billing_account
+    if not ba:
+        return UserBillingProfileResponse()
+
+    billing_account_dao = BillingAccountDAO(session)
+    profile = billing_account_dao.get_billing_profile(ba.id)
+    if not profile:
+        return UserBillingProfileResponse()
+
+    # Map DAO's generic "name" to individual_name + backward-compat alias
+    name = profile.pop("name", None)
+    profile["individual_name"] = name
+    profile["business_name"] = name  # backward-compat alias
+    return UserBillingProfileResponse(**profile)
+
+
+@router.patch(
+    "/user/billing/billing-profile",
+    response_model=UserBillingProfileResponse,
+    summary="Update user business profile",
+    description="Update the current user's billing/business profile information.",
+)
+def update_user_billing_profile(
+    request: Request,
+    profile_update: UserBillingProfileUpdate,
+    session: Session = Depends(get_db_session),
+) -> UserBillingProfileResponse:
+    """
+    Update the current user's business profile (billing details).
+
+    Only provided fields are updated. Billing address is merged with existing data.
+    Also syncs changes to Stripe customer if one exists.
+    """
+    user_id = request.state.user_id
+    user_dao = UserDAO(session)
+    user = user_dao.get_user_with_id(user_id)
+
+    ba = user.billing_account
+    if not ba:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User has no billing account",
+        )
+
+    resolved_name = profile_update.resolved_name
+
+    # Validate billing address if provided
+    if profile_update.billing_address is not None:
+        from orchestra.web.api.utils.business_validation import (
+            validate_billing_address_data,
+        )
+
+        addr = (
+            profile_update.billing_address
+            if isinstance(profile_update.billing_address, dict)
+            else {}
+        )
+        if addr.get("line1") or addr.get("city") or addr.get("country"):
+            is_valid, error_msg = validate_billing_address_data(
+                line1=addr.get("line1"),
+                city=addr.get("city"),
+                country=addr.get("country"),
+                line2=addr.get("line2"),
+                state=addr.get("state"),
+                postal_code=addr.get("postal_code"),
+            )
+            if not is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid billing address: {error_msg}",
+                )
+
+    billing_account_dao = BillingAccountDAO(session)
+    billing_account_dao.update_billing_profile(
+        billing_account_id=ba.id,
+        billing_email=profile_update.billing_email,
+        name=resolved_name,
+        tax_id=profile_update.tax_id,
+        tax_id_type=profile_update.tax_id_type,
+        billing_address=profile_update.billing_address,
+    )
+    session.flush()
+
+    # Sync to Stripe if customer exists
+    if ba.stripe_customer_id:
+        try:
+            import stripe
+
+            from orchestra.web.api.utils.business_validation import (
+                build_stripe_customer_name,
+                sync_tax_id_to_stripe,
+            )
+
+            stripe.api_key = settings.stripe_secret_key
+
+            update_params: dict = {}
+            if profile_update.billing_email is not None:
+                update_params["email"] = profile_update.billing_email
+            if resolved_name is not None:
+                # Users are individuals; pass is_business=False so Stripe
+                # gets individual_name.  If the user supplied a tax_id
+                # they're treated as a business for tax purposes, but
+                # the *name* is still their individual name.
+                update_params.update(
+                    build_stripe_customer_name(
+                        is_business=False,
+                        name=resolved_name,
+                    ),
+                )
+
+            # Sync billing address to Stripe
+            billing_address_dict = None
+            if profile_update.billing_address is not None:
+                billing_address_dict = (
+                    profile_update.billing_address
+                    if isinstance(profile_update.billing_address, dict)
+                    else profile_update.billing_address
+                )
+            if billing_address_dict and billing_address_dict.get("line1"):
+                update_params["address"] = {
+                    "line1": billing_address_dict.get("line1", ""),
+                    "line2": billing_address_dict.get("line2", ""),
+                    "city": billing_address_dict.get("city", ""),
+                    "state": billing_address_dict.get("state", ""),
+                    "postal_code": billing_address_dict.get("postal_code", ""),
+                    "country": billing_address_dict.get("country", ""),
+                }
+                # Validate location immediately when address changes
+                update_params["tax"] = {"validate_location": "immediately"}
+
+            if update_params:
+                stripe.Customer.modify(ba.stripe_customer_id, **update_params)
+
+            # Sync tax ID if provided (requires separate API calls)
+            if profile_update.tax_id is not None:
+                country_code = None
+                if billing_address_dict and billing_address_dict.get("country"):
+                    country_code = billing_address_dict["country"]
+                elif ba.billing_address and ba.billing_address.get("country"):
+                    country_code = ba.billing_address["country"]
+
+                sync_tax_id_to_stripe(
+                    ba.stripe_customer_id,
+                    profile_update.tax_id,
+                    country_code,
+                    logger=logger,
+                )
+        except Exception as e:
+            logging.warning(
+                f"Failed to sync business profile to Stripe for user {user_id}: {e}",
+            )
+
+    session.commit()
+
+    profile = billing_account_dao.get_billing_profile(ba.id)
+    name = profile.pop("name", None)
+    profile["individual_name"] = name
+    profile["business_name"] = name  # backward-compat alias
+    return UserBillingProfileResponse(**profile)
 
 
 # ============================================================================
@@ -1743,15 +1727,15 @@ def admin_get_user_spend(
     This endpoint is for internal service calls (e.g., UniLLM) and does not
     require the caller to be the user themselves.
     """
-    auth_user_dao = AuthUserDAO(session)
-    user_row = auth_user_dao.get_by_id(target_user_id)
+    user_dao = UserDAO(session)
+    user_row = user_dao.get_by_id(target_user_id)
     if not user_row:
         raise not_found("User")
 
     user = user_row[0]
 
-    cumulative_spend = auth_user_dao.get_cumulative_spend(target_user_id, month)
-    limit = auth_user_dao.get_spending_cap(target_user_id)
+    cumulative_spend = user_dao.get_cumulative_spend(target_user_id, month)
+    limit = user_dao.get_spending_cap(target_user_id)
 
     percent_used = None
     if limit is not None and limit > 0:
@@ -1765,3 +1749,152 @@ def admin_get_user_spend(
         limit_set_at=user.monthly_spending_cap_set_at,
         percent_used=percent_used,
     )
+
+
+# ============================================================================
+# Backward-Compat Stub Endpoints
+# ============================================================================
+# These stubs preserve the old API surface so that external repos (console,
+# ivory, etc.) continue to work after the underlying models and logic have
+# been refactored.  They should be removed once all callers have migrated.
+# ============================================================================
+
+
+# -- Assistant Hiring Approval stubs (approval flow removed; access now
+#    controlled by rate limits) --
+
+
+@router.post("/user/assistant-hiring-approval")
+def _compat_request_assistant_hiring_approval(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: always returns 'approved' (approval flow removed)."""
+    return {
+        "message": "Access is now managed through rate limits. No approval required.",
+        "assistant_hiring_approval": "approved",
+    }
+
+
+@admin_router.put(
+    "/auth-user/{target_user_id}/assistant-hiring-approval/{status_value}",
+)
+def _compat_set_user_assistant_hiring_status(
+    target_user_id: str,
+    status_value: str,
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: no-op (approval flow removed)."""
+    return {
+        "message": (
+            f"User {target_user_id} assistant hiring approval status "
+            f"set to '{status_value}' (no-op — approval flow removed)."
+        ),
+        "assistant_hiring_approval": status_value,
+    }
+
+
+@admin_router.get("/auth-user/assistant-hiring-approval")
+def _compat_list_users_by_assistant_hiring_approval(
+    status_filter: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: returns empty list (approval flow removed)."""
+    return []
+
+
+# -- Old Business / Account-Type stubs (replaced by BillingAccount-based
+#    business profile endpoints) --
+
+
+@router.get("/user/business-status")
+def _compat_get_user_business_status(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: returns business profile data mapped to old schema."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user_dao = UserDAO(session)
+    user_row = user_dao.get_by_id(user_id)
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user = user_row[0]
+    ba = user.billing_account
+
+    # Map new BillingAccount fields to old response shape
+    billing_address = None
+    if ba and ba.billing_address:
+        addr = ba.billing_address if isinstance(ba.billing_address, dict) else {}
+        billing_address = {
+            "line1": addr.get("line1", ""),
+            "line2": addr.get("line2", ""),
+            "city": addr.get("city", ""),
+            "state": addr.get("state", ""),
+            "country": addr.get("country", ""),
+            "postal_code": addr.get("postal_code", ""),
+        }
+
+    return {
+        "account_type": "individual",  # field removed; default
+        "individual_name": ba.name if ba else None,
+        "business_name": ba.name if ba else None,  # backward-compat alias
+        "tax_id": ba.tax_id if ba else None,
+        "business_type": None,  # field removed
+        "business_verified": False,  # field removed; default
+        "tax_exempt": False,  # field removed; default
+        "tax_jurisdiction": None,  # field removed
+        "business_address": billing_address,
+    }
+
+
+@router.put("/user/account-type")
+def _compat_update_user_account_type(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: no-op (account-type concept removed)."""
+    return {"message": "Account type updated successfully (no-op — field removed)"}
+
+
+@router.patch("/user/business-info")
+def _compat_update_user_business_info(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: no-op (use PATCH /user/billing/billing-profile instead)."""
+    return {
+        "message": "Business information updated successfully (no-op — use /user/billing/billing-profile)",
+    }
+
+
+@admin_router.post("/auth-user/verify-business")
+def _compat_verify_business_account(
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: no-op (old verify-business flow removed)."""
+    return {"message": "Business account verification is no longer required (no-op)."}
+
+
+@admin_router.get("/auth-user/business-accounts")
+def _compat_list_business_accounts(
+    verified: Optional[bool] = Query(None),
+    limit: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: returns empty list (old business-accounts listing removed)."""
+    return []
+
+
+@router.post("/user/create-with-business-info")
+def _compat_create_user_with_business_info(
+    session: Session = Depends(get_db_session),
+):
+    """Backward-compat stub: no-op (use POST /user with standard flow instead)."""
+    return {"message": "Use the standard user creation flow (POST /admin/user)."}

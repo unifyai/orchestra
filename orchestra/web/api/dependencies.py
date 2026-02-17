@@ -2,13 +2,17 @@ import logging
 import os
 from contextlib import contextmanager
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.models.orchestra_models import AdminUser
+from orchestra.db.models.orchestra_models import (
+    AdminUser,
+    BillingAccount,
+    Organization,
+    User,
+)
 from orchestra.web.api.utils.http_responses import (
     account_frozen,
     account_suspended,
@@ -116,42 +120,48 @@ def auth_admin_key(
     raise admin_not_authorized
 
 
+def _is_billing_account_frozen(session: Session, ba_id: int) -> bool:
+    """Check if a BillingAccount is SUSPENDED or CLOSED."""
+    ba = session.query(BillingAccount).filter(BillingAccount.id == ba_id).first()
+    if ba is None:
+        return False
+    return ba.account_status in ("SUSPENDED", "CLOSED")
+
+
 def check_account_not_frozen(request: Request):
     """
-    Check if the user's account is frozen or suspended.
+    Check if the relevant billing account is frozen or suspended.
 
-    This combines both frozen and suspended checks to avoid multiple dependency layers.
+    For personal API keys: checks the user's BillingAccount.
+    For org API keys: checks the organization's BillingAccount.
     """
     user_id = getattr(request.state, "user_id", None)
-    if user_id:
-        try:
-            with _ro_session() as session:
-                users_dao = UsersDAO(session)
+    organization_id = getattr(request.state, "organization_id", None)
+    if not user_id:
+        return
 
-                # Check if account is frozen
-                if users_dao.is_account_frozen(user_id):
+    try:
+        with _ro_session() as session:
+            # If request is in org context, check the org's billing account
+            if organization_id:
+                org = (
+                    session.query(Organization)
+                    .filter(Organization.id == organization_id)
+                    .first()
+                )
+                if org and org.billing_account_id:
+                    if _is_billing_account_frozen(session, org.billing_account_id):
+                        raise account_frozen
+                return
+
+            # Personal context — check user's billing account
+            user = session.query(User).filter(User.id == user_id).first()
+            if user and user.billing_account_id:
+                if _is_billing_account_frozen(session, user.billing_account_id):
                     raise account_frozen
 
-                # Check if account is suspended due to unpaid invoices
-                try:
-                    user = users_dao.get_user_with_id(user_id)
-                    # If user doesn't exist in users table, they can't be suspended
-                    # (they don't have billing setup yet)
-                    if user and user.billing_state == "SUSPENDED":
-                        raise account_suspended
-                except HTTPException as e:
-                    # If it's a 404 "User ID not found", allow the request to proceed
-                    # since users without billing setup can't be suspended
-                    if e.status_code == 404:
-                        pass
-                    else:
-                        # Re-raise other HTTP exceptions (like account_suspended)
-                        raise
-
-        except Exception as e:
-            if e == account_frozen or e == account_suspended:
-                raise
-            else:
-                # If there's any other error, allow the request to proceed
-                # rather than blocking legitimate users
-                pass
+    except Exception as e:
+        if e == account_frozen or e == account_suspended:
+            raise
+        # If there's any other error, allow the request to proceed
+        # rather than blocking legitimate users

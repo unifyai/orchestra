@@ -4,12 +4,12 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.teams.schema import (
     ResourceAccessGrant,
@@ -413,7 +413,7 @@ def add_team_members(
     org_dao = OrganizationDAO(session)
     team_dao = TeamDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Verify organization exists
@@ -447,7 +447,7 @@ def add_team_members(
     try:
         # Verify all users exist and are org members
         for user_id_to_add in member_data.user_ids:
-            user = auth_user_dao.get_by_id(user_id_to_add)
+            user = user_dao.get_by_id(user_id_to_add)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -886,7 +886,7 @@ def list_resource_access(
     user_id = request_fastapi.state.user_id
     resource_access_dao = ResourceAccessDAO(session)
     role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     team_dao = TeamDAO(session)
 
     # Check if user has read permission on the resource
@@ -913,7 +913,7 @@ def list_resource_access(
         # Get grantee name
         grantee_name = None
         if entry.grantee_type == "user":
-            user = auth_user_dao.get_by_id(entry.grantee_id)
+            user = user_dao.get_by_id(entry.grantee_id)
             grantee_name = user[0].email if user else entry.grantee_id
         elif entry.grantee_type == "team":
             try:

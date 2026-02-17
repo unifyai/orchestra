@@ -16,7 +16,6 @@ class OrganizationCreate(BaseModel):
     timezone: Optional[
         str
     ] = None  # IANA timezone; defaults to owner's timezone if not set
-    # Note: billing_user_id is always set to owner_id automatically
 
     @field_validator("timezone")
     @classmethod
@@ -34,8 +33,6 @@ class OrganizationUpdate(BaseModel):
 
     name: Optional[str] = None
     timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
-    # Note: billing_user_id cannot be updated directly.
-    # Use the transfer-ownership endpoint to change both owner and billing user.
 
     @field_validator("timezone")
     @classmethod
@@ -60,7 +57,6 @@ class OrganizationResponse(BaseModel):
     id: int
     name: str
     owner_id: str
-    billing_user_id: str
     timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
     created_at: datetime
 
@@ -95,7 +91,7 @@ class OrganizationMemberResponse(BaseModel):
     role_id: int
     role_name: Optional[str] = None
     created_at: datetime
-    # User info fields (populated from AuthUser)
+    # User info fields (populated from User)
     name: Optional[str] = None
     email: Optional[str] = None
     image: Optional[str] = None
@@ -167,10 +163,8 @@ class OrganizationBillingResponse(BaseModel):
 
     organization_id: int
     organization_name: str
-    billing_mode: str  # "delegated" or "direct"
     credits: float
-    billing_user_id: Optional[str] = None  # Only for delegated billing
-    stripe_customer_id: Optional[str] = None  # Only for direct billing
+    stripe_customer_id: Optional[str] = None  # Set when billing is set up
     autorecharge: bool
     autorecharge_threshold: float
     autorecharge_qty: float
@@ -249,6 +243,22 @@ class OrganizationCheckoutResponse(BaseModel):
 
     checkout_url: str
     session_id: str
+
+
+class OrganizationStripeCustomerResponse(BaseModel):
+    """Schema for organization Stripe customer info."""
+
+    organization_id: int
+    stripe_customer_id: str
+    is_new: bool = False  # True if customer was just created
+
+
+class OrganizationStripeCustomerCreateRequest(BaseModel):
+    """Schema for creating/ensuring organization Stripe customer."""
+
+    # Optional business info to set during creation
+    business_name: Optional[str] = None
+    billing_email: Optional[str] = None
 
 
 # ============================================================================

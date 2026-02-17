@@ -3,13 +3,16 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
+from orchestra.db.dao.billing_account_dao import (
+    MIN_AUTORECHARGE_AMOUNT,
+    BillingAccountDAO,
+)
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
@@ -18,9 +21,10 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.services.contact_sync_service import ContactSyncService
+from orchestra.settings import settings
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     DeclineInviteResponse,
@@ -34,6 +38,7 @@ from orchestra.web.api.organization.schema import (
     OrganizationBillingUpdate,
     OrganizationBusinessProfileResponse,
     OrganizationBusinessProfileUpdate,
+    OrganizationCheckoutRequest,
     OrganizationCreate,
     OrganizationCreditsResponse,
     OrganizationMemberAdd,
@@ -41,6 +46,7 @@ from orchestra.web.api.organization.schema import (
     OrganizationMemberRoleUpdate,
     OrganizationOwnershipTransfer,
     OrganizationResponse,
+    OrganizationStripeCustomerCreateRequest,
     OrganizationUpdate,
     OrgSpendingLimitRequest,
     OrgSpendingLimitResponse,
@@ -68,7 +74,6 @@ async def create_organization(
     Create a new organization.
 
     The authenticated user will be the owner of the organization.
-    billing_user_id is always set to the owner (billing follows ownership).
     timezone is initialized from the owner's timezone setting.
     Returns the organization details and the owner's organization API key.
     """
@@ -77,7 +82,7 @@ async def create_organization(
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
 
     # Check if organization name already exists
     existing = org_dao.filter(name=organization.name)
@@ -91,17 +96,15 @@ async def create_organization(
     if organization.timezone is not None:
         org_timezone = organization.timezone
     else:
-        owner_row = auth_user_dao.get_by_id(user_id)
+        owner_row = user_dao.get_by_id(user_id)
         org_timezone = owner_row[0].timezone if owner_row else None
 
     # Create organization
     try:
-        # billing_user_id always equals owner_id
         # timezone: provided > owner's timezone > None (runtime defaults to UTC)
         org = org_dao.create(
             name=organization.name,
             owner_id=user_id,
-            billing_user_id=user_id,
             timezone=org_timezone,
         )
 
@@ -186,7 +189,7 @@ async def list_organization_members_by_api_key(
     org_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
 
     # Verify organization exists
     org = org_dao.get(organization_id)
@@ -221,7 +224,7 @@ async def list_organization_members_by_api_key(
             role_name = role.name if role else None
 
         # Fetch user info
-        user_info_row = auth_user_dao.get_by_id(member.user_id)
+        user_info_row = user_dao.get_by_id(member.user_id)
         user_name = None
         user_email = None
         user_image = None
@@ -308,7 +311,7 @@ async def update_organization(
     Update an organization.
 
     Requires org:write permission.
-    Note: To change owner or billing_user_id, use the transfer-ownership endpoint.
+    Note: To change owner, use the transfer-ownership endpoint.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
@@ -402,16 +405,40 @@ async def delete_organization(
             detail="You do not have permission to delete this organization",
         )
 
-    # Delete organization
+    # Store Stripe customer ID for post-deletion archival
+    ba = org.billing_account
+    stripe_customer_id = ba.stripe_customer_id if ba else None
+
+    # Delete organization (cascades to related tables)
     try:
         org_dao.delete(organization_id)
-        return None
     except Exception as e:
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete organization: {str(e)}",
         )
+
+    # Archive Stripe customer (best-effort, don't fail if this errors)
+    if stripe_customer_id:
+        try:
+            import stripe
+
+            stripe.api_key = settings.stripe_secret_key
+            stripe.Customer.modify(
+                stripe_customer_id,
+                metadata={
+                    "organization_deleted": "true",
+                    "deleted_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except stripe.error.StripeError as e:
+            # Log but don't fail - org is already deleted from DB
+            logger.warning(
+                f"Failed to archive Stripe customer {stripe_customer_id}: {e}",
+            )
+
+    return None
 
 
 @router.post(
@@ -607,11 +634,11 @@ async def remove_organization_member(
     # Remove member and clean up all associated data
     try:
         team_dao = TeamDAO(session)
-        auth_user_dao = AuthUserDAO(session)
+        user_dao = UserDAO(session)
         contact_sync_service = ContactSyncService(session)
 
         # Get user info for Contact update
-        user_row = auth_user_dao.get_by_id(user_id)
+        user_row = user_dao.get_by_id(user_id)
         departing_user = user_row[0] if user_row else None
 
         # 1. Delete unshared resources created by this user
@@ -675,7 +702,7 @@ async def list_organization_members(
     org_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -710,7 +737,7 @@ async def list_organization_members(
             role_name = role.name if role else None
 
         # Fetch user info
-        user_info_row = auth_user_dao.get_by_id(member.user_id)
+        user_info_row = user_dao.get_by_id(member.user_id)
         user_name = None
         user_email = None
         user_image = None
@@ -718,7 +745,7 @@ async def list_organization_members(
         user_timezone = None
         user_phone_number = None
         if user_info_row:
-            # get_by_id returns a Row, extract the AuthUser model
+            # get_by_id returns a Row, extract the User model
             user_info = user_info_row[0]
             # Combine first and last name if available
             name_parts = []
@@ -844,8 +871,8 @@ async def update_member_role(
         updated_member = org_member_dao.get_member(member_user_id, organization_id)
 
         # Fetch user info
-        auth_user_dao = AuthUserDAO(session)
-        user_info_row = auth_user_dao.get_by_id(member_user_id)
+        user_dao = UserDAO(session)
+        user_info_row = user_dao.get_by_id(member_user_id)
         user_name = None
         user_email = None
         user_image = None
@@ -906,7 +933,6 @@ async def transfer_organization_ownership(
 
     Changes applied:
     - org.owner_id → new_owner_id
-    - org.billing_user_id → new_owner_id (billing always follows owner)
     - new_owner's role → Owner
     - old_owner's role → Admin
     """
@@ -953,11 +979,10 @@ async def transfer_organization_ownership(
         if not owner_role or not admin_role:
             raise ValueError("Required system roles not found")
 
-        # Update organization: owner_id and billing_user_id
+        # Update organization: owner_id
         org_dao.update(
             id=organization_id,
             owner_id=transfer.new_owner_id,
-            billing_user_id=transfer.new_owner_id,
         )
 
         # Update new owner's role to Owner
@@ -994,7 +1019,7 @@ def _build_invite_response(
     invite,
     org,
     role_dao: RoleDAO,
-    auth_user_dao: AuthUserDAO,
+    user_dao: UserDAO,
 ) -> InviteResponse:
     """Helper to build InviteResponse from invite object."""
     role_name = None
@@ -1003,7 +1028,7 @@ def _build_invite_response(
         role_name = role.name if role else None
 
     invited_by_name = None
-    inviter_row = auth_user_dao.get_by_id(invite.invited_by_user_id)
+    inviter_row = user_dao.get_by_id(invite.invited_by_user_id)
     if inviter_row:
         inviter = inviter_row[0]
         name_parts = []
@@ -1050,7 +1075,7 @@ async def invite_user_to_organization(
     org_member_dao = OrganizationMemberDAO(session)
     invite_dao = OrganizationInviteDAO(session)
     role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
@@ -1077,7 +1102,7 @@ async def invite_user_to_organization(
 
     # Check if user is already a member
     # First, try to find the user by email
-    existing_user_row = auth_user_dao.filter(email=email)
+    existing_user_row = user_dao.filter(email=email)
     if existing_user_row:
         existing_user = existing_user_row[0][0]
         existing_member = org_member_dao.filter(
@@ -1098,8 +1123,8 @@ async def invite_user_to_organization(
             days=invite_request.expires_in_days,
         )
         session.commit()
-        await _send_invite_email(existing_invite, org, auth_user_dao, user_id)
-        return _build_invite_response(existing_invite, org, role_dao, auth_user_dao)
+        await _send_invite_email(existing_invite, org, user_dao, user_id)
+        return _build_invite_response(existing_invite, org, role_dao, user_dao)
 
     # Determine role_id (default to Member role)
     role_id = invite_request.role_id
@@ -1137,9 +1162,9 @@ async def invite_user_to_organization(
         session.commit()
 
         # Send invite email
-        await _send_invite_email(invite, org, auth_user_dao, user_id)
+        await _send_invite_email(invite, org, user_dao, user_id)
 
-        return _build_invite_response(invite, org, role_dao, auth_user_dao)
+        return _build_invite_response(invite, org, role_dao, user_dao)
 
     except Exception as e:
         session.rollback()
@@ -1152,13 +1177,13 @@ async def invite_user_to_organization(
 async def _send_invite_email(
     invite,
     org,
-    auth_user_dao: AuthUserDAO,
+    user_dao: UserDAO,
     inviter_user_id: str,
 ) -> None:
     """Send the invitation email."""
     # Get inviter info
     inviter_name = "A team member"
-    inviter_row = auth_user_dao.get_by_id(inviter_user_id)
+    inviter_row = user_dao.get_by_id(inviter_user_id)
     if inviter_row:
         inviter = inviter_row[0]
         if inviter.name:
@@ -1232,7 +1257,7 @@ async def list_organization_invites(
     org_dao = OrganizationDAO(session)
     invite_dao = OrganizationInviteDAO(session)
     role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
@@ -1259,7 +1284,7 @@ async def list_organization_invites(
 
     return InviteListResponse(
         invites=[
-            _build_invite_response(invite, org, role_dao, auth_user_dao)
+            _build_invite_response(invite, org, role_dao, user_dao)
             for invite in invites
         ],
     )
@@ -1329,13 +1354,13 @@ async def list_my_pending_invites(
     List all pending invites for the current user's email.
     """
     user_id = request_fastapi.state.user_id
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     invite_dao = OrganizationInviteDAO(session)
     org_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
 
     # Get current user's email
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = user_dao.get_by_id(user_id)
     if not user_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1350,7 +1375,7 @@ async def list_my_pending_invites(
         org = org_dao.get(invite.organization_id)
         if org:
             invite_responses.append(
-                _build_invite_response(invite, org, role_dao, auth_user_dao),
+                _build_invite_response(invite, org, role_dao, user_dao),
             )
 
     return InviteListResponse(invites=invite_responses)
@@ -1372,14 +1397,14 @@ async def accept_invite(
     The current user's email must match the invite email.
     """
     user_id = request_fastapi.state.user_id
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     invite_dao = OrganizationInviteDAO(session)
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
 
     # Get current user
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = user_dao.get_by_id(user_id)
     if not user_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1524,11 +1549,11 @@ async def decline_invite(
     Decline an organization invite.
     """
     user_id = request_fastapi.state.user_id
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     invite_dao = OrganizationInviteDAO(session)
 
     # Get current user
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = user_dao.get_by_id(user_id)
     if not user_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1573,14 +1598,11 @@ async def get_organization_billing(
     """
     Get billing information for an organization.
 
-    Returns billing mode (delegated or direct), credits, and billing settings.
+    Returns credits, billing settings, and account status.
     Requires billing:read permission.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
@@ -1603,29 +1625,18 @@ async def get_organization_billing(
             detail="You do not have permission to view billing for this organization",
         )
 
-    # Determine billing mode
-    has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
-    billing_mode = "direct" if has_direct_billing else "delegated"
-
-    # Get credits based on billing mode
-    if has_direct_billing:
-        credits = float(org_billing_dao.get_credits(organization_id))
-    else:
-        # For delegated billing, show 0 (credits are on the billing user's account)
-        credits = 0.0
+    ba = org.billing_account
 
     return OrganizationBillingResponse(
         organization_id=organization_id,
         organization_name=org.name,
-        billing_mode=billing_mode,
-        credits=credits,
-        billing_user_id=org.billing_user_id if not has_direct_billing else None,
-        stripe_customer_id=org.stripe_customer_id if has_direct_billing else None,
-        autorecharge=org.autorecharge,
-        autorecharge_threshold=float(org.autorecharge_threshold),
-        autorecharge_qty=float(org.autorecharge_qty),
-        account_status=org.account_status,
-        billing_setup_complete=org.billing_setup_complete,
+        credits=float(ba.credits) if ba else 0.0,
+        stripe_customer_id=ba.stripe_customer_id if ba else None,
+        autorecharge=ba.autorecharge if ba else False,
+        autorecharge_threshold=float(ba.autorecharge_threshold) if ba else 0.0,
+        autorecharge_qty=float(ba.autorecharge_qty) if ba else 25.0,
+        account_status=ba.account_status if ba else "ACTIVE",
+        billing_setup_complete=ba.billing_setup_complete if ba else False,
     ).model_dump()
 
 
@@ -1645,11 +1656,13 @@ async def update_organization_billing(
     Requires billing:write permission.
     Owners and Admins have this permission by default.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    import decimal
+
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
+    ba_dao = BillingAccountDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
@@ -1672,48 +1685,48 @@ async def update_organization_billing(
             detail="You do not have permission to update billing settings",
         )
 
-    # Update settings
+    # Get billing account (created eagerly in organization_dao.create;
+    # fallback handles legacy orgs that may not have one yet)
+    ba = org.billing_account
+    if ba is None:
+        ba = ba_dao.create()
+        org.billing_account_id = ba.id
+        session.flush()
+
+    # Update settings directly on BillingAccount
     if billing_update.autorecharge is not None:
-        org_billing_dao.set_autorecharge(organization_id, billing_update.autorecharge)
+        ba.autorecharge = billing_update.autorecharge
 
     if billing_update.autorecharge_threshold is not None:
-        org_billing_dao.set_autorecharge_threshold(
-            organization_id,
-            billing_update.autorecharge_threshold,
+        ba.autorecharge_threshold = decimal.Decimal(
+            str(billing_update.autorecharge_threshold),
         )
 
     if billing_update.autorecharge_qty is not None:
-        org_billing_dao.set_autorecharge_qty(
-            organization_id,
-            billing_update.autorecharge_qty,
-        )
+        qty = decimal.Decimal(str(billing_update.autorecharge_qty))
+        if qty < MIN_AUTORECHARGE_AMOUNT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Minimum auto-recharge amount is ${MIN_AUTORECHARGE_AMOUNT}.",
+            )
+        ba.autorecharge_qty = qty
 
     session.commit()
 
-    # Return updated billing info
-    has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
-    billing_mode = "direct" if has_direct_billing else "delegated"
-    credits = (
-        float(org_billing_dao.get_credits(organization_id))
-        if has_direct_billing
-        else 0.0
-    )
-
-    # Refresh org to get updated values
+    # Return updated billing info via BillingAccount
     session.refresh(org)
+    ba = org.billing_account
 
     return OrganizationBillingResponse(
         organization_id=organization_id,
         organization_name=org.name,
-        billing_mode=billing_mode,
-        credits=credits,
-        billing_user_id=org.billing_user_id if not has_direct_billing else None,
-        stripe_customer_id=org.stripe_customer_id if has_direct_billing else None,
-        autorecharge=org.autorecharge,
-        autorecharge_threshold=float(org.autorecharge_threshold),
-        autorecharge_qty=float(org.autorecharge_qty),
-        account_status=org.account_status,
-        billing_setup_complete=org.billing_setup_complete,
+        credits=float(ba.credits) if ba else 0.0,
+        stripe_customer_id=ba.stripe_customer_id if ba else None,
+        autorecharge=ba.autorecharge if ba else False,
+        autorecharge_threshold=float(ba.autorecharge_threshold) if ba else 0.0,
+        autorecharge_qty=float(ba.autorecharge_qty) if ba else 25.0,
+        account_status=ba.account_status if ba else "ACTIVE",
+        billing_setup_complete=ba.billing_setup_complete if ba else False,
     ).model_dump()
 
 
@@ -1730,15 +1743,11 @@ async def get_organization_credits(
     Get credit balance for an organization.
 
     For direct billing orgs, returns the org's credit balance.
-    For delegated billing orgs, returns the billing user's credit balance.
+    For orgs without billing configured, returns 0.
     Requires billing:read permission.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
-    users_dao = UsersDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
@@ -1761,16 +1770,10 @@ async def get_organization_credits(
             detail="You do not have permission to view credits for this organization",
         )
 
-    # Get credits based on billing mode
-    if org_billing_dao.has_direct_billing(organization_id):
-        credits = float(org_billing_dao.get_credits(organization_id))
-    else:
-        # Delegated billing - get from billing user
-        if org.billing_user_id:
-            billing_user = users_dao.get_user_with_id(org.billing_user_id)
-            credits = float(billing_user.credits)
-        else:
-            credits = 0.0
+    # Get credits from organization's BillingAccount
+    ba = org.billing_account
+    has_direct = ba is not None and ba.stripe_customer_id is not None
+    credits = float(ba.credits) if has_direct else 0.0
 
     return OrganizationCreditsResponse(
         organization_id=organization_id,
@@ -1779,10 +1782,10 @@ async def get_organization_credits(
 
 
 @router.get(
-    "/organizations/{organization_id}/billing/business-profile",
+    "/organizations/{organization_id}/billing/billing-profile",
     tags=["organization-billing"],
 )
-async def get_organization_business_profile(
+async def get_organization_billing_profile(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
@@ -1792,11 +1795,8 @@ async def get_organization_business_profile(
 
     Requires billing:read permission.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
@@ -1819,15 +1819,22 @@ async def get_organization_business_profile(
             detail="You do not have permission to view business profile",
         )
 
-    profile = org_billing_dao.get_business_profile(organization_id)
+    # Get business profile directly from BillingAccount
+    ba = org.billing_account
+    profile = {
+        "billing_email": ba.billing_email if ba else None,
+        "business_name": ba.name if ba else None,
+        "tax_id": ba.tax_id if ba else None,
+        "billing_address": ba.billing_address if ba else None,
+    }
     return OrganizationBusinessProfileResponse(**profile).model_dump()
 
 
 @router.patch(
-    "/organizations/{organization_id}/billing/business-profile",
+    "/organizations/{organization_id}/billing/billing-profile",
     tags=["organization-billing"],
 )
-async def update_organization_business_profile(
+async def update_organization_billing_profile(
     request_fastapi: Request,
     organization_id: int,
     profile_update: "OrganizationBusinessProfileUpdate",
@@ -1839,11 +1846,11 @@ async def update_organization_business_profile(
     Requires billing:write permission.
     Owners and Admins have this permission by default.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
+    ba_dao = BillingAccountDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
@@ -1866,6 +1873,14 @@ async def update_organization_business_profile(
             detail="You do not have permission to update business profile",
         )
 
+    # Get billing account (created eagerly in organization_dao.create;
+    # fallback handles legacy orgs that may not have one yet)
+    ba = org.billing_account
+    if ba is None:
+        ba = ba_dao.create()
+        org.billing_account_id = ba.id
+        session.flush()
+
     # Update profile
     billing_address_dict = None
     if profile_update.billing_address is not None:
@@ -1873,14 +1888,41 @@ async def update_organization_business_profile(
             exclude_none=True,
         )
 
+        # Validate billing address fields
+        from orchestra.web.api.utils.business_validation import (
+            validate_billing_address_data,
+        )
+
+        if (
+            billing_address_dict.get("line1")
+            or billing_address_dict.get(
+                "city",
+            )
+            or billing_address_dict.get("country")
+        ):
+            is_valid, error_msg = validate_billing_address_data(
+                line1=billing_address_dict.get("line1"),
+                city=billing_address_dict.get("city"),
+                country=billing_address_dict.get("country"),
+                line2=billing_address_dict.get("line2"),
+                state=billing_address_dict.get("state"),
+                postal_code=billing_address_dict.get("postal_code"),
+            )
+            if not is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid billing address: {error_msg}",
+                )
+
     # Validate tax_id if provided along with country
+    existing_billing_address = ba.billing_address
     if profile_update.tax_id is not None:
         # Get country from billing_address (either new or existing)
         country = None
         if billing_address_dict and billing_address_dict.get("country"):
             country = billing_address_dict["country"]
-        elif org.billing_address and org.billing_address.get("country"):
-            country = org.billing_address["country"]
+        elif existing_billing_address and existing_billing_address.get("country"):
+            country = existing_billing_address["country"]
 
         if country:
             from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
@@ -1897,18 +1939,90 @@ async def update_organization_business_profile(
             # Use the formatted version if validation succeeded
             profile_update.tax_id = formatted_id
 
-    org_billing_dao.update_business_profile(
-        organization_id,
-        billing_email=profile_update.billing_email,
-        business_name=profile_update.business_name,
-        tax_id=profile_update.tax_id,
-        billing_address=billing_address_dict,
-    )
+    # Update profile fields directly on BillingAccount
+    if profile_update.billing_email is not None:
+        ba.billing_email = profile_update.billing_email
+    if profile_update.business_name is not None:
+        ba.name = profile_update.business_name
+    if profile_update.tax_id is not None:
+        ba.tax_id = profile_update.tax_id
+    if billing_address_dict is not None:
+        ba.billing_address = billing_address_dict
     session.commit()
 
-    # Return updated profile
-    profile = org_billing_dao.get_business_profile(organization_id)
-    return OrganizationBusinessProfileResponse(**profile).model_dump()
+    # Sync changes to Stripe if org has a Stripe customer via BillingAccount
+    stripe_cust_id = ba.stripe_customer_id if ba else None
+    if stripe_cust_id:
+        try:
+            stripe_key = settings.stripe_secret_key
+            if stripe_key:
+                import stripe
+
+                from orchestra.web.api.utils.business_validation import (
+                    build_stripe_customer_name,
+                    sync_tax_id_to_stripe,
+                )
+
+                stripe.api_key = stripe_key
+
+                # Build update params for customer
+                update_params: dict = {}
+
+                if profile_update.billing_email:
+                    update_params["email"] = profile_update.billing_email
+                if profile_update.business_name:
+                    update_params.update(
+                        build_stripe_customer_name(
+                            is_business=True,
+                            name=profile_update.business_name,
+                        ),
+                    )
+                if billing_address_dict and billing_address_dict.get("line1"):
+                    update_params["address"] = {
+                        "line1": billing_address_dict.get("line1", ""),
+                        "line2": billing_address_dict.get("line2", ""),
+                        "city": billing_address_dict.get("city", ""),
+                        "state": billing_address_dict.get("state", ""),
+                        "postal_code": billing_address_dict.get("postal_code", ""),
+                        "country": billing_address_dict.get("country", ""),
+                    }
+                    # Validate location immediately when address changes
+                    update_params["tax"] = {"validate_location": "immediately"}
+
+                if update_params:
+                    stripe.Customer.modify(stripe_cust_id, **update_params)
+
+                # Sync tax ID if provided (uses shared helper that also
+                # sets tax_exempt for B2B reverse-charge)
+                if profile_update.tax_id is not None:
+                    country_code = None
+                    if billing_address_dict and billing_address_dict.get("country"):
+                        country_code = billing_address_dict["country"]
+                    elif existing_billing_address and existing_billing_address.get(
+                        "country",
+                    ):
+                        country_code = existing_billing_address["country"]
+
+                    sync_tax_id_to_stripe(
+                        stripe_cust_id,
+                        profile_update.tax_id,
+                        country_code,
+                        logger=logger,
+                    )
+        except Exception as e:
+            # Log but don't fail - Stripe sync is best-effort
+            logger.warning(
+                f"Failed to sync business profile to Stripe for org {organization_id}: {e}",
+            )
+
+    # Return updated profile from the BillingAccount directly
+    session.refresh(ba)
+    return OrganizationBusinessProfileResponse(
+        billing_email=ba.billing_email,
+        business_name=ba.name,
+        tax_id=ba.tax_id,
+        billing_address=ba.billing_address,
+    ).model_dump()
 
 
 # ============================================================================
@@ -2214,6 +2328,406 @@ async def get_member_spending_limit(
 
 
 # ============================================================================
+# Organization Stripe Customer Endpoints
+# ============================================================================
+
+
+@router.post(
+    "/organizations/{organization_id}/billing/stripe-customer",
+    tags=["organization-billing"],
+    response_model=dict,
+)
+async def ensure_organization_stripe_customer(
+    request_fastapi: Request,
+    organization_id: int,
+    body: Optional[OrganizationStripeCustomerCreateRequest] = Body(default=None),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Ensure a Stripe customer exists for an organization.
+
+    This endpoint creates a Stripe customer for the organization if one doesn't
+    exist, or returns the existing customer ID. This enables direct billing
+    for the organization.
+
+    Requires billing:write permission (Owners and Admins).
+
+    The organization must have a billing_email set (either in business profile
+    or provided in the request body) for Stripe customer creation.
+
+    Returns:
+        - organization_id: The organization's ID
+        - stripe_customer_id: The Stripe customer ID
+        - is_new: True if the customer was just created, False if it existed
+    """
+
+    import stripe
+
+    from orchestra.web.api.organization.schema import OrganizationStripeCustomerResponse
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:write permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage billing for this organization",
+        )
+
+    # Get billing account (created eagerly in organization_dao.create;
+    # fallback handles legacy orgs that may not have one yet)
+    billing_account_dao = BillingAccountDAO(session)
+    ba = org.billing_account
+    if ba is None:
+        ba = billing_account_dao.create()
+        org.billing_account_id = ba.id
+        session.flush()
+
+    # If Stripe customer already exists, return it
+    if ba.stripe_customer_id:
+        return OrganizationStripeCustomerResponse(
+            organization_id=organization_id,
+            stripe_customer_id=ba.stripe_customer_id,
+            is_new=False,
+        ).model_dump()
+
+    # Determine email for Stripe customer
+    billing_email = None
+    if body and body.billing_email:
+        billing_email = body.billing_email
+    elif ba.billing_email:
+        billing_email = ba.billing_email
+    else:
+        # Fall back to owner's email
+        user_dao = UserDAO(session)
+        owner = user_dao.get_by_id(org.owner_id)
+        if owner:
+            billing_email = owner[0].email
+
+    if not billing_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization must have a billing_email set or provide one in the request",
+        )
+
+    # Determine name for Stripe customer
+    business_name = None
+    if body and body.business_name:
+        business_name = body.business_name
+    elif ba.name:
+        business_name = ba.name
+    else:
+        business_name = org.name  # Fall back to org name
+
+    # Configure Stripe
+    if not settings.stripe_secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stripe is not configured",
+        )
+
+    stripe.api_key = settings.stripe_secret_key
+
+    try:
+        # Build Stripe customer params including address and tax ID if available
+        from orchestra.web.api.utils.business_validation import (
+            build_stripe_customer_name,
+            get_stripe_tax_exempt_status,
+            get_stripe_tax_id_data,
+        )
+
+        customer_params = {
+            "email": billing_email,
+            **build_stripe_customer_name(is_business=True, name=business_name),
+            "metadata": {
+                "organization_id": str(organization_id),
+                "organization_name": org.name,
+            },
+        }
+
+        # Sync billing address to Stripe if available (from BillingAccount)
+        ba_address = ba.billing_address or {}
+        if ba_address.get("line1"):
+            customer_params["address"] = {
+                "line1": ba_address.get("line1", ""),
+                "line2": ba_address.get("line2", ""),
+                "city": ba_address.get("city", ""),
+                "state": ba_address.get("state", ""),
+                "postal_code": ba_address.get("postal_code", ""),
+                "country": ba_address.get("country", ""),
+            }
+            # Validate location immediately for tax calculations
+            customer_params["tax"] = {"validate_location": "immediately"}
+
+        # Sync tax ID to Stripe if available
+        country_code = ba_address.get("country")
+        tax_id_data = get_stripe_tax_id_data(ba.tax_id, country_code)
+        if tax_id_data:
+            customer_params["tax_id_data"] = tax_id_data
+
+        # Set tax_exempt based on B2B tax ID status
+        customer_params["tax_exempt"] = get_stripe_tax_exempt_status(
+            ba.tax_id,
+            country_code,
+        )
+
+        # Create Stripe customer
+        customer = stripe.Customer.create(**customer_params)
+
+        # Store the Stripe customer ID on the BillingAccount
+        ba.stripe_customer_id = customer.id
+
+        # Update business profile if provided in request
+        if body:
+            if body.billing_email and body.billing_email != ba.billing_email:
+                ba.billing_email = body.billing_email
+            if body.business_name and body.business_name != ba.name:
+                ba.name = body.business_name
+
+        session.commit()
+
+        return OrganizationStripeCustomerResponse(
+            organization_id=organization_id,
+            stripe_customer_id=customer.id,
+            is_new=True,
+        ).model_dump()
+
+    except stripe.error.StripeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create Stripe customer: {str(e)}",
+        )
+
+
+@router.get(
+    "/organizations/{organization_id}/billing/stripe-customer",
+    tags=["organization-billing"],
+)
+async def get_organization_stripe_customer(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get the Stripe customer ID for an organization.
+
+    Returns the Stripe customer ID if one exists, or indicates if direct
+    billing is not yet set up.
+
+    Requires billing:read permission.
+    """
+    from orchestra.web.api.organization.schema import OrganizationStripeCustomerResponse
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:read permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view billing info for this organization",
+        )
+
+    ba = org.billing_account
+    stripe_cust_id = ba.stripe_customer_id if ba else None
+    if not stripe_cust_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization does not have direct billing set up. "
+            "Use POST to create a Stripe customer.",
+        )
+
+    return OrganizationStripeCustomerResponse(
+        organization_id=organization_id,
+        stripe_customer_id=stripe_cust_id,
+        is_new=False,
+    ).model_dump()
+
+
+@router.post(
+    "/organizations/{organization_id}/billing/checkout",
+    tags=["organization-billing"],
+    response_model=dict,
+)
+async def create_organization_checkout_session(
+    request_fastapi: Request,
+    organization_id: int,
+    checkout_request: "OrganizationCheckoutRequest",
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Create a Stripe checkout session for purchasing credits for an organization.
+
+    This endpoint creates a one-time payment checkout session. Upon successful
+    payment, credits will be added to the organization's balance.
+
+    The organization must have a Stripe customer set up first (via the
+    ensure-stripe-customer endpoint).
+
+    Requires billing:write permission (Owners and Admins).
+
+    Args:
+        amount: Amount of credits to purchase (1 credit = $1)
+        success_url: URL to redirect to on successful payment
+        cancel_url: URL to redirect to on cancelled payment
+
+    Returns:
+        - checkout_url: URL to redirect the user to for payment
+        - session_id: Stripe checkout session ID
+    """
+
+    import stripe
+
+    from orchestra.web.api.organization.schema import OrganizationCheckoutResponse
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:write permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage billing for this organization",
+        )
+
+    # Check if organization has Stripe customer via BillingAccount
+    ba = org.billing_account
+    if not ba or not ba.stripe_customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization must have a Stripe customer set up first. "
+            "Use POST /billing/stripe-customer to create one.",
+        )
+
+    # Validate amount
+    if checkout_request.amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Amount must be greater than 0",
+        )
+
+    # Configure Stripe
+    if not settings.stripe_secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stripe is not configured",
+        )
+
+    stripe.api_key = settings.stripe_secret_key
+
+    try:
+        # Create checkout session
+        checkout_session = stripe.checkout.Session.create(
+            mode="payment",
+            submit_type="pay",
+            customer=ba.stripe_customer_id,
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": 100,  # $1 = 100 cents = 1 credit
+                        "product_data": {
+                            "name": "Unify Credits",
+                            "description": f"Credits for {org.name}",
+                        },
+                    },
+                    "quantity": checkout_request.amount,
+                },
+            ],
+            automatic_tax={"enabled": True},
+            customer_update={
+                "address": "auto",
+                "name": "auto",
+            },
+            billing_address_collection="required",
+            tax_id_collection={"enabled": True},
+            success_url=checkout_request.success_url,
+            cancel_url=checkout_request.cancel_url,
+            metadata={
+                "organization_id": str(organization_id),
+                "organization_name": org.name,
+                "credits_purchased": str(checkout_request.amount),
+                "initiated_by_user_id": user_id,
+            },
+            payment_intent_data={
+                "metadata": {
+                    "organization_id": str(organization_id),
+                    "credits_purchased": str(checkout_request.amount),
+                },
+            },
+            payment_method_options={
+                "card": {"request_three_d_secure": "any"},
+            },
+            invoice_creation={
+                "enabled": True,
+                "invoice_data": {
+                    "description": f"Unify Credits purchase ({checkout_request.amount} credits) for {org.name}",
+                },
+            },
+        )
+
+        if not checkout_session.url:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create checkout session URL",
+            )
+
+        return OrganizationCheckoutResponse(
+            checkout_url=checkout_session.url,
+            session_id=checkout_session.id,
+        ).model_dump()
+
+    except stripe.error.StripeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create checkout session: {str(e)}",
+        )
+
+
+# ============================================================================
 # Admin Spend Endpoints (for UniLLM service calls)
 # ============================================================================
 
@@ -2310,3 +2824,104 @@ def admin_get_member_spend(
         limit_set_at=member.monthly_spending_cap_set_at,
         percent_used=percent_used,
     )
+
+
+@admin_router.put("/organization/{organization_id}/verify")
+def admin_verify_organization(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Mark an organization as verified.
+
+    Verified organizations receive higher rate limits for assistant-related
+    endpoints. This is a manual verification process performed by an admin
+    after reviewing the organization.
+
+    Returns the updated organization info including verification status.
+    """
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    if org.verified:
+        return {
+            "message": "Organization is already verified.",
+            "organization_id": organization_id,
+            "name": org.name,
+            "verified": org.verified,
+            "verified_at": org.verified_at.isoformat() if org.verified_at else None,
+        }
+
+    # Mark as verified
+    org.verified = True
+    org.verified_at = datetime.now(timezone.utc)
+    session.commit()
+
+    return {
+        "message": "Organization verified successfully.",
+        "organization_id": organization_id,
+        "name": org.name,
+        "verified": org.verified,
+        "verified_at": org.verified_at.isoformat(),
+    }
+
+
+@admin_router.delete("/organization/{organization_id}/verify")
+def admin_unverify_organization(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Remove verification status from an organization.
+
+    This revokes the higher rate limits associated with verified status.
+    """
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    if not org.verified:
+        return {
+            "message": "Organization is not verified.",
+            "organization_id": organization_id,
+            "name": org.name,
+            "verified": False,
+            "verified_at": None,
+        }
+
+    # Remove verification
+    org.verified = False
+    org.verified_at = None
+    session.commit()
+
+    return {
+        "message": "Organization verification removed.",
+        "organization_id": organization_id,
+        "name": org.name,
+        "verified": False,
+        "verified_at": None,
+    }
+
+
+@admin_router.get("/organization/{organization_id}/verification")
+def admin_get_organization_verification(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Get the verification status of an organization.
+    """
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    return {
+        "organization_id": organization_id,
+        "name": org.name,
+        "verified": org.verified,
+        "verified_at": org.verified_at.isoformat() if org.verified_at else None,
+    }

@@ -52,8 +52,7 @@ class UserAccountCleanupService:
         Check all conditions that would block account deletion.
 
         Executes a single optimized query that checks:
-        - User exists in auth_user
-        - User exists in users (billing)
+        - User exists in user table
         - Has pending bills (PENDING_INVOICE or INVOICE_CREATED)
         - Owns any organizations
 
@@ -64,17 +63,18 @@ class UserAccountCleanupService:
             text(
                 """
                 SELECT
-                    EXISTS(SELECT 1 FROM auth_user WHERE id = :uid) as user_exists,
-                    EXISTS(SELECT 1 FROM users WHERE id = :uid) as billing_exists,
+                    EXISTS(SELECT 1 FROM "user" WHERE id = :uid) as user_exists,
                     EXISTS(
-                        SELECT 1 FROM recharge
-                        WHERE user_id = :uid
-                        AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')
+                        SELECT 1 FROM recharge r
+                        JOIN "user" u ON u.billing_account_id = r.billing_account_id
+                        WHERE u.id = :uid
+                        AND r.status IN ('PENDING_INVOICE', 'INVOICE_CREATED')
                     ) as has_pending_bills,
                     COALESCE(
-                        (SELECT SUM(amount_usd) FROM recharge
-                         WHERE user_id = :uid
-                         AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
+                        (SELECT SUM(r.amount_usd) FROM recharge r
+                         JOIN "user" u ON u.billing_account_id = r.billing_account_id
+                         WHERE u.id = :uid
+                         AND r.status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
                         0
                     ) as pending_amount,
                     EXISTS(
@@ -133,10 +133,9 @@ class UserAccountCleanupService:
 
         Deletion order (within single transaction):
         1. Check blockers
-        2. Delete from tables with users.id FK (no CASCADE)
-        3. Delete from users table (cascades: recharge)
-        4. Delete from auth_user table (cascades all auth_user.id FKs)
-        5. Archive Stripe customer (post-commit, best-effort)
+        2. Delete from tables with user.id FK (no CASCADE)
+        3. Delete from user table (cascades all user.id FKs)
+        4. Archive Stripe customer (post-commit, best-effort)
 
         :param user_id: The user's ID
         :param force_org_check: If True, skip organization ownership check
@@ -155,22 +154,35 @@ class UserAccountCleanupService:
                 blockers=blockers,
             )
 
-        stripe_customer_id = self.session.execute(
-            text("SELECT stripe_customer_id FROM users WHERE id = :uid"),
+        # Get the billing account info before deletion
+        ba_info = self.session.execute(
+            text(
+                """
+                SELECT ba.id as ba_id, ba.stripe_customer_id
+                FROM "user" u
+                LEFT JOIN billing_account ba ON u.billing_account_id = ba.id
+                WHERE u.id = :uid
+                """,
+            ),
             {"uid": user_id},
-        ).scalar()
+        ).fetchone()
 
-        self._delete_users_table_dependencies(user_id)
+        stripe_customer_id = ba_info.stripe_customer_id if ba_info else None
+        billing_account_id = ba_info.ba_id if ba_info else None
+
+        self._delete_user_table_dependencies(user_id, billing_account_id)
 
         self.session.execute(
-            text("DELETE FROM users WHERE id = :uid"),
+            text('DELETE FROM "user" WHERE id = :uid'),
             {"uid": user_id},
         )
 
-        self.session.execute(
-            text("DELETE FROM auth_user WHERE id = :uid"),
-            {"uid": user_id},
-        )
+        # Delete the billing account if it exists (cascade will handle recharges/fingerprints)
+        if billing_account_id:
+            self.session.execute(
+                text("DELETE FROM billing_account WHERE id = :ba_id"),
+                {"ba_id": billing_account_id},
+            )
 
         self.session.commit()
 
@@ -183,25 +195,22 @@ class UserAccountCleanupService:
         logger.info(f"Successfully deleted user account: {user_id}")
         return DeletionResult(success=True, message="Account deleted successfully")
 
-    def _delete_users_table_dependencies(self, user_id: str) -> None:
+    def _delete_user_table_dependencies(
+        self,
+        user_id: str,
+        billing_account_id: int | None = None,
+    ) -> None:
         """
-        Delete from tables that reference users.id without CASCADE.
+        Delete from tables that reference user.id without CASCADE.
 
         Uses raw SQL - no ORM overhead, no entity loading.
         Order matters due to FK constraints.
-        """
-        deletion_statements = [
-            # REMOVED: Legacy query tracking tables deleted in migration 2026-01-15
-            # Should be replaced by the new credit deduction system when in place.
-            # "DELETE FROM query_tag_association WHERE user_id = :uid",
-            # "DELETE FROM tags WHERE user_id = :uid",
-            # "DELETE FROM query WHERE user_id = :uid",
-            # "DELETE FROM local_endpoint WHERE user_id = :uid",  # Part of legacy LLM tracking
-            "DELETE FROM credit_card_fingerprint WHERE user_id = :uid",
-        ]
 
-        for stmt in deletion_statements:
-            self.session.execute(text(stmt), {"uid": user_id})
+        Note: credit_card_fingerprint and recharge now reference billing_account_id
+        and will be cascade-deleted when the billing_account row is removed.
+        """
+        # Currently no non-cascading tables reference user.id directly.
+        # credit_card_fingerprint is cascade-deleted via billing_account.
 
     def _archive_stripe_customer(self, stripe_customer_id: str) -> None:
         """
@@ -239,7 +248,7 @@ class UserAccountCleanupService:
             deleted_count = bucket_service.delete_message_attachments_for_user(user_id)
             if deleted_count > 0:
                 logger.info(
-                    f"Cleaned up {deleted_count} message attachments for user {user_id}"
+                    f"Cleaned up {deleted_count} message attachments for user {user_id}",
                 )
         except Exception as e:
             logger.error(f"Failed to cleanup attachments for user {user_id}: {e}")

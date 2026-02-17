@@ -17,7 +17,7 @@ async def approve_default_user(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     # Approve the user
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
@@ -183,7 +183,6 @@ async def test_assistant_spending_limit_forbidden(client: AsyncClient):
     other_user = await create_test_user(
         client,
         "other_spending_user@example.com",
-        hiring_approved=True,
     )
 
     # Other user should not be able to set spending limit on an assistant they don't own
@@ -248,7 +247,6 @@ async def test_org_spending_limit_non_admin(client: AsyncClient):
     non_member = await create_test_user(
         client,
         "non_member_spending@example.com",
-        hiring_approved=False,
     )
     non_member_headers = non_member["headers"]
 
@@ -487,7 +485,7 @@ async def test_admin_get_user_spend(client: AsyncClient):
 
     # Get spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
+        f"/v0/admin/user/spend/{user_id}?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1004,7 +1002,6 @@ async def test_get_org_spending_limit_non_member(client: AsyncClient):
     non_member = await create_test_user(
         client,
         "non_member_get_limit@example.com",
-        hiring_approved=False,
     )
 
     # Non-member should not be able to get spending limit
@@ -1266,7 +1263,7 @@ async def test_user_can_get_own_spend(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
+        f"/v0/admin/user/spend/{user_id}?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1291,7 +1288,7 @@ async def test_user_spend_includes_limit_when_set(client: AsyncClient):
     )
 
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
+        f"/v0/admin/user/spend/{user_id}?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1323,7 +1320,7 @@ async def test_user_spend_no_limit_shows_null(client: AsyncClient):
     )
 
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
+        f"/v0/admin/user/spend/{user_id}?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1459,7 +1456,7 @@ async def test_user_spend_aggregates_across_multiple_assistants(client: AsyncCli
 
     # Get user spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
+        f"/v0/admin/user/spend/{user_id}?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 

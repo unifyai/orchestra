@@ -11,7 +11,7 @@ from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
@@ -60,7 +60,6 @@ async def test_admin_update_user_personal_assistant(client: AsyncClient, dbsessi
     owner = await create_test_user(
         client,
         "admin_update_user_personal@test.com",
-        hiring_approved=True,
     )
 
     # Create a personal assistant
@@ -95,8 +94,8 @@ async def test_admin_update_user_personal_assistant(client: AsyncClient, dbsessi
     assert data["assistant_type"] == "personal"
 
     # Verify the user was actually updated
-    auth_user_dao = AuthUserDAO(dbsession)
-    user_row = auth_user_dao.get_by_id(owner["id"])
+    user_dao = UserDAO(dbsession)
+    user_row = user_dao.get_by_id(owner["id"])
     assert user_row is not None
     user = user_row[0]
     assert user.timezone == "America/New_York"
@@ -114,7 +113,6 @@ async def test_admin_update_user_personal_assistant_email_mismatch(
     owner = await create_test_user(
         client,
         "admin_update_mismatch@test.com",
-        hiring_approved=True,
     )
 
     # Create a personal assistant
@@ -157,12 +155,10 @@ async def test_admin_update_user_org_assistant(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "admin_update_org_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "admin_update_org_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -216,8 +212,8 @@ async def test_admin_update_user_org_assistant(client: AsyncClient, dbsession):
     assert data["assistant_type"] == "organization"
 
     # Verify the user was actually updated
-    auth_user_dao = AuthUserDAO(dbsession)
-    user_row = auth_user_dao.get_by_id(member["id"])
+    user_dao = UserDAO(dbsession)
+    user_row = user_dao.get_by_id(member["id"])
     assert user_row is not None
     user = user_row[0]
     assert user.timezone == "Asia/Tokyo"
@@ -235,7 +231,6 @@ async def test_admin_update_user_org_assistant_member_not_found(
     owner = await create_test_user(
         client,
         "admin_org_notfound_owner@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -298,7 +293,6 @@ async def test_admin_update_user_invalid_timezone(client: AsyncClient, dbsession
     owner = await create_test_user(
         client,
         "admin_invalid_tz@test.com",
-        hiring_approved=True,
     )
 
     # Create a personal assistant
@@ -333,7 +327,6 @@ async def test_admin_update_user_partial_update(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "admin_partial_update@test.com",
-        hiring_approved=True,
     )
 
     # Create a personal assistant
@@ -362,8 +355,8 @@ async def test_admin_update_user_partial_update(client: AsyncClient, dbsession):
     assert update_resp.status_code == 200
 
     # Verify timezone was updated
-    auth_user_dao = AuthUserDAO(dbsession)
-    user_row = auth_user_dao.get_by_id(owner["id"])
+    user_dao = UserDAO(dbsession)
+    user_row = user_dao.get_by_id(owner["id"])
     user = user_row[0]
     assert user.timezone == "Pacific/Auckland"
 
@@ -381,7 +374,7 @@ async def test_admin_update_user_partial_update(client: AsyncClient, dbsession):
 
     # Verify bio was updated and timezone preserved
     dbsession.expire_all()
-    user_row = auth_user_dao.get_by_id(owner["id"])
+    user_row = user_dao.get_by_id(owner["id"])
     user = user_row[0]
     assert user.bio == "Only bio updated"
     assert user.timezone == "Pacific/Auckland"  # Should be preserved
@@ -393,7 +386,6 @@ async def test_admin_update_user_no_fields(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "admin_no_fields@test.com",
-        hiring_approved=True,
     )
 
     # Create a personal assistant
@@ -433,7 +425,6 @@ async def test_admin_update_assistant_timezone(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "admin_asst_tz@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -473,7 +464,6 @@ async def test_admin_update_assistant_about(client: AsyncClient, dbsession):
     owner = await create_test_user(
         client,
         "admin_asst_about@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -512,7 +502,6 @@ async def test_admin_update_assistant_both_fields(client: AsyncClient, dbsession
     owner = await create_test_user(
         client,
         "admin_asst_both@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -568,7 +557,6 @@ async def test_admin_update_assistant_invalid_timezone(client: AsyncClient, dbse
     owner = await create_test_user(
         client,
         "admin_asst_invalid_tz@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -599,7 +587,6 @@ async def test_admin_update_assistant_no_changes(client: AsyncClient, dbsession)
     owner = await create_test_user(
         client,
         "admin_asst_no_changes@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant
@@ -631,7 +618,6 @@ async def test_admin_update_assistant_org_assistant(client: AsyncClient, dbsessi
     owner = await create_test_user(
         client,
         "admin_org_asst_update@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -689,7 +675,6 @@ async def test_admin_list_assistants_fields_single_email(client: AsyncClient):
     owner = await create_test_user(
         client,
         "fields_single_email@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant with email
@@ -748,7 +733,6 @@ async def test_admin_list_assistants_fields_multiple(client: AsyncClient):
     owner = await create_test_user(
         client,
         "fields_multiple@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant with email
@@ -803,7 +787,6 @@ async def test_admin_list_assistants_fields_excludes_expensive_lookups(
     owner = await create_test_user(
         client,
         "fields_no_expensive@test.com",
-        hiring_approved=True,
     )
 
     create_resp = await client.post(
@@ -855,7 +838,6 @@ async def test_admin_list_assistants_fields_with_filter_combination(
     owner = await create_test_user(
         client,
         "fields_filter_combo@test.com",
-        hiring_approved=True,
     )
 
     unique_email = "filter.combo.unique@example.com"
@@ -906,7 +888,6 @@ async def test_admin_list_assistants_no_fields_returns_full_objects(
     owner = await create_test_user(
         client,
         "fields_full_objects@test.com",
-        hiring_approved=True,
     )
 
     create_resp = await client.post(
@@ -964,7 +945,6 @@ async def test_admin_list_assistants_fields_null_values_handled(client: AsyncCli
     owner = await create_test_user(
         client,
         "fields_null_values@test.com",
-        hiring_approved=True,
     )
 
     # Create assistant WITHOUT email
@@ -1014,7 +994,6 @@ async def test_admin_list_assistants_fields_with_spaces_trimmed(client: AsyncCli
     owner = await create_test_user(
         client,
         "fields_spaces@test.com",
-        hiring_approved=True,
     )
 
     create_resp = await client.post(
@@ -1065,7 +1044,6 @@ async def test_admin_list_assistants_fields_invalid_field_returns_422(
     owner = await create_test_user(
         client,
         "fields_invalid@test.com",
-        hiring_approved=True,
     )
 
     create_resp = await client.post(
@@ -1109,7 +1087,6 @@ async def test_admin_list_assistants_fields_empty_string_returns_full_objects(
     owner = await create_test_user(
         client,
         "fields_empty_string@test.com",
-        hiring_approved=True,
     )
 
     create_resp = await client.post(
@@ -1159,7 +1136,6 @@ async def test_admin_list_assistants_fields_agent_id_filter_with_field_selection
     owner = await create_test_user(
         client,
         "fields_agent_filter@test.com",
-        hiring_approved=True,
     )
 
     # Create two assistants
@@ -1222,7 +1198,6 @@ async def test_admin_list_assistants_fields_case_sensitivity_returns_422(
     owner = await create_test_user(
         client,
         "fields_case@test.com",
-        hiring_approved=True,
     )
 
     create_resp = await client.post(

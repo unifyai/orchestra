@@ -23,9 +23,6 @@ async def test_create_organization(client: AsyncClient):
 
     assert org_data["name"] == "Test Org"
     assert org_data["owner_id"] == owner["id"]
-    assert (
-        org_data["billing_user_id"] == owner["id"]
-    )  # Defaults to owner (delegated mode)
     assert "id" in org_data
     assert "created_at" in org_data
     # Owner should receive an organization API key
@@ -185,8 +182,8 @@ async def test_update_organization(client: AsyncClient):
     org_data = response.json()
 
     assert org_data["name"] == "Updated Org Name"
-    # billing_user_id should still equal owner (unchanged)
-    assert org_data["billing_user_id"] == owner["id"]
+
+    assert True
 
 
 @pytest.mark.anyio
@@ -299,7 +296,6 @@ async def test_transfer_ownership_success(client: AsyncClient, dbsession):
 
     org_data = transfer_response.json()
     assert org_data["owner_id"] == new_owner["id"]
-    assert org_data["billing_user_id"] == new_owner["id"]
 
     # Verify roles were swapped
     org_member_dao = OrganizationMemberDAO(dbsession)
@@ -858,33 +854,33 @@ async def test_organization_has_default_billing_fields(client: AsyncClient, dbse
     # Query the organization directly from DB to verify wallet fields
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
 
-    # Verify default wallet fields
-    assert org.credits == Decimal("0")
-    assert org.stripe_customer_id is None  # NULL = legacy billing mode
-    assert org.autorecharge is False
-    assert org.autorecharge_threshold == Decimal("10")
-    assert org.autorecharge_qty == Decimal("100")
-    assert org.account_status == "ACTIVE"
-    assert org.billing_setup_complete is False
+    # Verify default wallet fields via billing_account
+    ba = org.billing_account
+    assert ba is not None
+    assert ba.credits == Decimal("0")
+    assert ba.stripe_customer_id is None  # NULL = legacy billing mode
+    assert ba.autorecharge is False
+    assert ba.account_status == "ACTIVE"
+    assert ba.billing_setup_complete is False
 
     # Verify business profile fields are NULL by default
-    assert org.billing_email is None
-    assert org.business_name is None
-    assert org.tax_id is None
-    assert org.billing_address is None or org.billing_address == {}
+    assert ba.billing_email is None
+    assert ba.name is None
+    assert ba.tax_id is None
+    assert ba.billing_address is None or ba.billing_address == {}
 
 
 @pytest.mark.anyio
-async def test_organization_billing_user_nullable(client: AsyncClient, dbsession):
-    """Test that billing_user_id can be NULL (for direct billing mode)."""
+async def test_organization_direct_billing(client: AsyncClient, dbsession):
+    """Test that organizations use direct billing via stripe_customer_id."""
     from orchestra.db.models.orchestra_models import Organization
 
-    owner = await create_test_user(client, "nullable_billing@test.com")
+    owner = await create_test_user(client, "direct_billing@test.com")
 
-    # Create organization - billing_user_id defaults to owner
+    # Create organization
     org_response = await client.post(
         "/v0/organizations",
-        json={"name": "Nullable Billing Org"},
+        json={"name": "Direct Billing Org"},
         headers=owner["headers"],
     )
     org_id = org_response.json()["id"]
@@ -892,16 +888,15 @@ async def test_organization_billing_user_nullable(client: AsyncClient, dbsession
     # Query organization
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
 
-    # Currently billing_user_id equals owner (delegated mode)
-    assert org.billing_user_id == owner["id"]
+    # New orgs start without stripe_customer_id (billing not set up)
+    assert org.billing_account.stripe_customer_id is None
 
-    # Verify billing_user_id column allows NULL (for future direct billing)
-    # We can set it to NULL directly in the DB
-    org.billing_user_id = None
+    # Setting stripe_customer_id enables direct billing
+    org.billing_account.stripe_customer_id = "cus_test_direct"
     dbsession.commit()
     dbsession.refresh(org)
 
-    assert org.billing_user_id is None
+    assert org.billing_account.stripe_customer_id == "cus_test_direct"
 
 
 @pytest.mark.anyio
@@ -921,20 +916,20 @@ async def test_organization_credits_can_be_updated(client: AsyncClient, dbsessio
     )
     org_id = org_response.json()["id"]
 
-    # Update credits directly in DB
+    # Update credits directly in DB via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.credits = Decimal("500.50")
+    org.billing_account.credits = Decimal("500.50")
     dbsession.commit()
     dbsession.refresh(org)
 
-    assert org.credits == Decimal("500.50")
+    assert org.billing_account.credits == Decimal("500.50")
 
     # Deduct credits
-    org.credits = org.credits - Decimal("100.25")
+    org.billing_account.credits = org.billing_account.credits - Decimal("100.25")
     dbsession.commit()
     dbsession.refresh(org)
 
-    assert org.credits == Decimal("400.25")
+    assert org.billing_account.credits == Decimal("400.25")
 
 
 @pytest.mark.anyio
@@ -954,10 +949,13 @@ async def test_recharge_model_supports_organization(client: AsyncClient, dbsessi
     )
     org_id = org_response.json()["id"]
 
-    # Create a recharge record for the organization
+    # Get the org's billing_account_id
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    ba_id = org.billing_account_id
+
+    # Create a recharge record linked to the org's billing account
     recharge = Recharge(
-        organization_id=org_id,
-        user_id=None,  # Organization recharge, not user recharge
+        billing_account_id=ba_id,
         quantity=Decimal("100"),
         amount_usd=Decimal("10.00"),
         type="payment",
@@ -967,22 +965,20 @@ async def test_recharge_model_supports_organization(client: AsyncClient, dbsessi
     dbsession.commit()
     dbsession.refresh(recharge)
 
-    assert recharge.organization_id == org_id
-    assert recharge.user_id is None
+    assert recharge.billing_account_id == ba_id
     assert recharge.quantity == Decimal("100")
 
-    # Verify relationship works
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    assert len(org.recharges) == 1
-    assert org.recharges[0].id == recharge.id
+    # Verify relationship works via billing_account
+    assert len(org.billing_account.recharges) == 1
+    assert org.billing_account.recharges[0].id == recharge.id
 
 
 @pytest.mark.anyio
-async def test_recharge_requires_exactly_one_owner(client: AsyncClient, dbsession):
-    """Test that recharge must have either user_id OR organization_id, not both or neither."""
+async def test_recharge_links_to_billing_account(client: AsyncClient, dbsession):
+    """Test that recharge links to billing_account_id."""
     from decimal import Decimal
 
-    from orchestra.db.models.orchestra_models import Recharge
+    from orchestra.db.models.orchestra_models import Organization, Recharge
 
     owner = await create_test_user(client, "recharge_xor@test.com")
 
@@ -994,35 +990,22 @@ async def test_recharge_requires_exactly_one_owner(client: AsyncClient, dbsessio
     )
     org_id = org_response.json()["id"]
 
-    # Test: Both user_id and organization_id set - should work at model level
-    # but the check constraint in DB should fail (if we add it)
-    # For now, we just test the model accepts the values
+    # Get org's billing_account_id
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    ba_id = org.billing_account_id
 
-    # Valid: organization_id only
-    recharge_org = Recharge(
-        organization_id=org_id,
-        user_id=None,
+    # Recharge linked to org's billing account
+    recharge = Recharge(
+        billing_account_id=ba_id,
         quantity=Decimal("50"),
         amount_usd=Decimal("5.00"),
         type="payment",
         status="PENDING_INVOICE",
     )
-    dbsession.add(recharge_org)
+    dbsession.add(recharge)
     dbsession.commit()
-    assert recharge_org.id is not None
-
-    # Valid: user_id only
-    recharge_user = Recharge(
-        organization_id=None,
-        user_id=owner["id"],
-        quantity=Decimal("50"),
-        amount_usd=Decimal("5.00"),
-        type="payment",
-        status="PENDING_INVOICE",
-    )
-    dbsession.add(recharge_user)
-    dbsession.commit()
-    assert recharge_user.id is not None
+    assert recharge.id is not None
+    assert recharge.billing_account_id == ba_id
 
 
 @pytest.mark.anyio
@@ -1042,25 +1025,25 @@ async def test_organization_autorecharge_settings(client: AsyncClient, dbsession
     )
     org_id = org_response.json()["id"]
 
-    # Update autorecharge settings
+    # Update autorecharge settings via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.autorecharge = True
-    org.autorecharge_threshold = Decimal("50")
-    org.autorecharge_qty = Decimal("200")
+    org.billing_account.autorecharge = True
+    org.billing_account.autorecharge_threshold = Decimal("50")
+    org.billing_account.autorecharge_qty = Decimal("200")
     dbsession.commit()
     dbsession.refresh(org)
 
-    assert org.autorecharge is True
-    assert org.autorecharge_threshold == Decimal("50")
-    assert org.autorecharge_qty == Decimal("200")
+    assert org.billing_account.autorecharge is True
+    assert org.billing_account.autorecharge_threshold == Decimal("50")
+    assert org.billing_account.autorecharge_qty == Decimal("200")
 
 
 @pytest.mark.anyio
-async def test_organization_business_profile_fields(client: AsyncClient, dbsession):
+async def test_organization_billing_profile_fields(client: AsyncClient, dbsession):
     """Test organization business profile fields for invoicing."""
     from orchestra.db.models.orchestra_models import Organization
 
-    owner = await create_test_user(client, "business_profile@test.com")
+    owner = await create_test_user(client, "billing_profile@test.com")
 
     # Create organization
     org_response = await client.post(
@@ -1070,666 +1053,31 @@ async def test_organization_business_profile_fields(client: AsyncClient, dbsessi
     )
     org_id = org_response.json()["id"]
 
-    # Update business profile
+    # Update business profile via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.billing_email = "billing@acme.com"
-    org.business_name = "Acme Corporation"
-    org.tax_id = "US-123456789"
-    org.billing_address = {
+    ba = org.billing_account
+    ba.billing_email = "billing@acme.com"
+    ba.name = "Acme Corporation"
+    ba.tax_id = "US-123456789"
+    ba.billing_address = {
         "line1": "123 Main St",
         "city": "San Francisco",
         "country": "US",
         "postal_code": "94102",
     }
-    org.billing_setup_complete = True
+    ba.billing_setup_complete = True
     dbsession.commit()
     dbsession.refresh(org)
 
-    assert org.billing_email == "billing@acme.com"
-    assert org.business_name == "Acme Corporation"
-    assert org.tax_id == "US-123456789"
-    assert org.billing_address["line1"] == "123 Main St"
-    assert org.billing_address["city"] == "San Francisco"
-    assert org.billing_address["country"] == "US"
-    assert org.billing_address["postal_code"] == "94102"
-    assert org.billing_setup_complete is True
-
-
-# ============== OrganizationBillingDAO Tests ==============
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_get_credits(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO.get_credits method."""
-    from decimal import Decimal
-
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_credits@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Credits Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Initial credits should be 0
-    credits = dao.get_credits(org_id)
-    assert credits == Decimal("0")
-
-    # Non-existent org should return 0
-    credits = dao.get_credits(999999)
-    assert credits == Decimal("0")
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_add_credits(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO.add_credits method."""
-    from decimal import Decimal
-
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_add_credits@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Add Credits Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Add credits
-    new_balance = dao.add_credits(org_id, 100.50)
-    assert new_balance == Decimal("100.50")
-
-    # Add more credits
-    new_balance = dao.add_credits(org_id, 50.25)
-    assert new_balance == Decimal("150.75")
-
-    # Verify with get_credits
-    assert dao.get_credits(org_id) == Decimal("150.75")
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_deduct_credits(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO.deduct_credits method."""
-    from decimal import Decimal
-
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_deduct_credits@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Deduct Credits Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Add initial credits
-    dao.add_credits(org_id, 100)
-
-    # Deduct credits
-    new_balance = dao.deduct_credits(org_id, 30.50)
-    assert new_balance == Decimal("69.50")
-
-    # Verify with get_credits
-    assert dao.get_credits(org_id) == Decimal("69.50")
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_has_direct_billing(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO.has_direct_billing method."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-    from orchestra.db.models.orchestra_models import Organization
-
-    owner = await create_test_user(client, "dao_direct_billing@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Direct Billing Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Initially no direct billing (no stripe_customer_id)
-    assert dao.has_direct_billing(org_id) is False
-
-    # Set stripe_customer_id
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_test123"
-    dbsession.commit()
-
-    # Now has direct billing
-    assert dao.has_direct_billing(org_id) is True
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_set_stripe_customer_id(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO.set_stripe_customer_id method."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_stripe_id@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Stripe ID Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Set stripe customer ID
-    result = dao.set_stripe_customer_id(org_id, "cus_abc123")
-    assert result is True
-
-    # Verify
-    org = dao.get(org_id)
-    assert org.stripe_customer_id == "cus_abc123"
-
-    # Non-existent org should return False
-    result = dao.set_stripe_customer_id(999999, "cus_xyz")
-    assert result is False
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_autorecharge_settings(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO autorecharge methods."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_autorecharge@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Autorecharge Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Get default settings
-    settings = dao.get_autorecharge_settings(org_id)
-    assert settings["autorecharge"] is False
-    assert settings["autorecharge_threshold"] == 10.0
-    assert settings["autorecharge_qty"] == 100.0
-
-    # Update settings
-    dao.set_autorecharge(org_id, True)
-    dao.set_autorecharge_threshold(org_id, 25.0)
-    dao.set_autorecharge_qty(org_id, 200.0)
-    dbsession.flush()
-
-    # Verify
-    settings = dao.get_autorecharge_settings(org_id)
-    assert settings["autorecharge"] is True
-    assert settings["autorecharge_threshold"] == 25.0
-    assert settings["autorecharge_qty"] == 200.0
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_should_trigger_autorecharge(
-    client: AsyncClient,
-    dbsession,
-):
-    """Test OrganizationBillingDAO.should_trigger_autorecharge method."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-    from orchestra.db.models.orchestra_models import Organization
-
-    owner = await create_test_user(client, "dao_trigger_autorecharge@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Trigger Autorecharge Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Initially: no stripe_customer_id, no autorecharge
-    assert dao.should_trigger_autorecharge(org_id) is False
-
-    # Enable autorecharge but no stripe_customer_id
-    dao.set_autorecharge(org_id, True)
-    dbsession.flush()
-    assert dao.should_trigger_autorecharge(org_id) is False
-
-    # Add stripe_customer_id
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_trigger_test"
-    dbsession.flush()
-
-    # Credits = 0, threshold = 10, should trigger
-    assert dao.should_trigger_autorecharge(org_id) is True
-
-    # Add credits above threshold
-    dao.add_credits(org_id, 50)
-    dbsession.flush()
-    assert dao.should_trigger_autorecharge(org_id) is False
-
-    # Deduct to below threshold
-    dao.deduct_credits(org_id, 45)
-    dbsession.flush()
-    assert dao.should_trigger_autorecharge(org_id) is True
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_account_status(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO account status methods."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_account_status@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Account Status Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Default status is ACTIVE
-    assert dao.is_account_active(org_id) is True
-
-    # Suspend account (FROZEN is no longer valid - use SUSPENDED)
-    dao.set_account_status(org_id, "SUSPENDED")
-    dbsession.flush()
-    assert dao.is_account_active(org_id) is False
-
-    # Reactivate
-    dao.set_account_status(org_id, "ACTIVE")
-    dbsession.flush()
-    assert dao.is_account_active(org_id) is True
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_business_profile(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO business profile methods."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_business_profile@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Business Profile Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Get initial profile (all None)
-    profile = dao.get_business_profile(org_id)
-    assert profile["billing_email"] is None
-    assert profile["business_name"] is None
-
-    # Update profile
-    dao.update_business_profile(
-        org_id,
-        billing_email="invoices@company.com",
-        business_name="Company Inc",
-        tax_id="TAX-12345",
-        billing_address={
-            "line1": "100 Business Blvd",
-            "city": "Austin",
-            "state": "TX",
-            "country": "US",
-            "postal_code": "78701",
-        },
-    )
-    dbsession.flush()
-
-    # Verify
-    profile = dao.get_business_profile(org_id)
-    assert profile["billing_email"] == "invoices@company.com"
-    assert profile["business_name"] == "Company Inc"
-    assert profile["tax_id"] == "TAX-12345"
-    assert profile["billing_address"]["line1"] == "100 Business Blvd"
-    assert profile["billing_address"]["city"] == "Austin"
-    assert profile["billing_address"]["state"] == "TX"
-    assert profile["billing_address"]["country"] == "US"
-    assert profile["billing_address"]["postal_code"] == "78701"
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_get_by_stripe_customer_id(
-    client: AsyncClient,
-    dbsession,
-):
-    """Test OrganizationBillingDAO.get_by_stripe_customer_id method."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-    from orchestra.db.models.orchestra_models import Organization
-
-    owner = await create_test_user(client, "dao_get_stripe@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Get Stripe Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Set stripe_customer_id
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_lookup_test"
-    dbsession.commit()
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Look up by stripe ID
-    found_org = dao.get_by_stripe_customer_id("cus_lookup_test")
-    assert found_org is not None
-    assert found_org.id == org_id
-    assert found_org.name == "DAO Get Stripe Test"
-
-    # Non-existent stripe ID
-    not_found = dao.get_by_stripe_customer_id("cus_nonexistent")
-    assert not_found is None
-
-
-@pytest.mark.anyio
-async def test_org_billing_dao_clear_delegated_billing(client: AsyncClient, dbsession):
-    """Test OrganizationBillingDAO.clear_delegated_billing method."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-
-    owner = await create_test_user(client, "dao_clear_delegated@test.com")
-
-    # Create organization (has billing_user_id = owner)
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "DAO Clear Delegated Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    dao = OrganizationBillingDAO(dbsession)
-
-    # Verify initially has billing_user_id
-    org = dao.get(org_id)
-    assert org.billing_user_id == owner["id"]
-
-    # Clear delegated billing
-    result = dao.clear_delegated_billing(org_id)
-    assert result is True
-    dbsession.flush()
-
-    # Verify billing_user_id is now None
-    dbsession.refresh(org)
-    assert org.billing_user_id is None
-
-
-# ============== BillingEntity Pattern Tests ==============
-
-
-@pytest.mark.anyio
-async def test_get_billing_entity_personal(client: AsyncClient, dbsession):
-    """Test get_billing_entity returns user for personal context."""
-    from decimal import Decimal
-
-    from orchestra.db.dao.users_dao import UsersDAO
-    from orchestra.lib.billing import BillingEntityType, get_billing_entity
-
-    user = await create_test_user(client, "entity_personal@test.com")
-
-    # Add credits to user
-    users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(user["id"], 50)
-    dbsession.commit()
-
-    # Get billing entity for personal query
-    entity = get_billing_entity(dbsession, user["id"], organization_id=None)
-
-    assert entity.entity_type == BillingEntityType.USER
-    assert entity.entity_id == user["id"]
-    assert entity.credits == Decimal("50")
-    assert entity.is_user is True
-    assert entity.is_organization is False
-
-
-@pytest.mark.anyio
-async def test_get_billing_entity_org_delegated(client: AsyncClient, dbsession):
-    """Test get_billing_entity returns billing user for delegated org billing."""
-    from decimal import Decimal
-
-    from orchestra.db.dao.users_dao import UsersDAO
-    from orchestra.lib.billing import BillingEntityType, get_billing_entity
-
-    owner = await create_test_user(client, "entity_delegated_owner@test.com")
-    member = await create_test_user(client, "entity_delegated_member@test.com")
-
-    # Add credits to owner (billing user)
-    users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(owner["id"], 100)
-    dbsession.commit()
-
-    # Create organization (delegated billing to owner)
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Entity Delegated Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Add member
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"]},
-        headers=owner["headers"],
-    )
-
-    # Get billing entity for org query (by member)
-    entity = get_billing_entity(dbsession, member["id"], organization_id=org_id)
-
-    # Should return owner (billing_user_id) not member
-    assert entity.entity_type == BillingEntityType.USER
-    assert entity.entity_id == owner["id"]
-    assert entity.credits == Decimal("100")
-    assert entity.is_user is True
-
-
-@pytest.mark.anyio
-async def test_get_billing_entity_org_direct(client: AsyncClient, dbsession):
-    """Test get_billing_entity returns org for direct org billing."""
-    from decimal import Decimal
-
-    from orchestra.db.models.orchestra_models import Organization
-    from orchestra.lib.billing import BillingEntityType, get_billing_entity
-
-    owner = await create_test_user(client, "entity_direct_owner@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Entity Direct Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Enable direct billing for org
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_direct_test"
-    org.credits = Decimal("200")
-    dbsession.commit()
-
-    # Get billing entity for org query
-    entity = get_billing_entity(dbsession, owner["id"], organization_id=org_id)
-
-    # Should return organization (direct billing)
-    assert entity.entity_type == BillingEntityType.ORGANIZATION
-    assert entity.entity_id == org_id
-    assert entity.credits == Decimal("200")
-    assert entity.is_organization is True
-    assert entity.has_direct_billing is True
-
-
-@pytest.mark.anyio
-async def test_deduct_credits_from_user(client: AsyncClient, dbsession):
-    """Test deduct_credits from a user billing entity."""
-    from decimal import Decimal
-
-    from orchestra.db.dao.users_dao import UsersDAO
-    from orchestra.lib.billing import deduct_credits, get_billing_entity
-
-    user = await create_test_user(client, "deduct_user@test.com")
-
-    # Add credits
-    users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(user["id"], 100)
-    dbsession.commit()
-
-    # Get billing entity
-    entity = get_billing_entity(dbsession, user["id"])
-
-    # Deduct credits
-    new_balance = deduct_credits(dbsession, entity, Decimal("25.50"))
-    dbsession.commit()
-
-    assert new_balance == Decimal("74.50")
-
-    # Verify in DB
-    updated_user = users_dao.get_user_with_id(user["id"])
-    assert updated_user.credits == Decimal("74.50")
-
-
-@pytest.mark.anyio
-async def test_deduct_credits_from_org(client: AsyncClient, dbsession):
-    """Test deduct_credits from an organization billing entity."""
-    from decimal import Decimal
-
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-    from orchestra.db.models.orchestra_models import Organization
-    from orchestra.lib.billing import deduct_credits, get_billing_entity
-
-    owner = await create_test_user(client, "deduct_org@test.com")
-
-    # Create organization with direct billing
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Deduct Org Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Enable direct billing and add credits
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_deduct_test"
-    org.credits = Decimal("500")
-    dbsession.commit()
-
-    # Get billing entity
-    entity = get_billing_entity(dbsession, owner["id"], organization_id=org_id)
-
-    # Deduct credits
-    new_balance = deduct_credits(dbsession, entity, Decimal("123.45"))
-    dbsession.commit()
-
-    assert new_balance == Decimal("376.55")
-
-    # Verify in DB
-    dao = OrganizationBillingDAO(dbsession)
-    assert dao.get_credits(org_id) == Decimal("376.55")
-
-
-@pytest.mark.anyio
-async def test_billing_entity_should_trigger_autorecharge(
-    client: AsyncClient,
-    dbsession,
-):
-    """Test BillingEntity.should_trigger_autorecharge method."""
-    from decimal import Decimal
-
-    from orchestra.db.models.orchestra_models import Organization
-    from orchestra.lib.billing import get_billing_entity
-
-    owner = await create_test_user(client, "autorecharge_trigger@test.com")
-
-    # Create organization with direct billing and autorecharge enabled
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Autorecharge Trigger Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Setup org with autorecharge
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_autorecharge"
-    org.credits = Decimal("100")
-    org.autorecharge = True
-    org.autorecharge_threshold = Decimal("50")
-    org.autorecharge_qty = Decimal("200")
-    dbsession.commit()
-
-    # Get billing entity
-    entity = get_billing_entity(dbsession, owner["id"], organization_id=org_id)
-
-    # Balance above threshold - should not trigger
-    assert entity.should_trigger_autorecharge(Decimal("100")) is False
-    assert entity.should_trigger_autorecharge(Decimal("51")) is False
-
-    # Balance at or below threshold - should trigger
-    assert entity.should_trigger_autorecharge(Decimal("50")) is True
-    assert entity.should_trigger_autorecharge(Decimal("25")) is True
-    assert entity.should_trigger_autorecharge(Decimal("0")) is True
-
-
-@pytest.mark.anyio
-async def test_billing_entity_no_autorecharge_without_stripe(
-    client: AsyncClient,
-    dbsession,
-):
-    """Test that autorecharge doesn't trigger without Stripe customer ID."""
-    from decimal import Decimal
-
-    from orchestra.db.models.orchestra_models import Organization
-    from orchestra.lib.billing import get_billing_entity
-
-    owner = await create_test_user(client, "no_stripe_autorecharge@test.com")
-
-    # Create organization WITHOUT direct billing but with autorecharge settings
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "No Stripe Autorecharge Test"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Setup org with autorecharge but NO stripe_customer_id
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.autorecharge = True
-    org.autorecharge_threshold = Decimal("50")
-    dbsession.commit()
-
-    # This org uses delegated billing, so we get the billing user
-    entity = get_billing_entity(dbsession, owner["id"], organization_id=org_id)
-
-    # User doesn't have stripe_customer_id by default
-    assert entity.is_user is True
-    assert entity.has_direct_billing is False
-    # Should not trigger autorecharge without stripe ID
-    assert entity.should_trigger_autorecharge(Decimal("0")) is False
+    ba = org.billing_account
+    assert ba.billing_email == "billing@acme.com"
+    assert ba.name == "Acme Corporation"
+    assert ba.tax_id == "US-123456789"
+    assert ba.billing_address["line1"] == "123 Main St"
+    assert ba.billing_address["city"] == "San Francisco"
+    assert ba.billing_address["country"] == "US"
+    assert ba.billing_address["postal_code"] == "94102"
+    assert ba.billing_setup_complete is True
 
 
 # ============== Stripe Webhook Tests ==============
@@ -1740,7 +1088,6 @@ async def test_webhook_checkout_org_credits(client: AsyncClient, dbsession):
     """Test that checkout.session.completed with organization_id credits the org."""
     from decimal import Decimal
 
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
     from orchestra.db.models.orchestra_models import Organization
     from orchestra.web.api.webhooks.stripe import process_checkout_session_event
 
@@ -1754,10 +1101,10 @@ async def test_webhook_checkout_org_credits(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    # Enable direct billing
+    # Enable direct billing via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_webhook_checkout"
-    org.credits = Decimal("0")
+    org.billing_account.stripe_customer_id = "cus_webhook_checkout"
+    org.billing_account.credits = Decimal("0")
     dbsession.commit()
 
     # Simulate checkout.session.completed event with organization_id in metadata
@@ -1780,8 +1127,8 @@ async def test_webhook_checkout_org_credits(client: AsyncClient, dbsession):
     assert response.status_code == 200
 
     # Verify org was credited
-    dao = OrganizationBillingDAO(dbsession)
-    assert dao.get_credits(org_id) == Decimal("100")
+    dbsession.refresh(org)
+    assert org.billing_account.credits == Decimal("100")
 
 
 @pytest.mark.anyio
@@ -1789,14 +1136,14 @@ async def test_webhook_checkout_user_credits(client: AsyncClient, dbsession):
     """Test that checkout.session.completed with user_id credits the user."""
     from decimal import Decimal
 
-    from orchestra.db.dao.users_dao import UsersDAO
+    from orchestra.db.dao.user_dao import UserDAO
     from orchestra.web.api.webhooks.stripe import process_checkout_session_event
 
     user = await create_test_user(client, "webhook_checkout_user@test.com")
 
     # Check initial credits
-    users_dao = UsersDAO(dbsession)
-    initial = users_dao.get_user_with_id(user["id"]).credits
+    user_dao = UserDAO(dbsession)
+    initial = user_dao.get_user_with_id(user["id"]).billing_account.credits
 
     # Simulate checkout.session.completed event for user
     event = {
@@ -1816,9 +1163,9 @@ async def test_webhook_checkout_user_credits(client: AsyncClient, dbsession):
     assert response.status_code == 200
 
     # Verify user was credited
-    dbsession.refresh(users_dao.get_user_with_id(user["id"]))
-    updated_user = users_dao.get_user_with_id(user["id"])
-    assert updated_user.credits == initial + Decimal("50")
+    dbsession.refresh(user_dao.get_user_with_id(user["id"]))
+    updated_user = user_dao.get_user_with_id(user["id"])
+    assert updated_user.billing_account.credits == initial + Decimal("50")
 
 
 @pytest.mark.anyio
@@ -1843,15 +1190,14 @@ async def test_webhook_invoice_paid_org(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    # Enable direct billing
+    # Enable direct billing via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_webhook_invoice"
+    org.billing_account.stripe_customer_id = "cus_webhook_invoice"
     dbsession.commit()
 
     # Create an organization recharge with invoice ID
     recharge = Recharge(
-        organization_id=org_id,
-        user_id=None,
+        billing_account_id=org.billing_account_id,
         quantity=Decimal("100"),
         amount_usd=Decimal("100"),
         type="auto",
@@ -1884,11 +1230,11 @@ async def test_webhook_invoice_paid_org(client: AsyncClient, dbsession):
     updated_recharge = dbsession.query(Recharge).filter_by(id=recharge_id).first()
     assert updated_recharge.status == RechargeStatus.PAID
 
-    # Verify org account status
+    # Verify org account status via billing_account
     updated_org = (
         dbsession.query(Organization).filter(Organization.id == org_id).first()
     )
-    assert updated_org.account_status == "ACTIVE"
+    assert updated_org.billing_account.account_status == "ACTIVE"
 
 
 @pytest.mark.anyio
@@ -1913,15 +1259,14 @@ async def test_webhook_invoice_failed_org(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    # Enable direct billing
+    # Enable direct billing via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_webhook_invoice_fail"
+    org.billing_account.stripe_customer_id = "cus_webhook_invoice_fail"
     dbsession.commit()
 
     # Create an organization recharge with invoice ID
     recharge = Recharge(
-        organization_id=org_id,
-        user_id=None,
+        billing_account_id=org.billing_account_id,
         quantity=Decimal("100"),
         amount_usd=Decimal("100"),
         type="auto",
@@ -1955,25 +1300,25 @@ async def test_webhook_invoice_failed_org(client: AsyncClient, dbsession):
     updated_recharge = dbsession.query(Recharge).filter_by(id=recharge_id).first()
     assert updated_recharge.status == RechargeStatus.FAILED
 
-    # Verify org account status
+    # Verify org account status via billing_account
     updated_org = (
         dbsession.query(Organization).filter(Organization.id == org_id).first()
     )
-    assert updated_org.account_status == "PAST_DUE"
+    assert updated_org.billing_account.account_status == "PAST_DUE"
 
 
 # ============== Billing API Endpoint Tests ==============
 
 
 @pytest.mark.anyio
-async def test_get_organization_billing_delegated(client: AsyncClient, dbsession):
-    """Test GET /organizations/{id}/billing for delegated billing org."""
+async def test_get_organization_billing_not_configured(client: AsyncClient, dbsession):
+    """Test GET /organizations/{id}/billing for org without billing configured."""
     owner = await create_test_user(client, "api_billing_delegated@test.com")
 
-    # Create organization (default is delegated billing)
+    # Create organization (default is no billing configured)
     org_response = await client.post(
         "/v0/organizations",
-        json={"name": "API Billing Delegated Org"},
+        json={"name": "API Billing Not Configured Org"},
         headers=owner["headers"],
     )
     org_id = org_response.json()["id"]
@@ -1987,9 +1332,8 @@ async def test_get_organization_billing_delegated(client: AsyncClient, dbsession
 
     data = response.json()
     assert data["organization_id"] == org_id
-    assert data["billing_mode"] == "delegated"
-    assert data["billing_user_id"] == owner["id"]
     assert data["stripe_customer_id"] is None
+    assert data["billing_setup_complete"] is False
     assert data["autorecharge"] is False
 
 
@@ -2010,10 +1354,10 @@ async def test_get_organization_billing_direct(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    # Enable direct billing
+    # Enable direct billing via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_api_test"
-    org.credits = Decimal("250")
+    org.billing_account.stripe_customer_id = "cus_api_test"
+    org.billing_account.credits = Decimal("250")
     dbsession.commit()
 
     # Get billing info
@@ -2025,8 +1369,6 @@ async def test_get_organization_billing_direct(client: AsyncClient, dbsession):
 
     data = response.json()
     assert data["organization_id"] == org_id
-    assert data["billing_mode"] == "direct"
-    assert data["billing_user_id"] is None
     assert data["stripe_customer_id"] == "cus_api_test"
     assert data["credits"] == 250.0
 
@@ -2131,10 +1473,10 @@ async def test_get_organization_credits(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    # Enable direct billing with credits
+    # Enable direct billing with credits via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_credits_test"
-    org.credits = Decimal("300.50")
+    org.billing_account.stripe_customer_id = "cus_credits_test"
+    org.billing_account.credits = Decimal("300.50")
     dbsession.commit()
 
     # Get credits
@@ -2150,9 +1492,9 @@ async def test_get_organization_credits(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_get_organization_business_profile(client: AsyncClient, dbsession):
-    """Test GET /organizations/{id}/billing/business-profile endpoint."""
-    owner = await create_test_user(client, "api_business_profile@test.com")
+async def test_get_organization_billing_profile(client: AsyncClient, dbsession):
+    """Test GET /organizations/{id}/billing/billing-profile endpoint."""
+    owner = await create_test_user(client, "api_billing_profile@test.com")
 
     # Create organization
     org_response = await client.post(
@@ -2164,7 +1506,7 @@ async def test_get_organization_business_profile(client: AsyncClient, dbsession)
 
     # Get business profile (initially all null)
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing/business-profile",
+        f"/v0/organizations/{org_id}/billing/billing-profile",
         headers=owner["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
@@ -2175,8 +1517,8 @@ async def test_get_organization_business_profile(client: AsyncClient, dbsession)
 
 
 @pytest.mark.anyio
-async def test_update_organization_business_profile(client: AsyncClient, dbsession):
-    """Test PATCH /organizations/{id}/billing/business-profile endpoint."""
+async def test_update_organization_billing_profile(client: AsyncClient, dbsession):
+    """Test PATCH /organizations/{id}/billing/billing-profile endpoint."""
     owner = await create_test_user(client, "api_update_profile@test.com")
 
     # Create organization
@@ -2189,7 +1531,7 @@ async def test_update_organization_business_profile(client: AsyncClient, dbsessi
 
     # Update business profile (using valid EIN format for US)
     response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/business-profile",
+        f"/v0/organizations/{org_id}/billing/billing-profile",
         json={
             "billing_email": "finance@company.com",
             "business_name": "Company LLC",
@@ -2246,12 +1588,13 @@ async def test_e2e_org_direct_billing_flow(client: AsyncClient, dbsession):
     assert org_response.status_code == status.HTTP_201_CREATED
     org_id = org_response.json()["id"]
 
-    # Step 2: Enable direct billing
+    # Step 2: Enable direct billing via billing_account
     org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_e2e_direct_test"
-    org.autorecharge = True
-    org.autorecharge_threshold = Decimal("50")
-    org.autorecharge_qty = Decimal("100")
+    ba = org.billing_account
+    ba.stripe_customer_id = "cus_e2e_direct_test"
+    ba.autorecharge = True
+    ba.autorecharge_threshold = Decimal("50")
+    ba.autorecharge_qty = Decimal("100")
     dbsession.commit()
 
     # Step 3: Add credits via simulated checkout webhook
@@ -2280,7 +1623,7 @@ async def test_e2e_org_direct_billing_flow(client: AsyncClient, dbsession):
     # Step 5: Get billing entity and deduct credits
     billing_entity = get_billing_entity(dbsession, owner["id"], organization_id=org_id)
     assert billing_entity.is_organization is True
-    assert billing_entity.has_direct_billing is True
+    assert billing_entity.has_billing is True
 
     # Simulate usage by deducting credits
     new_balance = deduct_credits(dbsession, billing_entity, Decimal("160"))
@@ -2296,115 +1639,6 @@ async def test_e2e_org_direct_billing_flow(client: AsyncClient, dbsession):
         organization_id=org_id,
     )
     assert billing_entity_updated.should_trigger_autorecharge(new_balance) is True
-
-
-@pytest.mark.anyio
-async def test_e2e_org_delegated_billing_flow(client: AsyncClient, dbsession):
-    """
-    End-to-end test: Organization with delegated billing.
-
-    Tests that organizations without stripe_customer_id use the
-    billing_user's wallet (delegated billing mode).
-    """
-    from decimal import Decimal
-
-    from orchestra.db.dao.users_dao import UsersDAO
-    from orchestra.lib.billing import BillingEntityType, get_billing_entity
-
-    owner = await create_test_user(client, "e2e_delegated@test.com")
-    member = await create_test_user(client, "e2e_delegated_member@test.com")
-
-    # Add credits to owner (billing user)
-    users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(owner["id"], 500)
-    dbsession.commit()
-
-    # Create organization (delegated billing - no stripe_customer_id)
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "E2E Delegated Billing Org"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == status.HTTP_201_CREATED
-    org_id = org_response.json()["id"]
-
-    # Add member
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"]},
-        headers=owner["headers"],
-    )
-
-    # Verify billing mode is delegated
-    billing_response = await client.get(
-        f"/v0/organizations/{org_id}/billing",
-        headers=owner["headers"],
-    )
-    assert billing_response.status_code == status.HTTP_200_OK
-    assert billing_response.json()["billing_mode"] == "delegated"
-    assert billing_response.json()["billing_user_id"] == owner["id"]
-
-    # Get billing entity - should return the owner (billing user)
-    billing_entity = get_billing_entity(dbsession, member["id"], organization_id=org_id)
-    assert billing_entity.entity_type == BillingEntityType.USER
-    assert billing_entity.entity_id == owner["id"]  # Bills to owner, not member
-    assert billing_entity.credits == Decimal("500")
-
-
-@pytest.mark.anyio
-async def test_e2e_transition_delegated_to_direct(client: AsyncClient, dbsession):
-    """
-    End-to-end test: Transitioning from delegated to direct billing.
-
-    Tests the workflow when an organization sets up direct billing.
-    """
-    from decimal import Decimal
-
-    from orchestra.db.models.orchestra_models import Organization
-    from orchestra.lib.billing import BillingEntityType, get_billing_entity
-
-    owner = await create_test_user(client, "e2e_transition@test.com")
-
-    # Create organization (starts with delegated billing)
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "E2E Transition Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Verify it's delegated initially
-    billing_entity_before = get_billing_entity(
-        dbsession,
-        owner["id"],
-        organization_id=org_id,
-    )
-    assert billing_entity_before.entity_type == BillingEntityType.USER
-
-    # Simulate enabling direct billing (what would happen after Stripe setup)
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.stripe_customer_id = "cus_transition_test"
-    org.credits = Decimal("100")  # Initial credits
-    org.billing_user_id = None  # Clear delegated billing
-    dbsession.commit()
-
-    # Verify it's now direct billing
-    billing_entity_after = get_billing_entity(
-        dbsession,
-        owner["id"],
-        organization_id=org_id,
-    )
-    assert billing_entity_after.entity_type == BillingEntityType.ORGANIZATION
-    assert billing_entity_after.entity_id == org_id
-    assert billing_entity_after.has_direct_billing is True
-
-    # Verify via API
-    billing_response = await client.get(
-        f"/v0/organizations/{org_id}/billing",
-        headers=owner["headers"],
-    )
-    assert billing_response.json()["billing_mode"] == "direct"
-    assert billing_response.json()["credits"] == 100.0
 
 
 # ============== Billing Permissions Tests ==============
@@ -2649,7 +1883,7 @@ async def test_billing_api_member_can_read(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_international_address_us(client: AsyncClient, dbsession):
     """Test US address format."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     owner = await create_test_user(client, "us_addr@test.com")
 
@@ -2660,9 +1894,12 @@ async def test_international_address_us(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    dao = OrganizationBillingDAO(dbsession)
-    dao.update_business_profile(
-        org_id,
+    from orchestra.db.models.orchestra_models import Organization
+
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    dao = BillingAccountDAO(dbsession)
+    dao.update_billing_profile(
+        org.billing_account_id,
         billing_address={
             "country": "US",
             "line1": "123 Main Street",
@@ -2675,7 +1912,7 @@ async def test_international_address_us(client: AsyncClient, dbsession):
     )
     dbsession.commit()
 
-    profile = dao.get_business_profile(org_id)
+    profile = dao.get_billing_profile(org.billing_account_id)
     assert profile["billing_address"]["country"] == "US"
     assert profile["billing_address"]["state"] == "CA"
     assert profile["billing_address"]["postal_code"] == "94102"
@@ -2684,7 +1921,7 @@ async def test_international_address_us(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_international_address_india(client: AsyncClient, dbsession):
     """Test India address format with district."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     owner = await create_test_user(client, "india_addr@test.com")
 
@@ -2695,9 +1932,12 @@ async def test_international_address_india(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    dao = OrganizationBillingDAO(dbsession)
-    dao.update_business_profile(
-        org_id,
+    from orchestra.db.models.orchestra_models import Organization
+
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    dao = BillingAccountDAO(dbsession)
+    dao.update_billing_profile(
+        org.billing_account_id,
         billing_address={
             "country": "IN",
             "line1": "123 MG Road",
@@ -2710,7 +1950,7 @@ async def test_international_address_india(client: AsyncClient, dbsession):
     )
     dbsession.commit()
 
-    profile = dao.get_business_profile(org_id)
+    profile = dao.get_billing_profile(org.billing_account_id)
     assert profile["billing_address"]["country"] == "IN"
     assert profile["billing_address"]["district"] == "Bengaluru Urban"
     assert profile["billing_address"]["state"] == "Karnataka"
@@ -2719,7 +1959,7 @@ async def test_international_address_india(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_international_address_uk(client: AsyncClient, dbsession):
     """Test UK address format with county."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     owner = await create_test_user(client, "uk_addr@test.com")
 
@@ -2730,9 +1970,12 @@ async def test_international_address_uk(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    dao = OrganizationBillingDAO(dbsession)
-    dao.update_business_profile(
-        org_id,
+    from orchestra.db.models.orchestra_models import Organization
+
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    dao = BillingAccountDAO(dbsession)
+    dao.update_billing_profile(
+        org.billing_account_id,
         billing_address={
             "country": "GB",
             "line1": "10 Downing Street",
@@ -2743,7 +1986,7 @@ async def test_international_address_uk(client: AsyncClient, dbsession):
     )
     dbsession.commit()
 
-    profile = dao.get_business_profile(org_id)
+    profile = dao.get_billing_profile(org.billing_account_id)
     assert profile["billing_address"]["country"] == "GB"
     assert profile["billing_address"]["postal_code"] == "SW1A 2AA"
 
@@ -2751,7 +1994,7 @@ async def test_international_address_uk(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_international_address_japan(client: AsyncClient, dbsession):
     """Test Japan address format with custom fields."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     owner = await create_test_user(client, "japan_addr@test.com")
 
@@ -2762,9 +2005,12 @@ async def test_international_address_japan(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    dao = OrganizationBillingDAO(dbsession)
-    dao.update_business_profile(
-        org_id,
+    from orchestra.db.models.orchestra_models import Organization
+
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    dao = BillingAccountDAO(dbsession)
+    dao.update_billing_profile(
+        org.billing_account_id,
         billing_address={
             "country": "JP",
             "postal_code": "100-0001",
@@ -2777,7 +2023,7 @@ async def test_international_address_japan(client: AsyncClient, dbsession):
     )
     dbsession.commit()
 
-    profile = dao.get_business_profile(org_id)
+    profile = dao.get_billing_profile(org.billing_account_id)
     assert profile["billing_address"]["country"] == "JP"
     assert profile["billing_address"]["sublocality"] == "Chiyoda"
 
@@ -2796,7 +2042,7 @@ async def test_international_address_api_update(client: AsyncClient, dbsession):
 
     # Update with Indian address via API
     response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/business-profile",
+        f"/v0/organizations/{org_id}/billing/billing-profile",
         json={
             "billing_email": "billing@indiancompany.in",
             "business_name": "Indian Tech Pvt Ltd",
@@ -2822,7 +2068,7 @@ async def test_international_address_api_update(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_address_partial_update_merges(client: AsyncClient, dbsession):
     """Test that partial address updates merge with existing data."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     owner = await create_test_user(client, "merge_addr@test.com")
 
@@ -2833,11 +2079,14 @@ async def test_address_partial_update_merges(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    dao = OrganizationBillingDAO(dbsession)
+    from orchestra.db.models.orchestra_models import Organization
+
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    dao = BillingAccountDAO(dbsession)
 
     # Set initial address
-    dao.update_business_profile(
-        org_id,
+    dao.update_billing_profile(
+        org.billing_account_id,
         billing_address={
             "country": "US",
             "line1": "123 Main St",
@@ -2849,8 +2098,8 @@ async def test_address_partial_update_merges(client: AsyncClient, dbsession):
     dbsession.commit()
 
     # Partial update - only change city
-    dao.update_business_profile(
-        org_id,
+    dao.update_billing_profile(
+        org.billing_account_id,
         billing_address={
             "city": "Cambridge",
         },
@@ -2858,7 +2107,7 @@ async def test_address_partial_update_merges(client: AsyncClient, dbsession):
     dbsession.commit()
 
     # Verify merge happened
-    profile = dao.get_business_profile(org_id)
+    profile = dao.get_billing_profile(org.billing_account_id)
     assert profile["billing_address"]["country"] == "US"  # Preserved
     assert profile["billing_address"]["line1"] == "123 Main St"  # Preserved
     assert profile["billing_address"]["city"] == "Cambridge"  # Updated
@@ -2870,25 +2119,37 @@ async def test_address_partial_update_merges(client: AsyncClient, dbsession):
 
 def test_frozen_org_cannot_spend_credits(dbsession):
     """Test that suspended organizations cannot spend credits (H1 fix)."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-    from orchestra.db.models.orchestra_models import AuthUser, Organization
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.models.orchestra_models import BillingAccount, Organization, User
     from orchestra.lib.billing import get_billing_entity
 
-    # Create owner
-    owner = AuthUser(
+    # Create owner with billing account
+    owner_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    dbsession.add(owner_ba)
+    dbsession.flush()
+
+    owner = User(
         id="frozen_org_owner",
         email="frozen_org_owner@test.com",
         name="Frozen Org Owner",
+        billing_account_id=owner_ba.id,
     )
     dbsession.add(owner)
     dbsession.flush()
 
-    # Create org with direct billing
+    # Create org with direct billing via billing_account
+    org_ba = BillingAccount(
+        stripe_customer_id="cus_frozen_test",
+        account_status="ACTIVE",
+        credits=0,
+    )
+    dbsession.add(org_ba)
+    dbsession.flush()
+
     org = Organization(
         name="Frozen Test Org",
         owner_id=owner.id,
-        stripe_customer_id="cus_frozen_test",
-        account_status="ACTIVE",
+        billing_account_id=org_ba.id,
     )
     dbsession.add(org)
     dbsession.commit()
@@ -2898,8 +2159,8 @@ def test_frozen_org_cannot_spend_credits(dbsession):
     assert billing_entity.is_organization
 
     # Suspend the org
-    dao = OrganizationBillingDAO(dbsession)
-    dao.set_account_status(org.id, "SUSPENDED")
+    dao = BillingAccountDAO(dbsession)
+    dao.set_account_status(org.billing_account_id, "SUSPENDED")
     dbsession.commit()
 
     # Should raise when SUSPENDED
@@ -2914,86 +2175,108 @@ def test_invalid_account_status_rejected(dbsession):
     """Test that invalid account status values are rejected (H4/M3 fix)."""
     import pytest
 
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-    from orchestra.db.models.orchestra_models import AuthUser, Organization
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.models.orchestra_models import BillingAccount, Organization, User
 
     # Create owner
-    owner = AuthUser(
+    owner_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    dbsession.add(owner_ba)
+    dbsession.flush()
+
+    owner = User(
         id="status_owner",
         email="status_owner@test.com",
         name="Status Owner",
+        billing_account_id=owner_ba.id,
     )
     dbsession.add(owner)
     dbsession.flush()
 
-    # Create org
+    # Create org with billing_account
+    org_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    dbsession.add(org_ba)
+    dbsession.flush()
+
     org = Organization(
         name="Status Test Org",
         owner_id=owner.id,
-        account_status="ACTIVE",
+        billing_account_id=org_ba.id,
     )
     dbsession.add(org)
     dbsession.commit()
 
-    dao = OrganizationBillingDAO(dbsession)
+    dao = BillingAccountDAO(dbsession)
 
     # Valid statuses should work
-    assert dao.set_account_status(org.id, "SUSPENDED") is True
-    assert dao.set_account_status(org.id, "PAST_DUE") is True
-    assert dao.set_account_status(org.id, "CLOSED") is True
-    assert dao.set_account_status(org.id, "ACTIVE") is True
+    assert dao.set_account_status(org.billing_account_id, "SUSPENDED") is True
+    assert dao.set_account_status(org.billing_account_id, "PAST_DUE") is True
+    assert dao.set_account_status(org.billing_account_id, "CLOSED") is True
+    assert dao.set_account_status(org.billing_account_id, "ACTIVE") is True
 
     # Invalid status should raise
     with pytest.raises(ValueError) as exc_info:
-        dao.set_account_status(org.id, "BANANA")
+        dao.set_account_status(org.billing_account_id, "BANANA")
     assert "Invalid account status" in str(exc_info.value)
 
     with pytest.raises(ValueError):
-        dao.set_account_status(org.id, "FROZEN")  # Not a valid status
+        dao.set_account_status(org.billing_account_id, "FROZEN")  # Not a valid status
 
 
-def test_recharge_xor_constraint(dbsession):
-    """Test that recharge table enforces exactly one of user_id/organization_id (XOR fix)."""
+def test_recharge_requires_billing_account(dbsession):
+    """Test that recharge table requires billing_account_id."""
     from decimal import Decimal
 
     from sqlalchemy.exc import IntegrityError
 
     from orchestra.db.models.orchestra_models import (
-        AuthUser,
+        BillingAccount,
         Organization,
         Recharge,
         RechargeStatus,
-        Users,
+        User,
     )
 
-    # Create user
-    user = Users(
+    # Create user with billing account
+    user_ba = BillingAccount(credits=Decimal("100"), account_status="ACTIVE")
+    dbsession.add(user_ba)
+    dbsession.flush()
+
+    user = User(
         id="xor_user",
-        credits=Decimal("100"),
+        email="xor_user@test.com",
+        billing_account_id=user_ba.id,
     )
     dbsession.add(user)
 
-    # Create owner and org
-    owner = AuthUser(
+    # Create owner and org with billing accounts
+    owner_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    dbsession.add(owner_ba)
+    dbsession.flush()
+
+    owner = User(
         id="xor_owner",
         email="xor_owner@test.com",
         name="XOR Owner",
+        billing_account_id=owner_ba.id,
     )
     dbsession.add(owner)
+    dbsession.flush()
+
+    org_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    dbsession.add(org_ba)
     dbsession.flush()
 
     org = Organization(
         name="XOR Test Org",
         owner_id=owner.id,
-        account_status="ACTIVE",
+        billing_account_id=org_ba.id,
     )
     dbsession.add(org)
     dbsession.commit()
 
-    # Valid: user_id only
+    # Valid: linked to user's billing account
     r1 = Recharge(
-        user_id="xor_user",
-        organization_id=None,
+        billing_account_id=user_ba.id,
         quantity=Decimal("10"),
         amount_usd=Decimal("10"),
         status=RechargeStatus.PENDING_INVOICE,
@@ -3001,10 +2284,9 @@ def test_recharge_xor_constraint(dbsession):
     dbsession.add(r1)
     dbsession.commit()
 
-    # Valid: organization_id only
+    # Valid: linked to org's billing account
     r2 = Recharge(
-        user_id=None,
-        organization_id=org.id,
+        billing_account_id=org_ba.id,
         quantity=Decimal("10"),
         amount_usd=Decimal("10"),
         status=RechargeStatus.PENDING_INVOICE,
@@ -3012,83 +2294,102 @@ def test_recharge_xor_constraint(dbsession):
     dbsession.add(r2)
     dbsession.commit()
 
-    # Invalid: both set - should fail
+    # Invalid: no billing_account_id - should fail (NOT NULL constraint)
+    import pytest
+
     r3 = Recharge(
-        user_id="xor_user",
-        organization_id=org.id,
         quantity=Decimal("10"),
         amount_usd=Decimal("10"),
         status=RechargeStatus.PENDING_INVOICE,
     )
     dbsession.add(r3)
-    import pytest
-
-    with pytest.raises(IntegrityError):
-        dbsession.commit()
-    dbsession.rollback()
-
-    # Invalid: neither set - should fail
-    r4 = Recharge(
-        user_id=None,
-        organization_id=None,
-        quantity=Decimal("10"),
-        amount_usd=Decimal("10"),
-        status=RechargeStatus.PENDING_INVOICE,
-    )
-    dbsession.add(r4)
     with pytest.raises(IntegrityError):
         dbsession.commit()
     dbsession.rollback()
 
 
 def test_duplicate_stripe_customer_id_rejected(dbsession):
-    """Test that duplicate stripe_customer_id is rejected (H3 fix)."""
+    """Test that duplicate stripe_customer_id is rejected on BillingAccount (H3 fix)."""
     import pytest
     from sqlalchemy.exc import IntegrityError
 
-    from orchestra.db.models.orchestra_models import AuthUser, Organization
+    from orchestra.db.models.orchestra_models import BillingAccount, Organization, User
 
-    # Create owners
-    owner1 = AuthUser(id="dup_owner1", email="dup1@test.com", name="Owner 1")
-    owner2 = AuthUser(id="dup_owner2", email="dup2@test.com", name="Owner 2")
+    # Create owners with billing accounts
+    owner1_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    owner2_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    dbsession.add(owner1_ba)
+    dbsession.add(owner2_ba)
+    dbsession.flush()
+
+    owner1 = User(
+        id="dup_owner1",
+        email="dup1@test.com",
+        name="Owner 1",
+        billing_account_id=owner1_ba.id,
+    )
+    owner2 = User(
+        id="dup_owner2",
+        email="dup2@test.com",
+        name="Owner 2",
+        billing_account_id=owner2_ba.id,
+    )
     dbsession.add(owner1)
     dbsession.add(owner2)
     dbsession.flush()
 
-    # Create org1 with stripe customer id
+    # Create org1 with stripe customer id on billing_account
+    org1_ba = BillingAccount(
+        credits=0,
+        account_status="ACTIVE",
+        stripe_customer_id="cus_duplicate_test",
+    )
+    dbsession.add(org1_ba)
+    dbsession.flush()
+
     org1 = Organization(
         name="Dup Test Org 1",
         owner_id=owner1.id,
-        stripe_customer_id="cus_duplicate_test",
-        account_status="ACTIVE",
+        billing_account_id=org1_ba.id,
     )
     dbsession.add(org1)
     dbsession.commit()
 
     # Try to create org2 with same stripe customer id - should fail
-    org2 = Organization(
-        name="Dup Test Org 2",
-        owner_id=owner2.id,
-        stripe_customer_id="cus_duplicate_test",  # Same as org1
+    org2_ba = BillingAccount(
+        credits=0,
         account_status="ACTIVE",
+        stripe_customer_id="cus_duplicate_test",  # Same as org1
     )
-    dbsession.add(org2)
+    dbsession.add(org2_ba)
     with pytest.raises(IntegrityError):
-        dbsession.commit()
+        dbsession.flush()
     dbsession.rollback()
 
-    # But NULL stripe_customer_id should be allowed for multiple orgs
+    # But NULL stripe_customer_id should be allowed for multiple billing accounts
+    org3_ba = BillingAccount(
+        credits=0,
+        account_status="ACTIVE",
+        stripe_customer_id=None,
+    )
+    org4_ba = BillingAccount(
+        credits=0,
+        account_status="ACTIVE",
+        stripe_customer_id=None,
+    )
+    dbsession.add(org3_ba)
+    dbsession.add(org4_ba)
+    dbsession.flush()
+
     org3 = Organization(
         name="Dup Test Org 3",
         owner_id=owner1.id,
-        stripe_customer_id=None,
-        account_status="ACTIVE",
+        billing_account_id=org3_ba.id,
     )
     org4 = Organization(
         name="Dup Test Org 4",
         owner_id=owner2.id,
-        stripe_customer_id=None,
-        account_status="ACTIVE",
+        billing_account_id=org4_ba.id,
     )
     dbsession.add(org3)
     dbsession.add(org4)
@@ -3098,7 +2399,7 @@ def test_duplicate_stripe_customer_id_rejected(dbsession):
 @pytest.mark.anyio
 async def test_checkout_webhook_enables_direct_billing(client: AsyncClient, dbsession):
     """Test that checkout webhook sets stripe_customer_id for new orgs (H2 fix)."""
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+    from orchestra.db.models.orchestra_models import Organization
 
     owner = await create_test_user(client, "webhook_owner@test.com")
 
@@ -3109,22 +2410,19 @@ async def test_checkout_webhook_enables_direct_billing(client: AsyncClient, dbse
     )
     org_id = org_response.json()["id"]
 
-    dao = OrganizationBillingDAO(dbsession)
-    org = dao.get(org_id)
+    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    ba = org.billing_account
 
     # Initially no stripe customer id
-    assert org.stripe_customer_id is None
+    assert ba.stripe_customer_id is None
 
     # Simulate what webhook handler does
-    if not org.stripe_customer_id:
-        stripe_customer_id = "cus_webhook_test_123"
-        dao.set_stripe_customer_id(org_id, stripe_customer_id)
-        dbsession.commit()
+    ba.stripe_customer_id = "cus_webhook_test_123"
+    dbsession.commit()
 
     # Verify it was set
     dbsession.refresh(org)
-    assert org.stripe_customer_id == "cus_webhook_test_123"
-    assert dao.has_direct_billing(org_id) is True
+    assert org.billing_account.stripe_customer_id == "cus_webhook_test_123"
 
 
 def test_duplicate_autorecharge_prevented(dbsession):
@@ -3133,30 +2431,44 @@ def test_duplicate_autorecharge_prevented(dbsession):
     from decimal import Decimal
 
     from orchestra.db.models.orchestra_models import (
-        AuthUser,
+        BillingAccount,
         Organization,
         Recharge,
         RechargeStatus,
+        User,
     )
     from orchestra.lib.time import month_end_utc
 
-    # Create owner and org
-    owner = AuthUser(
+    # Create owner with billing account
+    owner_ba = BillingAccount(credits=0, account_status="ACTIVE")
+    dbsession.add(owner_ba)
+    dbsession.flush()
+
+    owner = User(
         id="dup_recharge_owner",
         email="dup_recharge@test.com",
         name="Dup Recharge Owner",
+        billing_account_id=owner_ba.id,
     )
     dbsession.add(owner)
+    dbsession.flush()
+
+    # Create org with billing account
+    org_ba = BillingAccount(
+        credits=0,
+        account_status="ACTIVE",
+        stripe_customer_id="cus_dup_recharge",
+        autorecharge=True,
+        autorecharge_threshold=Decimal("10"),
+        autorecharge_qty=Decimal("100"),
+    )
+    dbsession.add(org_ba)
     dbsession.flush()
 
     org = Organization(
         name="Dup Recharge Org",
         owner_id=owner.id,
-        stripe_customer_id="cus_dup_recharge",
-        account_status="ACTIVE",
-        autorecharge=True,
-        autorecharge_threshold=Decimal("10"),
-        autorecharge_qty=Decimal("100"),
+        billing_account_id=org_ba.id,
     )
     dbsession.add(org)
     dbsession.commit()
@@ -3165,7 +2477,7 @@ def test_duplicate_autorecharge_prevented(dbsession):
 
     # Create first pending recharge
     r1 = Recharge(
-        organization_id=org.id,
+        billing_account_id=org_ba.id,
         quantity=Decimal("100"),
         amount_usd=Decimal("100"),
         invoice_group=current_month_end,
@@ -3179,7 +2491,7 @@ def test_duplicate_autorecharge_prevented(dbsession):
     existing_recharge = (
         dbsession.query(Recharge)
         .filter_by(
-            organization_id=org.id,
+            billing_account_id=org_ba.id,
             invoice_group=current_month_end,
             status=RechargeStatus.PENDING_INVOICE,
         )

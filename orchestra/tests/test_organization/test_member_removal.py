@@ -206,7 +206,6 @@ async def test_member_removal_deletes_unshared_project(client: AsyncClient, dbse
     member = await create_test_user(
         client,
         "unshared_proj_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -280,12 +279,10 @@ async def test_member_removal_deletes_unshared_assistant(
     owner = await create_test_user(
         client,
         "unshared_asst_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "unshared_asst_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -638,12 +635,10 @@ async def test_member_removal_handles_multiple_unshared_resources(
     owner = await create_test_user(
         client,
         "multi_unshared_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "multi_unshared_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -765,12 +760,10 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     owner = await create_test_user(
         client,
         "log_cleanup_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "log_cleanup_member@test.com",
-        hiring_approved=True,
     )
     user_name = "TestUser"
 
@@ -923,17 +916,14 @@ async def test_member_removal_preserves_other_assistant_logs(
     owner = await create_test_user(
         client,
         "preserve_owner@test.com",
-        hiring_approved=True,
     )
     member_a = await create_test_user(
         client,
         "preserve_member_a@test.com",
-        hiring_approved=True,
     )
     member_b = await create_test_user(
         client,
         "preserve_member_b@test.com",
-        hiring_approved=True,
     )
     user_name = "PreserveUser"
 
@@ -1145,12 +1135,10 @@ async def test_member_removal_sets_contact_is_system_false(
     owner = await create_test_user(
         client,
         "contact_update_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "contact_update_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization

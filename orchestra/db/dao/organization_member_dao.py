@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    AuthUser,
     Organization,
     OrganizationMember,
+    User,
 )
 
 
@@ -98,11 +98,11 @@ class OrganizationMemberDAO:
 
         query = (
             select(
-                AuthUser.email,
+                User.email,
                 OrganizationMember.role_id,
                 Role.name.label("role_name"),
             )
-            .join(OrganizationMember, OrganizationMember.user_id == AuthUser.id)
+            .join(OrganizationMember, OrganizationMember.user_id == User.id)
             .join(Organization, OrganizationMember.organization_id == Organization.id)
             .join(Role, OrganizationMember.role_id == Role.id)
             .where(Organization.name == name)

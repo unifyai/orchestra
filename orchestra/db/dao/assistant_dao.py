@@ -509,9 +509,9 @@ class AssistantDAO:
         :raises ValueError: If assistant limit exceeds parent limit.
         :raises HTTPException: If assistant not found.
         """
-        from orchestra.db.dao.auth_user_dao import AuthUserDAO
         from orchestra.db.dao.organization_dao import OrganizationDAO
         from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+        from orchestra.db.dao.user_dao import UserDAO
 
         assistant = self.get_assistant_by_agent_id(agent_id)
         if not assistant:
@@ -571,8 +571,8 @@ class AssistantDAO:
                         )
         else:
             # Personal assistant - validate against user's personal limit
-            auth_user_dao = AuthUserDAO(self.session)
-            user_row = auth_user_dao.get_by_id(user_id)
+            user_dao = UserDAO(self.session)
+            user_row = user_dao.get_by_id(user_id)
             if user_row:
                 user = user_row[0]
                 parent_limit = (
