@@ -152,6 +152,26 @@ def process_checkout_session_event(
 
         credits = amount_total / 100  # 1 credit = $1, amount in cents
 
+        # Update payment_intent metadata with the actual credits purchased.
+        # The session was created with a default quantity, but the user may
+        # have adjusted it via Stripe's quantity picker.
+        payment_intent_id = data.get("payment_intent")
+        if payment_intent_id:
+            try:
+                stripe.PaymentIntent.modify(
+                    payment_intent_id,
+                    metadata={"credits_purchased": str(credits)},
+                )
+            except Exception as e:
+                logger.warning(
+                    {
+                        "message": "Failed to update credits_purchased on PaymentIntent (non-fatal)",
+                        "payment_intent_id": payment_intent_id,
+                        "credits": credits,
+                        "error": str(e),
+                    },
+                )
+
         try:
             # Handle organization checkout (direct org billing)
             if organization_id:
