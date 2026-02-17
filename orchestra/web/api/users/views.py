@@ -1385,7 +1385,10 @@ async def create_user_checkout_session(
 
             customer_params = {
                 "email": user.email,
-                "metadata": {"user_id": user_id},
+                "metadata": {
+                    "user_id": user_id,
+                    "billing_account_id": str(ba.id),
+                },
             }
 
             # Include profile name — users are always individuals
@@ -1434,6 +1437,15 @@ async def create_user_checkout_session(
                 },
             )
 
+        # Resolve the pre-configured Price ID (personal context for this endpoint)
+        price_id = settings.stripe_unify_credits_price_id_personal
+        if not price_id:
+            logger.error("STRIPE_UNIFY_CREDITS_PRICE_ID_PERSONAL not configured")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Payment system not fully configured",
+            )
+
         # Build checkout session parameters
         checkout_params = {
             "mode": "payment",
@@ -1442,14 +1454,7 @@ async def create_user_checkout_session(
             "client_reference_id": user_id,
             "line_items": [
                 {
-                    "price_data": {
-                        "currency": "usd",
-                        "unit_amount": 100,  # $1 = 100 cents = 1 credit
-                        "product_data": {
-                            "name": "Unify Credits",
-                            "description": "Credits for your personal workspace",
-                        },
-                    },
+                    "price": price_id,
                     "quantity": checkout_request.amount,
                 },
             ],

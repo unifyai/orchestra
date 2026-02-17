@@ -45,6 +45,68 @@ router = APIRouter()
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _is_test_mode() -> bool:
+    """Return True when Orchestra is configured with a Stripe **test** key.
+
+    In staging the ``STRIPE_SECRET_KEY`` env var is bound to the ``_TEST``
+    secret (``sk_test_…``).  When this is the case, incoming webhook events
+    carry test-mode customer IDs that must **not** be persisted to the
+    production ``BillingAccount.stripe_customer_id`` column — they would
+    overwrite the real live-mode customer reference.
+
+    The console's ``resolveTestCustomer`` helper handles the reverse
+    direction: it resolves a test-mode customer at runtime so that staging
+    checkouts work without touching the database.
+    """
+    key = settings.stripe_secret_key or ""
+    return key.startswith("sk_test_")
+
+
+def _sync_billing_account_metadata(
+    stripe_customer_id: str,
+    billing_account_id: int,
+    *,
+    user_id: str | None = None,
+    organization_id: str | int | None = None,
+) -> None:
+    """Best-effort update of Stripe customer metadata with billing_account_id.
+
+    Also ensures user_id / organization_id are present in metadata for
+    cross-reference.  Failures are logged but never bubble up — we don't
+    want a Stripe API hiccup to break credit granting.
+    """
+    try:
+        metadata: dict[str, str] = {
+            "billing_account_id": str(billing_account_id),
+        }
+        if user_id:
+            metadata["user_id"] = user_id
+        if organization_id:
+            metadata["organization_id"] = str(organization_id)
+
+        stripe.Customer.modify(stripe_customer_id, metadata=metadata)
+        logger.info(
+            {
+                "message": "Stripe customer metadata updated with billing_account_id",
+                "stripe_customer_id": stripe_customer_id,
+                "billing_account_id": billing_account_id,
+            },
+        )
+    except Exception as e:
+        logger.warning(
+            {
+                "message": "Failed to update Stripe customer metadata (non-fatal)",
+                "stripe_customer_id": stripe_customer_id,
+                "error": str(e),
+            },
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────
 def process_checkout_session_event(
     event: Dict,
     session: Session,
@@ -116,16 +178,34 @@ def process_checkout_session_event(
                     org.billing_account_id = ba.id
                     session.flush()
 
-                # Enable direct billing if this is the org's first checkout
+                # Enable direct billing if this is the org's first checkout.
+                # In test mode (staging), we never persist the customer ID —
+                # the console resolves test customers at runtime instead.
                 stripe_customer_id = data.get("customer")
                 if stripe_customer_id and not ba.stripe_customer_id:
-                    ba.stripe_customer_id = stripe_customer_id
-                    logger.info(
-                        {
-                            "message": "Organization direct billing enabled",
-                            "organization_id": organization_id,
-                            "stripe_customer_id": stripe_customer_id,
-                        },
+                    if _is_test_mode():
+                        logger.info(
+                            {
+                                "message": "Test-mode checkout — skipping stripe_customer_id persistence for org",
+                                "organization_id": organization_id,
+                                "stripe_customer_id": stripe_customer_id,
+                            },
+                        )
+                    else:
+                        ba.stripe_customer_id = stripe_customer_id
+                        logger.info(
+                            {
+                                "message": "Organization direct billing enabled",
+                                "organization_id": organization_id,
+                                "stripe_customer_id": stripe_customer_id,
+                            },
+                        )
+                    # Tag the Stripe customer with the billing_account_id
+                    # (useful in both test and live modes for cross-referencing)
+                    _sync_billing_account_metadata(
+                        stripe_customer_id,
+                        ba.id,
+                        organization_id=organization_id,
                     )
 
                 ba_dao.add_credits(ba.id, credits)
@@ -161,16 +241,34 @@ def process_checkout_session_event(
                     user.billing_account_id = ba.id
                     session.flush()
 
-                # Save Stripe customer ID if this is the user's first checkout
+                # Save Stripe customer ID if this is the user's first checkout.
+                # In test mode (staging), we never persist the customer ID —
+                # the console resolves test customers at runtime instead.
                 stripe_customer_id = data.get("customer")
                 if stripe_customer_id and not ba.stripe_customer_id:
-                    ba.stripe_customer_id = stripe_customer_id
-                    logger.info(
-                        {
-                            "message": "User Stripe customer ID saved",
-                            "user_id": user_id,
-                            "stripe_customer_id": stripe_customer_id,
-                        },
+                    if _is_test_mode():
+                        logger.info(
+                            {
+                                "message": "Test-mode checkout — skipping stripe_customer_id persistence for user",
+                                "user_id": user_id,
+                                "stripe_customer_id": stripe_customer_id,
+                            },
+                        )
+                    else:
+                        ba.stripe_customer_id = stripe_customer_id
+                        logger.info(
+                            {
+                                "message": "User Stripe customer ID saved",
+                                "user_id": user_id,
+                                "stripe_customer_id": stripe_customer_id,
+                            },
+                        )
+                    # Tag the Stripe customer with the billing_account_id
+                    # (useful in both test and live modes for cross-referencing)
+                    _sync_billing_account_metadata(
+                        stripe_customer_id,
+                        ba.id,
+                        user_id=user_id,
                     )
 
                 ba_dao.add_credits(ba.id, credits)
