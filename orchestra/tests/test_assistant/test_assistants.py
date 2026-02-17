@@ -22,7 +22,7 @@ async def approve_default_user(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     # Approve the user
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
@@ -66,7 +66,6 @@ async def test_create_assistant_unapproved_user_fails(client: AsyncClient):
     unapproved_user = await create_test_user(
         client,
         "unapproved@example.com",
-        hiring_approved=False,
     )
     payload = {
         "first_name": "Should",
@@ -942,7 +941,7 @@ async def test_admin_list_assistants_filter_agent_id(client: AsyncClient):
 async def test_admin_list_assistants_for_user(client: AsyncClient):
     # Create a second test user via create_test_user
     # (default HEADERS user will serve as user1)
-    user2 = await create_test_user(client, "u2@test.com", hiring_approved=True)
+    user2 = await create_test_user(client, "u2@test.com")
 
     # Determine default user ID for HEADERS (user1)
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
@@ -1106,16 +1105,18 @@ async def test_create_assistant_duplicate_name_fails(
     user2 = await create_test_user(
         client,
         "user2-for-duplicate-test@example.com",
-        hiring_approved=True,
     )
     user2_headers = user2["headers"]
 
     # Add credits to user2 so they can create an assistant
-    from orchestra.db.dao.users_dao import UsersDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.dao.user_dao import UserDAO
     from orchestra.settings import settings
 
-    users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(user2["id"], settings.assistant_creation_cost)
+    user_dao = UserDAO(dbsession)
+    ba_dao = BillingAccountDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user2["id"])
+    ba_dao.add_credits(user_obj.billing_account_id, settings.assistant_creation_cost)
     dbsession.commit()
 
     resp3 = await client.post("/v0/assistant", json=payload, headers=user2_headers)

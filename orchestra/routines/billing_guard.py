@@ -1,4 +1,4 @@
-"""Suspend users that remain PAST_DUE and have no credits left.
+"""Suspend billing accounts that remain PAST_DUE and have no credits left.
 
 Runs once per day via scheduled job.
 """
@@ -10,58 +10,59 @@ from typing import Optional
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestra.db.models.orchestra_models import Users as User
+from orchestra.db.models.orchestra_models import BillingAccount
 from orchestra.web.api.utils.prometheus_middleware import BILLING_SUSPENDED_TOTAL
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
 
 
-def suspend_past_due_users(session: Optional[Session] = None) -> None:
-    """PUT any 'PAST_DUE & empty-wallet' accounts into SUSPENDED."""
+def suspend_past_due_accounts(session: Optional[Session] = None) -> None:
+    """PUT any 'PAST_DUE & empty-wallet' billing accounts into SUSPENDED."""
     if session is not None:
-        # Use provided session
-        _suspend_users_in_session(session)
+        _suspend_accounts_in_session(session)
     else:
-        # Create own session (for backward compatibility)
         SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
         with SessionLocal() as session:
-            _suspend_users_in_session(session)
+            _suspend_accounts_in_session(session)
 
 
-def _suspend_users_in_session(session: Session) -> None:
-    """Internal function to suspend users within a given session."""
+def _suspend_accounts_in_session(session: Session) -> None:
+    """Internal function to suspend billing accounts within a given session."""
     try:
-        # First, get the users that will be suspended
-        users_to_suspend = (
-            session.query(User)
+        # Get the billing accounts that will be suspended
+        accounts_to_suspend = (
+            session.query(BillingAccount)
             .filter(
-                User.billing_state == "PAST_DUE",
-                User.credits <= 0,
+                BillingAccount.account_status == "PAST_DUE",
+                BillingAccount.credits <= 0,
             )
             .all()
         )
 
-        # Update their billing state
+        # Update their status
         count = (
-            session.query(User)
+            session.query(BillingAccount)
             .filter(
-                User.billing_state == "PAST_DUE",
-                User.credits <= 0,
+                BillingAccount.account_status == "PAST_DUE",
+                BillingAccount.credits <= 0,
             )
             .update(
-                {"billing_state": "SUSPENDED"},
+                {"account_status": "SUSPENDED"},
                 synchronize_session=False,
             )
         )
         session.commit()
 
-        # Increment metrics for each suspended user
-        for user in users_to_suspend:
-            BILLING_SUSPENDED_TOTAL.labels(user_id=user.id).inc()
+        # Increment metrics for each suspended account
+        for ba in accounts_to_suspend:
+            BILLING_SUSPENDED_TOTAL.labels(billing_account_id=str(ba.id)).inc()
 
     except Exception:  # noqa: BLE001  (propagate)
         session.rollback()
         raise
 
-    logger.info("Billing-guard: suspended %s user(s) for non-payment", count)
+    logger.info(
+        "Billing-guard: suspended %s billing account(s) for non-payment",
+        count,
+    )

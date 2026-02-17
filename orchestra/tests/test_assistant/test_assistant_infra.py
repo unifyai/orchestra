@@ -24,7 +24,7 @@ async def approve_default_user(client: AsyncClient):
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
     user_id = credits_resp.json()["id"]
 
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
@@ -603,7 +603,6 @@ async def _create_org_with_approved_owner(client: AsyncClient):
     owner = await create_test_user(
         client,
         f"org_infra_owner_{id(client)}@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
