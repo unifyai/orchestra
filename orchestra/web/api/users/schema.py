@@ -109,6 +109,7 @@ class CreditGrantLinkResponse(BaseModel):
     expires_at: datetime
     claimed_at: Optional[datetime] = None
     user_id: Optional[str] = None
+    claimed_by_email: Optional[str] = None
     credit_amount: float  # Amount of credits granted when claimed
 
 
