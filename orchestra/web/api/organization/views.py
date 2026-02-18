@@ -2458,6 +2458,7 @@ async def ensure_organization_stripe_customer(
             "metadata": {
                 "organization_id": str(organization_id),
                 "organization_name": org.name,
+                "billing_account_id": str(ba.id),
             },
         }
 
