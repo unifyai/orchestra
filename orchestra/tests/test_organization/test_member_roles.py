@@ -1,4 +1,5 @@
 """Tests for Phase 4: Member Role Management."""
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient

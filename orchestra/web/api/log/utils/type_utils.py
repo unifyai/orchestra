@@ -767,9 +767,9 @@ def types_match(field_type: Any, inferred_type: str) -> bool:
     class TypeConstraint:
         kind: str  # any, none, enum, primitive, list, set, dict, tuple
         name: Optional[str] = None
-        elements: Optional[
-            List["TypeConstraint"]
-        ] = None  # for list/set allowed element unions
+        elements: Optional[List["TypeConstraint"]] = (
+            None  # for list/set allowed element unions
+        )
         key: Optional["TypeConstraint"] = None  # for dict
         value: Optional["TypeConstraint"] = None  # for dict
         variadic: bool = False  # for tuple
@@ -1085,6 +1085,7 @@ def _collect_types_from_iterable(it: Iterable, *, media_detector=None) -> _List[
 def _unique_normalized(types: _List[str]) -> _List[str]:
     """Return a stable, deterministic list of unique normalized types."""
     normalized = [normalize_type_string(t) for t in types]
+
     # stable order: primitives first, then specials, then containers lexicographically
     def _key(t: str):
         base, inner = parse_nested_type(t)

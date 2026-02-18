@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
 # =============================================================================
 # Input Schemas
 # =============================================================================
@@ -36,7 +35,7 @@ class ColumnConfig(BaseModel):
         """Ensure visible and hidden are mutually exclusive."""
         if self.visible is not None and self.hidden is not None:
             raise ValueError(
-                "Cannot specify both 'visible' and 'hidden' - use one or the other"
+                "Cannot specify both 'visible' and 'hidden' - use one or the other",
             )
         return self
 
@@ -172,7 +171,8 @@ class TableViewMetadata(BaseModel):
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the table view was created")
     updated_at: Optional[datetime] = Field(
-        None, description="When the table view was last updated"
+        None,
+        description="When the table view was last updated",
     )
     created_by: str = Field(..., description="User ID of the creator")
 
@@ -195,7 +195,8 @@ class TableViewResponse(BaseModel):
     table_config: Dict[str, Any] = Field(..., description="Table configuration")
     project_config: Dict[str, Any] = Field(..., description="Project configuration")
     table_view_metadata: TableViewMetadata = Field(
-        ..., description="Table view metadata"
+        ...,
+        description="Table view metadata",
     )
     user_metadata: UserMetadata = Field(..., description="User/org context")
 
@@ -208,7 +209,8 @@ class TableViewListItem(BaseModel):
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the table view was created")
     updated_at: Optional[datetime] = Field(
-        None, description="When the table view was last updated"
+        None,
+        description="When the table view was last updated",
     )
     created_by: str = Field(..., description="User ID of the creator")
     url: str = Field(..., description="Shareable URL to view the table")

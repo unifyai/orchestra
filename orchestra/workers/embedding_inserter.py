@@ -517,9 +517,9 @@ def process_ready_embeddings(
         "stale_reset": stale_reset,
         "chunk_size_used": chunk_size,
         "duration_seconds": duration,
-        "throughput_per_second": round(total_inserted / duration, 1)
-        if duration > 0
-        else 0,
+        "throughput_per_second": (
+            round(total_inserted / duration, 1) if duration > 0 else 0
+        ),
     }
 
     # Only fetch metrics if explicitly requested (saves ~50ms per invocation)

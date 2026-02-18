@@ -395,12 +395,14 @@ class ProjectDAO:
                     ResourceAccess.grantee_type == "user",
                     ResourceAccess.grantee_id == user_id,
                 ),
-                and_(
-                    ResourceAccess.grantee_type == "team",
-                    ResourceAccess.grantee_id.in_(team_id_strs),
-                )
-                if team_id_strs
-                else False,
+                (
+                    and_(
+                        ResourceAccess.grantee_type == "team",
+                        ResourceAccess.grantee_id.in_(team_id_strs),
+                    )
+                    if team_id_strs
+                    else False
+                ),
             ),
         )
         explicit_project_ids = [row[0] for row in explicit_access_query.all()]
@@ -412,9 +414,11 @@ class ProjectDAO:
                     Project.organization_id.is_(None),  # Personal projects only
                     or_(
                         Project.user_id == user_id,  # Owned by user
-                        Project.id.in_(explicit_project_ids)
-                        if explicit_project_ids
-                        else False,  # Explicitly granted
+                        (
+                            Project.id.in_(explicit_project_ids)
+                            if explicit_project_ids
+                            else False
+                        ),  # Explicitly granted
                     ),
                 ),
             )
@@ -424,9 +428,11 @@ class ProjectDAO:
             query = select(Project).where(
                 and_(
                     Project.organization_id == organization_id,
-                    Project.id.in_(explicit_project_ids)
-                    if explicit_project_ids
-                    else False,
+                    (
+                        Project.id.in_(explicit_project_ids)
+                        if explicit_project_ids
+                        else False
+                    ),
                 ),
             )
 
@@ -504,12 +510,14 @@ class ProjectDAO:
                     ResourceAccess.grantee_type == "user",
                     ResourceAccess.grantee_id == user_id,
                 ),
-                and_(
-                    ResourceAccess.grantee_type == "team",
-                    ResourceAccess.grantee_id.in_(team_id_strs),
-                )
-                if team_id_strs
-                else False,
+                (
+                    and_(
+                        ResourceAccess.grantee_type == "team",
+                        ResourceAccess.grantee_id.in_(team_id_strs),
+                    )
+                    if team_id_strs
+                    else False
+                ),
             ),
         )
         explicit_project_ids = [row[0] for row in explicit_access_query.all()]
@@ -520,12 +528,14 @@ class ProjectDAO:
                 Project.name == name,
                 or_(
                     Project.user_id == user_id,  # Personal ownership
-                    Project.organization_id.in_(org_ids)
-                    if org_ids
-                    else False,  # Org membership
-                    Project.id.in_(explicit_project_ids)
-                    if explicit_project_ids
-                    else False,  # Explicit grant
+                    (
+                        Project.organization_id.in_(org_ids) if org_ids else False
+                    ),  # Org membership
+                    (
+                        Project.id.in_(explicit_project_ids)
+                        if explicit_project_ids
+                        else False
+                    ),  # Explicit grant
                 ),
             ),
         )

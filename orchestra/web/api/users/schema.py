@@ -209,6 +209,7 @@ class UserSpendResponse(BaseModel):
 # Onboarding Status Schemas
 # ============================================================================
 
+
 # Business address used for billing/onboarding.
 # Field names match Stripe address format and BillingAccount.billing_address JSONB keys.
 class BusinessAddress(BaseModel):

@@ -51,6 +51,7 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 SERVER_URL = os.environ.get("ORCHESTRA_TEST_SERVER_URL", "http://localhost:8000")
 
+
 # Check if Stripe CLI is available
 def _check_stripe_cli() -> bool:
     try:
@@ -65,6 +66,7 @@ def _check_stripe_cli() -> bool:
 
 
 STRIPE_CLI_AVAILABLE = _check_stripe_cli()
+
 
 # Check if server is running
 def _check_server_running() -> bool:

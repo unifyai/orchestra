@@ -5,6 +5,7 @@ Revises: remove_param_field_category
 Create Date: 2026-01-14 12:00:00.000000
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 

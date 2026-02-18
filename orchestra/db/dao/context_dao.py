@@ -827,9 +827,9 @@ class ContextDAO:
             ref_context = self.filter(project_id=project_id, name=ref_context_name)
             if not ref_context:
                 # Referenced context doesn't exist - mark all logs using this FK as failed
-                valid_fk_values[
-                    (ref_context_name, ref_column, fk_path, is_nested)
-                ] = set()
+                valid_fk_values[(ref_context_name, ref_column, fk_path, is_nested)] = (
+                    set()
+                )
                 continue
 
             ref_context_id = ref_context[0][0].id
@@ -873,9 +873,9 @@ class ContextDAO:
                     # If conversion fails, skip this value
                     pass
 
-            valid_fk_values[
-                (ref_context_name, ref_column, fk_path, is_nested)
-            ] = valid_values
+            valid_fk_values[(ref_context_name, ref_column, fk_path, is_nested)] = (
+                valid_values
+            )
 
         # Step 3: Check each log's FK values against valid sets
         failed_validations = {}
@@ -942,9 +942,9 @@ class ContextDAO:
                 # Check if this FK was validated
                 if key not in valid_fk_values:
                     # Referenced context doesn't exist
-                    failed_validations[
-                        idx
-                    ] = f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist"
+                    failed_validations[idx] = (
+                        f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist"
+                    )
                     break  # Stop checking this log's other FKs
 
                 # Check if all values are in valid set

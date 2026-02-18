@@ -1169,6 +1169,7 @@ async def test_pydantic_schema_future_value_validation():
 @pytest.mark.anyio
 async def test_arbitrary_pydantic_nesting_depth():
     """Test that arbitrarily deep nesting is handled correctly."""
+
     # Create a deeply nested Pydantic model
     class Level3(BaseModel):
         value: str

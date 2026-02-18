@@ -3646,7 +3646,7 @@ async def test_capitalize_behavior(
         ("\t\nhello\r\n", "hello"),
         # Test Unicode whitespace characters
         ("\u2000hello\u2001", "hello"),  # En quad and em quad spaces
-        ("\u200Ahello\u3000", "hello"),  # Hair space and ideographic space
+        ("\u200ahello\u3000", "hello"),  # Hair space and ideographic space
         ("\u2028hello\u2029", "hello"),  # Line and paragraph separators
         # Test non-whitespace preservation
         ("  hello world  ", "hello world"),

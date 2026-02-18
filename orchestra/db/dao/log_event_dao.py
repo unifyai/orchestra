@@ -374,9 +374,11 @@ class LogEventDAO:
 
         for key, value in filters.items():
             query = query.where(
-                LogEvent.data[key].astext == str(value)
-                if isinstance(value, str)
-                else LogEvent.data[key] == cast(literal(value), JSONB),
+                (
+                    LogEvent.data[key].astext == str(value)
+                    if isinstance(value, str)
+                    else LogEvent.data[key] == cast(literal(value), JSONB)
+                ),
             )
         result = self.session.execute(query)
         return [row[0] for row in result]
@@ -944,7 +946,7 @@ class LogEventDAO:
         field_type_map: Dict[tuple, FieldType] = {}
         if enum_field_info:
             or_conditions = []
-            for (proj_id, ctx_id, fld_name) in enum_field_info.keys():
+            for proj_id, ctx_id, fld_name in enum_field_info.keys():
                 if ctx_id is None:
                     or_conditions.append(
                         and_(
@@ -985,17 +987,17 @@ class LogEventDAO:
                 new_values = [v for v in values_in_batch if v not in existing_values]
 
                 if new_values and ft.enum_restrict:
-                    restricted_enum_errors[
-                        field_key
-                    ] = f"Value '{new_values[0]}' is not in allowed enum values for field '{field_name}': {existing_values}"
+                    restricted_enum_errors[field_key] = (
+                        f"Value '{new_values[0]}' is not in allowed enum values for field '{field_name}': {existing_values}"
+                    )
                 elif new_values:
                     fields_to_expand[field_key] = new_values
             else:
                 for v in values_in_batch:
                     if enum_values and v not in enum_values and enum_restrict:
-                        restricted_enum_errors[
-                            field_key
-                        ] = f"Value '{v}' is not in allowed enum values for field '{field_name}': {enum_values}"
+                        restricted_enum_errors[field_key] = (
+                            f"Value '{v}' is not in allowed enum values for field '{field_name}': {enum_values}"
+                        )
                         break
                 else:
                     fields_to_create.append(

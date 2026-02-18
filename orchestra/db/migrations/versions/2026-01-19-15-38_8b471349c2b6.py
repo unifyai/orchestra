@@ -9,6 +9,7 @@ This migration:
 2. Adds updated_at column to plot table
 3. Adds JSONB indexes on project_config->>'context' for both tables
 """
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
@@ -33,19 +34,31 @@ def upgrade() -> None:
         sa.Column("organization_id", sa.Integer(), nullable=True),
         sa.Column("title", sa.String(), nullable=True),
         sa.Column(
-            "table_config", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+            "table_config",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
         ),
         sa.Column(
-            "project_config", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+            "project_config",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
         ),
         sa.Column(
-            "created_at", sa.TIMESTAMP(), server_default=sa.text("now()"), nullable=True
+            "created_at",
+            sa.TIMESTAMP(),
+            server_default=sa.text("now()"),
+            nullable=True,
         ),
         sa.Column(
-            "updated_at", sa.TIMESTAMP(), server_default=sa.text("now()"), nullable=True
+            "updated_at",
+            sa.TIMESTAMP(),
+            server_default=sa.text("now()"),
+            nullable=True,
         ),
         sa.ForeignKeyConstraint(
-            ["organization_id"], ["organization.id"], ondelete="CASCADE"
+            ["organization_id"],
+            ["organization.id"],
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(["project_id"], ["project.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["auth_user.id"], ondelete="CASCADE"),
@@ -55,7 +68,10 @@ def upgrade() -> None:
     # table_view indexes
     op.create_index("ix_table_view_token", "table_view", ["token"], unique=True)
     op.create_index(
-        "idx_table_view_project_id", "table_view", ["project_id"], unique=False
+        "idx_table_view_project_id",
+        "table_view",
+        ["project_id"],
+        unique=False,
     )
     op.create_index("idx_table_view_user_id", "table_view", ["user_id"], unique=False)
     op.create_index(
@@ -68,7 +84,7 @@ def upgrade() -> None:
     # JSONB index for context filtering
     op.execute(
         "CREATE INDEX idx_table_view_project_config_context "
-        "ON table_view ((project_config->>'context'))"
+        "ON table_view ((project_config->>'context'))",
     )
 
     # ==========================================================================
@@ -77,14 +93,17 @@ def upgrade() -> None:
     op.add_column(
         "plot",
         sa.Column(
-            "updated_at", sa.TIMESTAMP(), server_default=sa.text("now()"), nullable=True
+            "updated_at",
+            sa.TIMESTAMP(),
+            server_default=sa.text("now()"),
+            nullable=True,
         ),
     )
 
     # JSONB index for context filtering on plot
     op.execute(
         "CREATE INDEX idx_plot_project_config_context "
-        "ON plot ((project_config->>'context'))"
+        "ON plot ((project_config->>'context'))",
     )
 
 

@@ -5,6 +5,7 @@ Revises: add_timezone_to_organization
 Create Date: 2026-01-22 19:25:44.695897
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 

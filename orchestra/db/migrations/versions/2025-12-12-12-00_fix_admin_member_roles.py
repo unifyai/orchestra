@@ -11,6 +11,7 @@ incorrectly given the Member role, which doesn't have org:write permission.
 This migration updates:
 - level='admin' members → Admin role (has org:write)
 """
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

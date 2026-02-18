@@ -341,7 +341,8 @@ class PlotMetadata(BaseModel):
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the plot was created")
     updated_at: Optional[datetime] = Field(
-        None, description="When the plot was last updated"
+        None,
+        description="When the plot was last updated",
     )
     created_by: str = Field(..., description="User ID of the creator")
 
@@ -403,7 +404,8 @@ class PlotListItem(BaseModel):
     project_name: str = Field(..., description="Name of the project")
     created_at: datetime = Field(..., description="When the plot was created")
     updated_at: Optional[datetime] = Field(
-        None, description="When the plot was last updated"
+        None,
+        description="When the plot was last updated",
     )
     created_by: str = Field(..., description="User ID of the creator")
     url: str = Field(..., description="Shareable URL to view the plot")
