@@ -958,6 +958,17 @@ def list_credit_grant_links(
     """List all one-time credit grant links."""
     token_dao = OneTimeCreditGrantLinkDAO(session)
     links = token_dao.list_links(limit=limit, offset=offset)
+
+    # Batch-resolve emails for claimed links
+    user_ids = {link.user_id for link in links if link.user_id}
+    email_map: dict = {}
+    if user_ids:
+        user_dao = UserDAO(session)
+        for uid in user_ids:
+            row = user_dao.get_by_id(uid)
+            if row:
+                email_map[uid] = row[0].email
+
     return [
         CreditGrantLinkResponse(
             id=link.id,
@@ -965,6 +976,7 @@ def list_credit_grant_links(
             expires_at=link.expires_at,
             claimed_at=link.claimed_at,
             user_id=link.user_id,
+            claimed_by_email=email_map.get(link.user_id) if link.user_id else None,
             credit_amount=link.credit_amount,
         )
         for link in links
