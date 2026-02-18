@@ -576,7 +576,8 @@ async def test_list_plots_by_project(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_list_plots_only_returns_own_personal_plots(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that listing personal plots only returns the user's own plots.
 
@@ -3267,7 +3268,8 @@ async def test_update_plot_validates_project_name(client: AsyncClient, dbsession
 
 @pytest.mark.anyio
 async def test_update_plot_to_different_project_requires_access(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that updating to a different project requires write access."""
     user1 = await create_test_user(client, "plot_update_access_user1@test.com")
@@ -3310,7 +3312,8 @@ async def test_update_plot_to_different_project_requires_access(
 
 @pytest.mark.anyio
 async def test_update_plot_project_id_changes_with_project_name(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that project_id is updated when project_name changes."""
     from orchestra.db.dao.context_dao import ContextDAO
@@ -3379,7 +3382,8 @@ async def test_update_plot_project_id_changes_with_project_name(
 
 @pytest.mark.anyio
 async def test_plot_project_name_updates_on_project_rename(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that plot shows updated project name after project is renamed.
 
@@ -3477,7 +3481,8 @@ async def test_plot_list_shows_current_project_name(client: AsyncClient, dbsessi
 
 @pytest.mark.anyio
 async def test_plot_project_config_does_not_contain_project_name(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that project_name is NOT stored in project_config JSONB.
 

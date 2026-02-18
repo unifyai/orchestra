@@ -1375,9 +1375,11 @@ def pytest_sessionfinish(session, exitstatus):
                 "count": len(records),
                 "avg_ms": float(np.mean(filtered)),
                 "median_ms": float(np.median(filtered)),
-                "p95_ms": float(np.percentile(filtered, 95))
-                if len(filtered) > 1
-                else float(filtered[0]),
+                "p95_ms": (
+                    float(np.percentile(filtered, 95))
+                    if len(filtered) > 1
+                    else float(filtered[0])
+                ),
                 "min_ms": float(np.min(filtered)),
                 "max_ms": float(np.max(filtered)),
                 "outliers_removed": outliers_removed,

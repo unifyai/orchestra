@@ -350,7 +350,8 @@ async def create_plot(
 
     # Build project config dict - exclude project_name (use project_id FK as source of truth)
     project_config_dict = body.project_config.model_dump(
-        exclude_none=True, exclude={"project_name"}
+        exclude_none=True,
+        exclude={"project_name"},
     )
 
     # Create plot
@@ -621,14 +622,17 @@ def update_plot(
     updated_plot = plot_dao.update(
         plot_id=plot.id,
         title=body.title,
-        plot_config=body.plot_config.model_dump(exclude_none=True)
-        if body.plot_config
-        else None,
-        project_config=body.project_config.model_dump(
-            exclude_none=True, exclude={"project_name"}
-        )
-        if body.project_config
-        else None,
+        plot_config=(
+            body.plot_config.model_dump(exclude_none=True) if body.plot_config else None
+        ),
+        project_config=(
+            body.project_config.model_dump(
+                exclude_none=True,
+                exclude={"project_name"},
+            )
+            if body.project_config
+            else None
+        ),
         project_id=target_project.id if project_changed else None,
         organization_id=target_project.organization_id if project_changed else ...,
     )

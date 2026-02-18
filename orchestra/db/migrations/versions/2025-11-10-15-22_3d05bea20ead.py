@@ -5,6 +5,7 @@ Revises: support_variable_vector_dims
 Create Date: 2025-11-10 15:22:57.412288
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 

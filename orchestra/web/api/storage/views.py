@@ -113,9 +113,9 @@ def generate_signed_url(
                 filename = (
                     object_path.split("/")[-1] if "/" in object_path else object_path
                 )
-            signed_url_kwargs[
-                "response_disposition"
-            ] = f'attachment; filename="{filename}"'
+            signed_url_kwargs["response_disposition"] = (
+                f'attachment; filename="{filename}"'
+            )
 
         signed_url = blob.generate_signed_url(**signed_url_kwargs)
 

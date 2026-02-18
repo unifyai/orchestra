@@ -136,9 +136,7 @@ def _tokenize(s):
             value = (
                 None
                 if value == "None"
-                else float(value)
-                if "." in value
-                else int(value)
+                else float(value) if "." in value else int(value)
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":

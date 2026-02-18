@@ -1,4 +1,5 @@
 """Pydantic schemas for team management."""
+
 from datetime import datetime
 from typing import List, Optional
 

@@ -1,4 +1,5 @@
 """Tests for organization billing features (Phase 0)."""
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient

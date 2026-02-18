@@ -1,4 +1,5 @@
 """Data Access Object for Role model."""
+
 from typing import List, Optional
 
 from sqlalchemy import select

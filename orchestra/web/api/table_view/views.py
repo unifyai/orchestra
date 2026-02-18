@@ -208,7 +208,8 @@ async def create_table_view(
     )
     # Exclude project_name from JSONB - use project_id FK as source of truth
     project_config_dict = body.project_config.model_dump(
-        exclude_none=True, exclude={"project_name"}
+        exclude_none=True,
+        exclude={"project_name"},
     )
 
     # Create table view
@@ -475,14 +476,19 @@ def update_table_view(
     updated_table_view = table_view_dao.update(
         table_view_id=table_view.id,
         title=body.title,
-        table_config=body.table_config.model_dump(exclude_none=True)
-        if body.table_config
-        else None,
-        project_config=body.project_config.model_dump(
-            exclude_none=True, exclude={"project_name"}
-        )
-        if body.project_config
-        else None,
+        table_config=(
+            body.table_config.model_dump(exclude_none=True)
+            if body.table_config
+            else None
+        ),
+        project_config=(
+            body.project_config.model_dump(
+                exclude_none=True,
+                exclude={"project_name"},
+            )
+            if body.project_config
+            else None
+        ),
         project_id=target_project.id if project_changed else None,
         organization_id=target_project.organization_id if project_changed else ...,
     )

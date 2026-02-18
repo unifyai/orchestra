@@ -116,9 +116,11 @@ class ReplicateService:
                 "image": image_url,
                 "audio": audio_url,
                 "prompt": "A speaking person",
-                "duration": duration
-                if duration is not None
-                else settings.default_video_duration,
+                "duration": (
+                    duration
+                    if duration is not None
+                    else settings.default_video_duration
+                ),
             }
             if seed is not None:
                 model_input["seed"] = seed

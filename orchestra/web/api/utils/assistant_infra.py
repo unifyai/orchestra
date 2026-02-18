@@ -161,9 +161,11 @@ async def watch_email(email: str, is_staging: bool = False):
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={
                 "primary_email": email,
-                "topic": "gmail-notifications-staging"
-                if is_staging
-                else "gmail-notifications",
+                "topic": (
+                    "gmail-notifications-staging"
+                    if is_staging
+                    else "gmail-notifications"
+                ),
             },
             timeout=20,
         )
