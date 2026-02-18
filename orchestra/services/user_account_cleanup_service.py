@@ -54,6 +54,8 @@ class UserAccountCleanupService:
         Executes a single optimized query that checks:
         - User exists in user table
         - Has pending bills (PENDING_INVOICE or INVOICE_CREATED)
+        - Has disputed recharges (DISPUTED)
+        - Billing account is in PAST_DUE or SUSPENDED state
         - Owns any organizations
 
         :param user_id: The user's ID
@@ -77,6 +79,17 @@ class UserAccountCleanupService:
                          AND r.status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
                         0
                     ) as pending_amount,
+                    EXISTS(
+                        SELECT 1 FROM recharge r
+                        JOIN "user" u ON u.billing_account_id = r.billing_account_id
+                        WHERE u.id = :uid
+                        AND r.status = 'DISPUTED'
+                    ) as has_disputed_charges,
+                    (
+                        SELECT ba.account_status FROM billing_account ba
+                        JOIN "user" u ON u.billing_account_id = ba.id
+                        WHERE u.id = :uid
+                    ) as account_status,
                     EXISTS(
                         SELECT 1 FROM organization WHERE owner_id = :uid
                     ) as owns_organizations,
@@ -105,6 +118,29 @@ class UserAccountCleanupService:
                         "pending_amount_usd": float(result.pending_amount),
                         "message": f"User has ${result.pending_amount:.2f} in pending invoices. "
                         "Please wait for invoices to be processed before deleting account.",
+                    },
+                ),
+            )
+
+        if result.has_disputed_charges:
+            blockers.append(
+                DeletionBlocker(
+                    reason="open_disputes",
+                    details={
+                        "message": "User has open payment disputes. "
+                        "Please wait for disputes to be resolved before deleting account.",
+                    },
+                ),
+            )
+
+        if result.account_status in ("PAST_DUE", "SUSPENDED"):
+            blockers.append(
+                DeletionBlocker(
+                    reason="account_status",
+                    details={
+                        "account_status": result.account_status,
+                        "message": f"User's billing account is {result.account_status}. "
+                        "Please resolve outstanding billing issues before deleting account.",
                     },
                 ),
             )

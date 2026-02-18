@@ -24,6 +24,7 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.settings import settings
 from orchestra.web.api.organization.schema import (
@@ -406,8 +407,56 @@ async def delete_organization(
             detail="You do not have permission to delete this organization",
         )
 
-    # Store Stripe customer ID for post-deletion archival
+    # Check for billing blockers before allowing deletion
     ba = org.billing_account
+    if ba:
+        # Check for pending invoices
+        pending_recharges = (
+            session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.status.in_(
+                    [
+                        RechargeStatus.PENDING_INVOICE,
+                        RechargeStatus.INVOICE_CREATED,
+                    ]
+                ),
+            )
+            .all()
+        )
+        if pending_recharges:
+            pending_amount = sum(r.amount_usd for r in pending_recharges)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Organization has ${pending_amount:.2f} in pending invoices. "
+                "Please wait for invoices to be processed before deleting.",
+            )
+
+        # Check for open disputes
+        disputed_recharges = (
+            session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.status == RechargeStatus.DISPUTED,
+            )
+            .first()
+        )
+        if disputed_recharges:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Organization has open payment disputes. "
+                "Please wait for disputes to be resolved before deleting.",
+            )
+
+        # Check for problematic account status
+        if ba.account_status in ("PAST_DUE", "SUSPENDED"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Organization billing account is {ba.account_status}. "
+                "Please resolve outstanding billing issues before deleting.",
+            )
+
+    # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
 
     # Delete organization (cascades to related tables)
