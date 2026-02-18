@@ -4,7 +4,7 @@ Recording URLs are now stored directly on exchange metadata in Unity's
 transcript system, making the relational recording table redundant.
 
 Revision ID: a1b2c3d4e5f6
-Revises: 9b2c3d4e5f6a
+Revises: drop_has_claimed_credit_grant
 Create Date: 2026-02-17 14:00:00.000000
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "a1b2c3d4e5f6"
-down_revision = "9b2c3d4e5f6a"
+down_revision = "drop_has_claimed_credit_grant"
 branch_labels = None
 depends_on = None
 
