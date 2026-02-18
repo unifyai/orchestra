@@ -845,9 +845,9 @@ def get_billing_account_info(
         "stripe_customer_id": ba.stripe_customer_id,
         "credits": float(ba.credits) if ba.credits else 0,
         "autorecharge": ba.autorecharge,
-        "autorecharge_threshold": float(ba.autorecharge_threshold)
-        if ba.autorecharge_threshold
-        else 0,
+        "autorecharge_threshold": (
+            float(ba.autorecharge_threshold) if ba.autorecharge_threshold else 0
+        ),
         "autorecharge_qty": float(ba.autorecharge_qty) if ba.autorecharge_qty else 0,
         "account_status": ba.account_status,
     }
@@ -1151,9 +1151,9 @@ def migrate_billing_accounts_to_compliance(
         session.commit()
         total = results["total_accounts_processed"]
         results["status"] = "success"
-        results[
-            "message"
-        ] = f"Migration completed successfully. Processed {total} billing account(s)."
+        results["message"] = (
+            f"Migration completed successfully. Processed {total} billing account(s)."
+        )
     except Exception as e:
         session.rollback()
         results["status"] = "error"
@@ -1297,14 +1297,14 @@ def admin_get_spending_limit_notifications(
                     "entity_name": n.entity_name,
                     "month": n.month,
                     "limit_value": float(n.limit_value) if n.limit_value else None,
-                    "current_spend": float(n.current_spend)
-                    if n.current_spend
-                    else None,
+                    "current_spend": (
+                        float(n.current_spend) if n.current_spend else None
+                    ),
                     "notified_user_ids": n.notified_user_ids,
                     "notified_at": n.notified_at.isoformat() if n.notified_at else None,
-                    "limit_set_at": n.limit_set_at.isoformat()
-                    if n.limit_set_at
-                    else None,
+                    "limit_set_at": (
+                        n.limit_set_at.isoformat() if n.limit_set_at else None
+                    ),
                 }
                 for n in notifications
             ],

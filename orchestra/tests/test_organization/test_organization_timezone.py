@@ -1,4 +1,5 @@
 """Tests for organization timezone functionality."""
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient

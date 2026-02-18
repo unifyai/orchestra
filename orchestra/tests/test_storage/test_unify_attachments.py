@@ -58,7 +58,7 @@ class TestBucketServiceAttachmentCleanup:
 
             assert deleted_count == 2
             mock_storage_client["bucket"].list_blobs.assert_called_once_with(
-                prefix="12345/"
+                prefix="12345/",
             )
             for blob in mock_storage_client["blobs"]:
                 blob.delete.assert_called_once()
@@ -78,11 +78,12 @@ class TestBucketServiceAttachmentCleanup:
 
             assert deleted_count == 0
             mock_storage_client["bucket"].list_blobs.assert_called_once_with(
-                prefix="99999/"
+                prefix="99999/",
             )
 
     def test_delete_attachments_handles_deletion_errors_gracefully(
-        self, mock_storage_client
+        self,
+        mock_storage_client,
     ):
         """Deletion continues even if individual file deletion fails."""
         from google.api_core.exceptions import GoogleAPIError
@@ -118,7 +119,7 @@ class TestBucketServiceAttachmentCleanup:
         ):
             with patch("orchestra.services.bucket_service.service_account"):
                 with patch(
-                    "orchestra.services.bucket_service.storage.Client"
+                    "orchestra.services.bucket_service.storage.Client",
                 ) as mock_client:
                     mock_client.return_value = MagicMock()
                     service = BucketService()
@@ -227,7 +228,7 @@ class TestStorageEndpointsAttachmentsBucket:
         from orchestra.web.api.utils.gcp import parse_gcs_url
 
         bucket, path = parse_gcs_url(
-            "gs://unify-message-attachments/12345/uuid_document.pdf"
+            "gs://unify-message-attachments/12345/uuid_document.pdf",
         )
         assert bucket == "unify-message-attachments"
         assert path == "12345/uuid_document.pdf"
@@ -284,7 +285,7 @@ class TestAttachmentCleanupEdgeCases:
 
             # Should handle string user_id
             deleted_count = service.delete_message_attachments_for_user(
-                user_id="user-abc-123"
+                user_id="user-abc-123",
             )
 
             assert deleted_count == 0

@@ -1,4 +1,5 @@
 """Role and permission management endpoints."""
+
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status

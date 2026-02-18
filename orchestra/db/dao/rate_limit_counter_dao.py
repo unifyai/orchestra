@@ -102,9 +102,11 @@ class RateLimitCounterDAO:
             select(RateLimitCounter.request_count).where(
                 RateLimitCounter.user_id == user_id,
                 RateLimitCounter.endpoint_category == endpoint_category,
-                RateLimitCounter.endpoint_path == endpoint_path
-                if endpoint_path
-                else RateLimitCounter.endpoint_path.is_(None),
+                (
+                    RateLimitCounter.endpoint_path == endpoint_path
+                    if endpoint_path
+                    else RateLimitCounter.endpoint_path.is_(None)
+                ),
                 RateLimitCounter.time_bucket == time_bucket,
             ),
         ).scalar()

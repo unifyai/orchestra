@@ -581,9 +581,9 @@ def process_pending_embeddings(
         "stale_reset": stale_reset,
         "mode": mode,
         "duration_seconds": duration,
-        "throughput_per_second": round(len(successful_results) / duration, 1)
-        if duration > 0
-        else 0,
+        "throughput_per_second": (
+            round(len(successful_results) / duration, 1) if duration > 0 else 0
+        ),
     }
 
     # Only fetch metrics if explicitly requested (saves ~50ms per invocation)

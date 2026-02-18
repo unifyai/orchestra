@@ -5220,9 +5220,11 @@ async def create_demo_assistant(
                 voice_mode=demo_assistant.voice_mode,
                 timezone=demo_assistant.timezone,
                 demo_id=demo_assistant.demo_id,
-                monthly_spending_cap=float(demo_assistant.monthly_spending_cap)
-                if demo_assistant.monthly_spending_cap
-                else None,
+                monthly_spending_cap=(
+                    float(demo_assistant.monthly_spending_cap)
+                    if demo_assistant.monthly_spending_cap
+                    else None
+                ),
             ),
         )
 

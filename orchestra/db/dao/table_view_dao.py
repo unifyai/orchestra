@@ -6,15 +6,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, joinedload
 
-from orchestra.db.models.orchestra_models import Project, TableView
+from orchestra.db.models.orchestra_models import TableView
 
 logger = logging.getLogger(__name__)
 
 
 class TokenGenerationError(Exception):
     """Raised when unable to generate a unique token after max retries."""
-
-    pass
 
 
 class TableViewDAO:

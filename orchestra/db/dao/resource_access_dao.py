@@ -1,4 +1,5 @@
 """Data Access Object for ResourceAccess model."""
+
 from typing import List, Optional
 
 from sqlalchemy import and_, or_

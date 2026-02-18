@@ -4,6 +4,7 @@ Revision ID: support_variable_vector_dims
 Revises: ddaac731f82d
 Create Date: 2025-10-20 12:00:00.000000
 """
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

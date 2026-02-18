@@ -14,8 +14,6 @@ logger = logging.getLogger(__name__)
 class TokenGenerationError(Exception):
     """Raised when unable to generate a unique token after max retries."""
 
-    pass
-
 
 class PlotDAO:
     """Data access object for Plot operations."""

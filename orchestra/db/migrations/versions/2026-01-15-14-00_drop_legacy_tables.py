@@ -5,6 +5,7 @@ Revises: refactor_user_local_desktop
 Create Date: 2026-01-15 14:00:00.000000
 
 """
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
