@@ -121,11 +121,15 @@ def auth_admin_key(
 
 
 def _is_billing_account_frozen(session: Session, ba_id: int) -> bool:
-    """Check if a BillingAccount is SUSPENDED or CLOSED."""
+    """Check if a BillingAccount is PAST_DUE, SUSPENDED, or CLOSED."""
     ba = session.query(BillingAccount).filter(BillingAccount.id == ba_id).first()
     if ba is None:
         return False
-    return ba.account_status in ("SUSPENDED", "CLOSED")
+    if ba.account_status in ("SUSPENDED", "CLOSED"):
+        return True
+    if ba.account_status == "PAST_DUE":
+        raise account_suspended
+    return False
 
 
 def check_account_not_frozen(request: Request):
