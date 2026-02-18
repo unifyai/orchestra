@@ -428,18 +428,20 @@ def create_recharge_type_model(
 
 @router.put("/stripe_customer_id")
 def update_stripe_customer_id(  # noqa: WPS211
-    stripe_customer_id: str,
+    stripe_customer_id: Optional[str] = None,
     id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> None:
     """
-    Set the Stripe customer ID on a billing account.
+    Set or clear the Stripe customer ID on a billing account.
 
     Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
+    Pass ``stripe_customer_id`` to set it, or omit / pass empty string
+    to clear it (set to NULL).
 
-    :param stripe_customer_id: Stripe customer ID.
+    :param stripe_customer_id: Stripe customer ID, or None/empty to clear.
     :param id: (deprecated) Alias for user_id.
     :param user_id: User ID.
     :param organization_id: Organization ID.
@@ -450,7 +452,7 @@ def update_stripe_customer_id(  # noqa: WPS211
         user_id=effective_user_id,
         organization_id=organization_id,
     )
-    ba.stripe_customer_id = stripe_customer_id
+    ba.stripe_customer_id = stripe_customer_id if stripe_customer_id else None
     session.commit()
 
 
@@ -1151,9 +1153,9 @@ def migrate_billing_accounts_to_compliance(
         session.commit()
         total = results["total_accounts_processed"]
         results["status"] = "success"
-        results["message"] = (
-            f"Migration completed successfully. Processed {total} billing account(s)."
-        )
+        results[
+            "message"
+        ] = f"Migration completed successfully. Processed {total} billing account(s)."
     except Exception as e:
         session.rollback()
         results["status"] = "error"
