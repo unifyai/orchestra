@@ -108,9 +108,8 @@ class DeepgramService:
 
         try:
             # Step 1: Upload audio to a temporary GCS location to get a public URL
-            signed_url, temp_gcs_uri = bucket_service.upload_temp_assistant_file(
+            signed_url, temp_gcs_uri = bucket_service.upload_temp_file(
                 file_content=audio_content,
-                user_id=user_id,
                 content_type=content_type,
             )
 

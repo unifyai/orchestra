@@ -26,7 +26,7 @@ from orchestra.tests.utils import create_test_user
 
 @pytest.fixture(autouse=True)
 def mock_assistant_infra_calls(request):
-    """Automatically mock assistant infrastructure webhooks for all tests."""
+    """Automatically mock assistant infrastructure webhooks and BucketService for all tests."""
     if "no_mock_infra" in request.keywords:
         yield
         return
@@ -42,13 +42,23 @@ def mock_assistant_infra_calls(request):
         new_callable=AsyncMock,
     ) as mock_stop_jobs, patch(
         "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings:
+    ) as mock_settings, patch(
+        "orchestra.web.api.organization.views.BucketService",
+    ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_stop_jobs.return_value = MagicMock(status_code=200)
         mock_settings.is_staging = True
 
-        yield mock_wake_up, mock_reawaken, mock_stop_jobs
+        mock_bucket_instance = MagicMock()
+        mock_bucket_instance.delete_all_assistant_data.return_value = {
+            "media_files": 0,
+            "call_recordings": 0,
+            "message_attachments": 0,
+        }
+        mock_bucket_cls.return_value = mock_bucket_instance
+
+        yield mock_wake_up, mock_reawaken, mock_stop_jobs, mock_bucket_cls
 
 
 # =============================================================================
@@ -1389,3 +1399,238 @@ async def test_admin_can_remove_other_members(client: AsyncClient, dbsession):
     dbsession.expire_all()
     membership = org_member_dao.get_member(member["id"], org_id)
     assert membership is None, "Member should be removed from org"
+
+
+# =============================================================================
+# GCS Cleanup Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
+    client: AsyncClient,
+    dbsession,
+    mock_assistant_infra_calls,
+):
+    """Test that GCS data is cleaned up for assistants deleted during member removal."""
+    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    mock_bucket_instance = mock_bucket_cls.return_value
+
+    owner = await create_test_user(client, "gcs_cleanup_owner@test.com")
+    member = await create_test_user(client, "gcs_cleanup_member@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "GCS Cleanup Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    # Member creates an unshared assistant
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="GCSCleanup",
+        surname="Assistant",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    dbsession.commit()
+
+    # Remove member - triggers assistant deletion AND GCS cleanup
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify assistant is deleted from DB
+    dbsession.expire_all()
+    assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
+
+    # Verify BucketService.delete_all_assistant_data was called for the deleted assistant
+    mock_bucket_instance.delete_all_assistant_data.assert_called_once_with(agent_id)
+
+
+@pytest.mark.anyio
+async def test_member_removal_no_gcs_cleanup_for_shared_assistants(
+    client: AsyncClient,
+    dbsession,
+    mock_assistant_infra_calls,
+):
+    """Test that GCS data is NOT cleaned up for assistants that survive member removal (shared)."""
+    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    mock_bucket_instance = mock_bucket_cls.return_value
+
+    owner = await create_test_user(client, "gcs_shared_owner@test.com")
+    member = await create_test_user(client, "gcs_shared_member@test.com")
+    other = await create_test_user(client, "gcs_shared_other@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "GCS Shared Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add members
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": other["id"]},
+        headers=owner["headers"],
+    )
+
+    # Member creates a SHARED assistant (shared with 'other')
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="Shared",
+        surname="Bot",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        viewer_role.id,
+        "user",
+        other["id"],
+    )
+    dbsession.commit()
+
+    # Remove member
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify assistant still exists (was shared)
+    dbsession.expire_all()
+    assert assistant_dao.get_assistant_by_agent_id(agent_id) is not None
+
+    # Verify delete_all_assistant_data was NOT called (assistant survived)
+    mock_bucket_instance.delete_all_assistant_data.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_member_removal_gcs_failure_does_not_block(
+    client: AsyncClient,
+    dbsession,
+    mock_assistant_infra_calls,
+):
+    """Test that GCS cleanup failure does not block member removal."""
+    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    mock_bucket_instance = mock_bucket_cls.return_value
+    mock_bucket_instance.delete_all_assistant_data.side_effect = Exception(
+        "GCS unreachable",
+    )
+
+    owner = await create_test_user(client, "gcs_fail_owner@test.com")
+    member = await create_test_user(client, "gcs_fail_member@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "GCS Fail Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    # Member creates an unshared assistant
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="FailTest",
+        surname="Bot",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    dbsession.commit()
+
+    # Remove member - GCS cleanup fails but endpoint should still succeed
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # DB deletion should still have occurred
+    dbsession.expire_all()
+    assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
