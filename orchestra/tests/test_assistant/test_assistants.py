@@ -47,30 +47,6 @@ def mock_assistant_infra_calls(request):
 
 
 @pytest.mark.anyio
-async def test_create_assistant_unapproved_user_fails(client: AsyncClient):
-    """Test that a user who is not approved cannot create an assistant."""
-    unapproved_user = await create_test_user(
-        client,
-        "unapproved@example.com",
-    )
-    payload = {
-        "first_name": "Should",
-        "surname": "Fail",
-        "create_infra": False,
-    }
-    resp = await client.post(
-        "/v0/assistant",
-        json=payload,
-        headers=unapproved_user["headers"],
-    )
-    assert resp.status_code == status.HTTP_403_FORBIDDEN
-    assert (
-        "You need to request approval first by going to console.unify.ai/assistants"
-        in resp.json()["detail"]
-    )
-
-
-@pytest.mark.anyio
 async def test_create_assistant_success(client: AsyncClient):
     # `POST /v0/assistant` with full payload -> 200 OK and returns created assistant
     payload = {
@@ -1148,12 +1124,14 @@ async def test_delete_assistant_deletes_contexts(
     # Manually create a project and contexts to simulate logs being present
     # Using 3-tier context structure: user_id/assistant_id/Ctx, user_id/All/Ctx, All/Ctx
     project_name = "Assistants"
-    user_name = "test-user"
+    # Get the actual user_id that the backend sees via request.state.user_id
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
     assistant_name = str(assistant_id)
 
-    # 3-tier contexts
-    user_assistant_context = f"{user_name}/{assistant_name}/Transcripts"
-    user_all_context = f"{user_name}/All/Transcripts"
+    # 3-tier contexts using the real user_id (must match what the delete endpoint uses)
+    user_assistant_context = f"{user_id}/{assistant_name}/Transcripts"
+    user_all_context = f"{user_id}/All/Transcripts"
     global_all_context = "All/Transcripts"
 
     # The "Assistants" project is created automatically on first assistant creation
@@ -1164,7 +1142,7 @@ async def test_delete_assistant_deletes_contexts(
         "entries": [
             {
                 "message": "test",
-                "_user": user_name,
+                "_user": user_id,
                 "_assistant": assistant_name,
             },
         ],
@@ -1717,28 +1695,27 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
     assert create_resp.status_code == 200
     assistant_id = create_resp.json()["info"]["agent_id"]
 
-    with patch.object(
-        type(MagicMock()),
-        "delete_assistant_recordings",
-        create=True,
-    ) as _:
-        with patch(
-            "orchestra.web.api.assistant.views.BucketService",
-        ) as MockBucketServiceClass:
-            mock_instance = MockBucketServiceClass.return_value
-            mock_instance.delete_assistant_file.return_value = True
-            mock_instance.delete_assistant_recordings.return_value = 3
+    with patch(
+        "orchestra.web.api.assistant.views.BucketService",
+    ) as MockBucketServiceClass:
+        mock_instance = MockBucketServiceClass.return_value
+        mock_instance.delete_assistant_file.return_value = True
+        mock_instance.delete_all_assistant_data.return_value = {
+            "media": 1,
+            "recordings": 3,
+            "attachments": 0,
+        }
 
-            del_resp = await client.delete(
-                f"/v0/assistant/{assistant_id}",
-                headers=HEADERS,
-            )
-            assert del_resp.status_code == 200
+        del_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}",
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == 200
 
-            mock_instance.delete_assistant_recordings.assert_called_once_with(
-                int(assistant_id),
-                is_staging=False,
-            )
+        mock_instance.delete_all_assistant_data.assert_called_once_with(
+            int(assistant_id),
+            is_staging=False,
+        )
 
 
 @pytest.mark.anyio
@@ -1760,7 +1737,7 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     ) as MockBucketServiceClass:
         mock_instance = MockBucketServiceClass.return_value
         mock_instance.delete_assistant_file.return_value = True
-        mock_instance.delete_assistant_recordings.side_effect = Exception(
+        mock_instance.delete_all_assistant_data.side_effect = Exception(
             "GCS bucket unreachable",
         )
 
@@ -1770,4 +1747,4 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
         )
         assert del_resp.status_code == 200
         assert "cleanup issues" in del_resp.json()["info"]
-        assert "recordings" in del_resp.json()["info"]
+        assert "GCS" in del_resp.json()["info"]

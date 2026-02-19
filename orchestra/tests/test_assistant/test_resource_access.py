@@ -1165,7 +1165,6 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
         client,
         "3tier_transfer@test.com",
     )
-    user_name = "transfer-user"
 
     # Create personal Assistants project
     proj_resp = await client.post(
@@ -1186,9 +1185,10 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
     agent_id = int(assistant_info["agent_id"])
     assistant_name = str(agent_id)
 
-    # Define 3-tier context names
-    tier3_context = f"{user_name}/{assistant_name}/Transcripts"
-    tier2_context = f"{user_name}/All/Transcripts"
+    # Define 3-tier context names using the actual user_id
+    # The transfer endpoint uses context_prefix = f"{user_id}/{assistant_id}"
+    tier3_context = f"{user['id']}/{assistant_name}/Transcripts"
+    tier2_context = f"{user['id']}/All/Transcripts"
     tier1_context = "All/Transcripts"
 
     # Create log in Tier 3 context with proper fields
@@ -1200,7 +1200,7 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
             "entries": [
                 {
                     "message": "Log to transfer",
-                    "_user": user_name,
+                    "_user": user["id"],
                     "_assistant": assistant_name,
                     "_assistant_id": agent_id,
                 },
@@ -1388,8 +1388,9 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
     agent_id = assistant_info["agent_id"]
     assistant_name = str(agent_id)
 
-    # Create logs for this assistant using exact context name pattern
-    context_name = assistant_name  # Just the assistant ID
+    # The delete endpoint uses context_prefix = f"{user_id}/{assistant_id}"
+    # so we must create logs under that exact pattern.
+    context_name = f"{user['id']}/{assistant_name}"
     log_payload = {
         "project_name": project_name,
         "context": context_name,
@@ -1473,10 +1474,10 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
     agent_id = assistant_info["agent_id"]
     assistant_name = str(agent_id)
 
-    # Set up 3-tier context structure
-    user_name = "test-user"
-    tier3_context = f"{user_name}/{assistant_name}/Transcripts"
-    tier2_context = f"{user_name}/All/Transcripts"
+    # Set up 3-tier context structure using the actual user_id
+    # The delete endpoint uses context_prefix = f"{request.state.user_id}/{assistant_id}"
+    tier3_context = f"{user['id']}/{assistant_name}/Transcripts"
+    tier2_context = f"{user['id']}/All/Transcripts"
     tier1_context = "All/Transcripts"
 
     # Create log in tier3 context with _user and _assistant fields
@@ -1486,7 +1487,7 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
         "entries": [
             {
                 "message": "3-tier test log",
-                "_user": user_name,
+                "_user": user["id"],
                 "_assistant": assistant_name,
             },
         ],
@@ -2433,10 +2434,12 @@ async def test_transfer_shared_all_context_logs(
     agent_id = int(assistant_info["agent_id"])
     assistant_name = str(agent_id)
 
-    # Create logs in assistant-specific context (assistant ID)
+    # Create logs in assistant-specific context using {user_id}/{assistant_id} pattern
+    # (matches the transfer endpoint's context_prefix = f"{user_id}/{assistant_id}")
+    specific_context = f"{user['id']}/{assistant_name}"
     specific_log_payload = {
         "project_name": "Assistants",
-        "context": assistant_name,
+        "context": specific_context,
         "entries": [
             {
                 "message": "Specific context log",
@@ -2498,7 +2501,7 @@ async def test_transfer_shared_all_context_logs(
 
     # Verify assistant-specific logs are in org project
     specific_logs_org = await client.get(
-        f"/v0/logs?project_name=Assistants&context={assistant_name}",
+        f"/v0/logs?project_name=Assistants&context={specific_context}",
         headers=org_headers,
     )
     assert specific_logs_org.status_code == 200
