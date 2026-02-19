@@ -12,12 +12,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.tests.utils import (
-    ADMIN_HEADERS,
-    HEADERS,
-    create_test_user,
-    to_unity_name,
-)
+from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -1094,14 +1089,11 @@ async def test_transfer_personal_to_org_with_logs_transfer(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    assistant_name = str(agent_id)
 
     # Create logs for this assistant in the personal Assistants project
     # Use the exact naming convention the transfer code expects
-    context_name = assistant_name  # Just the assistant name, not with /Transcripts
+    context_name = assistant_name  # Just the assistant ID, not with /Transcripts
     log_payload = {
         "project_name": project_name,
         "context": context_name,
@@ -1162,8 +1154,8 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
 
     Uses 3-tier context hierarchy:
     - Tier 1: All/Transcripts (global aggregate)
-    - Tier 2: TestUser/All/Transcripts (user aggregate)
-    - Tier 3: TestUser/AssistantName/Transcripts (user + assistant specific)
+    - Tier 2: user_id/All/Transcripts (user aggregate)
+    - Tier 3: user_id/assistant_id/Transcripts (user + assistant specific)
 
     When transferring with transfer_logs=True:
     - All assistant-specific contexts (Tier 3) should be moved
@@ -1173,7 +1165,7 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
         client,
         "3tier_transfer@test.com",
     )
-    user_name = "TransferUser"
+    user_name = "transfer-user"
 
     # Create personal Assistants project
     proj_resp = await client.post(
@@ -1192,10 +1184,7 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    assistant_name = str(agent_id)
 
     # Define 3-tier context names
     tier3_context = f"{user_name}/{assistant_name}/Transcripts"
@@ -1318,14 +1307,11 @@ async def test_transfer_org_to_personal_with_logs_deletion(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    assistant_name = str(agent_id)
 
     # Create logs for this assistant in the org Assistants project
     # Use exact context name pattern the transfer code expects
-    context_name = assistant_name  # Just the assistant name
+    context_name = assistant_name  # Just the assistant ID
     log_payload = {
         "project_name": project_name,
         "context": context_name,
@@ -1400,13 +1386,10 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = assistant_info["agent_id"]
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    assistant_name = str(agent_id)
 
     # Create logs for this assistant using exact context name pattern
-    context_name = assistant_name  # Just the assistant name
+    context_name = assistant_name  # Just the assistant ID
     log_payload = {
         "project_name": project_name,
         "context": context_name,
@@ -1488,13 +1471,10 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = assistant_info["agent_id"]
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    assistant_name = str(agent_id)
 
     # Set up 3-tier context structure
-    user_name = "TestUser"
+    user_name = "test-user"
     tier3_context = f"{user_name}/{assistant_name}/Transcripts"
     tier2_context = f"{user_name}/All/Transcripts"
     tier1_context = "All/Transcripts"
@@ -2451,12 +2431,9 @@ async def test_transfer_shared_all_context_logs(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    assistant_name = str(agent_id)
 
-    # Create logs in assistant-specific context (AssistantName)
+    # Create logs in assistant-specific context (assistant ID)
     specific_log_payload = {
         "project_name": "Assistants",
         "context": assistant_name,
@@ -2673,8 +2650,8 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
 
     Uses 3-tier context hierarchy:
     - Tier 1: All/Transcripts (global aggregate)
-    - Tier 2: TestUser/All/Transcripts (user aggregate)
-    - Tier 3: TestUser/SharedDelTest/Transcripts (user + assistant specific)
+    - Tier 2: user_id/All/Transcripts (user aggregate)
+    - Tier 3: user_id/assistant_id/Transcripts (user + assistant specific)
 
     When transferring an assistant from org to personal with delete_logs=True:
     - Assistant-specific contexts (Tier 3) should be deleted
@@ -2684,7 +2661,7 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
         client,
         "shared_ctx_delete@test.com",
     )
-    user_name = "TestUser"
+    user_name = "test-user"
 
     # Create organization
     org_resp = await client.post(
@@ -2712,10 +2689,7 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     agent_id = int(assistant_info["agent_id"])
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    assistant_name = str(agent_id)
 
     # Define 3-tier context names
     tier3_context = f"{user_name}/{assistant_name}/Transcripts"
@@ -2811,7 +2785,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
         client,
         "preserve_other_logs@test.com",
     )
-    user_name = "PreserveUser"
+    user_name = "preserve-user"
 
     # Create organization
     org_resp = await client.post(
@@ -2837,7 +2811,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     )
     assert create_resp_a.status_code == 200
     agent_id_a = int(create_resp_a.json()["info"]["agent_id"])
-    assistant_name_a = "AssistantaTransfer"
+    assistant_name_a = str(agent_id_a)
 
     create_resp_b = await client.post(
         "/v0/assistant",
@@ -2846,7 +2820,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     )
     assert create_resp_b.status_code == 200
     agent_id_b = int(create_resp_b.json()["info"]["agent_id"])
-    assistant_name_b = "AssistantbKeep"
+    assistant_name_b = str(agent_id_b)
 
     # Create 3-tier contexts for Assistant A
     tier3_a = f"{user_name}/{assistant_name_a}/Transcripts"

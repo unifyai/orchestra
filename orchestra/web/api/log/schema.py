@@ -732,7 +732,7 @@ class AtomicFieldUpdateRequest(BaseModel):
     context: Optional[str] = Field(
         default=None,
         description="(Upsert mode) Context path for the log.",
-        example="JohnDoe/AdaLovelace/Spending/Monthly",
+        example="42/7/Spending/Monthly",
     )
     unique_keys: Optional[Dict[str, str]] = Field(
         default=None,

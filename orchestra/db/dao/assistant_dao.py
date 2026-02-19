@@ -388,16 +388,14 @@ class AssistantDAO:
                 sync_service.sync_assistant_timezone(
                     user_id=user_id,
                     organization_id=organization_id,
-                    first_name=assistant.first_name,
-                    surname=assistant.surname,
+                    agent_id=assistant.agent_id,
                     new_timezone=assistant.timezone,
                 )
             if should_sync_bio:
                 sync_service.sync_assistant_bio(
                     user_id=user_id,
                     organization_id=organization_id,
-                    first_name=assistant.first_name,
-                    surname=assistant.surname,
+                    agent_id=assistant.agent_id,
                     new_bio=assistant.about,
                 )
 

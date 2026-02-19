@@ -750,8 +750,8 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
 
     Uses 3-tier context hierarchy:
     - Tier 1: All/Transcripts (global aggregate)
-    - Tier 2: TestUser/All/Transcripts (user aggregate)
-    - Tier 3: TestUser/MemberOnlyBot/Transcripts (user + assistant specific)
+    - Tier 2: user_id/All/Transcripts (user aggregate)
+    - Tier 3: user_id/assistant_id/Transcripts (user + assistant specific)
 
     When member is removed and their unshared assistant is deleted:
     - Assistant-specific contexts (Tier 3) should be deleted
@@ -765,7 +765,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
         client,
         "log_cleanup_member@test.com",
     )
-    user_name = "TestUser"
+    user_name = "test-user"
 
     # Create organization
     org_resp = await client.post(
@@ -811,7 +811,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     )
     dbsession.flush()
     agent_id = assistant.agent_id
-    assistant_name = "MemberOnlyBot"
+    assistant_name = str(agent_id)
 
     # Grant only the member Owner role (making it unshared)
     resource_access_dao.grant_access(
@@ -925,7 +925,7 @@ async def test_member_removal_preserves_other_assistant_logs(
         client,
         "preserve_member_b@test.com",
     )
-    user_name = "PreserveUser"
+    user_name = "preserve-user"
 
     # Create organization
     org_resp = await client.post(
@@ -975,7 +975,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     )
     dbsession.flush()
     agent_id_a = assistant_a.agent_id
-    assistant_name_a = "AssistantARemove"
+    assistant_name_a = str(agent_id_a)
 
     resource_access_dao.grant_access(
         "assistant",
@@ -999,7 +999,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     )
     dbsession.flush()
     agent_id_b = assistant_b.agent_id
-    assistant_name_b = "AssistantBKeep"
+    assistant_name_b = str(agent_id_b)
 
     resource_access_dao.grant_access(
         "assistant",

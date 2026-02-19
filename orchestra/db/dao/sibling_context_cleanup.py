@@ -204,26 +204,24 @@ def get_assistants_sibling_context_info(
         if not sub_context:
             continue
 
-        user_name = user_values.get(log_id)
-        assistant_name = assistant_values.get(log_id)
+        user_ctx = user_values.get(log_id)
+        assistant_ctx = assistant_values.get(log_id)
 
         # Construct all three tier context names
         if prefix:
             tier1_name = f"{prefix}/All/{sub_context}"
-            tier2_name = (
-                f"{prefix}/{user_name}/All/{sub_context}" if user_name else None
-            )
+            tier2_name = f"{prefix}/{user_ctx}/All/{sub_context}" if user_ctx else None
             tier3_name = (
-                f"{prefix}/{user_name}/{assistant_name}/{sub_context}"
-                if user_name and assistant_name
+                f"{prefix}/{user_ctx}/{assistant_ctx}/{sub_context}"
+                if user_ctx and assistant_ctx
                 else None
             )
         else:
             tier1_name = f"All/{sub_context}"
-            tier2_name = f"{user_name}/All/{sub_context}" if user_name else None
+            tier2_name = f"{user_ctx}/All/{sub_context}" if user_ctx else None
             tier3_name = (
-                f"{user_name}/{assistant_name}/{sub_context}"
-                if user_name and assistant_name
+                f"{user_ctx}/{assistant_ctx}/{sub_context}"
+                if user_ctx and assistant_ctx
                 else None
             )
 

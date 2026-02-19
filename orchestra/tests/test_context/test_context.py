@@ -3160,7 +3160,7 @@ async def test_delete_context_no_sibling_deletion_for_non_assistants(
     await _create_project(client, project_name)
 
     # Create contexts that look like sibling pattern but in regular project
-    contexts = ["All/Transcripts", "User/Assistant/Transcripts"]
+    contexts = ["All/Transcripts", "user1/assistant1/Transcripts"]
     for ctx in contexts:
         response = await client.post(
             f"/v0/project/{project_name}/contexts",
@@ -3182,14 +3182,14 @@ async def test_delete_context_no_sibling_deletion_for_non_assistants(
     # Add same log to second context
     response = await client.post(
         f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": "User/Assistant/Transcripts", "log_ids": [log_id]},
+        json={"context_name": "user1/assistant1/Transcripts", "log_ids": [log_id]},
         headers=HEADERS,
     )
     assert response.status_code == 200
 
-    # Delete User/Assistant/Transcripts
+    # Delete user1/assistant1/Transcripts
     response = await client.delete(
-        f"/v0/project/{project_name}/contexts/User/Assistant/Transcripts",
+        f"/v0/project/{project_name}/contexts/user1/assistant1/Transcripts",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -3268,14 +3268,14 @@ async def test_delete_context_assistants_cleans_all_tiers(client: AsyncClient):
     """
     Test that deleting a context in Assistants project cleans up sibling tiers.
 
-    Deleting 'User/Assistant/Transcripts' should also clean logs from:
-    - 'User/All/Transcripts' (tier 2)
+    Deleting 'user_id/assistant_id/Transcripts' should also clean logs from:
+    - 'user_id/All/Transcripts' (tier 2)
     - 'All/Transcripts' (tier 1)
     """
     project_name = "Assistants"
     tier1 = "All/Transcripts"
-    tier2 = "SiblingUser/All/Transcripts"
-    tier3 = "SiblingUser/SiblingAssistant/Transcripts"
+    tier2 = "sibling-user/All/Transcripts"
+    tier3 = "sibling-user/sibling-assistant/Transcripts"
 
     # Create project
     await _create_project(client, project_name)
@@ -3295,8 +3295,8 @@ async def test_delete_context_assistants_cleans_all_tiers(client: AsyncClient):
         project_name,
         entries={
             "message": "sibling test",
-            "_user": "SiblingUser",
-            "_assistant": "SiblingAssistant",
+            "_user": "sibling-user",
+            "_assistant": "sibling-assistant",
         },
         context=tier3,
     )
@@ -3344,8 +3344,8 @@ async def test_delete_context_from_tier1_cleans_other_tiers(client: AsyncClient)
     """
     project_name = "Assistants"
     tier1 = "All/Messages"
-    tier2 = "Tier1User/All/Messages"
-    tier3 = "Tier1User/Tier1Asst/Messages"
+    tier2 = "tier1-user/All/Messages"
+    tier3 = "tier1-user/tier1-asst/Messages"
 
     # Create project and contexts
     await _create_project(client, project_name)
@@ -3363,8 +3363,8 @@ async def test_delete_context_from_tier1_cleans_other_tiers(client: AsyncClient)
         project_name,
         entries={
             "message": "tier1 deletion test",
-            "_user": "Tier1User",
-            "_assistant": "Tier1Asst",
+            "_user": "tier1-user",
+            "_assistant": "tier1-asst",
         },
         context=tier1,
     )
@@ -3398,12 +3398,12 @@ async def test_delete_context_from_tier1_cleans_other_tiers(client: AsyncClient)
 @pytest.mark.anyio
 async def test_delete_context_from_tier2_cleans_other_tiers(client: AsyncClient):
     """
-    Test deleting from User/All/* (tier 2) also cleans logs from tier 1 and tier 3.
+    Test deleting from user_id/All/* (tier 2) also cleans logs from tier 1 and tier 3.
     """
     project_name = "Assistants"
     tier1 = "All/Events"
-    tier2 = "Tier2User/All/Events"
-    tier3 = "Tier2User/Tier2Asst/Events"
+    tier2 = "tier2-user/All/Events"
+    tier3 = "tier2-user/tier2-asst/Events"
 
     # Create project and contexts
     await _create_project(client, project_name)
@@ -3421,8 +3421,8 @@ async def test_delete_context_from_tier2_cleans_other_tiers(client: AsyncClient)
         project_name,
         entries={
             "message": "tier2 deletion test",
-            "_user": "Tier2User",
-            "_assistant": "Tier2Asst",
+            "_user": "tier2-user",
+            "_assistant": "tier2-asst",
         },
         context=tier2,
     )
@@ -3465,13 +3465,13 @@ async def test_delete_context_include_children_with_sibling_cleanup(
     """
     Test that include_children=True with sibling cleanup works correctly.
 
-    Deleting 'User/Assistant' with include_children=True should:
-    1. Delete all child contexts under User/Assistant/*
-    2. Clean up logs from sibling contexts (All/* and User/All/*)
+    Deleting 'user_id/assistant_id' with include_children=True should:
+    1. Delete all child contexts under user_id/assistant_id/*
+    2. Clean up logs from sibling contexts (All/* and user_id/All/*)
     """
     project_name = "Assistants"
-    user = "ChildUser"
-    assistant = "ChildAsst"
+    user = "child-user"
+    assistant = "child-asst"
 
     # Tier structure for two different sub-contexts
     contexts = [
@@ -3520,7 +3520,7 @@ async def test_delete_context_include_children_with_sibling_cleanup(
             )
             assert response.status_code == 200
 
-    # DELETE User/Assistant with include_children=True
+    # DELETE user_id/assistant_id with include_children=True
     response = await client.delete(
         f"/v0/project/{project_name}/contexts/{user}/{assistant}",
         headers=HEADERS,
@@ -3529,14 +3529,14 @@ async def test_delete_context_include_children_with_sibling_cleanup(
     result = response.json()
     assert "Deleted 2 context(s)" in result["info"]
 
-    # Verify logs are removed from User/All/* contexts but remain in All/* (archive protection)
+    # Verify logs are removed from user_id/All/* contexts but remain in All/* (archive protection)
     # log_ids[0] is for Logs, log_ids[1] is for Chats
     sub_ctx_log_map = {"Logs": log_ids[0], "Chats": log_ids[1]}
 
     for sub_ctx in ["Logs", "Chats"]:
         log_id = sub_ctx_log_map[sub_ctx]
 
-        # Logs should be removed from User/All/* (not protected)
+        # Logs should be removed from user_id/All/* (not protected)
         tier2_ctx = f"{user}/All/{sub_ctx}"
         logs = await fetch_logs(client, project_name, context=tier2_ctx)
         assert log_id not in [
@@ -3558,8 +3558,8 @@ async def test_unitytests_project_sibling_cleanup(client: AsyncClient):
     """
     project_name = "UnityTests"
     tier1 = "All/TestResults"
-    tier2 = "UnityUser/All/TestResults"
-    tier3 = "UnityUser/UnityAsst/TestResults"
+    tier2 = "unity-user/All/TestResults"
+    tier3 = "unity-user/unity-asst/TestResults"
 
     # Create project and contexts
     await _create_project(client, project_name)
@@ -3577,8 +3577,8 @@ async def test_unitytests_project_sibling_cleanup(client: AsyncClient):
         project_name,
         entries={
             "result": "pass",
-            "_user": "UnityUser",
-            "_assistant": "UnityAsst",
+            "_user": "unity-user",
+            "_assistant": "unity-asst",
         },
         context=tier3,
     )
