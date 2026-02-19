@@ -419,7 +419,7 @@ async def delete_organization(
                     [
                         RechargeStatus.PENDING_INVOICE,
                         RechargeStatus.INVOICE_CREATED,
-                    ]
+                    ],
                 ),
             )
             .all()
