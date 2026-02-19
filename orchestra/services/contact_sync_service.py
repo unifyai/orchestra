@@ -25,8 +25,8 @@ class ContactSyncService:
     Handles:
     - User timezone → Contact logs (first_name + surname, is_system=True)
     - User bio → Contact logs (first_name + surname, is_system=True)
-    - Assistant timezone → Contact logs (_assistant=FirstSurname, contact_id=0)
-    - Assistant about → Contact logs (_assistant=FirstSurname, contact_id=0)
+    - Assistant timezone → Contact logs (_assistant=str(agent_id), contact_id=0)
+    - Assistant about → Contact logs (_assistant=str(agent_id), contact_id=0)
     """
 
     ASSISTANTS_PROJECT_NAME = "Assistants"
