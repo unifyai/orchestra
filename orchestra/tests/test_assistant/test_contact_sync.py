@@ -437,7 +437,7 @@ async def test_assistant_timezone_sync_updates_contact_log(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "_assistant": "TestBot",
+                    "_assistant": str(agent_id),
                     "contact_id": 0,
                     "timezone": "America/New_York",
                     "bio": "Original assistant bio",
@@ -503,8 +503,8 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
             "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"_assistant": "FilterBot", "contact_id": 0, "timezone": "UTC"},
-                {"_assistant": "FilterBot", "contact_id": 999, "timezone": "UTC"},
+                {"_assistant": str(agent_id), "contact_id": 0, "timezone": "UTC"},
+                {"_assistant": str(agent_id), "contact_id": 999, "timezone": "UTC"},
             ],
         },
         headers=user["headers"],
@@ -568,7 +568,7 @@ async def test_assistant_bio_sync_updates_contact_log(
             "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"_assistant": "BioBot", "contact_id": 0, "bio": "Original bio"},
+                {"_assistant": str(agent_id), "contact_id": 0, "bio": "Original bio"},
             ],
         },
         headers=user["headers"],
@@ -630,7 +630,7 @@ async def test_assistant_bio_and_timezone_sync_together(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "_assistant": "BothBot",
+                    "_assistant": str(agent_id),
                     "contact_id": 0,
                     "bio": "Old bio",
                     "timezone": "UTC",
@@ -721,7 +721,9 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
         json={
             "project_name": "Assistants",
             "context": "All/Contacts",
-            "entries": [{"_assistant": "OrgBot", "contact_id": 0, "timezone": "UTC"}],
+            "entries": [
+                {"_assistant": str(agent_id), "contact_id": 0, "timezone": "UTC"},
+            ],
         },
         headers=org_headers,
     )

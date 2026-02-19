@@ -1664,15 +1664,15 @@ def _atomic_upsert_mode(
         context_parts = body.context.split("/")
 
         if "_user" in body.initial_data and "_assistant" in body.initial_data:
-            user_name = str(body.initial_data.get("_user", ""))
-            assistant_name = str(body.initial_data.get("_assistant", ""))
+            user_ctx = str(body.initial_data.get("_user", ""))
+            assistant_ctx = str(body.initial_data.get("_assistant", ""))
 
             user_idx = None
             assistant_idx = None
             for i, part in enumerate(context_parts):
-                if part == user_name and user_idx is None:
+                if part == user_ctx and user_idx is None:
                     user_idx = i
-                elif part == assistant_name and user_idx is not None:
+                elif part == assistant_ctx and user_idx is not None:
                     assistant_idx = i
                     break
 
