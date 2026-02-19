@@ -189,7 +189,7 @@ async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
             f"{COMMS_URL}/infra/pubsub/topic",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             data={"topic_name": topic_name},
-            timeout=20,
+            timeout=40,
         )
         return response.json()
 
