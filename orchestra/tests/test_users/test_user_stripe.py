@@ -44,6 +44,18 @@ def _mock_stripe_settings(monkeypatch):
         True,
         raising=False,
     )
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_credits_price_id_personal",
+        "price_test_personal_dummy",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_credits_price_id_business",
+        "price_test_business_dummy",
+        raising=False,
+    )
 
 
 # ============================================================================
