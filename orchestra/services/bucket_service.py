@@ -48,36 +48,104 @@ class BucketService:
             )
         self.bucket = self.storage_client.bucket(self.bucket_name)
 
-        # Assistant images bucket
-        self.assistant_images_bucket_name = os.getenv(
-            "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
-            "hired_assistants_images",
+        # -----------------------------------------------------------------
+        # Assistant media bucket (renamed from hired_assistants_images)
+        # Env var: ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME
+        # Fallback: ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME (deprecated)
+        # -----------------------------------------------------------------
+        self.assistant_media_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME",
+            os.getenv(
+                "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
+                "assistant-media",
+            ),
         )
-        if not self.assistant_images_bucket_name:
+        if not self.assistant_media_bucket_name:
             raise ValueError(
-                "Missing required GCP assistant images bucket name configuration (ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME)",
+                "Missing required GCP assistant media bucket name configuration "
+                "(ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME)",
             )
-        self.assistant_images_bucket = self.storage_client.bucket(
-            self.assistant_images_bucket_name,
+        self.assistant_media_bucket = self.storage_client.bucket(
+            self.assistant_media_bucket_name,
         )
 
-        # Unify message attachments bucket
-        self.unify_attachments_bucket_name = os.getenv(
-            "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
-            "unify-message-attachments",
+        # -----------------------------------------------------------------
+        # Message attachments bucket (renamed from unify-message-attachments)
+        # Env var: ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME
+        # Fallback: ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME (deprecated)
+        # -----------------------------------------------------------------
+        self.message_attachments_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
+            os.getenv(
+                "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
+                "assistant-message-attachments",
+            ),
         )
-        self.unify_attachments_bucket = self.storage_client.bucket(
-            self.unify_attachments_bucket_name,
+        self.message_attachments_bucket = self.storage_client.bucket(
+            self.message_attachments_bucket_name,
         )
 
-        # Call recordings bucket (written by LiveKit Egress in the Communication service)
-        self.recordings_bucket_name = os.getenv(
-            "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME",
-            "unity-call-recordings",
+        # -----------------------------------------------------------------
+        # Call recordings bucket (renamed from unity-call-recordings)
+        # Env var: ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME
+        # Fallback: ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME (deprecated)
+        # -----------------------------------------------------------------
+        self.call_recordings_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
+            os.getenv(
+                "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME",
+                "assistant-call-recordings",
+            ),
         )
-        self.recordings_bucket = self.storage_client.bucket(
-            self.recordings_bucket_name,
+        self.call_recordings_bucket = self.storage_client.bucket(
+            self.call_recordings_bucket_name,
         )
+
+        # -----------------------------------------------------------------
+        # Presets bucket (environment-agnostic, shared across envs)
+        # -----------------------------------------------------------------
+        self.presets_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_ASSISTANT_MEDIA_PRESETS_BUCKET_NAME",
+            "assistant-media-presets",
+        )
+        self.presets_bucket = self.storage_client.bucket(self.presets_bucket_name)
+
+        # -----------------------------------------------------------------
+        # Backward-compatible aliases (deprecated, will be removed)
+        # These allow existing callers / tests to keep working during migration.
+        # -----------------------------------------------------------------
+        self.assistant_images_bucket_name = self.assistant_media_bucket_name
+        self.assistant_images_bucket = self.assistant_media_bucket
+        self.unify_attachments_bucket_name = self.message_attachments_bucket_name
+        self.unify_attachments_bucket = self.message_attachments_bucket
+        self.recordings_bucket_name = self.call_recordings_bucket_name
+        self.recordings_bucket = self.call_recordings_bucket
+
+    # -----------------------------------------------------------------
+    #                          Path helpers
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def build_assistant_path(
+        assistant_id: str | int,
+        media_type: str,
+        filename: str,
+    ) -> str:
+        """
+        Build an assistant-centric GCS object path.
+
+        Standard path layout:  {assistant_id}/{media_type}/{filename}
+
+        Args:
+            assistant_id: The assistant's ID.
+            media_type: Category subfolder – one of 'image', 'voice', 'video',
+                        'calls', 'attachments'.
+            filename: The final filename (with extension).
+
+        Returns:
+            The fully-qualified object path within a bucket.
+        """
+        return f"{assistant_id}/{media_type}/{filename}"
 
     def _generate_unique_filename(self, content: bytes, extension: str = "") -> str:
         """Generate a unique filename using content hash, UUID, and an optional extension."""
@@ -87,9 +155,21 @@ class BucketService:
             return f"{content_hash}_{unique_id}.{extension.lstrip('.')}"
         return f"{content_hash}_{unique_id}"
 
-    # -------------------------------------------------------------
+    @staticmethod
+    def _media_type_from_content_type(content_type: str) -> str:
+        """Derive the media-type subfolder name from a MIME content type."""
+        if not content_type:
+            return "image"
+        ct = content_type.lower()
+        if ct.startswith("video/"):
+            return "video"
+        if ct.startswith("audio/"):
+            return "voice"
+        return "image"
+
+    # -----------------------------------------------------------------
     #                   General media operations
-    # -------------------------------------------------------------
+    # -----------------------------------------------------------------
     def upload_media(self, base64_media: str, media_type: str) -> Tuple[str, str]:
         """
         Upload a base64 encoded media to the bucket.
@@ -195,26 +275,45 @@ class BucketService:
         blob = self.bucket.blob(filename)
         return blob.public_url
 
-    # -------------------------------------------------------------
-    #            Assistant photo and temp file operations
-    # -------------------------------------------------------------
-    def upload_assistant_photo_file(
+    # -----------------------------------------------------------------
+    #          Assistant media upload operations (assistant-centric)
+    # -----------------------------------------------------------------
+
+    def upload_assistant_media_file(
         self,
         file_content: bytes,
-        user_id: str,  # For path organization
-        content_type: str = "image/jpeg",  # Default, can be overridden
+        content_type: str = "image/jpeg",
+        *,
+        assistant_id: str | int | None = None,
+        user_id: str | None = None,
     ) -> str:
         """
-        Uploads an assistant's profile photo file to the assistant images GCS bucket.
+        Upload a media file to the assistant media bucket.
+
+        When ``assistant_id`` is provided the file is stored under the
+        assistant-centric path ``{assistant_id}/{media_type}/{filename}``.
+
+        When only ``user_id`` is supplied (legacy callers) the file is stored
+        under ``{user_id}/{filename}`` for backward compatibility.
+
         Args:
-            file_content: Raw bytes of the image file.
-            user_id: ID of the user uploading the photo, for path organization.
-            content_type: MIME type of the image.
+            file_content: Raw bytes of the file.
+            content_type: MIME type of the file (default ``image/jpeg``).
+            assistant_id: Target assistant ID (preferred).
+            user_id: Deprecated – kept for backward compatibility.
+
         Returns:
-            The GCS URL (gs://bucket-name/object-path) of the uploaded photo.
+            The ``gs://`` URL of the uploaded object.
+
         Raises:
+            ValueError: If neither *assistant_id* nor *user_id* is provided.
             Exception: If upload fails.
         """
+        if not assistant_id and not user_id:
+            raise ValueError(
+                "Either assistant_id or user_id must be provided for upload path.",
+            )
+
         try:
             extension = (
                 content_type.split("/")[-1]
@@ -222,32 +321,71 @@ class BucketService:
                 else "jpg"
             )
             file_name = self._generate_unique_filename(file_content)
-            object_path = f"{user_id}/{file_name}.{extension}"
 
-            blob = self.assistant_images_bucket.blob(object_path)
+            if assistant_id:
+                media_type = self._media_type_from_content_type(content_type)
+                object_path = self.build_assistant_path(
+                    assistant_id,
+                    media_type,
+                    f"{file_name}.{extension}",
+                )
+            else:
+                # Legacy path: {user_id}/{filename}
+                object_path = f"{user_id}/{file_name}.{extension}"
+
+            blob = self.assistant_media_bucket.blob(object_path)
             blob.upload_from_string(file_content, content_type=content_type)
-            gcs_url = f"gs://{self.assistant_images_bucket_name}/{object_path}"
+            gcs_url = f"gs://{self.assistant_media_bucket_name}/{object_path}"
 
             return gcs_url
         except exceptions.GoogleAPIError as e:
-            logging.error(f"Failed to upload assistant photo to GCS: {str(e)}")
-            raise Exception(f"Failed to upload assistant photo: {str(e)}")
+            logging.error(f"Failed to upload assistant media to GCS: {str(e)}")
+            raise Exception(f"Failed to upload assistant media: {str(e)}")
 
-    def upload_temp_assistant_file(
+    def upload_assistant_photo_file(
         self,
         file_content: bytes,
         user_id: str,
+        content_type: str = "image/jpeg",
+        *,
+        assistant_id: str | int | None = None,
+    ) -> str:
+        """
+        Upload an assistant's profile photo/video file.
+
+        This is a backward-compatible wrapper around
+        :meth:`upload_assistant_media_file`.  New callers should prefer
+        ``upload_assistant_media_file(…, assistant_id=…)`` directly.
+        """
+        return self.upload_assistant_media_file(
+            file_content,
+            content_type,
+            assistant_id=assistant_id,
+            user_id=user_id,
+        )
+
+    # -----------------------------------------------------------------
+    #                   Temporary file operations
+    # -----------------------------------------------------------------
+
+    def upload_temp_file(
+        self,
+        file_content: bytes,
         content_type: str,
     ) -> Tuple[str, str]:
         """
-        Uploads a temporary photo/file to a '_temp' subfolder in the assistant images bucket
-        and returns a signed URL for public access, along with its GCS URI.
+        Upload a temporary file to the root-level ``tmp/`` folder in the
+        assistant media bucket and return a signed URL + GCS URI.
+
+        Temp files are ephemeral and subject to lifecycle auto-cleanup.
+
         Args:
             file_content: Raw bytes of the file.
-            user_id: ID of the user, for path organization.
             content_type: MIME type of the file.
+
         Returns:
-            A tuple of (publicly_accessible_signed_url, gcs_uri) for the temporary file.
+            A tuple of ``(signed_url, gcs_uri)`` for the temporary file.
+
         Raises:
             Exception: If upload or URL signing fails.
         """
@@ -255,27 +393,27 @@ class BucketService:
             extension = (
                 content_type.split("/")[-1]
                 if content_type and "/" in content_type
-                else "jpg"
+                else "bin"
             )
-            if "audio" in content_type:
+            if "audio" in (content_type or ""):
                 extension = (
                     content_type.split("/")[-1] if "/" in content_type else "wav"
                 )
 
             file_name = self._generate_unique_filename(file_content)
-            object_path = f"_temp/{user_id}/{file_name}.{extension}"
+            object_path = f"tmp/{file_name}.{extension}"
 
-            blob = self.assistant_images_bucket.blob(object_path)
+            blob = self.assistant_media_bucket.blob(object_path)
             blob.upload_from_string(file_content, content_type=content_type)
 
-            expiration_timedelta = datetime.timedelta(hours=1)  # URL valid for 1 hour
+            expiration_timedelta = datetime.timedelta(hours=1)
             signed_url = blob.generate_signed_url(
                 version="v4",
                 expiration=expiration_timedelta,
                 method="GET",
             )
 
-            gcs_uri = f"gs://{self.assistant_images_bucket_name}/{object_path}"
+            gcs_uri = f"gs://{self.assistant_media_bucket_name}/{object_path}"
 
             return signed_url, gcs_uri
         except exceptions.GoogleAPIError as e:
@@ -285,18 +423,45 @@ class BucketService:
             raise Exception(f"Failed to upload temporary file: {str(e)}")
         except Exception as e:
             logging.error(
-                f"Unexpected error in upload_temp_assistant_file: {str(e)}",
+                f"Unexpected error in upload_temp_file: {str(e)}",
             )
             raise Exception(f"Failed to process temporary file: {str(e)}")
 
+    def upload_temp_assistant_file(
+        self,
+        file_content: bytes,
+        user_id: str,
+        content_type: str,
+    ) -> Tuple[str, str]:
+        """
+        Backward-compatible wrapper around :meth:`upload_temp_file`.
+
+        .. deprecated::
+            The ``user_id`` parameter is no longer used for path construction.
+            Temporary files are now stored in a root-level ``tmp/`` folder.
+            Use :meth:`upload_temp_file` directly.
+        """
+        return self.upload_temp_file(
+            file_content=file_content,
+            content_type=content_type,
+        )
+
+    # -----------------------------------------------------------------
+    #               File deletion (works with gs:// URLs)
+    # -----------------------------------------------------------------
+
     def delete_assistant_file(self, gcs_url: str) -> bool:
         """
-        Delete an assistant's profile photo/file from GCS using its GCS URL.
-        Ensures deletion only occurs from the designated assistant images bucket.
+        Delete an assistant's file from GCS using its ``gs://`` URL.
+
+        Ensures deletion only occurs from the designated assistant media bucket.
+
         Args:
-            gcs_url: The GCS URL of the photo/file to delete (e.g., gs://bucket/path/to/photo.jpg)
+            gcs_url: The GCS URL of the file (e.g., ``gs://bucket/path/to/file.jpg``).
+
         Returns:
             Boolean indicating success.
+
         Raises:
             Exception: If deletion fails for reasons other than NotFound.
         """
@@ -306,28 +471,31 @@ class BucketService:
             logging.warning(f"Invalid GCS URL for deletion: {gcs_url}")
             return False
 
-        if parsed_bucket != self.assistant_images_bucket_name:
+        if parsed_bucket != self.assistant_media_bucket_name:
             logging.error(
-                f"Attempt to delete photo/file from incorrect bucket. Expected '{self.assistant_images_bucket_name}', got '{parsed_bucket}'. URL: {gcs_url}",
+                f"Attempt to delete file from incorrect bucket. "
+                f"Expected '{self.assistant_media_bucket_name}', got '{parsed_bucket}'. "
+                f"URL: {gcs_url}",
             )
             return False
         try:
-            blob = self.assistant_images_bucket.blob(object_path)
+            blob = self.assistant_media_bucket.blob(object_path)
             blob.delete()
-            logging.info(f"Successfully deleted assistant photo/file: {gcs_url}")
+            logging.info(f"Successfully deleted assistant file: {gcs_url}")
             return True
         except exceptions.NotFound:
             logging.warning(
-                f"Assistant photo/file not found during deletion: {gcs_url}",
+                f"Assistant file not found during deletion: {gcs_url}",
             )
             return True
         except exceptions.GoogleAPIError as e:
-            logging.error(f"Failed to delete assistant photo/file {gcs_url}: {str(e)}")
-            raise Exception(f"Failed to delete assistant photo/file: {str(e)}")
+            logging.error(f"Failed to delete assistant file {gcs_url}: {str(e)}")
+            raise Exception(f"Failed to delete assistant file: {str(e)}")
 
-    # -------------------------------------------------------------
-    #            Call recording operations
-    # -------------------------------------------------------------
+    # -----------------------------------------------------------------
+    #                   Call recording operations
+    # -----------------------------------------------------------------
+
     def delete_assistant_recordings(
         self,
         assistant_id: str | int,
@@ -337,15 +505,17 @@ class BucketService:
         """
         Delete all call recordings for an assistant from GCS.
 
-        Recordings are stored under {staging|production}/{assistant_id}/ by
-        LiveKit Egress in the Communication service. This deletes every object
-        under both prefixes so recordings are cleaned up regardless of the
-        environment they were created in.
+        Searches under both the new assistant-centric path
+        (``{assistant_id}/``) and legacy environment-prefixed paths
+        (``staging/{assistant_id}/``, ``production/{assistant_id}/``) to
+        ensure all recordings are cleaned up during migration.
 
         Returns:
             Number of successfully deleted files.
         """
+        # New path + legacy paths for backward compat
         prefixes = [
+            f"{assistant_id}/",
             f"staging/{assistant_id}/",
             f"production/{assistant_id}/",
         ]
@@ -353,7 +523,7 @@ class BucketService:
 
         for prefix in prefixes:
             try:
-                blobs = self.recordings_bucket.list_blobs(prefix=prefix)
+                blobs = self.call_recordings_bucket.list_blobs(prefix=prefix)
                 for blob in blobs:
                     try:
                         blob.delete()
@@ -377,32 +547,28 @@ class BucketService:
 
         return deleted_count
 
-    # -------------------------------------------------------------
-    #            Unify message attachment operations
-    # -------------------------------------------------------------
-    def delete_message_attachments_for_user(self, user_id: str | int) -> int:
-        """
-        Delete all message attachments for a user from GCS.
+    # -----------------------------------------------------------------
+    #                Message attachment operations
+    # -----------------------------------------------------------------
 
-        Attachments are stored with user-scoped paths: {user_id}/{attachment_id}_{filename}
-        This method deletes all objects with the user's prefix.
+    def delete_assistant_attachments(self, assistant_id: str | int) -> int:
+        """
+        Delete all message attachments for an assistant from GCS.
+
+        Attachments are stored with assistant-scoped paths:
+        ``{assistant_id}/{attachment_id}_{filename}``
 
         Args:
-            user_id: The user's ID (can be string or int)
+            assistant_id: The assistant's ID.
 
         Returns:
-            Number of successfully deleted files
-
-        Note:
-            This is a best-effort operation. Individual deletion failures are logged
-            but don't stop the cleanup process. The method continues deleting other
-            files even if some fail.
+            Number of successfully deleted files.
         """
-        prefix = f"{user_id}/"
+        prefix = f"{assistant_id}/"
         deleted_count = 0
 
         try:
-            blobs = self.unify_attachments_bucket.list_blobs(prefix=prefix)
+            blobs = self.message_attachments_bucket.list_blobs(prefix=prefix)
 
             for blob in blobs:
                 try:
@@ -411,7 +577,54 @@ class BucketService:
                     logging.debug(f"Deleted attachment: {blob.name}")
                 except exceptions.GoogleAPIError as e:
                     logging.error(f"Failed to delete attachment {blob.name}: {str(e)}")
-                    # Continue with other files
+
+            if deleted_count > 0:
+                logging.info(
+                    f"Deleted {deleted_count} message attachment(s) for assistant {assistant_id}",
+                )
+            else:
+                logging.debug(
+                    f"No message attachments found for assistant {assistant_id}",
+                )
+
+            return deleted_count
+
+        except exceptions.GoogleAPIError as e:
+            logging.error(
+                f"Failed to list attachments for assistant {assistant_id}: {str(e)}",
+            )
+            return deleted_count
+
+    def delete_message_attachments_for_user(self, user_id: str | int) -> int:
+        """
+        Delete all message attachments for a user from GCS.
+
+        .. deprecated::
+            Use :meth:`delete_assistant_attachments` for assistant-centric
+            cleanup.  This method is retained for the user-account-deletion
+            flow which still iterates by user_id during the migration period.
+
+        Searches under the legacy ``{user_id}/`` prefix.
+
+        Args:
+            user_id: The user's ID (can be string or int).
+
+        Returns:
+            Number of successfully deleted files.
+        """
+        prefix = f"{user_id}/"
+        deleted_count = 0
+
+        try:
+            blobs = self.message_attachments_bucket.list_blobs(prefix=prefix)
+
+            for blob in blobs:
+                try:
+                    blob.delete()
+                    deleted_count += 1
+                    logging.debug(f"Deleted attachment: {blob.name}")
+                except exceptions.GoogleAPIError as e:
+                    logging.error(f"Failed to delete attachment {blob.name}: {str(e)}")
 
             if deleted_count > 0:
                 logging.info(
@@ -427,3 +640,70 @@ class BucketService:
                 f"Failed to list attachments for user {user_id}: {str(e)}",
             )
             return deleted_count
+
+    # -----------------------------------------------------------------
+    #          Full assistant cleanup (all buckets at once)
+    # -----------------------------------------------------------------
+
+    def delete_all_assistant_data(
+        self,
+        assistant_id: str | int,
+        *,
+        is_staging: bool = False,
+    ) -> dict:
+        """
+        Delete **all** GCS data for an assistant across every bucket.
+
+        Convenience method used during assistant deletion to ensure nothing
+        is left behind.  Calls the individual delete helpers and returns a
+        summary dict.
+
+        Args:
+            assistant_id: The assistant's ID.
+            is_staging: Whether this is a staging environment.
+
+        Returns:
+            Dict with counts per bucket, e.g.
+            ``{"media": 3, "recordings": 1, "attachments": 5}``.
+        """
+        media_count = 0
+        prefix = f"{assistant_id}/"
+
+        # --- assistant media bucket ---
+        try:
+            blobs = self.assistant_media_bucket.list_blobs(prefix=prefix)
+            for blob in blobs:
+                try:
+                    blob.delete()
+                    media_count += 1
+                except exceptions.GoogleAPIError as e:
+                    logging.error(
+                        f"Failed to delete media {blob.name}: {str(e)}",
+                    )
+        except exceptions.GoogleAPIError as e:
+            logging.error(
+                f"Failed to list media under {prefix}: {str(e)}",
+            )
+
+        # --- recordings ---
+        recordings_count = self.delete_assistant_recordings(
+            assistant_id,
+            is_staging=is_staging,
+        )
+
+        # --- attachments ---
+        attachments_count = self.delete_assistant_attachments(assistant_id)
+
+        total = media_count + recordings_count + attachments_count
+        if total > 0:
+            logging.info(
+                f"Cleaned up {total} file(s) for assistant {assistant_id} "
+                f"(media={media_count}, recordings={recordings_count}, "
+                f"attachments={attachments_count})",
+            )
+
+        return {
+            "media": media_count,
+            "recordings": recordings_count,
+            "attachments": attachments_count,
+        }
