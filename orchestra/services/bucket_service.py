@@ -70,6 +70,15 @@ class BucketService:
             self.unify_attachments_bucket_name,
         )
 
+        # Call recordings bucket (written by LiveKit Egress in the Communication service)
+        self.recordings_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME",
+            "unity-call-recordings",
+        )
+        self.recordings_bucket = self.storage_client.bucket(
+            self.recordings_bucket_name,
+        )
+
     def _generate_unique_filename(self, content: bytes, extension: str = "") -> str:
         """Generate a unique filename using content hash, UUID, and an optional extension."""
         content_hash = hashlib.md5(content).hexdigest()
@@ -315,6 +324,58 @@ class BucketService:
         except exceptions.GoogleAPIError as e:
             logging.error(f"Failed to delete assistant photo/file {gcs_url}: {str(e)}")
             raise Exception(f"Failed to delete assistant photo/file: {str(e)}")
+
+    # -------------------------------------------------------------
+    #            Call recording operations
+    # -------------------------------------------------------------
+    def delete_assistant_recordings(
+        self,
+        assistant_id: str | int,
+        *,
+        is_staging: bool = False,
+    ) -> int:
+        """
+        Delete all call recordings for an assistant from GCS.
+
+        Recordings are stored under {staging|production}/{assistant_id}/ by
+        LiveKit Egress in the Communication service. This deletes every object
+        under both prefixes so recordings are cleaned up regardless of the
+        environment they were created in.
+
+        Returns:
+            Number of successfully deleted files.
+        """
+        prefixes = [
+            f"staging/{assistant_id}/",
+            f"production/{assistant_id}/",
+        ]
+        deleted_count = 0
+
+        for prefix in prefixes:
+            try:
+                blobs = self.recordings_bucket.list_blobs(prefix=prefix)
+                for blob in blobs:
+                    try:
+                        blob.delete()
+                        deleted_count += 1
+                        logging.debug(f"Deleted recording: {blob.name}")
+                    except exceptions.GoogleAPIError as e:
+                        logging.error(
+                            f"Failed to delete recording {blob.name}: {str(e)}",
+                        )
+            except exceptions.GoogleAPIError as e:
+                logging.error(
+                    f"Failed to list recordings under {prefix}: {str(e)}",
+                )
+
+        if deleted_count > 0:
+            logging.info(
+                f"Deleted {deleted_count} recording(s) for assistant {assistant_id}",
+            )
+        else:
+            logging.debug(f"No recordings found for assistant {assistant_id}")
+
+        return deleted_count
 
     # -------------------------------------------------------------
     #            Unify message attachment operations
