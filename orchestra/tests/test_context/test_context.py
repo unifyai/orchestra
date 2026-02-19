@@ -1632,6 +1632,52 @@ async def test_rename_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_rename_context_with_children(client: AsyncClient):
+    project = "rename-children-project"
+    await client.post("/v0/project", json={"name": project}, headers=HEADERS)
+
+    contexts = ["A", "A/B", "A/B/C", "A/B/D", "X/Y"]
+    for ctx in contexts:
+        await client.post(
+            f"/v0/project/{project}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+
+    resp = await client.patch(
+        f"/v0/project/{project}/contexts/A/rename",
+        json={"name": "E"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+
+    for old, new in [
+        ("A", "E"),
+        ("A/B", "E/B"),
+        ("A/B/C", "E/B/C"),
+        ("A/B/D", "E/B/D"),
+    ]:
+        r_old = await client.get(
+            f"/v0/project/{project}/contexts/{old}",
+            headers=HEADERS,
+        )
+        assert r_old.status_code == 404, f"{old} should no longer exist"
+
+        r_new = await client.get(
+            f"/v0/project/{project}/contexts/{new}",
+            headers=HEADERS,
+        )
+        assert r_new.status_code == 200, f"{new} should exist"
+        assert r_new.json()["name"] == new
+
+    r_unrelated = await client.get(
+        f"/v0/project/{project}/contexts/X/Y",
+        headers=HEADERS,
+    )
+    assert r_unrelated.status_code == 200, "unrelated context should be untouched"
+
+
+@pytest.mark.anyio
 async def test_context_with_sequential_id(client: AsyncClient):
     """Test that logs in a context with unique_keys get a sequential ID."""
     project_name = "sequential-id-project"
