@@ -27,8 +27,9 @@ async def approve_default_user(client: AsyncClient):
 @pytest.fixture(autouse=True)
 def mock_assistant_infra_calls(request):
     """
-    Automatically mock assistant infrastructure webhooks for all tests.
-    This prevents real network calls, making tests fast and reliable.
+    Automatically mock assistant infrastructure webhooks and staging for all tests.
+    This prevents real network calls and bypasses billing checks,
+    making tests fast and reliable.
     """
     if "no_mock_infra" in request.keywords:
         yield
@@ -40,10 +41,14 @@ def mock_assistant_infra_calls(request):
     ) as mock_wake_up, patch(
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
-    ) as mock_reawaken:
+    ) as mock_reawaken, patch(
+        "orchestra.web.api.assistant.views.settings",
+    ) as mock_settings:
 
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+        # Patch is_staging to skip credit/billing checks during assistant creation
+        mock_settings.is_staging = True
 
         yield mock_wake_up, mock_reawaken
 
@@ -485,7 +490,7 @@ async def test_admin_get_user_spend(client: AsyncClient):
 
     # Get spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/user/spend/{user_id}?month=2026-01",
+        f"/v0/admin/user/{user_id}/spend?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1263,7 +1268,7 @@ async def test_user_can_get_own_spend(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     response = await client.get(
-        f"/v0/admin/user/spend/{user_id}?month=2026-01",
+        f"/v0/admin/user/{user_id}/spend?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1288,7 +1293,7 @@ async def test_user_spend_includes_limit_when_set(client: AsyncClient):
     )
 
     response = await client.get(
-        f"/v0/admin/user/spend/{user_id}?month=2026-01",
+        f"/v0/admin/user/{user_id}/spend?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1320,7 +1325,7 @@ async def test_user_spend_no_limit_shows_null(client: AsyncClient):
     )
 
     response = await client.get(
-        f"/v0/admin/user/spend/{user_id}?month=2026-01",
+        f"/v0/admin/user/{user_id}/spend?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
@@ -1456,7 +1461,7 @@ async def test_user_spend_aggregates_across_multiple_assistants(client: AsyncCli
 
     # Get user spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/user/spend/{user_id}?month=2026-01",
+        f"/v0/admin/user/{user_id}/spend?month=2026-01",
         headers=ADMIN_HEADERS,
     )
 
