@@ -1153,9 +1153,9 @@ def migrate_billing_accounts_to_compliance(
         session.commit()
         total = results["total_accounts_processed"]
         results["status"] = "success"
-        results[
-            "message"
-        ] = f"Migration completed successfully. Processed {total} billing account(s)."
+        results["message"] = (
+            f"Migration completed successfully. Processed {total} billing account(s)."
+        )
     except Exception as e:
         session.rollback()
         results["status"] = "error"
