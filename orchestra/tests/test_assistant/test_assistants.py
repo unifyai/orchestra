@@ -15,7 +15,7 @@ async def approve_default_user(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     # Approve the user
-    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
@@ -1703,3 +1703,71 @@ async def test_update_assistant_with_invalid_voice_config(
     )
     assert resp.status_code == 422
     assert error_msg in resp.text
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
+    """Deleting an assistant should delete its call recordings from GCS."""
+    payload = {
+        "first_name": "Recorded",
+        "surname": "Assistant",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    with patch.object(
+        type(MagicMock()),
+        "delete_assistant_recordings",
+        create=True,
+    ) as _:
+        with patch(
+            "orchestra.web.api.assistant.views.BucketService",
+        ) as MockBucketServiceClass:
+            mock_instance = MockBucketServiceClass.return_value
+            mock_instance.delete_assistant_file.return_value = True
+            mock_instance.delete_assistant_recordings.return_value = 3
+
+            del_resp = await client.delete(
+                f"/v0/assistant/{assistant_id}",
+                headers=HEADERS,
+            )
+            assert del_resp.status_code == 200
+
+            mock_instance.delete_assistant_recordings.assert_called_once_with(
+                int(assistant_id),
+                is_staging=False,
+            )
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
+    client: AsyncClient,
+):
+    """Recording cleanup failures should not prevent assistant deletion."""
+    payload = {
+        "first_name": "Resilient",
+        "surname": "Assistant",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    with patch(
+        "orchestra.web.api.assistant.views.BucketService",
+    ) as MockBucketServiceClass:
+        mock_instance = MockBucketServiceClass.return_value
+        mock_instance.delete_assistant_file.return_value = True
+        mock_instance.delete_assistant_recordings.side_effect = Exception(
+            "GCS bucket unreachable",
+        )
+
+        del_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}",
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == 200
+        assert "cleanup issues" in del_resp.json()["info"]
+        assert "recordings" in del_resp.json()["info"]

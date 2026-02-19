@@ -1305,6 +1305,20 @@ async def delete_assistant(
                 )
                 cleanup_errors.append(f"Failed to delete profile video: {str(e_gcs)}")
 
+        # Delete call recordings from GCS
+        try:
+            deleted_recordings = bucket_service.delete_assistant_recordings(
+                assistant_id,
+                is_staging=settings.is_staging,
+            )
+            if deleted_recordings > 0:
+                print(f"RECORDINGS DELETED: {deleted_recordings} file(s)")
+        except Exception as e:
+            logging.error(
+                f"Failed to delete recordings for assistant {assistant_id}: {str(e)}",
+            )
+            cleanup_errors.append(f"Failed to delete recordings: {str(e)}")
+
         # Wait before starting other infra cleanup (same as rollback operations)
         await asyncio.sleep(10)
 
