@@ -4,12 +4,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.tests.utils import (
-    ADMIN_HEADERS,
-    HEADERS,
-    create_test_user,
-    to_unity_name,
-)
+from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -1151,13 +1146,10 @@ async def test_delete_assistant_deletes_contexts(
     assistant_id = assistant_info["agent_id"]
 
     # Manually create a project and contexts to simulate logs being present
-    # Using 3-tier context structure: User/Assistant/Ctx, User/All/Ctx, All/Ctx
+    # Using 3-tier context structure: user_id/assistant_id/Ctx, user_id/All/Ctx, All/Ctx
     project_name = "Assistants"
-    user_name = "TestUser"
-    assistant_name = to_unity_name(
-        assistant_info["first_name"],
-        assistant_info["surname"],
-    )
+    user_name = "test-user"
+    assistant_name = str(assistant_id)
 
     # 3-tier contexts
     user_assistant_context = f"{user_name}/{assistant_name}/Transcripts"
