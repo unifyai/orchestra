@@ -173,14 +173,16 @@ jobs:
 
         # Extract pass/fail counts from pytest summary line
         # Format: "====== X passed, Y failed, Z skipped in N.NNs (H:MM:SS) ======"
-        summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+(\.[0-9]+)?s" pytest_output.txt | tail -1)
+        summary_line=$(grep -E "^=+ .*(passed|failed|error).* in [0-9]+(\.[0-9]+)?s" pytest_output.txt | tail -1)
         if [ -n "$summary_line" ]; then
           passed=$(echo "$summary_line" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo "0")
           failed=$(echo "$summary_line" | grep -oE "[0-9]+ failed" | grep -oE "[0-9]+" || echo "0")
           skipped=$(echo "$summary_line" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+" || echo "0")
+          errors=$(echo "$summary_line" | grep -oE "[0-9]+ error" | grep -oE "[0-9]+" || echo "0")
           echo "passed=${passed:-0}" >> $GITHUB_OUTPUT
           echo "failed=${failed:-0}" >> $GITHUB_OUTPUT
           echo "skipped=${skipped:-0}" >> $GITHUB_OUTPUT
+          echo "errors=${errors:-0}" >> $GITHUB_OUTPUT
         else
           # Debug: show last 5 lines to help diagnose parsing issues
           echo "Warning: Could not parse pytest summary line" >&2
@@ -189,6 +191,7 @@ jobs:
           echo "passed=0" >> $GITHUB_OUTPUT
           echo "failed=0" >> $GITHUB_OUTPUT
           echo "skipped=0" >> $GITHUB_OUTPUT
+          echo "errors=0" >> $GITHUB_OUTPUT
         fi
 
         exit $exit_code
@@ -224,11 +227,9 @@ jobs:
 
         echo "## ✅ Shard ${{ matrix.shard }}: All Tests Passed" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        if [ "$SKIPPED" -gt 0 ]; then
-          echo "**${PASSED}** passed, **${SKIPPED}** skipped" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**${PASSED}** passed" >> $GITHUB_STEP_SUMMARY
-        fi
+        STATS="**${PASSED}** passed"
+        [ "$SKIPPED" -gt 0 ] 2>/dev/null && STATS="$STATS, **${SKIPPED}** skipped"
+        echo "$STATS" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -241,6 +242,7 @@ jobs:
         PASSED="${{ steps.pytest.outputs.passed }}"
         FAILED="${{ steps.pytest.outputs.failed }}"
         SKIPPED="${{ steps.pytest.outputs.skipped }}"
+        ERRORS="${{ steps.pytest.outputs.errors }}"
 
         # Count trace files
         TRACE_COUNT=0
@@ -250,11 +252,11 @@ jobs:
 
         echo "## ❌ Shard ${{ matrix.shard }}: Tests Failed" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        if [ "$SKIPPED" -gt 0 ]; then
-          echo "**${PASSED}** passed, **${FAILED}** failed, **${SKIPPED}** skipped" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**${PASSED}** passed, **${FAILED}** failed" >> $GITHUB_STEP_SUMMARY
-        fi
+        STATS="**${PASSED}** passed"
+        [ "$FAILED" -gt 0 ] 2>/dev/null && STATS="$STATS, **${FAILED}** failed"
+        [ "$ERRORS" -gt 0 ] 2>/dev/null && STATS="$STATS, **${ERRORS}** errors"
+        [ "$SKIPPED" -gt 0 ] 2>/dev/null && STATS="$STATS, **${SKIPPED}** skipped"
+        echo "$STATS" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
