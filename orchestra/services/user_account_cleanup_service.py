@@ -206,6 +206,10 @@ class UserAccountCleanupService:
         stripe_customer_id = ba_info.stripe_customer_id if ba_info else None
         billing_account_id = ba_info.ba_id if ba_info else None
 
+        # Collect assistant IDs *before* deleting the user row (CASCADE will
+        # remove the assistants rows).  This list is used for GCS cleanup.
+        assistant_ids = self._get_user_assistant_ids(user_id)
+
         self._delete_user_table_dependencies(user_id, billing_account_id)
 
         self.session.execute(
@@ -226,7 +230,7 @@ class UserAccountCleanupService:
         if stripe_customer_id:
             self._archive_stripe_customer(stripe_customer_id)
 
-        self._cleanup_user_attachments(user_id)
+        self._cleanup_user_data(user_id, assistant_ids)
 
         logger.info(f"Successfully deleted user account: {user_id}")
         return DeletionResult(success=True, message="Account deleted successfully")
@@ -269,22 +273,65 @@ class UserAccountCleanupService:
         except Exception as e:
             logger.error(f"Failed to archive Stripe customer {stripe_customer_id}: {e}")
 
-    def _cleanup_user_attachments(self, user_id: str) -> None:
+    def _get_user_assistant_ids(self, user_id: str) -> list[int]:
         """
-        Delete user's message attachments from GCS.
+        Return all assistant ``agent_id`` values owned by *user_id*.
 
-        Best-effort operation - logs errors but doesn't fail the deletion.
-        Attachments are stored in the unify-message-attachments bucket with
-        user-scoped paths: {user_id}/{attachment_id}_{filename}
+        Must be called **before** the user row is deleted (CASCADE would
+        remove the assistants rows).
+        """
+        rows = self.session.execute(
+            text("SELECT agent_id FROM assistants WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).fetchall()
+        return [row[0] for row in rows] if rows else []
+
+    def _cleanup_user_data(
+        self,
+        user_id: str,
+        assistant_ids: list[int],
+    ) -> None:
+        """
+        Delete all GCS data for every assistant owned by a user.
+
+        *assistant_ids* is pre-fetched before the DB commit (since CASCADE
+        deletes the rows).  If the list is empty we fall back to the legacy
+        user-prefix cleanup.
+
+        Best-effort operation – logs errors but never fails the deletion.
         """
         try:
             from orchestra.services.bucket_service import BucketService
 
             bucket_service = BucketService()
-            deleted_count = bucket_service.delete_message_attachments_for_user(user_id)
-            if deleted_count > 0:
-                logger.info(
-                    f"Cleaned up {deleted_count} message attachments for user {user_id}",
+
+            if assistant_ids:
+                total = {"media": 0, "recordings": 0, "attachments": 0}
+                for aid in assistant_ids:
+                    try:
+                        counts = bucket_service.delete_all_assistant_data(aid)
+                        for key in total:
+                            total[key] += counts.get(key, 0)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to cleanup GCS data for assistant {aid} "
+                            f"(user {user_id}): {e}",
+                        )
+                grand_total = sum(total.values())
+                if grand_total > 0:
+                    logger.info(
+                        f"Cleaned up {grand_total} GCS file(s) across "
+                        f"{len(assistant_ids)} assistant(s) for user {user_id}: {total}",
+                    )
+            else:
+                # Fallback: no assistants found (user had none, or they were
+                # already cleaned up).  Try the legacy user-prefix cleanup.
+                deleted_count = bucket_service.delete_message_attachments_for_user(
+                    user_id,
                 )
+                if deleted_count > 0:
+                    logger.info(
+                        f"Cleaned up {deleted_count} legacy attachment(s) for user {user_id}",
+                    )
         except Exception as e:
-            logger.error(f"Failed to cleanup attachments for user {user_id}: {e}")
+            logger.error(f"Failed to cleanup GCS data for user {user_id}: {e}")

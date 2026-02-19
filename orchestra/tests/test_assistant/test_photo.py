@@ -69,8 +69,8 @@ def mock_media_services_factory(fastapi_app):
 
     bucket_mock = MagicMock(spec=OriginalBucketService)
     bucket_mock.upload_temp_assistant_file.return_value = (
-        "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
-        "gs://mock-bucket/_temp/test-user/temp_image.jpg",
+        "https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
+        "gs://mock-bucket/tmp/temp_image.jpg",
     )
     bucket_mock.delete_assistant_file.return_value = True
 
@@ -231,17 +231,17 @@ async def test_edit_photo_with_file_success(
     )
     openai_mock.moderate_text.assert_called_once_with("Add a cat")
     openai_mock.analyze_image.assert_called_once_with(
-        image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+        image_url="https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
     )
     replicate_mock.edit_photo.assert_called_once_with(
         prompt="Add a cat",
-        input_image="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+        input_image="https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
         aspect_ratio="match_input_image",
         output_format="jpg",
         safety_tolerance=2.0,
     )
     bucket_mock.delete_assistant_file.assert_called_once_with(
-        "gs://mock-bucket/_temp/test-user/temp_image.jpg",
+        "gs://mock-bucket/tmp/temp_image.jpg",
     )
 
 
@@ -357,9 +357,11 @@ async def test_animate_video_with_urls_success(
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
         from orchestra.db.dao.user_dao import UserDAO
 
+        credits_resp = await client.get("/v0/credits", headers=HEADERS)
+        user_id = credits_resp.json()["id"]
         user_dao = UserDAO(dbsession)
         ba_dao = BillingAccountDAO(dbsession)
-        user_obj = user_dao.get_user_with_id("test-user")
+        user_obj = user_dao.get_user_with_id(user_id)
         ba_dao.add_credits(
             user_obj.billing_account_id,
             (settings.video_generation_cost * settings.default_video_duration) * 2,
@@ -411,9 +413,11 @@ async def test_animate_video_with_files_success(
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
         from orchestra.db.dao.user_dao import UserDAO
 
+        credits_resp = await client.get("/v0/credits", headers=HEADERS)
+        user_id = credits_resp.json()["id"]
         user_dao = UserDAO(dbsession)
         ba_dao = BillingAccountDAO(dbsession)
-        user_obj = user_dao.get_user_with_id("test-user")
+        user_obj = user_dao.get_user_with_id(user_id)
         ba_dao.add_credits(
             user_obj.billing_account_id,
             settings.video_generation_cost * 2,
@@ -425,12 +429,12 @@ async def test_animate_video_with_files_success(
 
     bucket_mock.upload_temp_assistant_file.side_effect = [
         (
-            "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
-            "gs://mock-bucket/_temp/test-user/temp_image.jpg",
+            "https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
+            "gs://mock-bucket/tmp/temp_image.jpg",
         ),
         (
-            "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
-            "gs://mock-bucket/_temp/test-user/temp_audio.mp3",
+            "https://storage.googleapis.com/mock-bucket/tmp/temp_audio.mp3",
+            "gs://mock-bucket/tmp/temp_audio.mp3",
         ),
     ]
 
@@ -466,24 +470,24 @@ async def test_animate_video_with_files_success(
     )
 
     openai_mock.analyze_image.assert_called_once_with(
-        image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+        image_url="https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
     )
     openai_mock.analyze_audio.assert_called_once_with(
-        audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
+        audio_url="https://storage.googleapis.com/mock-bucket/tmp/temp_audio.mp3",
     )
 
     replicate_mock.create_video_animation.assert_called_once_with(
-        image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
-        audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
+        image_url="https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
+        audio_url="https://storage.googleapis.com/mock-bucket/tmp/temp_audio.mp3",
         seed=None,
     )
 
     assert bucket_mock.delete_assistant_file.call_count == 2
     bucket_mock.delete_assistant_file.assert_any_call(
-        "gs://mock-bucket/_temp/test-user/temp_image.jpg",
+        "gs://mock-bucket/tmp/temp_image.jpg",
     )
     bucket_mock.delete_assistant_file.assert_any_call(
-        "gs://mock-bucket/_temp/test-user/temp_audio.mp3",
+        "gs://mock-bucket/tmp/temp_audio.mp3",
     )
 
 

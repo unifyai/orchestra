@@ -24,7 +24,8 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.db.models.orchestra_models import Assistant, Recharge, RechargeStatus
+from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.settings import settings
 from orchestra.web.api.organization.schema import (
@@ -459,6 +460,14 @@ async def delete_organization(
     # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
 
+    # Collect all assistant IDs *before* DB deletion (CASCADE removes them)
+    org_assistant_ids: list[int] = [
+        a.agent_id
+        for a in session.query(Assistant.agent_id)
+        .filter(Assistant.organization_id == organization_id)
+        .all()
+    ]
+
     # Delete organization (cascades to related tables)
     try:
         org_dao.delete(organization_id)
@@ -468,6 +477,28 @@ async def delete_organization(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete organization: {str(e)}",
         )
+
+    # Post-commit: clean up GCS data for every assistant that was in this org
+    if org_assistant_ids:
+        try:
+            bucket_service = BucketService()
+            for aid in org_assistant_ids:
+                try:
+                    bucket_service.delete_all_assistant_data(aid)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to clean up GCS data for assistant {aid} "
+                        f"(org {organization_id}): {e}",
+                    )
+            logger.info(
+                f"Cleaned up GCS data for {len(org_assistant_ids)} assistant(s) "
+                f"in deleted org {organization_id}",
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to initialize BucketService for org {organization_id} "
+                f"GCS cleanup: {e}",
+            )
 
     # Archive Stripe customer (best-effort, don't fail if this errors)
     if stripe_customer_id:
@@ -681,6 +712,18 @@ async def remove_organization_member(
             detail="User is not a member of this organization",
         )
 
+    # Collect assistant IDs for this user in this org *before* they may be
+    # deleted by delete_unshared_resources_by_creator (needed for GCS cleanup).
+    member_assistant_ids: list[int] = [
+        a.agent_id
+        for a in session.query(Assistant.agent_id)
+        .filter(
+            Assistant.user_id == user_id,
+            Assistant.organization_id == organization_id,
+        )
+        .all()
+    ]
+
     # Remove member and clean up all associated data
     try:
         team_dao = TeamDAO(session)
@@ -724,13 +767,49 @@ async def remove_organization_member(
         org_member_dao.delete(member.id)
 
         session.commit()
-        return None
     except Exception as e:
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to remove member: {str(e)}",
         )
+
+    # Post-commit: clean up GCS data for deleted assistants (best-effort).
+    # Only assistants that were actually removed from the DB need cleanup.
+    # After commit, check which assistant IDs no longer exist.
+    if member_assistant_ids:
+        surviving_ids = {
+            a.agent_id
+            for a in session.query(Assistant.agent_id)
+            .filter(Assistant.agent_id.in_(member_assistant_ids))
+            .all()
+        }
+        deleted_assistant_ids = [
+            aid for aid in member_assistant_ids if aid not in surviving_ids
+        ]
+        if deleted_assistant_ids:
+            try:
+                bucket_service = BucketService()
+                for aid in deleted_assistant_ids:
+                    try:
+                        bucket_service.delete_all_assistant_data(aid)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to clean up GCS data for assistant {aid} "
+                            f"(member removal, org {organization_id}): {e}",
+                        )
+                logger.info(
+                    f"Cleaned up GCS data for {len(deleted_assistant_ids)} "
+                    f"assistant(s) after removing member {user_id} from "
+                    f"org {organization_id}",
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to initialize BucketService for member removal "
+                    f"GCS cleanup (user {user_id}, org {organization_id}): {e}",
+                )
+
+    return None
 
 
 @router.get(
