@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -2901,6 +2901,47 @@ class ContextDAO:
             self.session.commit()
         else:
             raise ValueError(f"Context with id {id} not found")
+
+    def rename_with_children(
+        self,
+        project_id: int,
+        old_prefix: str,
+        new_prefix: str,
+    ) -> int:
+        """Rename a context and all its children by replacing the name prefix.
+
+        Returns the number of contexts renamed.
+        """
+        if not re.match(r"^[a-zA-Z0-9_/]+$", new_prefix):
+            raise ValueError(
+                "Context name must contain only alphanumeric characters and '/'",
+            )
+        old_len = len(old_prefix)
+        stmt = (
+            update(Context)
+            .where(
+                Context.project_id == project_id,
+                Context.name.like(f"{old_prefix}/%"),
+            )
+            .values(
+                name=func.concat(new_prefix, func.substring(Context.name, old_len + 1)),
+            )
+        )
+        child_result = self.session.execute(stmt)
+
+        parent_stmt = (
+            update(Context)
+            .where(
+                Context.project_id == project_id,
+                Context.name == old_prefix,
+            )
+            .values(name=new_prefix)
+        )
+        parent_result = self.session.execute(parent_stmt)
+
+        total = child_result.rowcount + parent_result.rowcount
+        self.session.commit()
+        return total
 
     def delete(self, id: int) -> None:
         from orchestra.db.dao.log_event_dao import LogEventDAO
