@@ -314,7 +314,7 @@ async def test_atomic_upsert_create_new_log(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": "JohnDoe/AdaLovelace/Spending/Monthly",
+            "context": "user1/assistant1/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "operation": "+5.50",
             "initial_data": {
@@ -346,7 +346,7 @@ async def test_atomic_upsert_update_existing_log(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": "User/Assistant/Spending/Monthly",
+            "context": "user1/assistant1/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "operation": "+10.00",
             "initial_data": {
@@ -369,7 +369,7 @@ async def test_atomic_upsert_update_existing_log(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": "User/Assistant/Spending/Monthly",
+            "context": "user1/assistant1/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "operation": "+5.50",
             "initial_data": {
@@ -398,13 +398,13 @@ async def test_atomic_upsert_with_archive_context(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": "JohnDoe/AdaLovelace/Spending/Monthly",
+            "context": "user1/assistant1/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "operation": "+25.00",
             "initial_data": {
                 "_assistant_id": "789",
-                "_user": "JohnDoe",
-                "_assistant": "AdaLovelace",
+                "_user": "user1",
+                "_assistant": "assistant1",
                 "month": "2026-03",
                 "cumulative_spend": 0,
             },
@@ -857,16 +857,16 @@ async def test_atomic_upsert_explicit_field_parameter(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "context": "test-user/test-assistant/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "field": "cumulative_spend",  # Explicitly specify the field
             "operation": "+0.00005",  # Small value like LLM costs
             "initial_data": {
                 "_assistant_id": "test-agent-123",
                 "month": "2026-01",
-                "_user": "TestUserName",  # String field that should NOT be modified
+                "_user": "test-user",  # String field that should NOT be modified
                 "_user_id": "test-user-001",
-                "_assistant": "TestAssistant",
+                "_assistant": "test-assistant",
                 "cumulative_spend": 0,  # Initialize the field we want to increment
             },
             "add_to_all_context": False,
@@ -885,16 +885,16 @@ async def test_atomic_upsert_explicit_field_parameter(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "context": "test-user/test-assistant/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "field": "cumulative_spend",  # Explicit field on update
             "operation": "+0.00003",
             "initial_data": {
                 "_assistant_id": "test-agent-123",
                 "month": "2026-01",
-                "_user": "TestUserName",
+                "_user": "test-user",
                 "_user_id": "test-user-001",
-                "_assistant": "TestAssistant",
+                "_assistant": "test-assistant",
                 "cumulative_spend": 0,
             },
             "add_to_all_context": False,
@@ -917,15 +917,15 @@ async def test_atomic_upsert_explicit_field_parameter(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name2,
-            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "context": "test-user/test-assistant/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "field": "cumulative_spend",  # Explicitly specify field NOT in initial_data
             "operation": "+0.001",
             "initial_data": {
                 "_assistant_id": "agent-999",
                 "month": "2026-02",
-                "_user": "AnotherUser",  # Only string fields in initial_data
-                "_assistant": "TestBot",
+                "_user": "another-user",  # Only string fields in initial_data
+                "_assistant": "test-bot",
             },
             "add_to_all_context": False,
         },
@@ -944,15 +944,15 @@ async def test_atomic_upsert_explicit_field_parameter(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name2,
-            "context": "TestUser/TestAssistant/Spending/Monthly",
+            "context": "test-user/test-assistant/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "field": "cumulative_spend",
             "operation": "+0.002",
             "initial_data": {
                 "_assistant_id": "agent-999",
                 "month": "2026-02",
-                "_user": "AnotherUser",
-                "_assistant": "TestBot",
+                "_user": "another-user",
+                "_assistant": "test-bot",
             },
             "add_to_all_context": False,
         },
@@ -1020,15 +1020,15 @@ async def test_atomic_upsert_with_org_api_key(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": "Assistants",
-            "context": "OrgUser/OrgAssistant/Spending/Monthly",
+            "context": "org-user/org-assistant/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "field": "cumulative_spend",
             "operation": "+0.00123",
             "initial_data": {
                 "_assistant_id": "org-agent-001",
                 "month": "2026-01",
-                "_user": "OrgUser",
-                "_assistant": "OrgAssistant",
+                "_user": "org-user",
+                "_assistant": "org-assistant",
                 "_org_id": org_id,
             },
             "add_to_all_context": True,
@@ -1047,7 +1047,7 @@ async def test_atomic_upsert_with_org_api_key(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": "Assistants",
-            "context": "OrgUser/OrgAssistant/Spending/Monthly",
+            "context": "org-user/org-assistant/Spending/Monthly",
             "unique_keys": {"_assistant_id": "str", "month": "str"},
             "field": "cumulative_spend",
             "operation": "+0.00077",
@@ -1087,7 +1087,7 @@ async def test_atomic_upsert_org_project_isolation(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "context": f"isolation-test/assistant/Spending/Monthly",
             "unique_keys": {"test_id": "str"},
             "field": "value",
             "operation": "+100",
@@ -1138,7 +1138,7 @@ async def test_atomic_upsert_org_project_isolation(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "context": f"isolation-test/assistant/Spending/Monthly",
             "unique_keys": {"test_id": "str"},
             "field": "value",
             "operation": "+200",
@@ -1165,7 +1165,7 @@ async def test_atomic_upsert_org_project_isolation(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "context": f"isolation-test/assistant/Spending/Monthly",
             "unique_keys": {"test_id": "str"},
             "field": "value",
             "operation": "+50",
@@ -1185,7 +1185,7 @@ async def test_atomic_upsert_org_project_isolation(client: AsyncClient):
         "/v0/logs/atomic",
         json={
             "project": project_name,
-            "context": f"IsolationTest/Assistant/Spending/Monthly",
+            "context": f"isolation-test/assistant/Spending/Monthly",
             "unique_keys": {"test_id": "str"},
             "field": "value",
             "operation": "+25",
