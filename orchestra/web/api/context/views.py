@@ -880,6 +880,14 @@ def rename_context(
     body: RenameContextRequest,
     project_name: str = Path(...),
     context_name: str = Path(...),
+    include_children: bool = Query(
+        default=True,
+        description=(
+            "Whether to rename child contexts (which share the same '/' separated "
+            "prefix). When True, renaming 'A' to 'E' will also rename "
+            "'A/B/C' to 'E/B/C', 'A/B/D' to 'E/B/D', etc."
+        ),
+    ),
     session=Depends(get_db_session),
 ):
     """Rename an existing context within a project."""
@@ -887,16 +895,15 @@ def rename_context(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
-    # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
     context_name = context_name.lstrip("/")
+    new_name = body.name.lstrip("/")
 
-    # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":
         raise HTTPException(
             status_code=403,
             detail="Cannot modify built-in Tasks context.",
         )
-    # 1) Verify project
+
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
@@ -905,19 +912,20 @@ def rename_context(
     )
     if not project:
         raise not_found("Project")
-    # 2) Load context
-    ctx_list = context_dao.filter(
-        project_id=project.id,
-        name=context_name,
-    )
+
+    ctx_list = context_dao.filter(project_id=project.id, name=context_name)
     if not ctx_list:
         raise not_found("Context")
-    ctx_id = ctx_list[0][0].id
-    # 3) Attempt rename
+
     try:
-        # Normalize new context name: remove any leading slash from provided name
-        new_name = body.name.lstrip("/")
-        context_dao.update(id=ctx_id, name=new_name)
+        if include_children:
+            context_dao.rename_with_children(
+                project_id=project.id,
+                old_prefix=context_name,
+                new_prefix=new_name,
+            )
+        else:
+            context_dao.update(id=ctx_list[0][0].id, name=new_name)
     except IntegrityError:
         raise HTTPException(
             status_code=400,
