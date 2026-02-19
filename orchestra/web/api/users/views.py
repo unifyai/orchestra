@@ -68,7 +68,6 @@ logger = logging.getLogger(__name__)
 
 
 @admin_router.post("/user")
-@admin_router.post("/auth-user")  # backward-compat alias
 def create_user(
     user: UserRequest,
     session: Session = Depends(get_db_session),
@@ -109,7 +108,6 @@ def create_user(
 
 
 @admin_router.get("/user/by-user-id")
-@admin_router.get("/auth-user/by-user-id")  # backward-compat alias
 def get_user(
     user_id: str,
     session: Session = Depends(get_db_session),
@@ -173,7 +171,6 @@ def get_user(
 
 
 @admin_router.get("/user/by-email")
-@admin_router.get("/auth-user/by-email")  # backward-compat alias
 def get_user_by_email(
     email: str,
     session: Session = Depends(get_db_session),
@@ -238,7 +235,6 @@ def get_user_by_email(
 
 
 @admin_router.get("/user/by-account")
-@admin_router.get("/auth-user/by-account")  # backward-compat alias
 def get_user_by_account(
     provider_account_id: str,
     provider: str,
@@ -310,7 +306,6 @@ def get_user_by_account(
 
 
 @admin_router.put("/user")
-@admin_router.put("/auth-user")  # backward-compat alias
 def update_user(
     updated_user: UserRequest,
     session: Session = Depends(get_db_session),
@@ -332,10 +327,6 @@ def update_user(
 
 
 @admin_router.delete("/user", response_model=AccountDeletionResponse)
-@admin_router.delete(
-    "/auth-user",
-    response_model=AccountDeletionResponse,
-)  # backward-compat alias
 def delete_user(
     user_id: str,
     force: bool = Query(
@@ -406,7 +397,6 @@ def generate_key(size=32):
 
 
 @admin_router.put("/user/quotas/reset")
-@admin_router.put("/auth-user/quotas/reset")  # backward-compat alias
 def reset_user_quotas(
     user_id: str,
     session: Session = Depends(get_db_session),
@@ -420,7 +410,6 @@ def reset_user_quotas(
 
 
 @admin_router.put("/user/quotas/reset/all")
-@admin_router.put("/auth-user/quotas/reset/all")  # backward-compat alias
 def reset_all_user_quotas(
     session: Session = Depends(get_db_session),
 ):
@@ -547,7 +536,6 @@ def regenerate_api_key(
 
 
 @admin_router.post("/user/{user_id}/organization-api-key")
-@admin_router.post("/auth-user/{user_id}/organization-api-key")  # backward-compat alias
 def create_organization_api_key(
     user_id: str,
     organization_id: int,
@@ -1829,7 +1817,7 @@ def _compat_request_assistant_hiring_approval(
 
 
 @admin_router.put(
-    "/auth-user/{target_user_id}/assistant-hiring-approval/{status_value}",
+    "/user/{target_user_id}/assistant-hiring-approval/{status_value}",
 )
 def _compat_set_user_assistant_hiring_status(
     target_user_id: str,
@@ -1846,7 +1834,7 @@ def _compat_set_user_assistant_hiring_status(
     }
 
 
-@admin_router.get("/auth-user/assistant-hiring-approval")
+@admin_router.get("/user/assistant-hiring-approval")
 def _compat_list_users_by_assistant_hiring_approval(
     status_filter: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
@@ -1925,7 +1913,7 @@ def _compat_update_user_business_info(
     }
 
 
-@admin_router.post("/auth-user/verify-business")
+@admin_router.post("/user/verify-business")
 def _compat_verify_business_account(
     session: Session = Depends(get_db_session),
 ):
@@ -1933,7 +1921,7 @@ def _compat_verify_business_account(
     return {"message": "Business account verification is no longer required (no-op)."}
 
 
-@admin_router.get("/auth-user/business-accounts")
+@admin_router.get("/user/business-accounts")
 def _compat_list_business_accounts(
     verified: Optional[bool] = Query(None),
     limit: int = Query(50, ge=1, le=1000),

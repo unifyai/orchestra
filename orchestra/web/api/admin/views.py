@@ -720,7 +720,6 @@ def trigger_billing_guard(
 
 
 @router.post("/billing/freeze")
-@router.post("/auth-user/freeze")  # backward-compat alias (was in users admin_router)
 def freeze_billing_account(
     freeze: bool = True,
     user_id: Optional[str] = None,
@@ -756,7 +755,6 @@ def freeze_billing_account(
 
 
 @router.post("/billing/freeze-by-stripe-id")
-@router.post("/auth-user/freeze-by-stripe-id")  # backward-compat alias
 def freeze_billing_account_by_stripe_id(
     stripe_id: str,
     freeze: bool = True,
@@ -788,7 +786,6 @@ def freeze_billing_account_by_stripe_id(
 
 
 @router.get("/billing/is-frozen")
-@router.get("/auth-user/is-frozen")  # backward-compat alias
 def is_billing_account_frozen(
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
@@ -861,7 +858,6 @@ def get_billing_account_info(
 
 
 @router.put("/billing/stripe-id")
-@router.put("/auth-user/stripe-id")  # backward-compat alias
 def set_stripe_id(
     stripe_id: str,
     user_id: Optional[str] = None,
@@ -926,7 +922,6 @@ VALID_TIERS = {"developer", "professional", "enterprise"}
 
 
 @router.put("/billing/tier")
-@router.put("/auth-user/tier")  # backward-compat alias
 def set_billing_account_tier(
     tier: str,
     user_id: Optional[str] = None,

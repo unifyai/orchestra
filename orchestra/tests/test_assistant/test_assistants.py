@@ -15,7 +15,7 @@ async def approve_default_user(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     # Approve the user
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
