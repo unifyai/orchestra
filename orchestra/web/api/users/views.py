@@ -125,8 +125,19 @@ def get_user(
         raise not_found("User ID")
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user[0][0].id)
-    api_key_instance = api_key[0][0]
+    api_key = api_key_dao.filter(user_id=user_instance.id)
+    if api_key:
+        api_key_value = api_key[0][0].key
+    else:
+        # User exists but has no API key — create one to self-heal
+        logger.warning(
+            "User %s has no API key; generating one.",
+            user_instance.id,
+        )
+        new_key = generate_key()
+        api_key_dao.create(key=new_key, name="", user_id=user_instance.id)
+        session.commit()
+        api_key_value = new_key
 
     # Build organizations list with org-specific API keys
     organizations = user_dao.get_user_organizations(
@@ -149,7 +160,7 @@ def get_user(
         "image": user_instance.image,
         "email": user_instance.email,
         "created_at": user_instance.created_at,
-        "api_key": api_key_instance.key,
+        "api_key": api_key_value,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
         # backward-compat aliases (approval flow removed; always approved)
@@ -178,8 +189,20 @@ def get_user_by_email(
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user[0][0].id)
-    api_key_instance = api_key[0][0]
+    api_key = api_key_dao.filter(user_id=user_instance.id)
+    if api_key:
+        api_key_value = api_key[0][0].key
+    else:
+        # User exists but has no API key — create one to self-heal
+        logger.warning(
+            "User %s (%s) has no API key; generating one.",
+            user_instance.id,
+            email,
+        )
+        new_key = generate_key()
+        api_key_dao.create(key=new_key, name="", user_id=user_instance.id)
+        session.commit()
+        api_key_value = new_key
 
     # Build organizations list with org-specific API keys
     organizations = user_dao.get_user_organizations(
@@ -202,7 +225,7 @@ def get_user_by_email(
         "image": user_instance.image,
         "email": user_instance.email,
         "created_at": user_instance.created_at,
-        "api_key": api_key_instance.key,
+        "api_key": api_key_value,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
         # backward-compat aliases (approval flow removed; always approved)
@@ -239,8 +262,20 @@ def get_user_by_account(
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user[0][0].id)
-    api_key_instance = api_key[0][0]
+    api_key = api_key_dao.filter(user_id=user_instance.id)
+    if api_key:
+        api_key_value = api_key[0][0].key
+    else:
+        # User exists but has no API key — create one to self-heal
+        logger.warning(
+            "User %s has no API key; generating one.",
+            user_instance.id,
+        )
+        new_key = generate_key()
+        api_key_dao.create(key=new_key, name="", user_id=user_instance.id)
+        session.commit()
+        api_key_value = new_key
+
     # Build organizations list with org-specific API keys
     organizations = user_dao.get_user_organizations(
         user_instance.id,
@@ -262,7 +297,7 @@ def get_user_by_account(
         "image": user_instance.image,
         "email": user_instance.email,
         "created_at": user_instance.created_at,
-        "api_key": api_key_instance.key,
+        "api_key": api_key_value,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
         # backward-compat aliases (approval flow removed; always approved)
