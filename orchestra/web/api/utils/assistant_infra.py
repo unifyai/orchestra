@@ -185,13 +185,16 @@ async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
     """
     topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{COMMS_URL}/infra/pubsub/topic",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            data={"topic_name": topic_name},
-            timeout=40,
-        )
-        return response.json()
+        try:
+            response = await client.post(
+                f"{COMMS_URL}/infra/pubsub/topic",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                data={"topic_name": topic_name},
+                timeout=40,
+            )
+            return response.json()
+        except httpx.TimeoutException:
+            print("Pubsub topic creation timed out")
 
 
 async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
