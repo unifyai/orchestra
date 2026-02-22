@@ -4960,6 +4960,26 @@ def admin_get_assistant_spend(
     if limit is not None and limit > 0:
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
+    # Include credit balance from the billing account (for credit guard checks).
+    # The billing account comes from the org (if org assistant) or the user.
+    credit_balance = None
+    if assistant.organization_id is not None:
+        from orchestra.db.models.orchestra_models import Organization
+
+        org = (
+            session.query(Organization)
+            .filter(Organization.id == assistant.organization_id)
+            .first()
+        )
+        if org and org.billing_account:
+            credit_balance = float(org.billing_account.credits)
+    else:
+        from orchestra.db.models.orchestra_models import User
+
+        user = session.query(User).filter(User.id == assistant.user_id).first()
+        if user and user.billing_account:
+            credit_balance = float(user.billing_account.credits)
+
     return AssistantSpendResponse(
         agent_id=agent_id,
         month=month,
@@ -4967,6 +4987,7 @@ def admin_get_assistant_spend(
         limit=limit,
         limit_set_at=assistant.monthly_spending_cap_set_at,
         percent_used=percent_used,
+        credit_balance=credit_balance,
     )
 
 

@@ -1466,6 +1466,10 @@ class AssistantSpendResponse(BaseModel):
         description="Percentage of limit used (null if no limit set).",
         example=78.5,
     )
+    credit_balance: Optional[float] = Field(
+        None,
+        description="Current credit balance of the billing account.",
+    )
 
 
 class AssistantSpendingLimitResponse(BaseModel):
