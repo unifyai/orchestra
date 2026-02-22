@@ -2891,6 +2891,11 @@ def admin_get_org_spend(
     if limit is not None and limit > 0:
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
+    # Include credit balance from the billing account (for credit guard checks)
+    credit_balance = None
+    if org.billing_account:
+        credit_balance = float(org.billing_account.credits)
+
     return OrgSpendResponse(
         organization_id=organization_id,
         month=month,
@@ -2898,6 +2903,7 @@ def admin_get_org_spend(
         limit=limit,
         limit_set_at=org.monthly_spending_cap_set_at,
         percent_used=percent_used,
+        credit_balance=credit_balance,
     )
 
 
@@ -2945,6 +2951,11 @@ def admin_get_member_spend(
     if limit is not None and limit > 0:
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
+    # Include credit balance from the org's billing account (for credit guard checks)
+    credit_balance = None
+    if org.billing_account:
+        credit_balance = float(org.billing_account.credits)
+
     return MemberSpendResponse(
         organization_id=organization_id,
         user_id=member_user_id,
@@ -2953,6 +2964,7 @@ def admin_get_member_spend(
         limit=limit,
         limit_set_at=member.monthly_spending_cap_set_at,
         percent_used=percent_used,
+        credit_balance=credit_balance,
     )
 
 

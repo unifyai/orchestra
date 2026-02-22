@@ -1781,6 +1781,11 @@ def admin_get_user_spend(
     if limit is not None and limit > 0:
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
+    # Include credit balance from the billing account (for credit guard checks)
+    credit_balance = None
+    if user.billing_account:
+        credit_balance = float(user.billing_account.credits)
+
     return UserSpendResponse(
         user_id=target_user_id,
         month=month,
@@ -1788,6 +1793,7 @@ def admin_get_user_spend(
         limit=limit,
         limit_set_at=user.monthly_spending_cap_set_at,
         percent_used=percent_used,
+        credit_balance=credit_balance,
     )
 
 
