@@ -462,6 +462,7 @@ class UserDAO:
                     {
                         "id": member.organization_id,
                         "name": org_result.name,
+                        "owner_id": org_result.owner_id,
                         "role_id": member.role_id,
                         "role_name": member_role_name,
                         "api_key": org_api_key,
