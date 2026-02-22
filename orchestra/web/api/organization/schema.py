@@ -13,9 +13,9 @@ class OrganizationCreate(BaseModel):
     """Schema for creating an organization."""
 
     name: str
-    timezone: Optional[str] = (
-        None  # IANA timezone; defaults to owner's timezone if not set
-    )
+    timezone: Optional[
+        str
+    ] = None  # IANA timezone; defaults to owner's timezone if not set
 
     @field_validator("timezone")
     @classmethod
@@ -340,6 +340,10 @@ class OrgSpendResponse(BaseModel):
         description="When the spending limit was last changed.",
     )
     percent_used: Optional[float] = Field(None, description="Percentage of limit used.")
+    credit_balance: Optional[float] = Field(
+        None,
+        description="Current credit balance of the billing account.",
+    )
 
 
 class MemberSpendResponse(BaseModel):
@@ -360,3 +364,7 @@ class MemberSpendResponse(BaseModel):
         description="When the spending limit was last changed.",
     )
     percent_used: Optional[float] = Field(None, description="Percentage of limit used.")
+    credit_balance: Optional[float] = Field(
+        None,
+        description="Current credit balance of the billing account.",
+    )
