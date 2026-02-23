@@ -5,6 +5,7 @@ Revises: drop_legacy_tables
 Create Date: 2026-01-16 12:00:00.000000
 
 """
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

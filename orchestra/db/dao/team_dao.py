@@ -1,4 +1,5 @@
 """Data Access Object for Team model."""
+
 from typing import List, Optional
 
 from sqlalchemy.orm import Session

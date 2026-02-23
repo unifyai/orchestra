@@ -11,7 +11,6 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
@@ -23,7 +22,9 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.tab_dao import TabDAO
+from orchestra.db.dao.table_view_dao import TableViewDAO
 from orchestra.db.dao.tile_dao import TileDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
@@ -1168,6 +1169,13 @@ def transfer_project_to_organization(
             organization_id=transfer_request.organization_id,
         )
 
+        # Update organization_id for all table views belonging to this project
+        table_view_dao = TableViewDAO(session)
+        table_view_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=transfer_request.organization_id,
+        )
+
         session.commit()
 
         return TransferResponse(
@@ -1306,6 +1314,13 @@ def transfer_project_to_personal(
         # Update organization_id for all plots belonging to this project
         plot_dao = PlotDAO(session)
         plot_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=None,  # Personal project
+        )
+
+        # Update organization_id for all table views belonging to this project
+        table_view_dao = TableViewDAO(session)
+        table_view_dao.update_organization_id(
             project_id=project_id,
             organization_id=None,  # Personal project
         )
@@ -1910,15 +1925,15 @@ def admin_share_project(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     organization_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
     api_key_dao = ApiKeyDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
 
     # Lookup the from_user and to_user
-    from_user = auth_user_dao.get_by_id(request.from_user_id)
-    to_user = auth_user_dao.get_by_id(request.to_user_id)
+    from_user = user_dao.get_by_id(request.from_user_id)
+    to_user = user_dao.get_by_id(request.to_user_id)
 
     if not from_user or not to_user:
         raise not_found("User")
@@ -2105,15 +2120,15 @@ def admin_duplicate_project(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     log_event_dao = LogEventDAO(session)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
 
     # 1. Validate users exist
-    from_user = auth_user_dao.get_by_id(request.from_user_id)
-    to_user = auth_user_dao.get_by_id(request.to_user_id)
+    from_user = user_dao.get_by_id(request.from_user_id)
+    to_user = user_dao.get_by_id(request.to_user_id)
 
     if not from_user or not to_user:
         raise not_found("User")

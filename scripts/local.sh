@@ -179,6 +179,26 @@ check_poetry() {
   return 0
 }
 
+# Get an executable from the in-project .venv, with fallback to poetry run.
+# This avoids issues where poetry picks up the wrong virtualenv when called
+# from a different repo's context (e.g., unity calling orchestra's local.sh).
+#
+# Usage: get_venv_executable <repo_path> <executable_name>
+# Example: get_venv_executable "/path/to/orchestra" "python"
+# Returns: Full path to executable, or "poetry run <executable>" as fallback
+get_venv_executable() {
+  local repo_path="$1"
+  local executable="$2"
+  local venv_bin="$repo_path/.venv/bin"
+
+  if [[ -x "$venv_bin/$executable" ]]; then
+    echo "$venv_bin/$executable"
+  else
+    # Fallback to poetry - may work if environment is clean
+    echo "poetry run $executable"
+  fi
+}
+
 # =============================================================================
 # PostgreSQL Container Management
 # =============================================================================
@@ -331,7 +351,10 @@ run_migrations() {
   export ORCHESTRA_DB_PASS=orchestra
   export ORCHESTRA_DB_BASE=orchestra
 
-  if poetry run alembic upgrade head 2>&1; then
+  local alembic_cmd
+  alembic_cmd=$(get_venv_executable "$repo_path" "alembic")
+
+  if $alembic_cmd upgrade head 2>&1; then
     log_success "Migrations completed"
     return 0
   else
@@ -357,7 +380,7 @@ seed_test_user() {
 
   local user_exists
   user_exists=$(docker exec "$db_container" psql -U orchestra -d orchestra -tAc \
-    "SELECT 1 FROM users WHERE id = '$test_user_id'" 2>/dev/null || echo "")
+    "SELECT 1 FROM \"user\" WHERE id = '$test_user_id'" 2>/dev/null || echo "")
 
   if [[ "$user_exists" == "1" ]]; then
     log_success "Test user already exists"
@@ -366,26 +389,32 @@ seed_test_user() {
 
   log_info "Creating test user..."
 
+  # Note: Billing fields (credits, stripe_customer_id, autorecharge, etc.)
+  # now live on the billing_account table. The 'user' table only holds
+  # profile/identity fields plus a billing_account_id FK.
   docker exec "$db_container" psql -U orchestra -d orchestra -c "
--- Create billing user (users table)
-INSERT INTO users (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, store_prompts, frozen)
-VALUES ('$test_user_id', 10000, null, false, 0, 0, true, false)
-ON CONFLICT (id) DO NOTHING;
+DO \$\$
+DECLARE
+  _ba_id integer;
+BEGIN
+  -- Only seed if user doesn't already exist
+  IF NOT EXISTS (SELECT 1 FROM \"user\" WHERE id = '$test_user_id') THEN
+    -- Create a billing_account for the test user
+    INSERT INTO billing_account (credits, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, tier)
+    VALUES (10000, false, 0, 25, 'ACTIVE', 'developer')
+    RETURNING id INTO _ba_id;
 
--- Create auth user record
-INSERT INTO auth_user (id, email)
-VALUES ('$test_user_id', '$test_email')
-ON CONFLICT (id) DO NOTHING;
+    -- Create user record linked to the billing_account
+    INSERT INTO \"user\" (id, email, billing_account_id, store_prompts)
+    VALUES ('$test_user_id', '$test_email', _ba_id, true);
 
--- Set assistant hiring approval to approved
-UPDATE auth_user
-SET assistant_hiring_approval = 'approved'
-WHERE id = '$test_user_id';
-
--- Create API key
-INSERT INTO api_key (user_id, key)
-VALUES ('$test_user_id', '$test_api_key')
-ON CONFLICT (key) DO NOTHING;
+    -- Create API key
+    INSERT INTO api_key (user_id, key)
+    VALUES ('$test_user_id', '$test_api_key')
+    ON CONFLICT (key) DO NOTHING;
+  END IF;
+END
+\$\$;
 " 2>&1
 
   if [[ $? -eq 0 ]]; then
@@ -506,15 +535,11 @@ start_orchestra_server() {
   local workers="${ORCHESTRA_WORKERS:-$num_cores}"
   log_info "Starting Orchestra with $workers workers"
 
-  # Get virtualenv python path
+  # Get virtualenv python path - use in-project .venv to avoid poetry picking
+  # up wrong environment when called from another repo's context
   local venv_python
-  venv_python=$(poetry env info --executable 2>/dev/null)
-  if [[ -z "$venv_python" || ! -x "$venv_python" ]]; then
-    log_warn "Could not get virtualenv python path, falling back to poetry run"
-    venv_python="poetry run python"
-  else
-    log_info "Using virtualenv python: $venv_python"
-  fi
+  venv_python=$(get_venv_executable "$ORCHESTRA_REPO_PATH" "python")
+  log_info "Using python: $venv_python"
 
   # Set file descriptor limit
   local fd_limit=$((num_cores * 750))

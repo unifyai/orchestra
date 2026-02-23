@@ -5,7 +5,6 @@ This module consolidates type normalization logic that was previously
 duplicated across multiple locations in jsonb_builder.py.
 """
 
-
 __all__ = [
     "TYPE_NORMALIZATION",
     "normalize_field_type",

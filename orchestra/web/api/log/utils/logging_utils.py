@@ -287,21 +287,50 @@ def enforce_types(
                         detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but explicit_type '{comparable_type}' was provided.",
                     )
             else:
-                inferred_type = LogEventDAO.infer_type(
-                    field_name,
-                    value,
-                    explicit_type=None,
+                # When the value's Python runtime type is compatible with
+                # the declared field type, skip content-based inference.
+                # This prevents e.g. a date-formatted string "2024-01-15"
+                # from being re-classified as 'date' and rejected when the
+                # field is declared as 'str'.
+                #
+                # Compatibility follows standard Python numeric semantics:
+                #   - bool  → only 'bool' (not promoted to int/float)
+                #   - int   → 'int' or 'float' (numeric widening)
+                #   - float → 'float'
+                #   - str   → 'str'
+                #
+                # Container types (list, dict) are excluded because they
+                # need inference to validate inner/element types
+                # (e.g. List[int] vs List[str]).
+                _PYTHON_TYPE_TO_COMPATIBLE_FIELDS: dict[type, tuple[str, ...]] = {
+                    bool: ("bool",),
+                    int: ("int", "float"),
+                    float: ("float",),
+                    str: ("str",),
+                }
+                compatible_fields = _PYTHON_TYPE_TO_COMPATIBLE_FIELDS.get(
+                    type(value),
                 )
-                if not types_match(field_type, inferred_type):
-                    batch_info = (
-                        f" (in batch entry {batch_index})"
-                        if batch_index is not None
-                        else ""
+                if compatible_fields is not None and any(
+                    types_match(field_type, ft) for ft in compatible_fields
+                ):
+                    pass  # runtime type compatible with declared type
+                else:
+                    inferred_type = LogEventDAO.infer_type(
+                        field_name,
+                        value,
+                        explicit_type=None,
                     )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but value has inferred type '{inferred_type}'. Value: {str(value)[:100]}",
-                    )
+                    if not types_match(field_type, inferred_type):
+                        batch_info = (
+                            f" (in batch entry {batch_index})"
+                            if batch_index is not None
+                            else ""
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but value has inferred type '{inferred_type}'. Value: {str(value)[:100]}",
+                        )
     else:
         # Field doesn't exist - create it
         # New policy: We CAN create new fields, but we CANNOT modify existing fields
@@ -1674,6 +1703,14 @@ def _create_logs_internal(
                 else None
             )
 
+            # Extract infer_untyped_fields flag from entries
+            # If True, fields with type "Any" will have their type inferred from values
+            infer_untyped_fields = (
+                current_entries.pop("infer_untyped_fields", False)
+                if isinstance(current_entries, dict)
+                else False
+            )
+
             # Use entries explicit types
             merged_explicit_types = entries_explicit_types or {}
 
@@ -1746,19 +1783,38 @@ def _create_logs_internal(
                         },
                     )
                 else:
-                    # Field exists - enforce types (cannot modify existing field types)
-                    enforce_types(
-                        k,
-                        v,
-                        field_types=field_types,
-                        field_type_dao=field_type_dao,
-                        context_dao=context_dao,
-                        project_id=project_id,
-                        batch_index=i,
-                        explicit_types=entries_explicit_types,
-                        context_id=context_id,
-                        is_param=False,
-                    )
+                    # Field exists - check if we should infer type for untyped fields
+                    from orchestra.web.api.log.utils.type_utils import is_untyped_field
+
+                    field_info = field_types.get(k, {})
+                    current_field_type = field_info.get("field_type", "Any")
+
+                    if infer_untyped_fields and is_untyped_field(current_field_type):
+                        # Infer type from value and update the field
+                        inferred_type = LogEventDAO.infer_type(k, v, explicit_type=None)
+                        updated = field_type_dao.update_untyped_field_to_inferred(
+                            project_id,
+                            k,
+                            context_id,
+                            inferred_type,
+                        )
+                        if updated:
+                            # Update local cache so subsequent logs see the new type
+                            field_types[k]["field_type"] = inferred_type
+                    else:
+                        # Normal path: enforce types (cannot modify existing field types)
+                        enforce_types(
+                            k,
+                            v,
+                            field_types=field_types,
+                            field_type_dao=field_type_dao,
+                            context_dao=context_dao,
+                            project_id=project_id,
+                            batch_index=i,
+                            explicit_types=entries_explicit_types,
+                            context_id=context_id,
+                            is_param=False,
+                        )
 
             # Build log_data dictionary from entries
             log_data = {}
@@ -1811,82 +1867,69 @@ def _create_logs_internal(
         raise HTTPException(status_code=400, detail=str(e))
 
     # =========================================================================
-    # JSONB UNIQUENESS CHECK: Check unique field constraints against existing data
-    # Single query to check all unique field values at once
-    # This is needed because JSONB mode doesn't use log_dao.bulk_create which has _check_uniqueness
+    # UNIQUE FIELD VALIDATION
+    # Uses lookup table (O(M×log N)) or JSONB scan (O(N×M)) based on config.
+    # Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
     # =========================================================================
-    if log_data_updates and field_types:
+    if log_data_updates:
+        from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
         session = log_event_dao.session
 
-        # Get unique fields for this project/context
-        # field_types structure: {"field_name": {"field_type": "str", "mutable": False, "unique": True}}
+        # Get unique fields from EXISTING field types
+        # field_types structure: {"field_name": {"field_type": "str", "unique": True}}
         unique_fields = {
-            k: v
+            k
             for k, v in field_types.items()
             if isinstance(v, dict) and v.get("unique", False)
         }
 
+        # ALSO include unique fields from NEWLY created field types (via explicit_types)
+        # This handles the case where a log creates a new unique field in the same request
+        if new_field_types:
+            new_unique_fields = {
+                ft["field_name"] for ft in new_field_types if ft.get("unique", False)
+            }
+            unique_fields = unique_fields | new_unique_fields
+
         if unique_fields:
-            import json as json_module
+            unique_dao = UniqueConstraintDAO(session)
 
-            # Collect all unique field values to check in batch
-            # Structure: [(log_event_id, field_name, value_json), ...]
-            unique_checks = []
-            for log_event_id, log_data, key_order in log_data_updates:
-                for field_name in unique_fields:
-                    if field_name in log_data:
-                        value = log_data[field_name]
-                        if value is not None:
-                            value_json = json_module.dumps({field_name: value})
-                            unique_checks.append((log_event_id, field_name, value_json))
+            # Prepare log entries for batch validation
+            log_entries = [
+                (log_event_id, log_data)
+                for log_event_id, log_data, _ in log_data_updates
+            ]
 
-            if unique_checks:
-                # Build a single batch query to check all values at once
-                # Uses OR conditions for each value with CASE to identify which matched
-                or_conditions = []
-                params = {"project_id": project_id, "context_id": context_id}
+            # Exclude newly created log_event_ids from duplicate check
+            new_log_ids = [log_event_id for log_event_id, _, _ in log_data_updates]
 
-                # Exclude newly created log_event_ids from the check
-                new_log_ids = [log_event_id for log_event_id, _, _ in log_data_updates]
-                params["exclude_ids"] = new_log_ids
+            # Check for duplicates (handles both lookup table and JSONB scan)
+            duplicate = unique_dao.check_unique_fields_batch(
+                context_id=context_id,
+                project_id=project_id,
+                log_entries=log_entries,
+                unique_fields=unique_fields,
+                exclude_ids=new_log_ids,
+            )
 
-                for i, (log_event_id, field_name, value_json) in enumerate(
-                    unique_checks,
-                ):
-                    params[f"value_{i}"] = value_json
-                    or_conditions.append(f"le.data @> CAST(:value_{i} AS jsonb)")
+            if duplicate:
+                dup_log_id, field_name, _ = duplicate
 
-                # Build the batch query with CASE to identify which condition matched
-                case_parts = [
-                    f"WHEN le.data @> CAST(:value_{i} AS jsonb) THEN {i}"
-                    for i in range(len(unique_checks))
-                ]
+                # Clean up: remove constraints for all new logs
+                unique_dao.remove_constraints_for_logs(new_log_ids)
 
-                jsonb_query = f"""
-                    SELECT DISTINCT CASE {' '.join(case_parts)} END AS match_idx
-                    FROM log_event le
-                    JOIN log_event_context lec ON le.id = lec.log_event_id
-                    WHERE le.project_id = :project_id
-                    AND lec.context_id = :context_id
-                    AND le.id != ALL(:exclude_ids)
-                    AND ({' OR '.join(or_conditions)})
-                """
+                # Delete all the log events we just created
+                for log_event_id in new_log_ids:
+                    try:
+                        log_event_dao.delete(log_event_id)
+                    except Exception:
+                        pass
 
-                results = session.execute(text(jsonb_query), params).fetchall()
-
-                # Process results to find the first violation
-                for (match_idx,) in results:
-                    if match_idx is not None:
-                        log_event_id, field_name, _ = unique_checks[match_idx]
-                        # Delete the log event we just created
-                        try:
-                            log_event_dao.delete(log_event_id)
-                        except Exception:
-                            pass
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Duplicate entry for unique field '{field_name}'.",
-                        )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Duplicate entry for unique field '{field_name}'.",
+                )
 
     # Batch update LogEvent.data and key_order columns for all successful logs
     created_event_ids = [log_event_ids[i] for i in successful_indices]

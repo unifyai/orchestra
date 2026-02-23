@@ -1,4 +1,5 @@
 """Data Access Object for Permission model."""
+
 from typing import List, Optional
 
 from sqlalchemy import select

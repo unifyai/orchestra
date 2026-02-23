@@ -3646,7 +3646,7 @@ async def test_capitalize_behavior(
         ("\t\nhello\r\n", "hello"),
         # Test Unicode whitespace characters
         ("\u2000hello\u2001", "hello"),  # En quad and em quad spaces
-        ("\u200Ahello\u3000", "hello"),  # Hair space and ideographic space
+        ("\u200ahello\u3000", "hello"),  # Hair space and ideographic space
         ("\u2028hello\u2029", "hello"),  # Line and paragraph separators
         # Test non-whitespace preservation
         ("  hello world  ", "hello world"),
@@ -4155,8 +4155,12 @@ async def test_filter_on_field_with_existing_embedding(
     client: AsyncClient,
 ):
     """
-    Verifies that a filter on a field with an existing embedding works correctly
-    for both scalar and vector operations.
+    Verifies that:
+    1. Scalar filters work on source fields (e.g., doc_text == 'value')
+    2. Vector filters work on embedding target keys (e.g., cosine(doc_text_emb, ...))
+
+    Note: Embeddings are stored with the TARGET key (doc_text_emb), not the source
+    field name (doc_text). To use vector operations, you must reference the target key.
     """
     project_name = "test_ambiguous_field_filter"
     await _create_project(client, project_name, user=1)
@@ -4206,9 +4210,11 @@ async def test_filter_on_field_with_existing_embedding(
     ), "The wrong log was returned by the string filter."
     assert result["logs"][0]["entries"]["doc_text"] == log_content
 
-    # 5. Now, perform a vector similarity search on the SAME 'doc_text' field.
+    # 5. Now, perform a vector similarity search using the EMBEDDING key (not the source field).
+    # Note: The embedding is stored with key="doc_text_emb" (target key), not "doc_text" (source).
+    # To query the embedding, we must use the target key.
     vector_filter_expr = (
-        "cosine(doc_text, embed('a fast canine leaps over a sleepy animal')) > 0.2"
+        "cosine(doc_text_emb, embed('a fast canine leaps over a sleepy animal')) > 0.2"
     )
     response = await client.get(
         "/v0/logs",

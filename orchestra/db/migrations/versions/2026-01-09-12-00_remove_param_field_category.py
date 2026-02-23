@@ -5,6 +5,7 @@ Revises: add_phone_number_to_auth_user
 Create Date: 2026-01-09 12:00:00.000000
 
 """
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

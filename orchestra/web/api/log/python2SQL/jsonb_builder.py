@@ -4093,22 +4093,27 @@ def _handle_embed_jsonb(
         if row.text_value and isinstance(row.text_value, str):
             id_to_text[row.log_event_id] = row.text_value
 
+    # Get target key for embedding storage
+    # For SYNC workflow: embed_target_key is set by views.py create_from_logs
+    # For other contexts: default to source key for backwards compatibility
+    target_key = filter_dict.get("embed_target_key", key)
+
     # Generate embeddings: async (queued) or sync (immediate)
     # Controlled by async_embeddings kwarg in embed() call (defaults to False = sync)
     if id_to_text:
         async_embeddings = filter_dict.get("async_embeddings", False)
 
         if async_embeddings:
-            # Async: queue for background generation
+            # Async: queue for background generation with TARGET key
             _queue_embeddings_for_generation(
                 session=session,
                 id_to_text=id_to_text,
                 model=model,
                 dimensions=dimensions,
-                key=key,
+                key=target_key,  # Target key for Embedding.key
             )
         else:
-            # Sync: generate embeddings immediately (sync wrapper for use in sync query builder)
+            # Sync: generate embeddings immediately with TARGET key
             from .helpers import _ensure_vectors_exist
 
             _ensure_vectors_exist(
@@ -4116,7 +4121,7 @@ def _handle_embed_jsonb(
                 id_to_text=id_to_text,
                 model=model,
                 dimensions=dimensions,
-                key=key,
+                key=target_key,  # Use target key, not source key
             )
 
     # JSONB-native: Build subquery joining LogEvent with Embedding table
@@ -4134,7 +4139,7 @@ def _handle_embed_jsonb(
             Embedding,
             and_(
                 Embedding.ref_id == log_event_ids.c.id,
-                Embedding.key == literal(key),
+                Embedding.key == literal(target_key),  # Use target key for lookup
                 Embedding.model == literal(model_name),
             ),
         )
@@ -4163,8 +4168,14 @@ def _handle_embed_image_jsonb(
 
     embed_image(image_url_or_base64) - Converts image to vector embedding
 
-    In JSONB mode, image URLs are stored in LogEvent.data and we compute
-    embeddings on-the-fly (not stored in Embedding table since they're image-based).
+    NOTE: Unlike _handle_embed_jsonb (for text), this function does NOT store
+    embeddings in the Embedding table - it only computes and returns them.
+    Storage is handled separately in views.py (create_from_logs).
+
+    It's unclear why this was designed differently from _handle_embed_jsonb,
+    which stores embeddings immediately via _ensure_vectors_exist(). This
+    inconsistency requires special-case handling elsewhere and arguably should
+    be unified with the text embedding flow for consistency.
 
     Handles three cases:
     1. Subquery: Execute query, compute embeddings in parallel

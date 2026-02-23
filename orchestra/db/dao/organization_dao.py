@@ -1,37 +1,54 @@
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Organization, OrganizationMember
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    BillingAccount,
+    Organization,
+    OrganizationMember,
+)
+
+
+@dataclass
+class OrgSpendingCapResult:
+    """Result of setting an organization spending cap with cascade updates."""
+
+    members_capped: int = 0
+    assistants_capped: int = 0
 
 
 class OrganizationDAO:
     def __init__(self, session: Session):
         self.session = session
 
-    def create(  # noqa: WPS211
+    def create(
         self,
         name: str,
         owner_id: str,
-        billing_user_id: Optional[str] = None,
+        timezone: Optional[str] = None,
     ) -> Organization:
         """
-        Create a new organization.
+        Create a new organization with an associated BillingAccount.
 
         :param name: Organization name.
         :param owner_id: ID of the user who owns the organization.
-        :param billing_user_id: ID of the user who will be billed. Defaults to owner_id.
+        :param timezone: IANA timezone string (e.g., "America/New_York"). Defaults to None.
         :return: The created Organization object.
         """
-        # Default billing user to owner if not specified
-        if billing_user_id is None:
-            billing_user_id = owner_id
+        # Create a BillingAccount for this organization
+        billing_account = BillingAccount()
+        self.session.add(billing_account)
+        self.session.flush()  # Get the billing_account.id
 
         org = Organization(
             name=name,
             owner_id=owner_id,
-            billing_user_id=billing_user_id,
+            timezone=timezone,
+            billing_account_id=billing_account.id,
         )
         self.session.add(org)
         self.session.flush()  # Flush to get the org ID
@@ -41,7 +58,6 @@ class OrganizationDAO:
         self,
         id: Optional[int] = None,
         owner_id: Optional[str] = None,
-        billing_user_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> List[Organization]:
         """
@@ -49,7 +65,6 @@ class OrganizationDAO:
 
         :param id: Organization ID.
         :param owner_id: Owner user ID.
-        :param billing_user_id: Billing user ID.
         :param name: Organization name.
         :return: List of matching organizations.
         """
@@ -58,8 +73,6 @@ class OrganizationDAO:
             query = query.where(Organization.id == id)
         if owner_id:
             query = query.where(Organization.owner_id == owner_id)
-        if billing_user_id:
-            query = query.where(Organization.billing_user_id == billing_user_id)
         if name:
             query = query.where(Organization.name == name)
         rows = self.session.execute(query)
@@ -69,16 +82,18 @@ class OrganizationDAO:
         self,
         id: int,
         owner_id: Optional[str] = None,
-        billing_user_id: Optional[str] = None,
         name: Optional[str] = None,
+        timezone: Optional[str] = None,
+        monthly_spending_cap: Optional[float] = None,
     ) -> None:
         """
         Update an organization.
 
         :param id: Organization ID.
         :param owner_id: New owner user ID.
-        :param billing_user_id: New billing user ID.
         :param name: New organization name.
+        :param timezone: IANA timezone string (e.g., "America/New_York").
+        :param monthly_spending_cap: Monthly spending limit in dollars.
         """
         query = select(Organization)
         query = query.where(Organization.id == id)
@@ -89,21 +104,37 @@ class OrganizationDAO:
                 setattr(entry, "name", name)
             if owner_id:
                 setattr(entry, "owner_id", owner_id)
-            if billing_user_id:
-                setattr(entry, "billing_user_id", billing_user_id)
+            if timezone is not None:
+                setattr(entry, "timezone", timezone)
+            # Use set_spending_cap which handles cascading to members/assistants
+            if monthly_spending_cap is not None:
+                self.set_spending_cap(id, monthly_spending_cap)
 
     def delete(self, id: int):
         """
         Delete an organization and all its associated data.
+
+        Also deletes the associated BillingAccount (which cascades to
+        recharges, credit card fingerprints, etc.).
+
+        Note: Stripe customer archival is handled by the caller (view layer)
+        as a post-commit, best-effort operation.
 
         :param id: Organization ID.
         :raises ValueError: If the organization doesn't exist or deletion fails.
         """
         try:
             org = self.session.query(Organization).filter_by(id=id).one()
+            billing_account_id = org.billing_account_id
             self.session.delete(org)
+            # Clean up the orphaned billing account
+            if billing_account_id:
+                self.session.execute(
+                    text("DELETE FROM billing_account WHERE id = :ba_id"),
+                    {"ba_id": billing_account_id},
+                )
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise ValueError
 
@@ -115,16 +146,6 @@ class OrganizationDAO:
         :return: Organization object or None if not found.
         """
         return self.session.query(Organization).filter_by(id=id).first()
-
-    def get_billing_user_id(self, organization_id: int) -> Optional[str]:
-        """
-        Get the billing user ID for an organization.
-
-        :param organization_id: Organization ID.
-        :return: Billing user ID or None if organization not found.
-        """
-        org = self.get(organization_id)
-        return org.billing_user_id if org else None
 
     def get_user_organizations(self, user_id: str) -> List[Organization]:
         """
@@ -170,3 +191,126 @@ class OrganizationDAO:
             query = query.where(Organization.name.ilike(f"%{name_filter}%"))
         query = query.order_by(Organization.id).limit(limit).offset(offset)
         return list(self.session.execute(query).scalars().all())
+
+    def set_spending_cap(
+        self,
+        org_id: int,
+        monthly_spending_cap: Optional[float],
+    ) -> OrgSpendingCapResult:
+        """
+        Set organization spending cap and cascade to members/assistants.
+
+        When the limit is lowered, all member limits and assistant limits
+        that exceed the new org limit are automatically capped.
+
+        :param org_id: Organization ID.
+        :param monthly_spending_cap: New spending cap (None = no limit).
+        :return: Result containing counts of cascaded updates.
+        """
+        result = OrgSpendingCapResult()
+
+        # Update the organization's spending limit
+        org = self.get(org_id)
+        if not org:
+            return result
+
+        old_limit = org.monthly_spending_cap
+
+        if monthly_spending_cap is not None:
+            new_limit = Decimal(str(monthly_spending_cap))
+
+            # Cap member limits that exceed the new org limit
+            members_to_cap = (
+                self.session.query(OrganizationMember)
+                .filter(
+                    OrganizationMember.organization_id == org_id,
+                    OrganizationMember.monthly_spending_cap > new_limit,
+                )
+                .all()
+            )
+            for member in members_to_cap:
+                member.monthly_spending_cap = new_limit
+                result.members_capped += 1
+
+            # Cap assistant limits that exceed the new org limit
+            assistants_to_cap = (
+                self.session.query(Assistant)
+                .filter(
+                    Assistant.organization_id == org_id,
+                    Assistant.monthly_spending_cap > new_limit,
+                )
+                .all()
+            )
+            for assistant in assistants_to_cap:
+                assistant.monthly_spending_cap = new_limit
+                result.assistants_capped += 1
+
+            org.monthly_spending_cap = new_limit
+        else:
+            org.monthly_spending_cap = None
+
+        # Track when the limit value changes (for notification deduplication)
+        if old_limit != org.monthly_spending_cap:
+            from datetime import datetime, timezone
+
+            org.monthly_spending_cap_set_at = datetime.now(timezone.utc)
+
+        return result
+
+    def get_spending_cap(self, org_id: int) -> Optional[float]:
+        """
+        Get organization's monthly spending cap.
+
+        :param org_id: Organization ID.
+        :return: Monthly spending cap or None if not set or org not found.
+        """
+        org = self.get(org_id)
+        if org and org.monthly_spending_cap is not None:
+            return float(org.monthly_spending_cap)
+        return None
+
+    def get_cumulative_spend(self, org_id: int, month: str) -> float:
+        """
+        Get organization's cumulative spend for a given month.
+
+        Queries the organization's Assistants project logs for spending data.
+        Aggregates cumulative_spend across all assistants in the organization.
+
+        :param org_id: Organization ID.
+        :param month: Month in YYYY-MM format.
+        :return: Cumulative spend for the month (0.0 if no spend data).
+        """
+        from sqlalchemy import cast, func
+        from sqlalchemy.types import Float
+
+        from orchestra.db.models.orchestra_models import (
+            Context,
+            LogEvent,
+            LogEventContext,
+            Project,
+        )
+
+        # Sum cumulative_spend across all assistants in this organization
+        result = (
+            self.session.query(
+                func.coalesce(
+                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
+                    0.0,
+                ).label("spend"),
+            )
+            .select_from(LogEvent)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .join(Context, LogEventContext.context_id == Context.id)
+            .join(Project, Context.project_id == Project.id)
+            .filter(
+                Project.name == "Assistants",
+                Project.organization_id == org_id,
+                Context.name == "All/Spending/Monthly",
+                LogEvent.data.op("->>")("month") == month,
+            )
+            .first()
+        )
+
+        if result and result.spend:
+            return float(result.spend)
+        return 0.0

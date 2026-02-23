@@ -9,6 +9,7 @@ VERSIONING ARCHITECTURE:
 
 See conftest.py for testing infrastructure and performance tracking.
 """
+
 import pytest
 from httpx import AsyncClient
 
@@ -19,6 +20,7 @@ from orchestra.tests.test_log import (
     _update_logs,
     fetch_logs,
 )
+from orchestra.tests.utils import create_test_user
 
 
 @pytest.mark.anyio
@@ -1067,3 +1069,455 @@ async def test_jsonb_nested_structure_versioning(client: AsyncClient):
     assert entries["config"]["retry"]["backoff"] == [1, 2, 4]
     assert entries["tags"] == ["prod", "critical"]
     assert entries["matrix"] == [[1, 2], [3, 4]]
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_field_types(client: AsyncClient):
+    """
+    Tests that rollback removes FieldType records created after the commit point.
+
+    BUG: Currently FieldType records are NOT cleaned up during rollback.
+    This means that after rolling back, the fields list still shows fields
+    that were created after the rolled-back commit, even though the logs
+    containing those fields no longer exist.
+
+    Steps:
+    1. Create a log with field_a, commit
+    2. Add a new field field_b to the log
+    3. Rollback to the first commit
+    4. Verify field_b is NOT in the fields list (this currently fails)
+    """
+    project_name = "test_rollback_field_cleanup"
+    context_name = "field_cleanup_context"
+
+    # Setup: Create a versioned project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # --- Version 1: Create log with field_a ---
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"field_a": "initial_value"},
+    )
+
+    # Get fields before commit - should only have field_a
+    fields_v1_res = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_v1_res.status_code == 200
+    fields_v1 = set(fields_v1_res.json().keys())
+    assert "field_a" in fields_v1
+    assert "field_b" not in fields_v1
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit with field_a"},
+        headers=HEADERS,
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Add field_b (after commit) ---
+    logs_v1 = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_v1[0]["id"]],
+        {"field_b": "new_field_value"},
+        context={"name": context_name},
+        overwrite=False,  # Append, don't overwrite
+    )
+
+    # Verify field_b now exists
+    fields_v2_res = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_v2_res.status_code == 200
+    fields_v2 = set(fields_v2_res.json().keys())
+    assert "field_a" in fields_v2
+    assert "field_b" in fields_v2, "field_b should exist after update"
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=HEADERS,
+    )
+    assert rollback_res.status_code == 200
+
+    # Verify log data is rolled back
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    assert len(logs_after_rollback) == 1
+    assert logs_after_rollback[0]["entries"]["field_a"] == "initial_value"
+    assert (
+        "field_b" not in logs_after_rollback[0]["entries"]
+    ), "field_b should not be in log entries after rollback"
+
+    # --- KEY ASSERTION: field_b should NOT be in the fields list ---
+    fields_after_rollback_res = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_after_rollback_res.status_code == 200
+    fields_after_rollback = set(fields_after_rollback_res.json().keys())
+
+    assert "field_a" in fields_after_rollback, "field_a should still exist"
+    assert "field_b" not in fields_after_rollback, (
+        f"BUG: field_b should NOT exist after rollback, but found fields: "
+        f"{fields_after_rollback}. FieldType records created after the commit "
+        f"point are not being cleaned up during rollback."
+    )
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_active_derived_log_templates(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Tests that rollback removes ActiveDerivedLog templates created after the commit point.
+
+    BUG: Currently ActiveDerivedLog templates are NOT cleaned up during rollback.
+    This means that after rolling back, derived field templates still exist and
+    will be applied to new logs, even though the derived field shouldn't exist
+    in the rolled-back state.
+
+    Steps:
+    1. Create a log with base_value, commit
+    2. Create a derived field computed_value = base_value * 2
+    3. Rollback to the first commit
+    4. Verify the ActiveDerivedLog template for computed_value is deleted
+    """
+    project_name = "test_rollback_derived_template_cleanup"
+    context_name = "derived_cleanup_context"
+
+    # Setup: Create a versioned project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # --- Version 1: Create log with base_value ---
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"base_value": 10},
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit with base_value"},
+        headers=HEADERS,
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Create derived field (after commit) ---
+    derived_key = "computed_value"
+    derive_res = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project_name": project_name,
+            "key": derived_key,
+            "equation": "{log:base_value} * 2",
+            "referenced_logs": {"log": {"context": context_name}},
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert derive_res.status_code == 200, derive_res.text
+    assert "Created 1 derived logs" in derive_res.json().get("info", "")
+
+    # Verify derived field exists in logs
+    logs_with_derived = await fetch_logs(client, project_name, context=context_name)
+    assert len(logs_with_derived) == 1
+    assert logs_with_derived[0].get("derived_entries", {}).get(derived_key) == 20
+
+    # Verify the ActiveDerivedLog template exists (check via fields endpoint)
+    fields_with_derived = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_with_derived.status_code == 200
+    assert derived_key in fields_with_derived.json()
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=HEADERS,
+    )
+    assert rollback_res.status_code == 200
+
+    # Verify log data is rolled back (no derived field)
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    assert len(logs_after_rollback) == 1
+    assert logs_after_rollback[0]["entries"]["base_value"] == 10
+    assert derived_key not in logs_after_rollback[0].get(
+        "derived_entries",
+        {},
+    ), f"Derived field {derived_key} should not exist in log after rollback"
+
+    # --- KEY ASSERTION: ActiveDerivedLog template should be deleted ---
+    # The template's existence can be checked by:
+    # 1. The derived field should not appear in the fields list
+    # 2. Creating a new log should NOT auto-compute the derived field
+
+    # Check 1: Derived field should not be in fields list
+    fields_after_rollback = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_after_rollback.status_code == 200
+    fields_after = fields_after_rollback.json()
+    assert derived_key not in fields_after, (
+        f"BUG: Derived field '{derived_key}' should NOT be in fields after rollback. "
+        f"Found fields: {list(fields_after.keys())}. "
+        f"ActiveDerivedLog templates created after the commit point are not being "
+        f"cleaned up during rollback."
+    )
+
+    # Check 2: Directly verify ActiveDerivedLog template is deleted from database
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import ActiveDerivedLog, Context, Project
+
+    dbsession.expire_all()
+
+    # Get project and context IDs
+    project = dbsession.execute(
+        select(Project).where(Project.name == project_name),
+    ).scalar_one()
+    context = dbsession.execute(
+        select(Context).where(
+            Context.project_id == project.id,
+            Context.name == context_name,
+        ),
+    ).scalar_one()
+
+    # Check if ActiveDerivedLog template still exists
+    template = dbsession.execute(
+        select(ActiveDerivedLog).where(
+            ActiveDerivedLog.project_id == project.id,
+            ActiveDerivedLog.context_id == context.id,
+            ActiveDerivedLog.key == derived_key,
+        ),
+    ).scalar_one_or_none()
+
+    assert template is None, (
+        f"BUG: ActiveDerivedLog template for '{derived_key}' should NOT exist after "
+        f"rollback. The template was created after the commit point and should have "
+        f"been cleaned up. Found template: key={template.key}, equation={template.equation}"
+    )
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_plots(client: AsyncClient, dbsession):
+    """Tests that rollback removes Plot records created after the commit point."""
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.plot_dao import PlotDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+
+    user = await create_test_user(client, "rollback_plot_cleanup@test.com")
+
+    project_name = "test_rollback_plot_cleanup"
+    context_name = "plot_cleanup_context"
+
+    # Create project and context via DAOs
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name=project_name,
+        user_id=user["id"],
+        organization_id=None,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name=project_name)
+    project = projects[0][0]
+
+    context_id = context_dao.create(
+        project_id=project.id,
+        name=context_name,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    # --- Version 1: Create a log and commit ---
+    await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "context": {"name": context_name},
+            "entries": {"value": 100},
+        },
+        headers=user["headers"],
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit"},
+        headers=user["headers"],
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Create a plot after the commit (using DAO) ---
+    plot_dao = PlotDAO(dbsession)
+    plot = plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "histogram", "x_axis": "value"},
+        project_config={
+            "project_name": project_name,
+            "context": context_name,
+        },
+        title="Plot Created After Commit",
+    )
+    dbsession.commit()
+    plot_token = plot.token
+
+    # Verify plot exists
+    assert plot_dao.get_by_token(plot_token) is not None
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=user["headers"],
+    )
+    assert rollback_res.status_code == 200
+
+    # Refresh session to see changes
+    dbsession.expire_all()
+
+    # --- KEY ASSERTION: Plot should NOT exist after rollback ---
+    # The plot was created after the commit point we rolled back to,
+    # so it should be cleaned up during rollback
+    assert plot_dao.get_by_token(plot_token) is None, (
+        f"BUG: Plot should NOT exist after rollback. "
+        f"Plot records created after the commit point are not being cleaned up "
+        f"during rollback."
+    )
+
+
+@pytest.mark.anyio
+async def test_rollback_cleans_up_table_views(client: AsyncClient, dbsession):
+    """Tests that rollback removes TableView records created after the commit point."""
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+    from orchestra.db.dao.table_view_dao import TableViewDAO
+
+    user = await create_test_user(client, "rollback_table_view_cleanup@test.com")
+
+    project_name = "test_rollback_table_view_cleanup"
+    context_name = "table_view_cleanup_context"
+
+    # Create project and context via DAOs
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name=project_name,
+        user_id=user["id"],
+        organization_id=None,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name=project_name)
+    project = projects[0][0]
+
+    context_id = context_dao.create(
+        project_id=project.id,
+        name=context_name,
+        is_versioned=True,
+    )
+    dbsession.commit()
+
+    # --- Version 1: Create a log and commit ---
+    await client.post(
+        "/v0/log",
+        json={
+            "project": project_name,
+            "context": {"name": context_name},
+            "entries": {"value": 100},
+        },
+        headers=user["headers"],
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit"},
+        headers=user["headers"],
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # --- Create a table view after the commit (using DAO) ---
+    table_view_dao = TableViewDAO(dbsession)
+    table_view = table_view_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        table_config={"columns": ["value"]},
+        project_config={
+            "project_name": project_name,
+            "context": context_name,
+        },
+        title="TableView Created After Commit",
+    )
+    dbsession.commit()
+    table_view_token = table_view.token
+
+    # Verify table view exists
+    assert table_view_dao.get_by_token(table_view_token) is not None
+
+    # --- Rollback to v1 ---
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=user["headers"],
+    )
+    assert rollback_res.status_code == 200
+
+    # Refresh session to see changes
+    dbsession.expire_all()
+
+    # --- KEY ASSERTION: TableView should NOT exist after rollback ---
+    # The table view was created after the commit point we rolled back to,
+    # so it should be cleaned up during rollback
+    assert table_view_dao.get_by_token(table_view_token) is None, (
+        f"BUG: TableView should NOT exist after rollback. "
+        f"TableView records created after the commit point are not being cleaned up "
+        f"during rollback."
+    )

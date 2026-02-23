@@ -223,11 +223,11 @@ class RequestTraceMiddleware:
             captured_headers = {}
             for key, value in scope.get("headers", []):
                 if key.lower() in headers_to_capture:
-                    captured_headers[
-                        key.decode("utf-8", errors="ignore")
-                    ] = value.decode(
-                        "utf-8",
-                        errors="ignore",
+                    captured_headers[key.decode("utf-8", errors="ignore")] = (
+                        value.decode(
+                            "utf-8",
+                            errors="ignore",
+                        )
                     )
             if captured_headers:
                 span.set_attribute(

@@ -13,6 +13,7 @@ After this migration:
 - role_id references the Role table (Owner, Admin, Member, Viewer, or custom roles)
 - The level field is no longer stored or used
 """
+
 import sqlalchemy as sa
 from alembic import op
 

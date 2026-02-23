@@ -41,6 +41,27 @@ SPECIAL_FIELD_TYPES = [
     "enum",  # Enum type with restricted values (Log.inferred_type will be "str")
 ]
 
+# ============================================================
+# JSON Schema Type Aliases
+# ============================================================
+# Standard JSON Schema uses different type names than Python/Orchestra.
+# This mapping allows Orchestra to accept both standard JSON Schema types
+# and Python-style type names for backwards compatibility.
+#
+# Standard JSON Schema types → Orchestra internal types
+JSON_SCHEMA_TYPE_ALIASES = {
+    "string": "str",
+    "integer": "int",
+    "number": "float",
+    "boolean": "bool",
+    "array": "list",
+    "object": "dict",
+    "null": "NoneType",
+}
+
+# Reverse mapping for converting Orchestra types to JSON Schema
+ORCHESTRA_TO_JSON_SCHEMA = {v: k for k, v in JSON_SCHEMA_TYPE_ALIASES.items()}
+
 # Default field type for untyped/mixed-type fields
 # This is used when no type is specified during field creation
 # "Any" means the field is NOT strongly typed and can accept logs of any/mixed types
@@ -148,6 +169,7 @@ def _canon_ident(name: str) -> str:
       - "any" -> "Any"
       - "none" / "nonetype" -> "NoneType"
       - "enum" -> "enum" (kept lowercase per SPECIAL_FIELD_TYPES)
+      - JSON Schema types are mapped to Orchestra types (e.g., "string" -> "str")
       - Known containers use Title-case when parameterized; bare remains lowercase.
       - Known primitives lowercased (per SUPPORTED_BASE_TYPES)
       - Otherwise, keep Title-case if provided, else lowercase for determinism.
@@ -165,6 +187,10 @@ def _canon_ident(name: str) -> str:
 
     if lower in _COLLECTION_CANON:
         return _COLLECTION_CANON[lower]
+
+    # Map JSON Schema types to Orchestra internal types
+    if lower in JSON_SCHEMA_TYPE_ALIASES:
+        return JSON_SCHEMA_TYPE_ALIASES[lower]
 
     if lower in SUPPORTED_BASE_TYPES:
         return lower
@@ -741,9 +767,9 @@ def types_match(field_type: Any, inferred_type: str) -> bool:
     class TypeConstraint:
         kind: str  # any, none, enum, primitive, list, set, dict, tuple
         name: Optional[str] = None
-        elements: Optional[
-            List["TypeConstraint"]
-        ] = None  # for list/set allowed element unions
+        elements: Optional[List["TypeConstraint"]] = (
+            None  # for list/set allowed element unions
+        )
         key: Optional["TypeConstraint"] = None  # for dict
         value: Optional["TypeConstraint"] = None  # for dict
         variadic: bool = False  # for tuple
@@ -1059,6 +1085,7 @@ def _collect_types_from_iterable(it: Iterable, *, media_detector=None) -> _List[
 def _unique_normalized(types: _List[str]) -> _List[str]:
     """Return a stable, deterministic list of unique normalized types."""
     normalized = [normalize_type_string(t) for t in types]
+
     # stable order: primitives first, then specials, then containers lexicographically
     def _key(t: str):
         base, inner = parse_nested_type(t)

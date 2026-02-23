@@ -7,9 +7,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Users
+from orchestra.lib.billing import get_billing_entity
 from orchestra.lib.time import month_end_utc
 from orchestra.web.api.credits.schema import (
     CreditsResponse,
@@ -43,20 +43,26 @@ logger.addHandler(handler)
 def get_credits(
     request_fastapi: Request,
     session=Depends(get_db_session),
-) -> Users:
+) -> dict:
     """
     Returns the number of available credits.
     \f
     :param request_fastapi: FastAPI request object.
-    :param users_dao: DAO for users models.
-    :return: user instance with credits from database.
+    :param session: Database session.
+    :return: dict with user id and credits from billing account.
     """
-    users_dao = UsersDAO(session)
-    user = users_dao.filter(id=request_fastapi.state.user_id)
-    # TODO: Remove this after fixing the DB entries
-    if len(user) == 0:
-        logging.debug(f"##ANCHOR## bot: {request_fastapi.state.user_id}")
-    return user[0]
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+        credits = float(billing_entity.credits)
+    except ValueError:
+        credits = 0.0
+
+    # Return the entity whose credits were looked up
+    entity_id = str(organization_id) if organization_id else user_id
+    return {"id": entity_id, "credits": credits}
 
 
 @router.post(
@@ -103,12 +109,17 @@ def deduct_credits(
     :param session: Database session.
     :return: Response with previous, deducted, and current credit amounts.
     """
-    users_dao = UsersDAO(session)
-    user = users_dao.filter(id=request_fastapi.state.user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    from orchestra.lib.billing import deduct_credits as billing_deduct_credits
 
-    current_credits = float(user[0].credits)
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    current_credits = float(billing_entity.credits)
 
     if request.amount > current_credits:
         raise HTTPException(
@@ -116,7 +127,7 @@ def deduct_credits(
             detail=f"Insufficient credits. Available: {current_credits}, requested: {request.amount}",
         )
 
-    users_dao.recharge_credit(request_fastapi.state.user_id, -request.amount)
+    billing_deduct_credits(session, billing_entity, Decimal(str(request.amount)))
     session.commit()
 
     new_credits = current_credits - request.amount
@@ -177,11 +188,11 @@ def promo_code(
     :param user: ID of the user that receives the credits, if not present
     if defaults to the user making the request.
     :param recharge_dao: DAO for recharge models.
-    :param users_dao: DAO for users models.
+    :param user_dao: DAO for users models.
     :return: user instance with credits from database.
     """
     recharge_dao = RechargeDAO(session)
-    users_dao = UsersDAO(session)
+    user_dao = UserDAO(session)
 
     raise HTTPException(
         status_code=400,
@@ -219,12 +230,21 @@ def promo_code(
 
     user_id = request_fastapi.state.user_id
     if user is not None:
-        if len(users_dao.filter(id=user)) > 0:
+        if len(user_dao.filter(id=user)) > 0:
             user_id = user
         else:
             raise not_found("User ID")
 
-    prev_recharges = recharge_dao.filter(user_id=user_id)
+    # Resolve billing_account_id from user
+    target_user = user_dao.filter(id=user_id)
+    if not target_user or not target_user[0][0].billing_account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="User not found or has no billing account",
+        )
+    ba_id = target_user[0][0].billing_account_id
+
+    prev_recharges = recharge_dao.filter(billing_account_id=ba_id)
 
     if any(pr.type == code for pr in prev_recharges):
         raise HTTPException(
@@ -239,11 +259,15 @@ def promo_code(
         )
 
     recharge_dao.create_recharge(
-        user_id=user_id,
+        billing_account_id=ba_id,
         quantity=qty,
         amount_usd=Decimal("0.00"),
         invoice_group=month_end_utc(date.today()),
         type_=code,
     )
-    users_dao.recharge_credit(user_id, qty)
+    # Credit the billing account directly
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+    billing_account_dao = BillingAccountDAO(session)
+    billing_account_dao.add_credits(ba_id, qty)
     return {"info": f"Code {code} activated successfully!"}

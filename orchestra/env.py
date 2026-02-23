@@ -22,10 +22,6 @@ from typing import Optional
 STANDARD_FALLBACKS: dict[str, str] = {
     # OpenAI API key (used for embeddings in log search)
     "ORCHESTRA_OPENAI_API_KEY": "OPENAI_API_KEY",
-    # GCP/VertexAI credentials
-    "ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON": "GOOGLE_APPLICATION_CREDENTIALS",
-    "ORCHESTRA_VERTEXAI_PROJECT": "GCP_PROJECT_ID",
-    "ORCHESTRA_VERTEXAI_LOCATION": "GCP_LOCATION",
 }
 
 
