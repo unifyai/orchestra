@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Literal
 
 import httpx
 from sqlalchemy import and_
@@ -31,19 +31,23 @@ async def create_phone_number(phone_country: str = "US", is_staging: bool = Fals
     voice_url = ADAPTERS_URL + "/twilio/call"
     sms_url = ADAPTERS_URL + "/twilio/sms"
     status_callback = ADAPTERS_URL + "/twilio/call-status"
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{COMMS_URL}/phone/create",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "voice_url": voice_url,
-                "sms_url": sms_url,
-                "status_callback": status_callback,
-                "phone_country": phone_country,
-            },
-            timeout=20,
-        )
-        return response.json()
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        try:
+            response = await client.post(
+                f"{COMMS_URL}/phone/create",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                json={
+                    "voice_url": voice_url,
+                    "sms_url": sms_url,
+                    "status_callback": status_callback,
+                    "phone_country": phone_country,
+                },
+            )
+            return response.json()
+        except httpx.TimeoutException:
+            raise Exception(
+                "Phone creation timed out - comms service may be cold starting",
+            )
 
 
 async def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
@@ -157,9 +161,11 @@ async def watch_email(email: str, is_staging: bool = False):
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={
                 "primary_email": email,
-                "topic": "gmail-notifications-staging"
-                if is_staging
-                else "gmail-notifications",
+                "topic": (
+                    "gmail-notifications-staging"
+                    if is_staging
+                    else "gmail-notifications"
+                ),
             },
             timeout=20,
         )
@@ -179,13 +185,16 @@ async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
     """
     topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{COMMS_URL}/infra/pubsub/topic",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            data={"topic_name": topic_name},
-            timeout=20,
-        )
-        return response.json()
+        try:
+            response = await client.post(
+                f"{COMMS_URL}/infra/pubsub/topic",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                data={"topic_name": topic_name},
+                timeout=40,
+            )
+            return response.json()
+        except httpx.TimeoutException:
+            print("Pubsub topic creation timed out")
 
 
 async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
@@ -211,18 +220,20 @@ async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
         return response.json()
 
 
-async def create_windows_vm(
+async def create_vm(
     assistant_id: str,
     unify_apikey: str,
     assistant_name: str,
+    vm_type: Literal["windows", "ubuntu"],
 ):
     """
-    Create a Windows VM for the assistant via the infra service.
+    Create a VM for the assistant via the infra service.
 
     Args:
         assistant_id: Numeric assistant ID (e.g., "12345")
-        unify_apikey: API key used for VNC/Windows password
-        assistant_name: Used for Windows username
+        unify_apikey: API key used for VNC password
+        assistant_name: Used for VM username
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         JSON response with vm_name, ip_address, hostname, desktop_url, status
@@ -235,18 +246,23 @@ async def create_windows_vm(
                 "assistant_id": assistant_id,
                 "unify_apikey": unify_apikey,
                 "assistant_name": assistant_name,
+                "vm_type": vm_type,
             },
-            timeout=60,
+            timeout=120,
         )
         return response.json()
 
 
-async def delete_windows_vm(assistant_id: str):
+async def delete_vm(
+    assistant_id: str,
+    vm_type: Literal["windows", "ubuntu"],
+):
     """
-    Delete a Windows VM and associated resources (DNS, static IP).
+    Delete a VM and associated resources (DNS, static IP).
 
     Args:
         assistant_id: Numeric assistant ID (e.g., "12345")
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         JSON response with vm_deleted, dns_deleted, ip_released flags
@@ -256,8 +272,8 @@ async def delete_windows_vm(assistant_id: str):
             "DELETE",
             f"{COMMS_URL}/infra/vm/delete",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={"assistant_id": assistant_id},
-            timeout=60,
+            json={"assistant_id": assistant_id, "vm_type": vm_type},
+            timeout=120,
         )
         return response.json()
 

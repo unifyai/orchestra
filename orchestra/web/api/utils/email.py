@@ -28,17 +28,29 @@ def _send_email_sync(
     email_subject: str,
     email_body: str,
     sender_email: str,
+    impersonate_email: str | None = None,
 ) -> bool:
     """
     Synchronous implementation of email sending via Gmail API.
     This is called via run_in_executor to avoid blocking the event loop.
+
+    Args:
+        to_email: Recipient email address.
+        email_subject: Email subject line.
+        email_body: HTML email body.
+        sender_email: The "From" address shown in the email.
+        impersonate_email: The actual user to impersonate (must be a real user in Google Workspace).
+                          If sender_email is an alias, this should be the primary email.
+                          Defaults to DELEGATED_USER_EMAIL.
     """
     try:
         # Create credentials from the service account file, impersonating the user
+        # Note: We impersonate the delegated user (must be real), but can send "from" an alias
+        impersonate_as = impersonate_email or DELEGATED_USER_EMAIL
         creds = Credentials.from_service_account_file(
             SERVICE_ACCOUNT_FILE,
             scopes=SCOPES,
-            subject=sender_email,  # Impersonate this user
+            subject=impersonate_as,  # Impersonate this user (must be real user, not alias)
         )
 
         # Build the Gmail service
@@ -92,6 +104,7 @@ async def send_email_async(
     email_subject: str,
     email_body: str,
     from_email: str | None = None,
+    impersonate_email: str | None = None,
 ) -> bool:
     """
     Sends an email using Gmail API with OAuth 2.0 (Service Account with Domain-Wide Delegation).
@@ -103,7 +116,10 @@ async def send_email_async(
         to_email: Recipient email address.
         email_subject: Email subject line.
         email_body: HTML email body.
-        from_email: Sender email address. Defaults to DELEGATED_USER_EMAIL if not specified.
+        from_email: Sender "From" address shown in the email. Defaults to DELEGATED_USER_EMAIL.
+                    Can be an alias of the impersonated user.
+        impersonate_email: The actual user to impersonate (must be a real user in Google Workspace).
+                           Defaults to DELEGATED_USER_EMAIL. Required when from_email is an alias.
     """
     if not SERVICE_ACCOUNT_FILE:
         logger.error(
@@ -126,4 +142,5 @@ async def send_email_async(
         email_subject,
         email_body,
         sender_email,
+        impersonate_email,
     )

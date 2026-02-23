@@ -1,8 +1,68 @@
 name: Testing orchestra
 
-on: push
+on:
+  # Manual trigger - always runs tests
+  workflow_dispatch:
+
+  # Push events - tests only run if commit message contains [run-tests]
+  push:
+    branches:
+    - '**'
+
+  # Pull request events - tests only run if PR title contains [run-tests]
+  pull_request:
+    branches:
+    - '**'
 
 jobs:
+  # Determine if tests should run based on trigger and commit/PR message
+  should-run-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ steps.check.outputs.run_tests }}
+    steps:
+    - name: Check if tests should run
+      id: check
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        COMMIT_MSG: ${{ github.event.head_commit.message }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+      run: |
+        # workflow_dispatch always runs tests
+        if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          echo "run_tests=true" >> "$GITHUB_OUTPUT"
+          echo "Tests triggered by workflow_dispatch"
+          exit 0
+        fi
+
+        # For push events, check commit message for [run-tests]
+        if [[ "$EVENT_NAME" == "push" ]]; then
+          if [[ "$COMMIT_MSG" == *"[run-tests]"* ]]; then
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+            echo "Tests triggered by commit message containing [run-tests]"
+          else
+            echo "run_tests=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping tests - commit message does not contain [run-tests]"
+          fi
+          exit 0
+        fi
+
+        # For pull_request events, check PR title for [run-tests]
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          if [[ "$PR_TITLE" == *"[run-tests]"* ]]; then
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+            echo "Tests triggered by PR title containing [run-tests]"
+          else
+            echo "run_tests=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping tests - PR title does not contain [run-tests]"
+          fi
+          exit 0
+        fi
+
+        # Default: don't run tests
+        echo "run_tests=false" >> "$GITHUB_OUTPUT"
+        echo "Skipping tests - unknown event type"
+
   black:
     runs-on: ubuntu-latest
     steps:
@@ -10,7 +70,7 @@ jobs:
     - uses: psf/black@stable
       with:
         options: "--check"
-        version: "22.12.0"
+        version: "26.1.0"
   # flake8:
   #   runs-on: ubuntu-latest
   #   steps:
@@ -41,6 +101,8 @@ jobs:
   #       run: poetry run mypy --install-types --non-interactive .
   pytest:
     runs-on: ubuntu-latest-8-cores
+    needs: should-run-tests
+    if: needs.should-run-tests.outputs.run_tests == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -111,14 +173,16 @@ jobs:
 
         # Extract pass/fail counts from pytest summary line
         # Format: "====== X passed, Y failed, Z skipped in N.NNs (H:MM:SS) ======"
-        summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+(\.[0-9]+)?s" pytest_output.txt | tail -1)
+        summary_line=$(grep -E "^=+ .*(passed|failed|error).* in [0-9]+(\.[0-9]+)?s" pytest_output.txt | tail -1)
         if [ -n "$summary_line" ]; then
           passed=$(echo "$summary_line" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo "0")
           failed=$(echo "$summary_line" | grep -oE "[0-9]+ failed" | grep -oE "[0-9]+" || echo "0")
           skipped=$(echo "$summary_line" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+" || echo "0")
+          errors=$(echo "$summary_line" | grep -oE "[0-9]+ error" | grep -oE "[0-9]+" || echo "0")
           echo "passed=${passed:-0}" >> $GITHUB_OUTPUT
           echo "failed=${failed:-0}" >> $GITHUB_OUTPUT
           echo "skipped=${skipped:-0}" >> $GITHUB_OUTPUT
+          echo "errors=${errors:-0}" >> $GITHUB_OUTPUT
         else
           # Debug: show last 5 lines to help diagnose parsing issues
           echo "Warning: Could not parse pytest summary line" >&2
@@ -127,6 +191,7 @@ jobs:
           echo "passed=0" >> $GITHUB_OUTPUT
           echo "failed=0" >> $GITHUB_OUTPUT
           echo "skipped=0" >> $GITHUB_OUTPUT
+          echo "errors=0" >> $GITHUB_OUTPUT
         fi
 
         exit $exit_code
@@ -136,12 +201,10 @@ jobs:
         # Logging
         ORCHESTRA_LOG_DIR: ${{ env.LOGS_DIR }}/orchestra
         # GCP configuration (from org-level variables)
-        ORCHESTRA_VERTEXAI_PROJECT: ${{ vars.GCP_PROJECT_ID }}
-        # Use step output from google-github-actions/auth@v2 (more explicit than env.GOOGLE_APPLICATION_CREDENTIALS)
-        ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON: ${{ steps.gcp-auth.outputs.credentials_file_path }}
+        GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.gcp-auth.outputs.credentials_file_path }}
         ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
         ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
-        ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
         # OpenAI API key (used for embeddings in log search)
         ORCHESTRA_OPENAI_API_KEY: ${{ secrets.ORCHESTRA_OPENAI_API_KEY }}
         # Orchestra-specific configuration
@@ -164,11 +227,9 @@ jobs:
 
         echo "## ✅ Shard ${{ matrix.shard }}: All Tests Passed" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        if [ "$SKIPPED" -gt 0 ]; then
-          echo "**${PASSED}** passed, **${SKIPPED}** skipped" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**${PASSED}** passed" >> $GITHUB_STEP_SUMMARY
-        fi
+        STATS="**${PASSED}** passed"
+        [ "$SKIPPED" -gt 0 ] 2>/dev/null && STATS="$STATS, **${SKIPPED}** skipped"
+        echo "$STATS" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -181,6 +242,7 @@ jobs:
         PASSED="${{ steps.pytest.outputs.passed }}"
         FAILED="${{ steps.pytest.outputs.failed }}"
         SKIPPED="${{ steps.pytest.outputs.skipped }}"
+        ERRORS="${{ steps.pytest.outputs.errors }}"
 
         # Count trace files
         TRACE_COUNT=0
@@ -190,11 +252,11 @@ jobs:
 
         echo "## ❌ Shard ${{ matrix.shard }}: Tests Failed" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        if [ "$SKIPPED" -gt 0 ]; then
-          echo "**${PASSED}** passed, **${FAILED}** failed, **${SKIPPED}** skipped" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**${PASSED}** passed, **${FAILED}** failed" >> $GITHUB_STEP_SUMMARY
-        fi
+        STATS="**${PASSED}** passed"
+        [ "$FAILED" -gt 0 ] 2>/dev/null && STATS="$STATS, **${FAILED}** failed"
+        [ "$ERRORS" -gt 0 ] 2>/dev/null && STATS="$STATS, **${ERRORS}** errors"
+        [ "$SKIPPED" -gt 0 ] 2>/dev/null && STATS="$STATS, **${SKIPPED}** skipped"
+        echo "$STATS" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY

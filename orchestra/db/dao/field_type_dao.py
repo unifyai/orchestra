@@ -43,7 +43,7 @@ class FieldTypeDAO:
         field_name: str,
         value,
         context_id: int,
-        mutable: bool = False,
+        mutable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -191,7 +191,7 @@ class FieldTypeDAO:
         field_name: str,
         value,
         context_id: int,
-        mutable: bool = False,
+        mutable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -272,6 +272,107 @@ class FieldTypeDAO:
         )
         self.session.execute(stmt)
         self.session.commit()
+
+    def update_untyped_field_to_inferred(
+        self,
+        project_id: int,
+        field_name: str,
+        context_id: int,
+        inferred_type: str,
+    ) -> bool:
+        """
+        Update a field's type from "Any" (untyped) to an inferred type.
+
+        Only updates if the current field type is "Any" (untyped).
+        This allows "locking in" a type for fields that were created without
+        explicit types, based on the actual data being logged.
+
+        Args:
+            project_id: The project ID
+            field_name: The name of the field to update
+            context_id: The context ID
+            inferred_type: The type inferred from the logged value
+
+        Returns:
+            True if the field was updated (was untyped and is now typed)
+            False if the field doesn't exist or was already typed
+        """
+        from orchestra.web.api.log.utils.type_utils import (
+            is_untyped_field,
+            normalize_type_string,
+        )
+
+        existing = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+
+        if not existing:
+            return False
+
+        # Only update if currently untyped ("Any")
+        if not is_untyped_field(existing.field_type):
+            return False
+
+        existing.field_type = normalize_type_string(inferred_type)
+        self.session.flush()
+        return True
+
+    def bulk_update_untyped_fields_to_inferred(
+        self,
+        project_id: int,
+        context_id: int,
+        field_type_updates: Dict[str, str],
+    ) -> Dict[str, bool]:
+        """
+        Batch update multiple untyped fields to their inferred types.
+
+        Only updates fields that currently have type "Any" (untyped).
+
+        Args:
+            project_id: The project ID
+            context_id: The context ID
+            field_type_updates: Dict mapping field_name -> inferred_type
+
+        Returns:
+            Dict mapping field_name -> True if updated, False if skipped
+        """
+        from orchestra.web.api.log.utils.type_utils import (
+            is_untyped_field,
+            normalize_type_string,
+        )
+
+        if not field_type_updates:
+            return {}
+
+        # Fetch all relevant fields in one query
+        field_names = list(field_type_updates.keys())
+        existing_fields = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.context_id == context_id,
+                FieldType.field_name.in_(field_names),
+            )
+            .all()
+        )
+
+        results = {fname: False for fname in field_names}
+
+        for field in existing_fields:
+            if is_untyped_field(field.field_type):
+                inferred = field_type_updates.get(field.field_name)
+                if inferred:
+                    field.field_type = normalize_type_string(inferred)
+                    results[field.field_name] = True
+
+        self.session.flush()
+        return results
 
     def update_field_mutability(
         self,
@@ -489,8 +590,6 @@ class FieldTypeDAO:
             context_id: The context ID
             fields: Dictionary mapping fields names to their definitions.
         """
-        from orchestra.web.api.log.schema import StandardFieldDefinition
-
         if not fields:
             return
 
@@ -498,8 +597,12 @@ class FieldTypeDAO:
         self._validate_description(description)
 
         # Prepare values for bulk insertion
-        # Import EnumType for isinstance check
-        from orchestra.web.api.log.schema import EnumType
+        # Import field definition types for isinstance checks
+        from orchestra.web.api.log.schema import (
+            EnumType,
+            JsonSchemaFieldDefinition,
+            StandardFieldDefinition,
+        )
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
             is_pydantic_schema,
@@ -511,7 +614,7 @@ class FieldTypeDAO:
         values_to_insert = []
         for field_name, field_info in fields.items():
             field_type = DEFAULT_FIELD_TYPE  # Default to DEFAULT_FIELD_TYPE ("Any")
-            mutable = False
+            mutable = True
             unique = False
             enum_values = None
             enum_restrict = False
@@ -544,6 +647,16 @@ class FieldTypeDAO:
                 if field_type.lower() == "enum":
                     enum_values = getattr(field_info, "values", None)
                     enum_restrict = getattr(field_info, "restrict", False)
+            elif isinstance(field_info, JsonSchemaFieldDefinition):
+                # Handle full JSON Schema field definitions
+                # Convert to dict (excluding None values) and store as JSON string
+                schema_dict = field_info.model_dump(exclude_none=True)
+                schema = normalize_pydantic_schema(schema_dict)
+                field_type = pydantic_schema_to_string(schema)
+                # Extract description from schema if present
+                field_description = schema_dict.get("description")
+                # Validate individual field description
+                self._validate_description(field_description)
             elif isinstance(field_info, str):
                 field_type = field_info
             elif isinstance(field_info, dict) and is_pydantic_schema(field_info):
@@ -613,7 +726,7 @@ class FieldTypeDAO:
                 - field_name: The name of the field
                 - value: The value (not used for type inference anymore)
                 - context_id: The context ID
-                - mutable: Optional, defaults to False
+                - mutable: Optional, defaults to True
                 - field_category: Optional, defaults to "entry". Valid values are:
                     - "entry": Regular entry fields
                     - "derived_entry": Derived field values
@@ -654,8 +767,13 @@ class FieldTypeDAO:
             project_id = data["project_id"]
             field_name = data["field_name"]
             context_id = data["context_id"]
-            mutable = data.get("mutable", True)
             field_category = data.get("field_category", "entry")
+            # Derived entries are always immutable; others default to mutable
+            mutable = (
+                False
+                if field_category == "derived_entry"
+                else data.get("mutable", True)
+            )
             unique = data.get("unique", False)
             field_description = data.get("description", description)
 
@@ -728,3 +846,50 @@ class FieldTypeDAO:
         )
         self.session.execute(stmt)
         self.session.commit()
+
+    def copy_field_types(
+        self,
+        source_context_id: int,
+        target_context_id: int,
+        target_project_id: int,
+    ) -> int:
+        """Copy all field types from one context to another.
+
+        Args:
+            source_context_id: The context to copy field types from.
+            target_context_id: The context to copy field types to.
+            target_project_id: The project ID for the target field types.
+
+        Returns:
+            The number of field types copied.
+        """
+        source_fields = (
+            self.session.query(FieldType)
+            .filter(FieldType.context_id == source_context_id)
+            .all()
+        )
+        if not source_fields:
+            return 0
+
+        values = [
+            {
+                "project_id": target_project_id,
+                "context_id": target_context_id,
+                "field_name": ft.field_name,
+                "field_type": ft.field_type,
+                "field_category": ft.field_category,
+                "mutable": ft.mutable,
+                "unique": ft.unique,
+                "enum_values": ft.enum_values,
+                "enum_restrict": ft.enum_restrict,
+                "description": ft.description,
+            }
+            for ft in source_fields
+        ]
+        stmt = pg_insert(FieldType).values(values)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["project_id", "field_name", "context_id"],
+        )
+        self.session.execute(stmt)
+        self.session.flush()
+        return len(values)

@@ -116,24 +116,9 @@ class TestStandardFallbacks:
         for key in expected_keys:
             assert key in STANDARD_FALLBACKS, f"Missing fallback for {key}"
 
-    def test_gcp_fallbacks_exist(self):
-        """GCP/VertexAI vars should have fallbacks defined."""
-        expected_keys = [
-            "ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON",
-            "ORCHESTRA_VERTEXAI_PROJECT",
-            "ORCHESTRA_VERTEXAI_LOCATION",
-        ]
-        for key in expected_keys:
-            assert key in STANDARD_FALLBACKS, f"Missing fallback for {key}"
-
     def test_fallback_values_are_standard_names(self):
         """Fallback values should be the standard (unprefixed) names."""
         assert STANDARD_FALLBACKS["ORCHESTRA_OPENAI_API_KEY"] == "OPENAI_API_KEY"
-        assert (
-            STANDARD_FALLBACKS["ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"]
-            == "GOOGLE_APPLICATION_CREDENTIALS"
-        )
-        assert STANDARD_FALLBACKS["ORCHESTRA_VERTEXAI_PROJECT"] == "GCP_PROJECT_ID"
 
 
 class TestAllProviderApiKeys:

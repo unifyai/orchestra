@@ -5,6 +5,7 @@ Revises: add_safe_temporal_cast_functions
 Create Date: 2025-11-14 16:00:00.000000
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql

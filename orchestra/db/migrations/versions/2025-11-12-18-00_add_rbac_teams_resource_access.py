@@ -5,6 +5,7 @@ Revises: add_rbac_foundation
 Create Date: 2025-11-12 18:00:00.000000
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 

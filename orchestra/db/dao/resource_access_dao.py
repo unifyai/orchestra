@@ -1,4 +1,5 @@
 """Data Access Object for ResourceAccess model."""
+
 from typing import List, Optional
 
 from sqlalchemy import and_, or_
@@ -823,10 +824,9 @@ class ResourceAccessDAO:
         if not org_project:
             return
 
-        assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+        assistant_context_id = str(assistant.agent_id)
         context_dao = ContextDAO(self.session)
 
-        # Find assistant-specific contexts (both 2-tier and 3-tier patterns)
         from sqlalchemy import or_
 
         contexts_to_delete = (
@@ -834,12 +834,10 @@ class ResourceAccessDAO:
             .filter(
                 Context.project_id == org_project.id,
                 or_(
-                    # Old 2-tier patterns
-                    Context.name == assistant_context_prefix,
-                    Context.name.like(f"{assistant_context_prefix}/%"),
-                    # New 3-tier patterns: User/Assistant or User/Assistant/*
-                    Context.name.like(f"%/{assistant_context_prefix}"),
-                    Context.name.like(f"%/{assistant_context_prefix}/%"),
+                    Context.name == assistant_context_id,
+                    Context.name.like(f"{assistant_context_id}/%"),
+                    Context.name.like(f"%/{assistant_context_id}"),
+                    Context.name.like(f"%/{assistant_context_id}/%"),
                 ),
             )
             .all()

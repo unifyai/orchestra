@@ -21,6 +21,21 @@ class LogLevel(str, enum.Enum):  # noqa: WPS600
     FATAL = "FATAL"
 
 
+class UniqueValidationMode(str, enum.Enum):
+    """
+    Mode for unique field validation.
+
+    JSONB_SCAN: Original behavior - scan all logs with JSONB containment (slow, O(N×M))
+    LOOKUP_TABLE: New behavior - use lookup table with B-tree index (fast, O(M×log N))
+
+    Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
+    Default is JSONB_SCAN for backward compatibility during migration.
+    """
+
+    JSONB_SCAN = "jsonb_scan"
+    LOOKUP_TABLE = "lookup_table"
+
+
 class Settings(BaseSettings):
     """
     Application settings.
@@ -142,6 +157,20 @@ class Settings(BaseSettings):
         None,
     )
 
+    # Comma-separated span name patterns to exclude from OTel export.
+    # Matched as substrings against span names. Default excludes repetitive
+    # auth/connection overhead that adds noise without diagnostic value.
+    # Set to empty string (ORCHESTRA_OTEL_EXCLUDE_PATTERNS="") to disable.
+    otel_exclude_patterns: list[str] = [
+        p.strip()
+        for p in os.environ.get(
+            "ORCHESTRA_OTEL_EXCLUDE_PATTERNS",
+            "connect,db.query.select.users,db.query.select.api_key,"
+            "db.query.select.team_member,db.query.select.resource_access",
+        ).split(",")
+        if p.strip()
+    ]
+
     # Production Traffic Project (for internal monitoring)
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
@@ -179,16 +208,11 @@ class Settings(BaseSettings):
         "https://console.unify.ai/",
     ).rstrip("/")
 
-    vertexai_service_acc_json: str = ""
-    vertexai_project: str = (
-        os.environ.get("ORCHESTRA_VERTEXAI_PROJECT")
-        if os.environ.get("ON_PREM")
-        else "saas-368716"
+    gcp_project: str = (
+        os.environ.get("GCP_PROJECT_ID") if os.environ.get("ON_PREM") else "saas-368716"
     )
-    vertexai_location: str = (
-        os.environ.get("ORCHESTRA_VERTEXAI_LOCATION")
-        if os.environ.get("ON_PREM")
-        else "europe-west1"
+    gcp_location: str = (
+        os.environ.get("GCP_LOCATION") if os.environ.get("ON_PREM") else "europe-west1"
     )
 
     # Variables for email sending
@@ -205,6 +229,25 @@ class Settings(BaseSettings):
     elevenlabs_api_key: Optional[str] = os.environ.get("ELEVENLABS_API_KEY")
     deepgram_api_key: Optional[str] = os.environ.get("DEEPGRAM_API_KEY")
     openai_api_key: Optional[str] = None  # Populated by model_config below
+
+    # Stripe configuration
+    stripe_secret_key: Optional[str] = os.environ.get("STRIPE_SECRET_KEY")
+    stripe_webhook_secret: Optional[str] = os.environ.get("STRIPE_WEBHOOK_SECRET")
+    stripe_skip_signature_verification: bool = (
+        os.environ.get("SKIP_STRIPE_SIGNATURE_VERIFICATION", "false").lower() == "true"
+    )
+    stripe_unify_credits_product_id_personal: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRODUCT_ID_PERSONAL",
+    )
+    stripe_unify_credits_product_id_business: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRODUCT_ID_BUSINESS",
+    )
+    stripe_unify_credits_price_id_personal: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRICE_ID_PERSONAL",
+    )
+    stripe_unify_credits_price_id_business: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_CREDITS_PRICE_ID_BUSINESS",
+    )
 
     # Assistant creation
     assistant_creation_cost: float = 10.0
@@ -261,6 +304,28 @@ class Settings(BaseSettings):
             ).lower()
             == "true"
         )
+
+    @property
+    def unique_validation_mode(self) -> UniqueValidationMode:
+        """
+        Get the unique field validation mode.
+
+        Controls how unique field constraints are checked:
+        - jsonb_scan: Original O(N×M) JSONB containment scan (slow)
+        - lookup_table: New O(M×log N) lookup table approach (fast)
+
+        Default is jsonb_scan for backward compatibility during migration.
+
+        :return: The configured validation mode.
+        """
+        mode_str = os.environ.get(
+            "ORCHESTRA_UNIQUE_VALIDATION_MODE",
+            UniqueValidationMode.LOOKUP_TABLE.value,
+        )
+        try:
+            return UniqueValidationMode(mode_str)
+        except ValueError:
+            return UniqueValidationMode.LOOKUP_TABLE
 
     model_config = SettingsConfigDict(
         env_file=".env",

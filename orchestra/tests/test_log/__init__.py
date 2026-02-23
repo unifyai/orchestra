@@ -220,15 +220,22 @@ def _create_log(
     if isinstance(entries, dict):
         # set all entries to be mutable (backwards compatibility)
         if "explicit_types" not in entries:
-            explicit_types_entries = {k: {"mutable": True} for k in entries.keys()}
+            explicit_types_entries = {
+                k: {"mutable": True}
+                for k in entries.keys()
+                if k != "infer_untyped_fields"
+            }
             entries["explicit_types"] = explicit_types_entries
         else:
             # Preserve existing explicit_types but ensure mutable=True for backward compatibility
             for k in entries.keys():
-                if k != "explicit_types" and k not in entries["explicit_types"]:
+                if (
+                    k not in ("explicit_types", "infer_untyped_fields")
+                    and k not in entries["explicit_types"]
+                ):
                     entries["explicit_types"][k] = {"mutable": True}
                 elif (
-                    k != "explicit_types"
+                    k not in ("explicit_types", "infer_untyped_fields")
                     and "mutable" not in entries["explicit_types"][k]
                 ):
                     entries["explicit_types"][k]["mutable"] = True
@@ -236,15 +243,22 @@ def _create_log(
         # Handle list of entries
         for entry in entries:
             if "explicit_types" not in entry:
-                explicit_types_entries = {k: {"mutable": True} for k in entry.keys()}
+                explicit_types_entries = {
+                    k: {"mutable": True}
+                    for k in entry.keys()
+                    if k != "infer_untyped_fields"
+                }
                 entry["explicit_types"] = explicit_types_entries
             else:
                 # Preserve existing explicit_types but ensure mutable=True for backward compatibility
                 for k in entry.keys():
-                    if k != "explicit_types" and k not in entry["explicit_types"]:
+                    if (
+                        k not in ("explicit_types", "infer_untyped_fields")
+                        and k not in entry["explicit_types"]
+                    ):
                         entry["explicit_types"][k] = {"mutable": True}
                     elif (
-                        k != "explicit_types"
+                        k not in ("explicit_types", "infer_untyped_fields")
                         and "mutable" not in entry["explicit_types"][k]
                     ):
                         entry["explicit_types"][k]["mutable"] = True
