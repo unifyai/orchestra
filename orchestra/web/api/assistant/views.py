@@ -26,6 +26,7 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -119,6 +120,78 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
 router = APIRouter()
 admin_router = APIRouter()
 demo_router = APIRouter()
+
+
+def _build_assistant_read(
+    a: Assistant,
+    session: Session,
+    *,
+    api_key: Optional[str] = None,
+    secrets: Optional[dict] = None,
+    user_first_name: Optional[str] = None,
+    user_last_name: Optional[str] = None,
+    user_email: Optional[str] = None,
+    phone_override: Optional[str] = None,
+    email_override: Optional[str] = None,
+    whatsapp_override: Optional[str] = None,
+) -> AssistantRead:
+    """Build an AssistantRead from an ORM Assistant, resolving desktop fields."""
+    desktop_dao = DesktopDAO(session)
+    user_desktop_url = None
+    user_desktop_mode = None
+    if a.user_desktop_id is not None:
+        desktop = desktop_dao.get_by_id(a.user_desktop_id, a.user_id)
+        if desktop:
+            user_desktop_url = desktop.url
+            user_desktop_mode = desktop.os
+
+    return AssistantRead(
+        agent_id=str(a.agent_id),
+        user_id=a.user_id,
+        organization_id=a.organization_id,
+        first_name=a.first_name,
+        surname=a.surname,
+        age=a.age,
+        nationality=a.nationality,
+        profile_photo=a.profile_photo,
+        profile_video=a.profile_video,
+        desktop_url=a.desktop_url,
+        desktop_mode=a.desktop_mode,
+        user_desktop_id=a.user_desktop_id,
+        user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+        user_desktop_url=user_desktop_url,
+        user_desktop_mode=user_desktop_mode,
+        about=a.about,
+        phone_country=a.phone_country,
+        weekly_limit=(float(a.weekly_limit) if a.weekly_limit is not None else None),
+        max_parallel=a.max_parallel,
+        created_at=a.created_at,
+        updated_at=a.updated_at,
+        phone=phone_override if phone_override is not None else a.phone,
+        email=email_override if email_override is not None else a.email,
+        user_phone=a.user_phone,
+        user_whatsapp_number=a.user_whatsapp_number,
+        assistant_whatsapp_number=(
+            whatsapp_override
+            if whatsapp_override is not None
+            else a.assistant_whatsapp_number
+        ),
+        voice_id=a.voice_id,
+        voice_provider=a.voice_provider,
+        voice_mode=a.voice_mode,
+        timezone=a.timezone,
+        demo_id=a.demo_id,
+        monthly_spending_cap=(
+            float(a.monthly_spending_cap)
+            if a.monthly_spending_cap is not None
+            else None
+        ),
+        api_key=api_key,
+        secrets=secrets,
+        user_first_name=user_first_name,
+        user_last_name=user_last_name,
+        user_email=user_email,
+    )
 
 
 @router.post(
@@ -295,9 +368,8 @@ async def create_assistant(
             profile_video=assistant_in.profile_video,
             desktop_url=assistant_in.desktop_url,
             desktop_mode=assistant_in.desktop_mode,
-            user_desktop_mode=assistant_in.user_desktop_mode,
+            user_desktop_id=assistant_in.user_desktop_id,
             user_desktop_filesys_sync=assistant_in.user_desktop_filesys_sync or False,
-            user_desktop_url=assistant_in.user_desktop_url,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -739,47 +811,7 @@ async def create_assistant(
 
     # Phase 4: Prepare and return response
     return InfoResponse(
-        info=AssistantRead(
-            agent_id=str(assistant.agent_id),
-            user_id=assistant.user_id,
-            organization_id=assistant.organization_id,
-            first_name=assistant.first_name,
-            surname=assistant.surname,
-            age=assistant.age,
-            nationality=assistant.nationality,
-            profile_photo=assistant.profile_photo,
-            profile_video=assistant.profile_video,
-            desktop_url=assistant.desktop_url,
-            desktop_mode=assistant.desktop_mode,
-            user_desktop_mode=assistant.user_desktop_mode,
-            user_desktop_filesys_sync=assistant.user_desktop_filesys_sync,
-            user_desktop_url=assistant.user_desktop_url,
-            about=assistant.about,
-            weekly_limit=(
-                float(assistant.weekly_limit)
-                if assistant.weekly_limit is not None
-                else None
-            ),
-            max_parallel=assistant.max_parallel,
-            created_at=assistant.created_at,
-            updated_at=assistant.updated_at,
-            phone=assistant.phone,
-            email=assistant.email,
-            voice_id=assistant.voice_id,
-            voice_provider=assistant.voice_provider,
-            voice_mode=assistant.voice_mode,
-            phone_country=assistant.phone_country,
-            user_whatsapp_number=assistant.user_whatsapp_number,
-            assistant_whatsapp_number=assistant.assistant_whatsapp_number,
-            user_phone=assistant.user_phone,
-            timezone=assistant.timezone,
-            demo_id=assistant.demo_id,
-            monthly_spending_cap=(
-                float(assistant.monthly_spending_cap)
-                if assistant.monthly_spending_cap is not None
-                else None
-            ),
-        ),
+        info=_build_assistant_read(assistant, session),
     )
 
 
@@ -921,48 +953,7 @@ def list_assistants(
         voice_dao = VoiceDAO(session)
 
         return InfoResponse(
-            info=[
-                AssistantRead(
-                    agent_id=str(a.agent_id),
-                    user_id=a.user_id,
-                    organization_id=a.organization_id,
-                    first_name=a.first_name,
-                    surname=a.surname,
-                    age=a.age,
-                    nationality=a.nationality,
-                    profile_photo=a.profile_photo,
-                    profile_video=a.profile_video,
-                    desktop_url=a.desktop_url,
-                    desktop_mode=a.desktop_mode,
-                    user_desktop_mode=a.user_desktop_mode,
-                    user_desktop_filesys_sync=a.user_desktop_filesys_sync,
-                    user_desktop_url=a.user_desktop_url,
-                    about=a.about,
-                    phone_country=a.phone_country,
-                    weekly_limit=(
-                        float(a.weekly_limit) if a.weekly_limit is not None else None
-                    ),
-                    max_parallel=a.max_parallel,
-                    created_at=a.created_at,
-                    updated_at=a.updated_at,
-                    phone=a.phone,
-                    user_phone=a.user_phone,
-                    user_whatsapp_number=a.user_whatsapp_number,
-                    assistant_whatsapp_number=a.assistant_whatsapp_number,
-                    email=a.email,
-                    voice_id=a.voice_id,
-                    voice_provider=a.voice_provider,
-                    voice_mode=a.voice_mode,
-                    timezone=a.timezone,
-                    demo_id=a.demo_id,
-                    monthly_spending_cap=(
-                        float(a.monthly_spending_cap)
-                        if a.monthly_spending_cap is not None
-                        else None
-                    ),
-                )
-                for a in assistants
-            ],
+            info=[_build_assistant_read(a, session) for a in assistants],
         )
     except HTTPException:
         raise
@@ -1070,47 +1061,7 @@ async def delete_assistant_contact(
             )
 
         return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(updated_assistant.agent_id),
-                user_id=updated_assistant.user_id,
-                organization_id=updated_assistant.organization_id,
-                first_name=updated_assistant.first_name,
-                surname=updated_assistant.surname,
-                age=updated_assistant.age,
-                nationality=updated_assistant.nationality,
-                profile_photo=updated_assistant.profile_photo,
-                profile_video=updated_assistant.profile_video,
-                desktop_url=updated_assistant.desktop_url,
-                desktop_mode=updated_assistant.desktop_mode,
-                user_desktop_mode=updated_assistant.user_desktop_mode,
-                user_desktop_filesys_sync=updated_assistant.user_desktop_filesys_sync,
-                user_desktop_url=updated_assistant.user_desktop_url,
-                about=updated_assistant.about,
-                phone_country=updated_assistant.phone_country,
-                weekly_limit=(
-                    float(updated_assistant.weekly_limit)
-                    if updated_assistant.weekly_limit is not None
-                    else None
-                ),
-                max_parallel=updated_assistant.max_parallel,
-                created_at=updated_assistant.created_at,
-                updated_at=updated_assistant.updated_at,
-                phone=updated_assistant.phone,
-                user_phone=updated_assistant.user_phone,
-                user_whatsapp_number=updated_assistant.user_whatsapp_number,
-                assistant_whatsapp_number=updated_assistant.assistant_whatsapp_number,
-                email=updated_assistant.email,
-                voice_id=updated_assistant.voice_id,
-                voice_provider=updated_assistant.voice_provider,
-                voice_mode=updated_assistant.voice_mode,
-                timezone=updated_assistant.timezone,
-                demo_id=updated_assistant.demo_id,
-                monthly_spending_cap=(
-                    float(updated_assistant.monthly_spending_cap)
-                    if updated_assistant.monthly_spending_cap is not None
-                    else None
-                ),
-            ),
+            info=_build_assistant_read(updated_assistant, session),
         )
 
     except HTTPException:
@@ -1750,46 +1701,12 @@ async def update_assistant_config(
                 )
 
         return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(updated.agent_id),
-                user_id=updated.user_id,
-                organization_id=updated.organization_id,
-                first_name=updated.first_name,
-                surname=updated.surname,
-                age=updated.age,
-                nationality=updated.nationality,
-                profile_photo=updated.profile_photo,
-                profile_video=updated.profile_video,
-                desktop_url=updated.desktop_url,
-                desktop_mode=updated.desktop_mode,
-                user_desktop_mode=updated.user_desktop_mode,
-                user_desktop_filesys_sync=updated.user_desktop_filesys_sync,
-                user_desktop_url=updated.user_desktop_url,
-                about=updated.about,
-                phone_country=updated.phone_country,
-                weekly_limit=(
-                    float(updated.weekly_limit)
-                    if updated.weekly_limit is not None
-                    else None
-                ),
-                max_parallel=updated.max_parallel,
-                created_at=updated.created_at,
-                updated_at=updated.updated_at,
-                phone=assistant_phone,
-                email=assistant_email,
-                user_whatsapp_number=updated.user_whatsapp_number,
-                assistant_whatsapp_number=assistant_whatsapp_number,
-                user_phone=updated.user_phone,
-                voice_id=updated.voice_id,
-                voice_provider=updated.voice_provider,
-                voice_mode=updated.voice_mode,
-                timezone=updated.timezone,
-                demo_id=updated.demo_id,
-                monthly_spending_cap=(
-                    float(updated.monthly_spending_cap)
-                    if updated.monthly_spending_cap is not None
-                    else None
-                ),
+            info=_build_assistant_read(
+                updated,
+                session,
+                phone_override=assistant_phone,
+                email_override=assistant_email,
+                whatsapp_override=assistant_whatsapp_number,
             ),
         )
     except HTTPException:
@@ -4338,45 +4255,9 @@ def admin_list_all_assistants(
 
         # Build AssistantRead objects
         assistant_reads = [
-            AssistantRead(
-                agent_id=str(a.agent_id),
-                user_id=a.user_id,
-                organization_id=a.organization_id,
-                first_name=a.first_name,
-                surname=a.surname,
-                age=a.age,
-                nationality=a.nationality,
-                profile_photo=a.profile_photo,
-                profile_video=a.profile_video,
-                desktop_url=a.desktop_url,
-                desktop_mode=a.desktop_mode,
-                user_desktop_mode=a.user_desktop_mode,
-                user_desktop_filesys_sync=a.user_desktop_filesys_sync,
-                user_desktop_url=a.user_desktop_url,
-                about=a.about,
-                weekly_limit=(
-                    float(a.weekly_limit) if a.weekly_limit is not None else None
-                ),
-                max_parallel=a.max_parallel,
-                created_at=a.created_at,
-                updated_at=a.updated_at,
-                phone=a.phone,
-                user_phone=a.user_phone,
-                email=a.email,
-                user_whatsapp_number=a.user_whatsapp_number,
-                assistant_whatsapp_number=a.assistant_whatsapp_number,
-                voice_id=a.voice_id,
-                voice_provider=a.voice_provider,
-                voice_mode=a.voice_mode,
-                timezone=a.timezone,
-                phone_country=a.phone_country,
-                monthly_spending_cap=(
-                    float(a.monthly_spending_cap)
-                    if a.monthly_spending_cap is not None
-                    else None
-                ),
-                demo_id=a.demo_id,
-                # Expensive fields - only populated if needed
+            _build_assistant_read(
+                a,
+                session,
                 api_key=api_keys[i] if api_keys else None,
                 user_first_name=users[i].name if users else None,
                 user_last_name=users[i].last_name if users else None,
@@ -4500,46 +4381,9 @@ def admin_update_assistant_by_filter(
 
     # Return updated assistant
     return InfoResponse(
-        info=AssistantRead(
-            agent_id=str(updated.agent_id),
-            user_id=updated.user_id,
-            organization_id=updated.organization_id,
-            first_name=updated.first_name,
-            surname=updated.surname,
-            age=updated.age,
-            nationality=updated.nationality,
-            profile_photo=updated.profile_photo,
-            profile_video=updated.profile_video,
-            desktop_url=updated.desktop_url,
-            desktop_mode=updated.desktop_mode,
-            user_desktop_mode=updated.user_desktop_mode,
-            user_desktop_filesys_sync=updated.user_desktop_filesys_sync,
-            user_desktop_url=updated.user_desktop_url,
-            about=updated.about,
-            phone_country=updated.phone_country,
-            weekly_limit=(
-                float(updated.weekly_limit)
-                if updated.weekly_limit is not None
-                else None
-            ),
-            max_parallel=updated.max_parallel,
-            created_at=updated.created_at,
-            updated_at=updated.updated_at,
-            phone=updated.phone,
-            user_phone=updated.user_phone,
-            email=updated.email,
-            user_whatsapp_number=updated.user_whatsapp_number,
-            assistant_whatsapp_number=updated.assistant_whatsapp_number,
-            voice_id=updated.voice_id,
-            voice_provider=updated.voice_provider,
-            voice_mode=updated.voice_mode,
-            timezone=updated.timezone,
-            demo_id=updated.demo_id,
-            monthly_spending_cap=(
-                float(updated.monthly_spending_cap)
-                if updated.monthly_spending_cap is not None
-                else None
-            ),
+        info=_build_assistant_read(
+            updated,
+            session,
             api_key=api_key,
             secrets=secrets_dict,
         ),
@@ -4616,43 +4460,9 @@ def admin_list_assistants_for_user(
 
         return InfoResponse(
             info=[
-                AssistantRead(
-                    agent_id=str(a.agent_id),
-                    user_id=a.user_id,
-                    organization_id=a.organization_id,
-                    first_name=a.first_name,
-                    surname=a.surname,
-                    age=a.age,
-                    nationality=a.nationality,
-                    profile_photo=a.profile_photo,
-                    profile_video=a.profile_video,
-                    desktop_url=a.desktop_url,
-                    desktop_mode=a.desktop_mode,
-                    user_desktop_mode=a.user_desktop_mode,
-                    user_desktop_filesys_sync=a.user_desktop_filesys_sync,
-                    user_desktop_url=a.user_desktop_url,
-                    about=a.about,
-                    weekly_limit=(
-                        float(a.weekly_limit) if a.weekly_limit is not None else None
-                    ),
-                    max_parallel=a.max_parallel,
-                    created_at=a.created_at,
-                    updated_at=a.updated_at,
-                    phone=a.phone,
-                    user_phone=a.user_phone,
-                    email=a.email,
-                    user_whatsapp_number=a.user_whatsapp_number,
-                    assistant_whatsapp_number=a.assistant_whatsapp_number,
-                    voice_id=a.voice_id,
-                    voice_provider=a.voice_provider,
-                    voice_mode=a.voice_mode,
-                    timezone=a.timezone,
-                    demo_id=a.demo_id,
-                    monthly_spending_cap=(
-                        float(a.monthly_spending_cap)
-                        if a.monthly_spending_cap is not None
-                        else None
-                    ),
+                _build_assistant_read(
+                    a,
+                    session,
                     api_key=api_keys[i],
                     secrets=secrets_list[i],
                 )
@@ -5195,43 +5005,7 @@ async def create_demo_assistant(
             logging.warning(f"Failed to wake up demo assistant: {e}")
 
         return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(demo_assistant.agent_id),
-                user_id=demo_assistant.user_id,
-                organization_id=demo_assistant.organization_id,
-                first_name=demo_assistant.first_name,
-                surname=demo_assistant.surname,
-                age=demo_assistant.age,
-                nationality=demo_assistant.nationality,
-                profile_photo=demo_assistant.profile_photo,
-                profile_video=demo_assistant.profile_video,
-                desktop_url=demo_assistant.desktop_url,
-                desktop_mode=demo_assistant.desktop_mode,
-                user_desktop_mode=demo_assistant.user_desktop_mode,
-                user_desktop_filesys_sync=demo_assistant.user_desktop_filesys_sync,
-                user_desktop_url=demo_assistant.user_desktop_url,
-                about=demo_assistant.about,
-                phone_country=demo_assistant.phone_country,
-                weekly_limit=None,
-                max_parallel=demo_assistant.max_parallel,
-                created_at=demo_assistant.created_at,
-                updated_at=demo_assistant.updated_at,
-                phone=demo_assistant.phone,
-                user_phone=demo_assistant.user_phone,
-                user_whatsapp_number=demo_assistant.user_whatsapp_number,
-                assistant_whatsapp_number=demo_assistant.assistant_whatsapp_number,
-                email=demo_assistant.email,
-                voice_id=demo_assistant.voice_id,
-                voice_provider=demo_assistant.voice_provider,
-                voice_mode=demo_assistant.voice_mode,
-                timezone=demo_assistant.timezone,
-                demo_id=demo_assistant.demo_id,
-                monthly_spending_cap=(
-                    float(demo_assistant.monthly_spending_cap)
-                    if demo_assistant.monthly_spending_cap
-                    else None
-                ),
-            ),
+            info=_build_assistant_read(demo_assistant, session),
         )
 
     except IntegrityError as e:

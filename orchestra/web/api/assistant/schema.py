@@ -97,20 +97,15 @@ class AssistantCreate(BaseModel):
         description="Desktop operating system mode for assistant's VM creation",
         example="windows",
     )
-    user_desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
+    user_desktop_id: Optional[int] = Field(
         None,
-        description="Operating system mode of the user's own desktop",
-        example="macos",
+        description="ID of the registered user desktop to assign to this assistant",
+        example=1,
     )
     user_desktop_filesys_sync: Optional[bool] = Field(
         False,
         description="Whether to enable filesystem sync with user's desktop",
         example=False,
-    )
-    user_desktop_url: Optional[str] = Field(
-        None,
-        description="URL for communication with user's desktop",
-        example="https://user-desktop.example.com",
     )
     about: Optional[str] = Field(
         None,
@@ -207,9 +202,8 @@ class AssistantCreate(BaseModel):
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
-                "user_desktop_mode": "macos",
+                "user_desktop_id": 1,
                 "user_desktop_filesys_sync": False,
-                "user_desktop_url": "https://user-desktop.example.com",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -228,6 +222,16 @@ class AssistantRead(AssistantCreate):
     Schema for reading assistant data, extends AssistantCreate with additional fields.
     """
 
+    user_desktop_url: Optional[str] = Field(
+        None,
+        description="Resolved URL of the assigned user desktop (from device registry)",
+        example="https://abc123.tunnel.unify.ai",
+    )
+    user_desktop_mode: Optional[str] = Field(
+        None,
+        description="Resolved OS of the assigned user desktop (from device registry)",
+        example="macos",
+    )
     agent_id: str = Field(
         ...,
         description="Unique identifier for the assistant",
@@ -313,9 +317,8 @@ class AssistantRead(AssistantCreate):
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
-                "user_desktop_mode": "macos",
+                "user_desktop_id": 1,
                 "user_desktop_filesys_sync": False,
-                "user_desktop_url": "https://user-desktop.example.com",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -538,20 +541,15 @@ class AssistantUpdate(BaseModel):
         description="Desktop operating system mode for VM creation",
         example="macos",
     )
-    user_desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
+    user_desktop_id: Optional[int] = Field(
         None,
-        description="Operating system mode of the user's own desktop",
-        example="macos",
+        description="ID of the registered user desktop to assign to this assistant",
+        example=1,
     )
     user_desktop_filesys_sync: Optional[bool] = Field(
         None,
         description="Whether to enable filesystem sync with user's desktop",
         example=False,
-    )
-    user_desktop_url: Optional[str] = Field(
-        None,
-        description="URL for communication with user's desktop",
-        example="https://user-desktop.example.com",
     )
     about: Optional[str] = Field(
         None,
@@ -676,9 +674,8 @@ class AssistantUpdate(BaseModel):
                 "profile_video": "https://example.com/videos/ada_new.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "macos",
-                "user_desktop_mode": "macos",
+                "user_desktop_id": 1,
                 "user_desktop_filesys_sync": True,
-                "user_desktop_url": "https://user-desktop.example.com",
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
