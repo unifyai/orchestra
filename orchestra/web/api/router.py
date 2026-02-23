@@ -27,6 +27,7 @@ from orchestra.web.api.dependencies import (
     auth_api_key,
     check_account_not_frozen,
 )
+from orchestra.web.api.desktop import router as desktop_router
 from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.organization import admin_router as organization_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
@@ -125,6 +126,11 @@ api_router.include_router(
     prefix="/demo",
     tags=["Demo Assistants"],
     include_in_schema=False,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    desktop_router,
+    tags=["Desktops"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
