@@ -13,9 +13,9 @@ class OrganizationCreate(BaseModel):
     """Schema for creating an organization."""
 
     name: str
-    timezone: Optional[
-        str
-    ] = None  # IANA timezone; defaults to owner's timezone if not set
+    timezone: Optional[str] = (
+        None  # IANA timezone; defaults to owner's timezone if not set
+    )
 
     @field_validator("timezone")
     @classmethod
