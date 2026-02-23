@@ -102,6 +102,48 @@ def upgrade() -> None:
         type_="foreignkey",
     )
 
+    # Step 4.1: Back up and clean up orphan data — rows in recharge,
+    # credit_card_fingerprint, and users that reference user_ids present in the
+    # old `users` table but not in `user` (the renamed auth_user).
+    # These are dead users with no auth records, no accounts, no sessions,
+    # and zero credit balance. We back them up for rollback safety.
+    op.execute("DROP TABLE IF EXISTS _backup_orphan_recharge")
+    op.execute("DROP TABLE IF EXISTS _backup_orphan_credit_card_fingerprint")
+    op.execute("DROP TABLE IF EXISTS _backup_orphan_users")
+    op.execute(
+        """
+        CREATE TABLE _backup_orphan_recharge AS
+        SELECT * FROM recharge
+        WHERE user_id NOT IN (SELECT id FROM "user")
+        """,
+    )
+    op.execute(
+        """
+        CREATE TABLE _backup_orphan_credit_card_fingerprint AS
+        SELECT * FROM credit_card_fingerprint
+        WHERE user_id NOT IN (SELECT id FROM "user")
+        """,
+    )
+    op.execute(
+        """
+        CREATE TABLE _backup_orphan_users AS
+        SELECT * FROM users
+        WHERE id NOT IN (SELECT id FROM "user")
+        """,
+    )
+    op.execute(
+        """
+        DELETE FROM recharge
+        WHERE user_id NOT IN (SELECT id FROM "user")
+        """,
+    )
+    op.execute(
+        """
+        DELETE FROM credit_card_fingerprint
+        WHERE user_id NOT IN (SELECT id FROM "user")
+        """,
+    )
+
     # Create new FKs pointing to user.id
     op.create_foreign_key(
         "recharge_user_id_fkey",
@@ -176,12 +218,43 @@ def downgrade() -> None:
         """,
     )
 
+    # Step 2.1: Restore orphan data from backup tables (if they exist)
+    op.execute(
+        """
+        INSERT INTO users
+        SELECT * FROM _backup_orphan_users b
+        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = b.id)
+          AND EXISTS (SELECT 1 FROM information_schema.tables
+                      WHERE table_name = '_backup_orphan_users')
+        """,
+    )
+
     # Step 3: Update FK references back to users.id
     op.drop_constraint("recharge_user_id_fkey", "recharge", type_="foreignkey")
     op.drop_constraint(
         "credit_card_fingerprint_user_id_fkey",
         "credit_card_fingerprint",
         type_="foreignkey",
+    )
+
+    # Restore orphan recharges and credit card fingerprints before creating FKs
+    op.execute(
+        """
+        INSERT INTO recharge
+        SELECT * FROM _backup_orphan_recharge b
+        WHERE NOT EXISTS (SELECT 1 FROM recharge r WHERE r.id = b.id)
+          AND EXISTS (SELECT 1 FROM information_schema.tables
+                      WHERE table_name = '_backup_orphan_recharge')
+        """,
+    )
+    op.execute(
+        """
+        INSERT INTO credit_card_fingerprint
+        SELECT * FROM _backup_orphan_credit_card_fingerprint b
+        WHERE NOT EXISTS (SELECT 1 FROM credit_card_fingerprint c WHERE c.id = b.id)
+          AND EXISTS (SELECT 1 FROM information_schema.tables
+                      WHERE table_name = '_backup_orphan_credit_card_fingerprint')
+        """,
     )
 
     op.create_foreign_key(
@@ -200,6 +273,11 @@ def downgrade() -> None:
         ["id"],
         ondelete="CASCADE",
     )
+
+    # Step 3.1: Drop backup tables
+    op.execute("DROP TABLE IF EXISTS _backup_orphan_recharge")
+    op.execute("DROP TABLE IF EXISTS _backup_orphan_credit_card_fingerprint")
+    op.execute("DROP TABLE IF EXISTS _backup_orphan_users")
 
     # Step 4: Drop billing columns from user table
     op.drop_column("user", "credits")
