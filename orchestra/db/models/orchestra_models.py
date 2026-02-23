@@ -1074,6 +1074,36 @@ class DemoAssistantMeta(Base):
     )
 
 
+class UserDesktop(Base):
+    """Registered user desktop machines.
+
+    Each row represents a physical/virtual desktop that a user's desktop app
+    has registered after obtaining a public hostname via the tunnel service.
+    """
+
+    __tablename__ = "user_desktops"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    os = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "os IN ('ubuntu', 'windows', 'macos')",
+            name="ck_user_desktop_os",
+        ),
+    )
+
+
 class Assistant(Base):
     """Model class for the assistants table.
 
@@ -1104,9 +1134,13 @@ class Assistant(Base):
     profile_video = Column(String, nullable=True)
     desktop_url = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
-    user_desktop_mode = Column(String, nullable=True)
+    user_desktop_id = Column(
+        Integer,
+        ForeignKey("user_desktops.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
     user_desktop_filesys_sync = Column(Boolean, nullable=False, default=False)
-    user_desktop_url = Column(String, nullable=True)
     about = Column(String, nullable=True)
     phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
