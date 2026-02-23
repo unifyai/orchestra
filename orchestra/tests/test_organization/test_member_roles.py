@@ -1,4 +1,5 @@
 """Tests for Phase 4: Member Role Management."""
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient
@@ -1039,7 +1040,7 @@ async def test_list_members_includes_phone_number(client: AsyncClient):
     phone_user_email = "phone_test_member@test.com"
     phone_number = "+14155551234"
     create_response = await client.post(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "email": phone_user_email,
             "name": "Phone",
@@ -1054,7 +1055,7 @@ async def test_list_members_includes_phone_number(client: AsyncClient):
 
     # Get phone user's API key
     user_details_resp = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={phone_user_id}",
+        f"/v0/admin/user/by-user-id?user_id={phone_user_id}",
         headers=ADMIN_HEADERS,
     )
     assert user_details_resp.status_code == status.HTTP_200_OK
@@ -1121,7 +1122,7 @@ async def test_update_member_role_includes_phone_number(client: AsyncClient):
     phone_user_email = "role_phone_member@test.com"
     phone_number = "+442071234567"
     create_response = await client.post(
-        "/v0/admin/auth-user",
+        "/v0/admin/user",
         json={
             "email": phone_user_email,
             "name": "Role",

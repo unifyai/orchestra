@@ -26,7 +26,7 @@ from orchestra.tests.utils import create_test_user
 
 @pytest.fixture(autouse=True)
 def mock_assistant_infra_calls(request):
-    """Automatically mock assistant infrastructure webhooks for all tests."""
+    """Automatically mock assistant infrastructure webhooks and BucketService for all tests."""
     if "no_mock_infra" in request.keywords:
         yield
         return
@@ -42,13 +42,23 @@ def mock_assistant_infra_calls(request):
         new_callable=AsyncMock,
     ) as mock_stop_jobs, patch(
         "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings:
+    ) as mock_settings, patch(
+        "orchestra.web.api.organization.views.BucketService",
+    ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_stop_jobs.return_value = MagicMock(status_code=200)
         mock_settings.is_staging = True
 
-        yield mock_wake_up, mock_reawaken, mock_stop_jobs
+        mock_bucket_instance = MagicMock()
+        mock_bucket_instance.delete_all_assistant_data.return_value = {
+            "media_files": 0,
+            "call_recordings": 0,
+            "message_attachments": 0,
+        }
+        mock_bucket_cls.return_value = mock_bucket_instance
+
+        yield mock_wake_up, mock_reawaken, mock_stop_jobs, mock_bucket_cls
 
 
 # =============================================================================
@@ -206,7 +216,6 @@ async def test_member_removal_deletes_unshared_project(client: AsyncClient, dbse
     member = await create_test_user(
         client,
         "unshared_proj_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -280,12 +289,10 @@ async def test_member_removal_deletes_unshared_assistant(
     owner = await create_test_user(
         client,
         "unshared_asst_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "unshared_asst_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -638,12 +645,10 @@ async def test_member_removal_handles_multiple_unshared_resources(
     owner = await create_test_user(
         client,
         "multi_unshared_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "multi_unshared_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -755,8 +760,8 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
 
     Uses 3-tier context hierarchy:
     - Tier 1: All/Transcripts (global aggregate)
-    - Tier 2: TestUser/All/Transcripts (user aggregate)
-    - Tier 3: TestUser/MemberOnlyBot/Transcripts (user + assistant specific)
+    - Tier 2: user_id/All/Transcripts (user aggregate)
+    - Tier 3: user_id/assistant_id/Transcripts (user + assistant specific)
 
     When member is removed and their unshared assistant is deleted:
     - Assistant-specific contexts (Tier 3) should be deleted
@@ -765,14 +770,12 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     owner = await create_test_user(
         client,
         "log_cleanup_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "log_cleanup_member@test.com",
-        hiring_approved=True,
     )
-    user_name = "TestUser"
+    user_name = "test-user"
 
     # Create organization
     org_resp = await client.post(
@@ -818,7 +821,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     )
     dbsession.flush()
     agent_id = assistant.agent_id
-    assistant_name = "MemberOnlyBot"
+    assistant_name = str(agent_id)
 
     # Grant only the member Owner role (making it unshared)
     resource_access_dao.grant_access(
@@ -886,8 +889,8 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     dbsession.expire_all()
     assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
 
-    # Verify log is removed from ALL three contexts via sibling cleanup
-    for ctx in [tier1_context, tier2_context, tier3_context]:
+    # Verify log is removed from tier2 and tier3 contexts via sibling cleanup
+    for ctx in [tier2_context, tier3_context]:
         logs_resp = await client.get(
             f"/v0/logs?project_name=Assistants&context={ctx}",
             headers=org_headers,
@@ -896,6 +899,16 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
             assert log_id not in [
                 log["id"] for log in logs_resp.json()["logs"]
             ], f"Log should be cleaned from {ctx}"
+
+    # Archive protection: log remains in topmost All/* context for historical record
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier1_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    assert log_id in [
+        log["id"] for log in logs_resp.json()["logs"]
+    ], f"Log should remain in archive {tier1_context}"
 
 
 @pytest.mark.anyio
@@ -913,19 +926,16 @@ async def test_member_removal_preserves_other_assistant_logs(
     owner = await create_test_user(
         client,
         "preserve_owner@test.com",
-        hiring_approved=True,
     )
     member_a = await create_test_user(
         client,
         "preserve_member_a@test.com",
-        hiring_approved=True,
     )
     member_b = await create_test_user(
         client,
         "preserve_member_b@test.com",
-        hiring_approved=True,
     )
-    user_name = "PreserveUser"
+    user_name = "preserve-user"
 
     # Create organization
     org_resp = await client.post(
@@ -975,7 +985,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     )
     dbsession.flush()
     agent_id_a = assistant_a.agent_id
-    assistant_name_a = "AssistantARemove"
+    assistant_name_a = str(agent_id_a)
 
     resource_access_dao.grant_access(
         "assistant",
@@ -999,7 +1009,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     )
     dbsession.flush()
     agent_id_b = assistant_b.agent_id
-    assistant_name_b = "AssistantBKeep"
+    assistant_name_b = str(agent_id_b)
 
     resource_access_dao.grant_access(
         "assistant",
@@ -1091,16 +1101,26 @@ async def test_member_removal_preserves_other_assistant_logs(
     # Verify Assistant B still exists
     assert assistant_dao.get_assistant_by_agent_id(agent_id_b) is not None
 
-    # Verify log A is removed from shared contexts, but log B remains
-    for ctx in [tier1_context, tier2_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-        assert log_id_a not in log_ids, f"Log A should be removed from {ctx}"
-        assert log_id_b in log_ids, f"Log B should still exist in {ctx}"
+    # Verify log A is removed from tier2 (User/All/*) but remains in tier1 (All/*)
+    # due to archive protection - topmost All/* contexts are preserved as historical records
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier2_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
+    assert log_id_a not in log_ids, f"Log A should be removed from {tier2_context}"
+    assert log_id_b in log_ids, f"Log B should still exist in {tier2_context}"
+
+    # Archive protection: log A remains in topmost All/* context for historical record
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier1_context}",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
+    assert log_id_a in log_ids, f"Log A should remain in archive {tier1_context}"
+    assert log_id_b in log_ids, f"Log B should still exist in {tier1_context}"
 
     # Verify Assistant B's Tier 3 context is untouched
     logs_resp_b = await client.get(
@@ -1125,12 +1145,10 @@ async def test_member_removal_sets_contact_is_system_false(
     owner = await create_test_user(
         client,
         "contact_update_owner@test.com",
-        hiring_approved=True,
     )
     member = await create_test_user(
         client,
         "contact_update_member@test.com",
-        hiring_approved=True,
     )
 
     # Create organization
@@ -1381,3 +1399,238 @@ async def test_admin_can_remove_other_members(client: AsyncClient, dbsession):
     dbsession.expire_all()
     membership = org_member_dao.get_member(member["id"], org_id)
     assert membership is None, "Member should be removed from org"
+
+
+# =============================================================================
+# GCS Cleanup Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
+    client: AsyncClient,
+    dbsession,
+    mock_assistant_infra_calls,
+):
+    """Test that GCS data is cleaned up for assistants deleted during member removal."""
+    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    mock_bucket_instance = mock_bucket_cls.return_value
+
+    owner = await create_test_user(client, "gcs_cleanup_owner@test.com")
+    member = await create_test_user(client, "gcs_cleanup_member@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "GCS Cleanup Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    # Member creates an unshared assistant
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="GCSCleanup",
+        surname="Assistant",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    dbsession.commit()
+
+    # Remove member - triggers assistant deletion AND GCS cleanup
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify assistant is deleted from DB
+    dbsession.expire_all()
+    assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
+
+    # Verify BucketService.delete_all_assistant_data was called for the deleted assistant
+    mock_bucket_instance.delete_all_assistant_data.assert_called_once_with(agent_id)
+
+
+@pytest.mark.anyio
+async def test_member_removal_no_gcs_cleanup_for_shared_assistants(
+    client: AsyncClient,
+    dbsession,
+    mock_assistant_infra_calls,
+):
+    """Test that GCS data is NOT cleaned up for assistants that survive member removal (shared)."""
+    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    mock_bucket_instance = mock_bucket_cls.return_value
+
+    owner = await create_test_user(client, "gcs_shared_owner@test.com")
+    member = await create_test_user(client, "gcs_shared_member@test.com")
+    other = await create_test_user(client, "gcs_shared_other@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "GCS Shared Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add members
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": other["id"]},
+        headers=owner["headers"],
+    )
+
+    # Member creates a SHARED assistant (shared with 'other')
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="Shared",
+        surname="Bot",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        viewer_role.id,
+        "user",
+        other["id"],
+    )
+    dbsession.commit()
+
+    # Remove member
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify assistant still exists (was shared)
+    dbsession.expire_all()
+    assert assistant_dao.get_assistant_by_agent_id(agent_id) is not None
+
+    # Verify delete_all_assistant_data was NOT called (assistant survived)
+    mock_bucket_instance.delete_all_assistant_data.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_member_removal_gcs_failure_does_not_block(
+    client: AsyncClient,
+    dbsession,
+    mock_assistant_infra_calls,
+):
+    """Test that GCS cleanup failure does not block member removal."""
+    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    mock_bucket_instance = mock_bucket_cls.return_value
+    mock_bucket_instance.delete_all_assistant_data.side_effect = Exception(
+        "GCS unreachable",
+    )
+
+    owner = await create_test_user(client, "gcs_fail_owner@test.com")
+    member = await create_test_user(client, "gcs_fail_member@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "GCS Fail Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    # Member creates an unshared assistant
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="FailTest",
+        surname="Bot",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    dbsession.commit()
+
+    # Remove member - GCS cleanup fails but endpoint should still succeed
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # DB deletion should still have occurred
+    dbsession.expire_all()
+    assert assistant_dao.get_assistant_by_agent_id(agent_id) is None

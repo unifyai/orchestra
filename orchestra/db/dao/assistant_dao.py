@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from zoneinfo import available_timezones
@@ -7,6 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant
+
+
+@dataclass
+class AssistantSpendingCapResult:
+    """Result of setting an assistant spending cap."""
+
+    monthly_spending_cap: Optional[float] = None
+    effective_limit: Optional[float] = None
+    parent_limit: Optional[float] = None
+
 
 VALID_TIMEZONES = available_timezones()
 
@@ -36,7 +47,8 @@ class AssistantDAO:
         profile_video: Optional[str] = None,
         desktop_url: Optional[str] = None,
         desktop_mode: Optional[str] = None,
-        is_user_desktop: Optional[bool] = None,
+        user_desktop_id: Optional[int] = None,
+        user_desktop_filesys_sync: bool = False,
         phone: Optional[str] = None,
         phone_country: Optional[str] = None,
         user_phone: Optional[str] = None,
@@ -73,7 +85,8 @@ class AssistantDAO:
             profile_video=profile_video,
             desktop_url=desktop_url,
             desktop_mode=desktop_mode,
-            is_user_desktop=is_user_desktop,
+            user_desktop_id=user_desktop_id,
+            user_desktop_filesys_sync=user_desktop_filesys_sync,
             about=about,
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
@@ -142,6 +155,40 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
 
+    def get_assistant_by_name(
+        self,
+        user_id: str,
+        first_name: str,
+        surname: str,
+        organization_id: Optional[int] = None,
+    ) -> Optional[Assistant]:
+        """
+        Retrieve an Assistant by name within a user/org context.
+
+        Used to check for name uniqueness when creating assistants.
+
+        :param user_id: User ID.
+        :param first_name: Assistant first name.
+        :param surname: Assistant surname.
+        :param organization_id: Organization ID (None for personal assistants).
+        :return: Assistant if found, None otherwise.
+        """
+        if organization_id is not None:
+            stmt = select(Assistant).where(
+                Assistant.organization_id == organization_id,
+                Assistant.first_name == first_name,
+                Assistant.surname == surname,
+            )
+        else:
+            stmt = select(Assistant).where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+                Assistant.first_name == first_name,
+                Assistant.surname == surname,
+            )
+        result = self.session.execute(stmt).scalar_one_or_none()
+        return result
+
     def list_assistants_for_user(
         self,
         user_id: str,
@@ -151,6 +198,8 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        include_demo: bool = False,
+        demo_only: bool = False,
     ) -> List[Assistant]:
         """
         List assistants accessible to a user based on API key context.
@@ -165,6 +214,8 @@ class AssistantDAO:
 
         :param user_id: User ID.
         :param organization_id: Organization ID from API key context (None = personal).
+        :param include_demo: If True, include demo assistants in results.
+        :param demo_only: If True, only return demo assistants.
         :return: List of assistants.
         """
         if organization_id is not None:
@@ -179,6 +230,12 @@ class AssistantDAO:
                 Assistant.user_id == user_id,
                 Assistant.organization_id.is_(None),
             )
+
+        # Demo filtering
+        if demo_only:
+            stmt = stmt.where(Assistant.demo_id.isnot(None))
+        elif not include_demo:
+            stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if phone is not None:
             stmt = stmt.where(Assistant.phone == phone)
@@ -203,6 +260,8 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        include_demo: bool = False,
+        demo_only: bool = False,
     ) -> List[Assistant]:
         """
         List ALL assistants in an organization (for list_all_org=True).
@@ -211,11 +270,19 @@ class AssistantDAO:
         Should only be called after verifying the user has assistant:read permission.
 
         :param organization_id: Organization ID.
+        :param include_demo: If True, include demo assistants in results.
+        :param demo_only: If True, only return demo assistants.
         :return: List of all assistants in the organization.
         """
         stmt = select(Assistant).where(
             Assistant.organization_id == organization_id,
         )
+
+        # Demo filtering
+        if demo_only:
+            stmt = stmt.where(Assistant.demo_id.isnot(None))
+        elif not include_demo:
+            stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if phone is not None:
             stmt = stmt.where(Assistant.phone == phone)
@@ -283,6 +350,11 @@ class AssistantDAO:
             if tz is not None and tz not in VALID_TIMEZONES:
                 raise ValueError(f"'{tz}' is not a valid IANA timezone.")
 
+        # Handle monthly_spending_cap with validation via set_spending_cap
+        if "monthly_spending_cap" in update_data:
+            new_cap = update_data.pop("monthly_spending_cap")
+            self.set_spending_cap(agent_id, user_id, new_cap)
+
         # Track changes for contact sync
         should_sync_timezone = False
         should_sync_bio = False
@@ -314,16 +386,14 @@ class AssistantDAO:
                 sync_service.sync_assistant_timezone(
                     user_id=user_id,
                     organization_id=organization_id,
-                    first_name=assistant.first_name,
-                    surname=assistant.surname,
+                    agent_id=assistant.agent_id,
                     new_timezone=assistant.timezone,
                 )
             if should_sync_bio:
                 sync_service.sync_assistant_bio(
                     user_id=user_id,
                     organization_id=organization_id,
-                    first_name=assistant.first_name,
-                    surname=assistant.surname,
+                    agent_id=assistant.agent_id,
                     new_bio=assistant.about,
                 )
 
@@ -415,3 +485,245 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
+
+    def set_spending_cap(
+        self,
+        agent_id: int,
+        user_id: str,
+        monthly_spending_cap: Optional[float],
+    ) -> AssistantSpendingCapResult:
+        """
+        Set assistant spending cap with context-aware parent limit validation.
+
+        For personal assistants (org_id=NULL): validates against user's personal limit.
+        For org assistants: validates against member limit and org limit.
+
+        :param agent_id: Assistant agent ID.
+        :param user_id: User ID of the owner.
+        :param monthly_spending_cap: New spending cap (None = no limit).
+        :return: Result with new cap and effective limit.
+        :raises ValueError: If assistant limit exceeds parent limit.
+        :raises HTTPException: If assistant not found.
+        """
+        from orchestra.db.dao.organization_dao import OrganizationDAO
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+        from orchestra.db.dao.user_dao import UserDAO
+
+        assistant = self.get_assistant_by_agent_id(agent_id)
+        if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+
+        # Verify ownership
+        if assistant.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+
+        new_limit = monthly_spending_cap
+        parent_limit: Optional[float] = None
+
+        if assistant.organization_id is not None:
+            # Organizational assistant - validate against member limit and org limit
+            org_dao = OrganizationDAO(self.session)
+            org_member_dao = OrganizationMemberDAO(self.session)
+
+            org = org_dao.get(assistant.organization_id)
+            member = org_member_dao.get_member(user_id, assistant.organization_id)
+
+            # Get applicable limits (member limit and org limit)
+            member_limit = (
+                float(member.monthly_spending_cap)
+                if member and member.monthly_spending_cap is not None
+                else None
+            )
+            org_limit = (
+                float(org.monthly_spending_cap)
+                if org and org.monthly_spending_cap is not None
+                else None
+            )
+
+            # The effective parent limit is the most restrictive
+            if member_limit is not None and org_limit is not None:
+                parent_limit = min(member_limit, org_limit)
+            elif member_limit is not None:
+                parent_limit = member_limit
+            elif org_limit is not None:
+                parent_limit = org_limit
+
+            # Validate against parent limit
+            if new_limit is not None and parent_limit is not None:
+                if new_limit > parent_limit:
+                    if member_limit is not None and new_limit > member_limit:
+                        raise ValueError(
+                            f"Assistant limit cannot exceed member limit (${member_limit:.2f})",
+                        )
+                    else:
+                        raise ValueError(
+                            f"Assistant limit cannot exceed organization limit (${org_limit:.2f})",
+                        )
+        else:
+            # Personal assistant - validate against user's personal limit
+            user_dao = UserDAO(self.session)
+            user_row = user_dao.get_by_id(user_id)
+            if user_row:
+                user = user_row[0]
+                parent_limit = (
+                    float(user.monthly_spending_cap)
+                    if user.monthly_spending_cap is not None
+                    else None
+                )
+
+            if new_limit is not None and parent_limit is not None:
+                if new_limit > parent_limit:
+                    raise ValueError(
+                        f"Assistant limit cannot exceed user limit (${parent_limit:.2f})",
+                    )
+
+        # Update the assistant's spending limit
+        old_limit = assistant.monthly_spending_cap
+        new_limit = Decimal(str(new_limit)) if new_limit is not None else None
+        assistant.monthly_spending_cap = new_limit
+
+        # Track when the limit value changes (for notification deduplication)
+        if old_limit != new_limit:
+            from datetime import datetime, timezone
+
+            assistant.monthly_spending_cap_set_at = datetime.now(timezone.utc)
+
+        # Calculate effective limit
+        effective_limit = new_limit
+        if parent_limit is not None:
+            if effective_limit is None:
+                effective_limit = parent_limit
+            else:
+                effective_limit = min(effective_limit, parent_limit)
+
+        return AssistantSpendingCapResult(
+            monthly_spending_cap=new_limit,
+            effective_limit=effective_limit,
+            parent_limit=parent_limit,
+        )
+
+    def get_spending_cap(self, agent_id: int) -> Optional[float]:
+        """
+        Get assistant's monthly spending cap.
+
+        :param agent_id: Assistant agent ID.
+        :return: Monthly spending cap or None if not set or assistant not found.
+        """
+        assistant = self.get_assistant_by_agent_id(agent_id)
+        if assistant and assistant.monthly_spending_cap is not None:
+            return float(assistant.monthly_spending_cap)
+        return None
+
+    def get_cumulative_spend(self, agent_id: int, month: str) -> float:
+        """
+        Get assistant's cumulative spend for a given month.
+
+        Queries the Assistants project logs for spending data.
+
+        :param agent_id: Assistant agent ID.
+        :param month: Month in YYYY-MM format.
+        :return: Cumulative spend for the month (0.0 if no spend data).
+        """
+        from sqlalchemy import cast, func
+        from sqlalchemy.types import Float
+
+        from orchestra.db.models.orchestra_models import (
+            Context,
+            LogEvent,
+            LogEventContext,
+            Project,
+        )
+
+        assistant = self.get_assistant_by_agent_id(agent_id)
+        if not assistant:
+            return 0.0
+
+        # Build query based on whether assistant is personal or organizational
+        query = (
+            self.session.query(
+                func.coalesce(
+                    cast(LogEvent.data.op("->>")("cumulative_spend"), Float),
+                    0.0,
+                ).label("spend"),
+            )
+            .select_from(LogEvent)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .join(Context, LogEventContext.context_id == Context.id)
+            .join(Project, Context.project_id == Project.id)
+            .filter(
+                Project.name == "Assistants",
+                Context.name == "All/Spending/Monthly",
+                LogEvent.data.op("->>")("_assistant_id") == str(agent_id),
+                LogEvent.data.op("->>")("month") == month,
+            )
+        )
+
+        # Add project ownership filter based on whether assistant is personal or org
+        if assistant.organization_id:
+            query = query.filter(Project.organization_id == assistant.organization_id)
+        else:
+            query = query.filter(
+                Project.organization_id.is_(None),
+                Project.user_id == assistant.user_id,
+            )
+
+        result = query.first()
+
+        if result and result.spend:
+            return float(result.spend)
+        return 0.0
+
+    def generate_unique_email_local(
+        self,
+        first_name: str,
+        surname: str,
+    ) -> str:
+        """
+        Generate a unique email local part for demo assistants.
+
+        Uses {first_name.lower()}.{surname.lower()} as base.
+        If a collision exists, appends .1, .2, etc. until unique.
+
+        :param first_name: Assistant's first name
+        :param surname: Assistant's surname
+        :return: Unique email local part (without @domain)
+        """
+        import re
+
+        # Normalize names: lowercase, remove non-alphanumeric, limit length
+        def normalize(s: str) -> str:
+            s = re.sub(r"[^a-z0-9]", "", s.lower())
+            return s[:30] if len(s) > 30 else s
+
+        base_local = f"{normalize(first_name)}.{normalize(surname)}"
+
+        # Query existing emails to check for collisions
+        existing_emails = (
+            self.session.query(Assistant.email)
+            .filter(Assistant.email.isnot(None))
+            .all()
+        )
+        existing_locals = {
+            email[0].lower().split("@")[0] for email in existing_emails if email[0]
+        }
+
+        # Check if base is unique
+        if base_local not in existing_locals:
+            return base_local
+
+        # Find unique suffix
+        for i in range(1, 1000):
+            candidate = f"{base_local}.{i}"
+            if candidate not in existing_locals:
+                return candidate
+
+        # Extremely unlikely fallback
+        import uuid
+
+        return f"{base_local}.{uuid.uuid4().hex[:8]}"

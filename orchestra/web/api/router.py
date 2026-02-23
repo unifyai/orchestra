@@ -19,16 +19,22 @@ from orchestra.web.api import (  # noqa: WPS235
     users,
 )
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
+from orchestra.web.api.assistant import demo_router as assistant_demo_router
 from orchestra.web.api.assistant import router as assistant_router
+from orchestra.web.api.context.views import admin_router as context_admin_router
 from orchestra.web.api.dependencies import (
     auth_admin_key,
     auth_api_key,
     check_account_not_frozen,
 )
+from orchestra.web.api.desktop import router as desktop_router
 from orchestra.web.api.log.views import admin_router as log_admin_router
+from orchestra.web.api.organization import admin_router as organization_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
 from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
+from orchestra.web.api.table_view.views import admin_router as table_view_admin_router
+from orchestra.web.api.table_view.views import router as table_view_router
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 
 API_KEY_AUTH = [
@@ -61,6 +67,13 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    context_admin_router,
+    prefix="/admin",
+    tags=["Contexts"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
     log_admin_router,
     prefix="/admin",
     tags=["Logs"],
@@ -88,10 +101,36 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
+api_router.include_router(
+    table_view_admin_router,
+    prefix="/admin",
+    tags=["Table Views"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    organization_admin_router,
+    prefix="/admin",
+    tags=["Organizations"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
 # API_KEY_AUTH endpoints
 
 api_router.include_router(
     assistant_router,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    assistant_demo_router,
+    prefix="/demo",
+    tags=["Demo Assistants"],
+    include_in_schema=False,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    desktop_router,
+    tags=["Desktops"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -112,6 +151,11 @@ api_router.include_router(
 api_router.include_router(
     plot_router,
     tags=["Plots"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    table_view_router,
+    tags=["Table Views"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

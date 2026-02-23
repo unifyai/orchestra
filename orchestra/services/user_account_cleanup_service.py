@@ -52,9 +52,10 @@ class UserAccountCleanupService:
         Check all conditions that would block account deletion.
 
         Executes a single optimized query that checks:
-        - User exists in auth_user
-        - User exists in users (billing)
+        - User exists in user table
         - Has pending bills (PENDING_INVOICE or INVOICE_CREATED)
+        - Has disputed recharges (DISPUTED)
+        - Billing account is in PAST_DUE or SUSPENDED state
         - Owns any organizations
 
         :param user_id: The user's ID
@@ -64,19 +65,31 @@ class UserAccountCleanupService:
             text(
                 """
                 SELECT
-                    EXISTS(SELECT 1 FROM auth_user WHERE id = :uid) as user_exists,
-                    EXISTS(SELECT 1 FROM users WHERE id = :uid) as billing_exists,
+                    EXISTS(SELECT 1 FROM "user" WHERE id = :uid) as user_exists,
                     EXISTS(
-                        SELECT 1 FROM recharge
-                        WHERE user_id = :uid
-                        AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')
+                        SELECT 1 FROM recharge r
+                        JOIN "user" u ON u.billing_account_id = r.billing_account_id
+                        WHERE u.id = :uid
+                        AND r.status IN ('PENDING_INVOICE', 'INVOICE_CREATED')
                     ) as has_pending_bills,
                     COALESCE(
-                        (SELECT SUM(amount_usd) FROM recharge
-                         WHERE user_id = :uid
-                         AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
+                        (SELECT SUM(r.amount_usd) FROM recharge r
+                         JOIN "user" u ON u.billing_account_id = r.billing_account_id
+                         WHERE u.id = :uid
+                         AND r.status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
                         0
                     ) as pending_amount,
+                    EXISTS(
+                        SELECT 1 FROM recharge r
+                        JOIN "user" u ON u.billing_account_id = r.billing_account_id
+                        WHERE u.id = :uid
+                        AND r.status = 'DISPUTED'
+                    ) as has_disputed_charges,
+                    (
+                        SELECT ba.account_status FROM billing_account ba
+                        JOIN "user" u ON u.billing_account_id = ba.id
+                        WHERE u.id = :uid
+                    ) as account_status,
                     EXISTS(
                         SELECT 1 FROM organization WHERE owner_id = :uid
                     ) as owns_organizations,
@@ -109,6 +122,29 @@ class UserAccountCleanupService:
                 ),
             )
 
+        if result.has_disputed_charges:
+            blockers.append(
+                DeletionBlocker(
+                    reason="open_disputes",
+                    details={
+                        "message": "User has open payment disputes. "
+                        "Please wait for disputes to be resolved before deleting account.",
+                    },
+                ),
+            )
+
+        if result.account_status in ("PAST_DUE", "SUSPENDED"):
+            blockers.append(
+                DeletionBlocker(
+                    reason="account_status",
+                    details={
+                        "account_status": result.account_status,
+                        "message": f"User's billing account is {result.account_status}. "
+                        "Please resolve outstanding billing issues before deleting account.",
+                    },
+                ),
+            )
+
         if result.owns_organizations:
             blockers.append(
                 DeletionBlocker(
@@ -133,10 +169,9 @@ class UserAccountCleanupService:
 
         Deletion order (within single transaction):
         1. Check blockers
-        2. Delete from tables with users.id FK (no CASCADE)
-        3. Delete from users table (cascades: recharge)
-        4. Delete from auth_user table (cascades all auth_user.id FKs)
-        5. Archive Stripe customer (post-commit, best-effort)
+        2. Delete from tables with user.id FK (no CASCADE)
+        3. Delete from user table (cascades all user.id FKs)
+        4. Archive Stripe customer (post-commit, best-effort)
 
         :param user_id: The user's ID
         :param force_org_check: If True, skip organization ownership check
@@ -155,50 +190,67 @@ class UserAccountCleanupService:
                 blockers=blockers,
             )
 
-        stripe_customer_id = self.session.execute(
-            text("SELECT stripe_customer_id FROM users WHERE id = :uid"),
+        # Get the billing account info before deletion
+        ba_info = self.session.execute(
+            text(
+                """
+                SELECT ba.id as ba_id, ba.stripe_customer_id
+                FROM "user" u
+                LEFT JOIN billing_account ba ON u.billing_account_id = ba.id
+                WHERE u.id = :uid
+                """,
+            ),
             {"uid": user_id},
-        ).scalar()
+        ).fetchone()
 
-        self._delete_users_table_dependencies(user_id)
+        stripe_customer_id = ba_info.stripe_customer_id if ba_info else None
+        billing_account_id = ba_info.ba_id if ba_info else None
+
+        # Collect assistant IDs *before* deleting the user row (CASCADE will
+        # remove the assistants rows).  This list is used for GCS cleanup.
+        assistant_ids = self._get_user_assistant_ids(user_id)
+
+        self._delete_user_table_dependencies(user_id, billing_account_id)
 
         self.session.execute(
-            text("DELETE FROM users WHERE id = :uid"),
+            text('DELETE FROM "user" WHERE id = :uid'),
             {"uid": user_id},
         )
 
-        self.session.execute(
-            text("DELETE FROM auth_user WHERE id = :uid"),
-            {"uid": user_id},
-        )
+        # Delete the billing account if it exists (cascade will handle recharges/fingerprints)
+        if billing_account_id:
+            self.session.execute(
+                text("DELETE FROM billing_account WHERE id = :ba_id"),
+                {"ba_id": billing_account_id},
+            )
 
         self.session.commit()
 
+        # Post-commit cleanup operations (best-effort, don't block on failure)
         if stripe_customer_id:
             self._archive_stripe_customer(stripe_customer_id)
+
+        self._cleanup_user_data(user_id, assistant_ids)
 
         logger.info(f"Successfully deleted user account: {user_id}")
         return DeletionResult(success=True, message="Account deleted successfully")
 
-    def _delete_users_table_dependencies(self, user_id: str) -> None:
+    def _delete_user_table_dependencies(
+        self,
+        user_id: str,
+        billing_account_id: int | None = None,
+    ) -> None:
         """
-        Delete from tables that reference users.id without CASCADE.
+        Delete from tables that reference user.id without CASCADE.
 
         Uses raw SQL - no ORM overhead, no entity loading.
         Order matters due to FK constraints.
-        """
-        deletion_statements = [
-            # REMOVED: Legacy query tracking tables deleted in migration 2026-01-15
-            # Should be replaced by the new credit deduction system when in place.
-            # "DELETE FROM query_tag_association WHERE user_id = :uid",
-            # "DELETE FROM tags WHERE user_id = :uid",
-            # "DELETE FROM query WHERE user_id = :uid",
-            # "DELETE FROM local_endpoint WHERE user_id = :uid",  # Part of legacy LLM tracking
-            "DELETE FROM credit_card_fingerprint WHERE user_id = :uid",
-        ]
 
-        for stmt in deletion_statements:
-            self.session.execute(text(stmt), {"uid": user_id})
+        Note: credit_card_fingerprint and recharge now reference billing_account_id
+        and will be cascade-deleted when the billing_account row is removed.
+        """
+        # Currently no non-cascading tables reference user.id directly.
+        # credit_card_fingerprint is cascade-deleted via billing_account.
 
     def _archive_stripe_customer(self, stripe_customer_id: str) -> None:
         """
@@ -220,3 +272,66 @@ class UserAccountCleanupService:
             logger.info(f"Archived Stripe customer: {stripe_customer_id}")
         except Exception as e:
             logger.error(f"Failed to archive Stripe customer {stripe_customer_id}: {e}")
+
+    def _get_user_assistant_ids(self, user_id: str) -> list[int]:
+        """
+        Return all assistant ``agent_id`` values owned by *user_id*.
+
+        Must be called **before** the user row is deleted (CASCADE would
+        remove the assistants rows).
+        """
+        rows = self.session.execute(
+            text("SELECT agent_id FROM assistants WHERE user_id = :uid"),
+            {"uid": user_id},
+        ).fetchall()
+        return [row[0] for row in rows] if rows else []
+
+    def _cleanup_user_data(
+        self,
+        user_id: str,
+        assistant_ids: list[int],
+    ) -> None:
+        """
+        Delete all GCS data for every assistant owned by a user.
+
+        *assistant_ids* is pre-fetched before the DB commit (since CASCADE
+        deletes the rows).  If the list is empty we fall back to the legacy
+        user-prefix cleanup.
+
+        Best-effort operation – logs errors but never fails the deletion.
+        """
+        try:
+            from orchestra.services.bucket_service import BucketService
+
+            bucket_service = BucketService()
+
+            if assistant_ids:
+                total = {"media": 0, "recordings": 0, "attachments": 0}
+                for aid in assistant_ids:
+                    try:
+                        counts = bucket_service.delete_all_assistant_data(aid)
+                        for key in total:
+                            total[key] += counts.get(key, 0)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to cleanup GCS data for assistant {aid} "
+                            f"(user {user_id}): {e}",
+                        )
+                grand_total = sum(total.values())
+                if grand_total > 0:
+                    logger.info(
+                        f"Cleaned up {grand_total} GCS file(s) across "
+                        f"{len(assistant_ids)} assistant(s) for user {user_id}: {total}",
+                    )
+            else:
+                # Fallback: no assistants found (user had none, or they were
+                # already cleaned up).  Try the legacy user-prefix cleanup.
+                deleted_count = bucket_service.delete_message_attachments_for_user(
+                    user_id,
+                )
+                if deleted_count > 0:
+                    logger.info(
+                        f"Cleaned up {deleted_count} legacy attachment(s) for user {user_id}",
+                    )
+        except Exception as e:
+            logger.error(f"Failed to cleanup GCS data for user {user_id}: {e}")

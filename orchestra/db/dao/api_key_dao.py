@@ -3,7 +3,7 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import ApiKey, AuthUser
+from orchestra.db.models.orchestra_models import ApiKey, User
 
 
 class ApiKeyDAO:
@@ -52,12 +52,12 @@ class ApiKeyDAO:
     def get_user_id_and_mail(self, key):
         query = select(
             ApiKey.user_id,
-            AuthUser.email,
-            AuthUser.name,
-            AuthUser.last_name,
+            User.email,
+            User.name,
+            User.last_name,
             ApiKey.organization_id,
         )
-        query = query.join(AuthUser, ApiKey.user_id == AuthUser.id)
+        query = query.join(User, ApiKey.user_id == User.id)
         query = query.where(ApiKey.key == key)
         rows = self.session.execute(query)
         return rows.fetchall()

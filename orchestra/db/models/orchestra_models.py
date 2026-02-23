@@ -50,20 +50,24 @@ RECHARGE_TYPE_PAYMENT = "payment"
 RECHARGE_TYPE_PROMO = "promo"
 
 
-class Users(Base):
-    """Model class for the users table."""
+class BillingAccount(Base):
+    """
+    Shared billing entity for User and Organization.
 
-    __tablename__ = "users"
+    Consolidates all billing-related fields (credits, Stripe customer, autorecharge,
+    account status) AND optional business profile fields (tax ID, address, business name)
+    into a single table. Both User and Organization link here via FK.
 
-    # IMPORTANT: If any change happens here the DB trigger must be updated as well!
-    id = Column(String(), primary_key=True)
-    credits = Column(
-        Numeric,
-        nullable=False,
-        default=0,
-        server_default="0",
-    )
-    stripe_customer_id = Column(String())
+    This eliminates field duplication and provides a single code path for all billing logic.
+    """
+
+    __tablename__ = "billing_account"
+
+    id = Column(Integer, primary_key=True)
+
+    # === CORE BILLING ===
+    credits = Column(Numeric, nullable=False, default=0, server_default="0")
+    stripe_customer_id = Column(String, nullable=True, unique=True, index=True)
     autorecharge = Column(
         Boolean,
         nullable=False,
@@ -82,22 +86,63 @@ class Users(Base):
         default=25,
         server_default="25",
     )
-    store_prompts = Column(
+    account_status = Column(
+        String,
+        nullable=False,
+        default="ACTIVE",
+        server_default="ACTIVE",
+    )  # ACTIVE, PAST_DUE, SUSPENDED, CLOSED
+    billing_setup_complete = Column(
         Boolean,
         nullable=False,
-        default=True,
-        server_default="true",
+        default=False,
+        server_default="false",
     )
-    frozen = Column(Boolean(), nullable=False, server_default="f")
-    credit_balance = Column(BigInteger, default=0)
-    billing_state = Column(String, default="OK", server_default="OK")
+    tier = Column(
+        String,
+        nullable=False,
+        server_default="developer",
+    )  # developer, pro, enterprise (future)
 
-    # back-reference for the relationship defined on Recharge
+    # === BILLING PROFILE (optional — available to all billing entities) ===
+    # A personal user can add their name / tax details without creating an org.
+    # An org fills these in for proper business invoicing.
+    # All fields sync to the Stripe Customer when set.
+    # ``name`` is the display name — mapped to Stripe's individual_name (users)
+    # or business_name (orgs) via build_stripe_customer_name().
+    billing_email = Column(String, nullable=True)
+    name = Column(String(255), nullable=True)
+    tax_id = Column(String(100), nullable=True)
+    tax_id_type = Column(String(50), nullable=True)
+    tax_id_verification_status = Column(
+        String(20),
+        nullable=True,
+    )  # pending, verified, unverified, unavailable (from Stripe)
+    billing_address = Column(JSONB, nullable=True, default=dict)
+
+    # === TIMESTAMPS ===
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    # === RELATIONSHIPS ===
     recharges = relationship(
         "Recharge",
-        back_populates="user",
+        back_populates="billing_account",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+    credit_card_fingerprints = relationship(
+        "CreditCardFingerprint",
+        back_populates="billing_account",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "account_status IN ('ACTIVE', 'PAST_DUE', 'SUSPENDED', 'CLOSED')",
+            name="ck_billing_account_status",
+        ),
     )
 
 
@@ -113,17 +158,11 @@ class Recharge(Base):
         server_default=func.now(),
         default=datetime.utcnow,
     )
-    # User ID - nullable for organization recharges
-    user_id = Column(
-        String(),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    # Organization ID - nullable for user recharges
-    organization_id = Column(
+    # Billing account that this recharge belongs to
+    billing_account_id = Column(
         Integer,
-        ForeignKey("organization.id", ondelete="CASCADE"),
-        nullable=True,
+        ForeignKey("billing_account.id", ondelete="CASCADE"),
+        nullable=False,
         index=True,
     )
     quantity = Column(Numeric(), nullable=False)
@@ -139,20 +178,13 @@ class Recharge(Base):
     invoice_group = Column(Date)
 
     # ORM relationships
-    user = relationship("Users", back_populates="recharges")
-    organization = relationship("Organization", back_populates="recharges")
+    billing_account = relationship("BillingAccount", back_populates="recharges")
 
     __table_args__ = (
         Index("idx_recharge_pending", "status", "invoice_group"),
         sa.CheckConstraint(
             "status IN ('PENDING_INVOICE','PAID','FAILED','INVOICE_CREATED','DISPUTED')",
             name="ck_recharge_status",
-        ),
-        # Ensure exactly one of user_id or organization_id is set
-        sa.CheckConstraint(
-            "(user_id IS NOT NULL AND organization_id IS NULL) OR "
-            "(user_id IS NULL AND organization_id IS NOT NULL)",
-            name="ck_recharge_entity_xor",
         ),
     )
 
@@ -185,13 +217,34 @@ class CreditCardFingerprint(Base):
     __tablename__ = "credit_card_fingerprint"
 
     id = Column(Integer(), primary_key=True)
-    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     fingerprint = Column(String(), nullable=False)
 
+    # ORM relationship
+    billing_account = relationship(
+        "BillingAccount",
+        back_populates="credit_card_fingerprints",
+    )
 
-class AuthUser(Base):
-    __tablename__ = "auth_user"
 
+class User(Base):
+    """
+    Consolidated user model.
+
+    Previously split across `users` (billing) and `auth_user` (profile).
+    Now a single table matching Organization, OrganizationMember, Team architecture.
+
+    Billing fields live on BillingAccount (linked via billing_account_id FK).
+    """
+
+    __tablename__ = "user"
+
+    # === IDENTITY FIELDS ===
     id = Column(String, primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String)
@@ -201,98 +254,44 @@ class AuthUser(Base):
     image = Column(String)
     timezone = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
-    # Account tier, developer, professional, enterprise
-    tier = Column(String, nullable=False, server_default="developer")
+
+    # === BILLING (via BillingAccount) ===
+    billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # === ACCOUNT SETTINGS ===
     # Toggles managed by usage quotas
     queries_enabled = Column(Boolean, nullable=False, server_default="true")
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
-    # Toggle for handling assistant hiring approval
-    assistant_hiring_approval = Column(
-        String,
-        nullable=True,
-        index=True,
-        server_default=None,
+    onboarded = Column(Boolean, nullable=False, server_default="false")
+    store_prompts = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
     )
-    has_claimed_approval_link = Column(Boolean, nullable=False, server_default="false")
+
+    # === SPENDING LIMITS ===
+    # Monthly spending limit for this user's assistants (NULL = no limit)
+    # Cannot exceed the org's monthly_spending_cap if user is in an org
+    monthly_spending_cap = Column(Numeric, nullable=True)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # === TIMESTAMPS ===
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
-    # Business classification fields for B2B/B2C tax compliance
-    account_type = Column(
-        String(20),
-        nullable=False,
-        server_default="individual",
-    )  # 'individual' or 'business'
-    business_name = Column(
-        String(255),
-        nullable=True,
-    )  # Company name for business accounts
-    tax_id = Column(String(100), nullable=True)  # Tax ID/VAT number for businesses
-    business_type = Column(
-        String(50),
-        nullable=True,
-    )  # 'corporation', 'llc', 'partnership', etc.
-
-    # Business address fields (for tax jurisdiction)
-    business_address_line1 = Column(String(255), nullable=True)
-    business_address_line2 = Column(String(255), nullable=True)
-    business_city = Column(String(100), nullable=True)
-    business_state = Column(String(100), nullable=True)
-    business_country = Column(String(100), nullable=True)
-    business_postal_code = Column(String(20), nullable=True)
-
-    # Tax compliance flags
-    tax_exempt = Column(
-        Boolean,
-        nullable=False,
-        server_default="false",
-    )  # Tax-exempt status
-    business_verified = Column(
-        Boolean,
-        nullable=False,
-        server_default="false",
-    )  # Verification status
-    tax_jurisdiction = Column(String(100), nullable=True)  # Computed tax jurisdiction
-    onboarded = Column(Boolean, nullable=False, server_default="false")
-
-    # Relationships
+    # === RELATIONSHIPS ===
+    billing_account = relationship("BillingAccount", foreign_keys=[billing_account_id])
     interfaces = relationship(
         "Interface",
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,
-    )
-    temp_interfaces = relationship(
-        "TempInterface",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-
-    __table_args__ = (
-        # Check constraint for account_type
-        sa.CheckConstraint(
-            "account_type IN ('individual', 'business')",
-            name="ck_auth_user_account_type",
-        ),
-        # Index for efficient filtering by account type
-        Index("idx_auth_user_account_type", "account_type"),
-        # Unique constraint on tax_id (where not null)
-        Index(
-            "idx_auth_user_tax_id",
-            "tax_id",
-            unique=True,
-            postgresql_where=text("tax_id IS NOT NULL"),
-        ),
-        # Additional indexes for common business classification queries
-        Index("idx_auth_user_business_verified", "business_verified"),
-        Index("idx_auth_user_business_country", "business_country"),
-        Index(
-            "idx_auth_user_account_type_verified",
-            "account_type",
-            "business_verified",
-        ),
-        Index("idx_auth_user_tax_jurisdiction", "tax_jurisdiction"),
     )
 
 
@@ -302,7 +301,7 @@ class Account(Base):
     __tablename__ = "account"
 
     id = Column(String, primary_key=True, default=uuid.uuid4)
-    user_id = Column(String, ForeignKey("auth_user.id", ondelete="CASCADE"))
+    user_id = Column(String, ForeignKey("user.id", ondelete="CASCADE"))
     provider = Column(String, nullable=False)  # OAuth provider name
     provider_type = Column(String, nullable=False)
     provider_account_id = Column(String, nullable=False)
@@ -314,110 +313,65 @@ class Account(Base):
 
 
 class Organization(Base):
+    """
+    Organization model.
+
+    Billing fields live on BillingAccount (linked via billing_account_id FK).
+    Business profile fields (tax_id, billing_address, etc.) also live on BillingAccount.
+    """
+
     __tablename__ = "organization"
 
     id = Column(Integer, primary_key=True)
     owner_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
-    )
-    # Legacy delegated billing - nullable when org has its own billing
-    billing_user_id = Column(
-        String,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=True,
     )
     name = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
-    # === WALLET FIELDS (direct org billing) ===
-    credits = Column(
-        Numeric,
-        nullable=False,
-        default=0,
-        server_default="0",
-    )
-    stripe_customer_id = Column(
-        String,
+    # === BILLING (via BillingAccount) ===
+    billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id", ondelete="SET NULL"),
         nullable=True,
-        unique=True,
         index=True,
-    )  # NULL = legacy billing
-    autorecharge = Column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default="false",
     )
-    autorecharge_threshold = Column(
-        Numeric,
-        nullable=False,
-        default=10,
-        server_default="10",
-    )
-    autorecharge_qty = Column(
-        Numeric,
-        nullable=False,
-        default=100,
-        server_default="100",
-    )
-    account_status = Column(
-        String,
-        nullable=False,
-        default="ACTIVE",
-        server_default="'ACTIVE'",
-    )  # ACTIVE, SUSPENDED, PAST_DUE, CLOSED
 
-    # === BUSINESS PROFILE FIELDS ===
-    billing_email = Column(String, nullable=True)
-    business_name = Column(String(255), nullable=True)
-    tax_id = Column(String(100), nullable=True)
-    # JSONB for flexible international address support
-    # Structure: {
-    #   "country": "US",  # ISO 3166-1 alpha-2 code
-    #   "formatted": "123 Main St, City, State 12345, USA",  # Display string
-    #   "line1": "123 Main St",
-    #   "line2": "Suite 100",
-    #   "city": "San Francisco",
-    #   "state": "CA",  # or province/region
-    #   "postal_code": "94105",
-    #   "locality": "...",  # For countries that use locality
-    #   "district": "...",  # For countries like India
-    # }
-    billing_address = Column(JSONB, nullable=True, default=dict)
-    billing_setup_complete = Column(
+    # Timezone for org-level billing (IANA format, e.g., "America/New_York")
+    # Initialized from owner's timezone on creation, defaults to UTC if not set
+    timezone = Column(String, nullable=True)
+
+    # Monthly spending limit for all users/assistants in the org (NULL = no limit)
+    monthly_spending_cap = Column(Numeric, nullable=True)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # === VERIFICATION FIELDS ===
+    # Verified orgs get higher rate limits
+    verified = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
+        comment="Whether org has been manually verified by admin",
+    )
+    verified_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment="When the org was verified",
     )
 
     # Relationships
+    billing_account = relationship(
+        "BillingAccount",
+        foreign_keys=[billing_account_id],
+    )
     interfaces = relationship(
         "Interface",
         back_populates="organization",
         cascade="all, delete-orphan",
         passive_deletes=True,
-    )
-    temp_interfaces = relationship(
-        "TempInterface",
-        back_populates="organization",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    recharges = relationship(
-        "Recharge",
-        back_populates="organization",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-
-    __table_args__ = (
-        sa.CheckConstraint(
-            "account_status IN ('ACTIVE', 'SUSPENDED', 'PAST_DUE', 'CLOSED')",
-            name="ck_organization_account_status",
-        ),
     )
 
 
@@ -432,7 +386,7 @@ class OrganizationMember(Base):
     )
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
     )
     role_id = Column(
@@ -441,6 +395,12 @@ class OrganizationMember(Base):
         nullable=False,
     )  # RBAC role for this member (Owner, Admin, Member, Viewer, or custom roles)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Monthly spending limit for this member within this org (NULL = no limit)
+    # Set by org admins; cannot exceed org's monthly_spending_cap
+    monthly_spending_cap = Column(Numeric, nullable=True)
+    # When the spending cap was last changed (for notification deduplication)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class OrganizationInvite(Base):
@@ -463,12 +423,12 @@ class OrganizationInvite(Base):
     invitee_email = Column(String, nullable=False, index=True)
     invitee_user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="SET NULL"),
+        ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
     )  # Set if user already exists in system
     invited_by_user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
     )
     role_id = Column(
@@ -581,7 +541,7 @@ class TeamMember(Base):
     )
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
     )
     created_at = Column(TIMESTAMP, server_default=func.now())
@@ -634,7 +594,7 @@ class ApiKey(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String)
-    user_id = Column(String, ForeignKey("auth_user.id", ondelete="CASCADE"))
+    user_id = Column(String, ForeignKey("user.id", ondelete="CASCADE"))
     organization_id = Column(Integer, ForeignKey("organization.id", ondelete="CASCADE"))
     key = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
@@ -648,7 +608,7 @@ class Project(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         index=True,
     )
     organization_id = Column(
@@ -667,12 +627,6 @@ class Project(Base):
     contexts = relationship("Context", back_populates="project", passive_deletes=True)
     interfaces = relationship(
         "Interface",
-        back_populates="project",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    temp_interfaces = relationship(
-        "TempInterface",
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -906,19 +860,34 @@ class ActiveDerivedLog(Base):
     __table_args__ = (UniqueConstraint("project_id", "context_id", "key"),)
 
 
-class DashboardView(Base):
-    __tablename__ = "dashboard_view"
+class LogUniqueConstraint(Base):
+    """
+    Lookup table for efficient unique field validation.
 
-    id = Column(Integer, primary_key=True)
-    project_id = Column(
-        Integer,
-        ForeignKey("project.id", ondelete="CASCADE"),
+    Replaces O(N×M) JSONB containment scans with O(M×log N) B-tree lookups
+    for checking unique field constraints during log creation/update.
+
+    Supports:
+    - Single unique fields: field_name = 'row_id', value_hash = md5(value)
+    - Composite keys: field_name = '__composite__', value_hash = md5(json(combo))
+    """
+
+    __tablename__ = "log_unique_constraint"
+
+    context_id = Column(Integer, nullable=False)
+    field_name = Column(String, nullable=False)
+    value_hash = Column(String(32), nullable=False)  # MD5 hash of the value
+    log_event_id = Column(
+        BigInteger,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
-    name = Column(String)
-    view = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("context_id", "field_name", "value_hash"),
+        Index("idx_log_unique_constraint_log_event", "log_event_id"),
+    )
 
 
 class Interface(Base):
@@ -928,7 +897,7 @@ class Interface(Base):
     # TODO: remove both <user_id> and <organization_id>
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         index=True,
     )
     organization_id = Column(
@@ -959,7 +928,7 @@ class Interface(Base):
     active_tab_id = Column(String, nullable=True)
     # Relationships
     project = relationship("Project", back_populates="interfaces")
-    user = relationship("AuthUser", back_populates="interfaces")
+    user = relationship("User", back_populates="interfaces")
     organization = relationship("Organization", back_populates="interfaces")
     tabs = relationship(
         "Tab",
@@ -1002,7 +971,7 @@ class FieldType(Base):
         nullable=False,
         server_default="entry",
     )  # entry, param, derived_entry
-    mutable = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
+    mutable = Column(Boolean(), nullable=False, server_default="t")  # type: ignore
     unique = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
     enum_values = Column(JSONB, nullable=False, server_default=text("'[]'"))
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")
@@ -1023,46 +992,6 @@ class FieldType(Base):
     )
 
 
-class TempInterface(Base):
-    __tablename__ = "temp_interface"
-
-    id = Column(String, primary_key=True, default=uuid.uuid4)
-    user_id = Column(
-        String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
-        index=True,
-    )
-    organization_id = Column(
-        Integer,
-        ForeignKey("organization.id", ondelete="CASCADE"),
-        index=True,
-    )
-    name = Column(String(), nullable=False)
-    new_counter = Column(Integer, nullable=False)
-    items = Column(String(), nullable=False)
-    project_id = Column(
-        Integer,
-        ForeignKey("project.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    context = Column(String(), nullable=True)
-    color = Column(String(), nullable=True)
-    created_at = Column(TIMESTAMP, nullable=True, server_default=func.now())
-    # Relationships
-    project = relationship("Project", back_populates="temp_interfaces")
-    user = relationship("AuthUser", back_populates="temp_interfaces")
-    organization = relationship("Organization", back_populates="temp_interfaces")
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "project_id",
-            "name",
-            name="temp_it_uq_project_name",
-        ),
-    )
-
-
 class AdminUser(Base):
     """Model class for admin users who have special privileges."""
 
@@ -1071,15 +1000,15 @@ class AdminUser(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         unique=True,
         nullable=False,
     )
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
-    # Relationship to AuthUser
-    auth_user = relationship("AuthUser", backref="admin_user")
+    # Relationship to User
+    user = relationship("User", backref="admin_user")
 
 
 class FavoriteProject(Base):
@@ -1090,7 +1019,7 @@ class FavoriteProject(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -1106,6 +1035,75 @@ class FavoriteProject(Base):
     )
 
 
+class DemoAssistantMeta(Base):
+    """Model class for demo assistant metadata.
+
+    Stores metadata about demo assistants created by Unify employees
+    for demonstrating the product to prospects. Each demo assistant
+    has a corresponding entry in this table linked via demo_id.
+    """
+
+    __tablename__ = "demo_assistant_meta"
+
+    id = Column(Integer, primary_key=True)
+    source_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    demoer_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    label = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Optional prospect details (for pre-populating boss contact in Unity)
+    prospect_first_name = Column(String, nullable=True)
+    prospect_surname = Column(String, nullable=True)
+    prospect_email = Column(String, nullable=True)
+    prospect_phone = Column(String, nullable=True)
+
+    # Relationships
+    demoer = relationship(
+        "User",
+        foreign_keys=[demoer_user_id],
+        backref="created_demos",
+    )
+
+
+class UserDesktop(Base):
+    """Registered user desktop machines.
+
+    Each row represents a physical/virtual desktop that a user's desktop app
+    has registered after obtaining a public hostname via the tunnel service.
+    """
+
+    __tablename__ = "user_desktops"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    os = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "os IN ('ubuntu', 'windows', 'macos')",
+            name="ck_user_desktop_os",
+        ),
+    )
+
+
 class Assistant(Base):
     """Model class for the assistants table.
 
@@ -1118,7 +1116,7 @@ class Assistant(Base):
     agent_id = Column(Integer, primary_key=True)
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -1136,11 +1134,22 @@ class Assistant(Base):
     profile_video = Column(String, nullable=True)
     desktop_url = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
-    is_user_desktop = Column(Boolean, nullable=True)
+    user_desktop_id = Column(
+        Integer,
+        ForeignKey("user_desktops.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    user_desktop_filesys_sync = Column(Boolean, nullable=False, default=False)
     about = Column(String, nullable=True)
     phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
+    # Monthly spending limit for this assistant (NULL = no limit)
+    # Cannot exceed the user's monthly_spending_cap
+    monthly_spending_cap = Column(Numeric, nullable=True)
+    # When the spending cap was last changed (for notification deduplication)
+    monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
     max_parallel = Column(Integer, nullable=True)
     email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
@@ -1149,11 +1158,6 @@ class Assistant(Base):
     assistant_whatsapp_number = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
-    recordings = relationship(
-        "CallRecording",
-        back_populates="assistant",
-        cascade="all, delete-orphan",
-    )
     voice_id = sa.Column(
         sa.String,
         nullable=True,
@@ -1161,6 +1165,21 @@ class Assistant(Base):
     )
     voice_provider = Column(String, nullable=True)
     voice_mode = Column(String, nullable=True)
+
+    # Demo assistant metadata FK (NULL for regular assistants)
+    demo_id = Column(
+        Integer,
+        ForeignKey("demo_assistant_meta.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Relationship to demo metadata
+    demo_meta = relationship(
+        "DemoAssistantMeta",
+        backref=backref("assistant", uselist=False),
+        foreign_keys=[demo_id],
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -1204,7 +1223,7 @@ class AssistantSecret(Base):
 
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         primary_key=True,
         nullable=False,
         index=True,
@@ -1229,15 +1248,78 @@ class AssistantSecret(Base):
     __table_args__ = (sa.PrimaryKeyConstraint("user_id", "agent_id", "secret_name"),)
 
 
-class AssistantHiringOneTimeApprovalLink(Base):
-    __tablename__ = "assistant_hiring_one_time_approval_link"
+class OneTimeCreditGrantLink(Base):
+    """
+    One-time links that grant credits when claimed.
+
+    Each link can only be claimed once. When claimed, the user receives
+    the specified credit_amount. Users can only benefit from one link
+    ever (checked via query on this table's user_id column).
+    """
+
+    __tablename__ = "one_time_credit_grant_link"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     token = Column(String, unique=True, index=True, nullable=False)
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
-    user_id = Column(String, ForeignKey("auth_user.id"), nullable=True, index=True)
+    user_id = Column(String, ForeignKey("user.id"), nullable=True, index=True)
     claimed_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    credit_amount = Column(
+        Float,
+        nullable=False,
+        default=10.0,
+        comment="Amount of credits to grant when link is claimed",
+    )
+
+
+class OnboardingStatus(Base):
+    """
+    Tracks user onboarding progress.
+
+    The current_step represents WHERE TO RESUME next time:
+    - account_setup: User needs to complete account setup (initial state)
+    - billing_setup: Account done, user needs to add payment method
+    - completed: All onboarding steps done
+
+    step_data accumulates information from completed steps:
+    - selected_type: "personal" | "business"
+    - organization_id, organization_name (if business)
+    - billing_skipped, payment_method_added (after billing step)
+    - completed_at (when completed)
+    """
+
+    __tablename__ = "onboarding_status"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    current_step = Column(
+        String(50),
+        nullable=False,
+        # No server_default - handled by DAO to avoid migrations when flow changes
+        comment="Next step to resume at (freeform in DB, enforced by API)",
+    )
+    step_data = Column(
+        JSONB,
+        nullable=False,
+        server_default="{}",
+        comment="Accumulated data from completed steps (freeform JSON)",
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    # Relationship
+    user = relationship("User", backref=backref("onboarding_status", uselist=False))
 
 
 class Voice(Base):
@@ -1251,7 +1333,7 @@ class Voice(Base):
     )  # This will store the TTS provider's voice ID
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         primary_key=True,
         nullable=False,
         index=True,
@@ -1547,24 +1629,6 @@ class TerminalTile(Base):
     tile = relationship("Tile", back_populates="terminal_tile")
 
 
-class CallRecording(Base):
-    """Model class for the assistant call recordings table."""
-
-    __tablename__ = "assistant_call_recording"
-
-    id = Column(Integer, primary_key=True)
-    agent_id = Column(
-        Integer,
-        ForeignKey("assistants.agent_id"),
-        nullable=False,
-        index=True,
-    )
-    filename = Column(String, nullable=False)
-    url = Column(String, nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    assistant = relationship("Assistant", back_populates="recordings")
-
-
 class Embedding(Base):
     """Model class for the embedding table that stores embeddings.
 
@@ -1579,10 +1643,13 @@ class Embedding(Base):
     __tablename__ = "embedding"
 
     id = Column(Integer, primary_key=True)
+    # ref_id uses SET NULL instead of CASCADE to preserve soft-deleted embeddings.
+    # When a LogEvent is deleted, ref_id becomes NULL but the embedding row stays
+    # until index maintenance cleans it up (avoiding HNSW index surgery on delete).
     ref_id = Column(
         Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("log_event.id", ondelete="SET NULL"),
+        nullable=True,
     )
     model = Column(String, nullable=False)
     key = Column(String, nullable=False)
@@ -1645,15 +1712,29 @@ class Embedding(Base):
 
 
 class EmbeddingQueue(Base):
-    """Queue for async embedding generation.
+    """Queue for async embedding generation with two-stage processing pipeline.
 
-    Embeddings are queued during log creation and processed by background workers.
-    This decouples log creation from OpenAI API calls and HNSW index updates.
+    Embeddings are queued during log creation and processed by background workers
+    in two stages to maximize throughput:
+
+    Stage 1 (parallel-safe): Generate embedding vectors
+    - Multiple workers can run concurrently using FOR UPDATE SKIP LOCKED
+    - pending → generating → vector_ready
+
+    Stage 2 (serial): Bulk insert into indexed Embedding table
+    - Single worker for optimal HNSW index performance
+    - vector_ready → inserting → (deleted from queue)
+
     Status values:
-    - pending: Waiting to be processed
-    - processing: Currently being processed by a worker
+    - pending: Waiting for Stage 1 processing
+    - generating: Being processed by Stage 1 worker (vector generation)
+    - vector_ready: Vector generated, awaiting Stage 2 (index insertion)
+    - inserting: Being processed by Stage 2 worker (bulk insert)
     - completed: Successfully processed (will be deleted from queue)
     - failed: Failed after max retries (kept for debugging)
+
+    TODO: Migrate Cloud Scheduler jobs to Cloud Tasks for dynamic scaling
+    based on queue depth rather than fixed scheduling intervals.
     """
 
     __tablename__ = "embedding_queue"
@@ -1675,10 +1756,15 @@ class EmbeddingQueue(Base):
     # Timestamp when item was claimed for processing (used for stale detection)
     processing_started_at = Column(TIMESTAMP, nullable=True)
 
+    # Stage 1 output: Generated embedding vector (stored here until Stage 2 inserts it)
+    generated_vector = Column(Vector(), nullable=True)
+    # Timestamp when vector was generated (for monitoring/debugging)
+    vector_generated_at = Column(TIMESTAMP, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
         sa.CheckConstraint(
-            "status IN ('pending', 'processing', 'completed', 'failed')",
+            "status IN ('pending', 'generating', 'vector_ready', 'inserting', 'completed', 'failed')",
             name="chk_embedding_queue_status",
         ),
         Index("idx_embedding_queue_status_created", "status", "created_at"),
@@ -1688,6 +1774,12 @@ class EmbeddingQueue(Base):
             "idx_embedding_queue_processing_started",
             "status",
             "processing_started_at",
+        ),
+        # Index for Stage 2 worker to efficiently find vector_ready items
+        Index(
+            "idx_embedding_queue_vector_ready",
+            "created_at",
+            postgresql_where=sa.text("status = 'vector_ready'"),
         ),
     )
 
@@ -1711,7 +1803,7 @@ class Plot(Base):
     )
     user_id = Column(
         String,
-        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -1725,6 +1817,7 @@ class Plot(Base):
     plot_config = Column(JSONB, nullable=False)
     project_config = Column(JSONB, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
     # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
     project = relationship("Project", backref=backref("plots", passive_deletes=True))
@@ -1733,4 +1826,244 @@ class Plot(Base):
         Index("idx_plot_project_id", "project_id"),
         Index("idx_plot_user_id", "user_id"),
         Index("idx_plot_organization_id", "organization_id"),
+    )
+
+
+class TableView(Base):
+    """Model class for shareable table view configurations.
+
+    TableViews are linked to projects and follow project-based access control.
+    When a project is deleted, all associated table views are cascade deleted.
+    """
+
+    __tablename__ = "table_view"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String(12), unique=True, nullable=False, index=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    title = Column(String, nullable=True)
+    table_config = Column(JSONB, nullable=False)
+    project_config = Column(JSONB, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
+    project = relationship(
+        "Project",
+        backref=backref("table_views", passive_deletes=True),
+    )
+
+    __table_args__ = (
+        Index("idx_table_view_project_id", "project_id"),
+        Index("idx_table_view_user_id", "user_id"),
+        Index("idx_table_view_organization_id", "organization_id"),
+    )
+
+
+class SpendingLimitNotification(Base):
+    """
+    Tracks spending limit notifications to prevent duplicate emails.
+
+    When a spending limit is reached, we record the notification here.
+    Subsequent limit breaches for the same (entity_type, entity_id, month, limit_value)
+    are deduplicated unless the limit was re-configured (limit_set_at > notified_at).
+
+    This table is intentionally NOT linked via foreign keys to entity tables
+    so that notification records are preserved when entities are deleted (audit trail).
+    """
+
+    __tablename__ = "spending_limit_notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Which entity hit the limit
+    entity_type = Column(
+        String(20),
+        nullable=False,
+        comment="'assistant', 'user', 'member', or 'organization'",
+    )
+    entity_id = Column(
+        String,
+        nullable=False,
+        comment="ID of the entity (agent_id, user_id, or org_id)",
+    )
+
+    # When and at what limit
+    month = Column(
+        String(7),
+        nullable=False,
+        comment="Billing month in YYYY-MM format",
+    )
+    limit_value = Column(
+        Numeric,
+        nullable=False,
+        comment="The limit value that was reached",
+    )
+
+    # When the limit was configured (for re-enable detection)
+    limit_set_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment="When the limit was configured",
+    )
+
+    # Notification metadata
+    notified_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    notified_user_ids = Column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+        comment="List of user IDs who received the notification email",
+    )
+
+    # Entity name for auditing (may become stale if entity renamed)
+    entity_name = Column(
+        String,
+        nullable=True,
+        comment="Name of the entity at time of notification (for auditing)",
+    )
+
+    # Current spend at time of notification (for auditing)
+    current_spend = Column(
+        Numeric,
+        nullable=True,
+        comment="Spend amount when notification was triggered",
+    )
+
+    __table_args__ = (
+        # Index for deduplication lookups
+        Index(
+            "ix_spending_limit_notifications_dedupe",
+            "entity_type",
+            "entity_id",
+            "month",
+            "limit_value",
+        ),
+        # Index for entity lookups
+        Index(
+            "ix_spending_limit_notifications_entity",
+            "entity_type",
+            "entity_id",
+        ),
+        # Index for cleanup queries
+        Index(
+            "ix_spending_limit_notifications_month",
+            "month",
+        ),
+    )
+
+
+class RateLimitCounter(Base):
+    """
+    Tracks API request counts in 5-minute time buckets for rate limiting.
+
+    This table replaces the previous approval-based gating with a flexible
+    rate limiting system. It supports:
+    - Category-based limits (assistant_hiring, assistant_media, assistant_crud, assistant_voice)
+    - Optional per-endpoint overrides
+    - User-level and organization-level (shared) limits
+    - Rolling 24-hour window calculation
+    """
+
+    __tablename__ = "rate_limit_counter"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Who made the request
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
+    # What endpoint/category
+    endpoint_category = Column(
+        String(50),
+        nullable=False,
+        comment="Rate limit category: 'assistant_hiring', 'assistant_media', 'assistant_crud', 'assistant_voice'",
+    )
+    endpoint_path = Column(
+        String(200),
+        nullable=True,
+        comment="Specific endpoint path for per-endpoint overrides",
+    )
+
+    # When (5-minute buckets)
+    time_bucket = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        comment="Start of the 5-minute time bucket",
+    )
+
+    # Request count
+    request_count = Column(
+        Integer,
+        nullable=False,
+        server_default="1",
+        comment="Number of requests in this bucket",
+    )
+
+    __table_args__ = (
+        # Unique constraint for upsert operations
+        UniqueConstraint(
+            "user_id",
+            "endpoint_category",
+            "endpoint_path",
+            "time_bucket",
+            name="uq_rate_limit_counter",
+        ),
+        # Index for user + category lookups
+        Index(
+            "ix_rate_limit_counter_user_category",
+            "user_id",
+            "endpoint_category",
+            "time_bucket",
+        ),
+        # Index for organization-level lookups
+        Index(
+            "ix_rate_limit_counter_org_category",
+            "organization_id",
+            "endpoint_category",
+            "time_bucket",
+        ),
+        # Index for endpoint-specific lookups
+        Index(
+            "ix_rate_limit_counter_endpoint",
+            "user_id",
+            "endpoint_path",
+            "time_bucket",
+        ),
+        # Index for cleanup queries
+        Index(
+            "ix_rate_limit_counter_time_bucket",
+            "time_bucket",
+        ),
     )

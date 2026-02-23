@@ -2,6 +2,8 @@
 Includes endpoints related to context management within projects.
 """
 
+import logging
+import math
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -21,11 +23,17 @@ from orchestra.web.api.context.schema import (
     ContextCommitHistory,
     ContextCreateRequest,
     ContextRollback,
+    CopyContextRequest,
     RenameContextRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# Admin router for protected endpoints
+admin_router = APIRouter()
 
 
 @router.post(
@@ -872,6 +880,14 @@ def rename_context(
     body: RenameContextRequest,
     project_name: str = Path(...),
     context_name: str = Path(...),
+    include_children: bool = Query(
+        default=True,
+        description=(
+            "Whether to rename child contexts (which share the same '/' separated "
+            "prefix). When True, renaming 'A' to 'E' will also rename "
+            "'A/B/C' to 'E/B/C', 'A/B/D' to 'E/B/D', etc."
+        ),
+    ),
     session=Depends(get_db_session),
 ):
     """Rename an existing context within a project."""
@@ -879,16 +895,15 @@ def rename_context(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
-    # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
     context_name = context_name.lstrip("/")
+    new_name = body.name.lstrip("/")
 
-    # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":
         raise HTTPException(
             status_code=403,
             detail="Cannot modify built-in Tasks context.",
         )
-    # 1) Verify project
+
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
@@ -897,19 +912,20 @@ def rename_context(
     )
     if not project:
         raise not_found("Project")
-    # 2) Load context
-    ctx_list = context_dao.filter(
-        project_id=project.id,
-        name=context_name,
-    )
+
+    ctx_list = context_dao.filter(project_id=project.id, name=context_name)
     if not ctx_list:
         raise not_found("Context")
-    ctx_id = ctx_list[0][0].id
-    # 3) Attempt rename
+
     try:
-        # Normalize new context name: remove any leading slash from provided name
-        new_name = body.name.lstrip("/")
-        context_dao.update(id=ctx_id, name=new_name)
+        if include_children:
+            context_dao.rename_with_children(
+                project_id=project.id,
+                old_prefix=context_name,
+                new_prefix=new_name,
+            )
+        else:
+            context_dao.update(id=ctx_list[0][0].id, name=new_name)
     except IntegrityError:
         raise HTTPException(
             status_code=400,
@@ -999,3 +1015,188 @@ def rollback_context_version(
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# =============================================================================
+# Admin Endpoints
+# =============================================================================
+
+
+@admin_router.post("/copy_context")
+def admin_copy_context(
+    request: CopyContextRequest,
+    session=Depends(get_db_session),
+):
+    """Deep-copy a context from one location to another.
+
+    Creates a complete, independent clone of a context including all
+    associated data. Changes to the original will NOT affect the copy.
+
+    **What is copied:**
+    - Log events (JSONB data + key_order)  — via ``ContextDAO.batch_copy_log_events``
+    - Field types — via ``FieldTypeDAO.copy_field_types``
+    - Derived log templates — via ``ContextDAO.copy_derived_templates``
+    - Unique constraint entries — via ``ContextDAO.copy_unique_constraints``
+    - Embeddings — via ``ContextDAO.queue_embedding_copies`` (HNSW-safe)
+
+    **Embedding handling:**
+    Embedding vectors are queued in ``EmbeddingQueue`` as ``vector_ready``
+    so the existing Stage-2 worker inserts them at a controlled rate,
+    avoiding expensive HNSW graph recomputations.
+
+    **Batch processing:**
+    Log events are copied in configurable batches with a commit per batch.
+    A failure mid-way leaves a partial copy that can be deleted and retried.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    field_type_dao = FieldTypeDAO(session)
+
+    # ------------------------------------------------------------------
+    # 1. Resolve & validate source
+    # ------------------------------------------------------------------
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    source_project = project_dao.get_by_user_and_name(
+        user_id=request.source_user_id,
+        name=request.source_project_name,
+    )
+    if not source_project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source project '{request.source_project_name}' not found "
+            f"for user '{request.source_user_id}'.",
+        )
+
+    source_ctx_rows = context_dao.filter(
+        project_id=source_project.id,
+        name=request.source_context_name,
+    )
+    if not source_ctx_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source context '{request.source_context_name}' not found "
+            f"in project '{request.source_project_name}'.",
+        )
+    source_context = source_ctx_rows[0][0]
+
+    # ------------------------------------------------------------------
+    # 2. Resolve & validate target
+    # ------------------------------------------------------------------
+    target_project = project_dao.get_by_user_and_name(
+        user_id=request.target_user_id,
+        name=request.target_project_name,
+    )
+    if not target_project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Target project '{request.target_project_name}' not found "
+            f"for user '{request.target_user_id}'.",
+        )
+
+    if (
+        source_project.id == target_project.id
+        and request.source_context_name == request.target_context_name
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Source and target context are identical. "
+            "Use a different target_context_name or target_project_name.",
+        )
+
+    if context_dao.filter(
+        project_id=target_project.id,
+        name=request.target_context_name,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Target context '{request.target_context_name}' already exists "
+            f"in project '{request.target_project_name}'.",
+        )
+
+    # ------------------------------------------------------------------
+    # 3. Create target context (preserving source config)
+    # ------------------------------------------------------------------
+    target_context_id = context_dao.create(
+        project_id=target_project.id,
+        name=request.target_context_name,
+        description=source_context.description,
+        is_versioned=False,
+        allow_duplicates=source_context.allow_duplicates,
+        unique_keys=(
+            dict(zip(source_context.unique_key_names, source_context.unique_key_types))
+            if source_context.unique_key_names and source_context.unique_key_types
+            else None
+        ),
+        auto_counting=source_context.auto_counting or None,
+        foreign_keys=source_context.foreign_keys or None,
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Copy metadata (field types + derived templates)
+    # ------------------------------------------------------------------
+    ft_count = field_type_dao.copy_field_types(
+        source_context_id=source_context.id,
+        target_context_id=target_context_id,
+        target_project_id=target_project.id,
+    )
+    tmpl_count = context_dao.copy_derived_templates(
+        source_context_id=source_context.id,
+        target_context_id=target_context_id,
+        target_project_id=target_project.id,
+    )
+
+    # ------------------------------------------------------------------
+    # 5. Batch copy log events (returns old→new ID mapping)
+    # ------------------------------------------------------------------
+    source_le_ids = context_dao.get_log_event_ids(source_context.id)
+    id_map = context_dao.batch_copy_log_events(
+        source_log_event_ids=source_le_ids,
+        target_context_id=target_context_id,
+        target_project_id=target_project.id,
+        batch_size=request.batch_size,
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Copy unique constraints (remapped via id_map)
+    # ------------------------------------------------------------------
+    uc_count = context_dao.copy_unique_constraints(
+        source_context_id=source_context.id,
+        target_context_id=target_context_id,
+        id_map=id_map,
+        batch_size=request.batch_size,
+    )
+
+    # ------------------------------------------------------------------
+    # 7. Queue embedding copies (HNSW-safe via EmbeddingQueue)
+    # ------------------------------------------------------------------
+    emb_count = 0
+    if request.copy_embeddings and id_map:
+        emb_count = context_dao.queue_embedding_copies(
+            id_map=id_map,
+            batch_size=request.batch_size,
+        )
+
+    # ------------------------------------------------------------------
+    # 8. Return summary
+    # ------------------------------------------------------------------
+    batch_count = (
+        math.ceil(len(source_le_ids) / request.batch_size) if source_le_ids else 0
+    )
+
+    return {
+        "info": (
+            f"Context '{request.source_context_name}' copied to "
+            f"'{request.target_context_name}' successfully."
+        ),
+        "details": {
+            "source": f"{request.source_user_id}/{request.source_project_name}/{request.source_context_name}",
+            "target": f"{request.target_user_id}/{request.target_project_name}/{request.target_context_name}",
+            "log_events_copied": len(id_map),
+            "field_types_copied": ft_count,
+            "derived_templates_copied": tmpl_count,
+            "unique_constraints_copied": uc_count,
+            "embeddings_queued": emb_count,
+            "batches_processed": batch_count,
+        },
+    }

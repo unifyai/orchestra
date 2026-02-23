@@ -25,26 +25,28 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
-    AuthUser,
+    Assistant,
     Context,
+    DemoAssistantMeta,
     LogEvent,
     LogEventContext,
+    Organization,
+    OrganizationMember,
     Project,
 )
+from orchestra.lib.billing import get_billing_entity
 from orchestra.services.bucket_service import BucketService
-from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
@@ -60,6 +62,8 @@ from orchestra.web.api.assistant.schema import (
     AssistantCreate,
     AssistantPhotoUploadResponse,
     AssistantRead,
+    AssistantSpendingLimitResponse,
+    AssistantSpendResponse,
     AssistantStatus,
     AssistantTransferResponse,
     AssistantTransferToOrgRequest,
@@ -67,14 +71,15 @@ from orchestra.web.api.assistant.schema import (
     AssistantUpdate,
     AssistantVideoUploadResponse,
     Contact,
+    DemoAssistantCreate,
+    DemoAssistantMetaRead,
     InfoResponse,
     PhotoGenerateRequest,
-    RecordingCreate,
-    RecordingInfo,
     ReplicatePredictionResponse,
     SecretCreate,
     SecretRead,
     SecretUpdate,
+    SpendingLimitRequest,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -87,11 +92,11 @@ from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_phone_number,
     create_pubsub_topic,
-    create_windows_vm,
+    create_vm,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    delete_windows_vm,
+    delete_vm,
     get_running_jobs,
     get_social_platforms_costs,
     log_pre_hire_chat,
@@ -112,28 +117,81 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     return raw_phone
 
 
-def check_assistant_hiring_approval(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    user_id = request.state.user_id
-    user = session.query(AuthUser).filter(AuthUser.id == user_id).one_or_none()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Authenticated user not found.",
-        )
-
-    if user.assistant_hiring_approval != "approved":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You need to request approval first by going to console.unify.ai/assistants",
-        )
-
-
 router = APIRouter()
 admin_router = APIRouter()
+demo_router = APIRouter()
+
+
+def _build_assistant_read(
+    a: Assistant,
+    session: Session,
+    *,
+    api_key: Optional[str] = None,
+    secrets: Optional[dict] = None,
+    user_first_name: Optional[str] = None,
+    user_last_name: Optional[str] = None,
+    user_email: Optional[str] = None,
+    phone_override: Optional[str] = None,
+    email_override: Optional[str] = None,
+    whatsapp_override: Optional[str] = None,
+) -> AssistantRead:
+    """Build an AssistantRead from an ORM Assistant, resolving desktop fields."""
+    desktop_dao = DesktopDAO(session)
+    user_desktop_url = None
+    user_desktop_mode = None
+    if a.user_desktop_id is not None:
+        desktop = desktop_dao.get_by_id(a.user_desktop_id, a.user_id)
+        if desktop:
+            user_desktop_url = desktop.url
+            user_desktop_mode = desktop.os
+
+    return AssistantRead(
+        agent_id=str(a.agent_id),
+        user_id=a.user_id,
+        organization_id=a.organization_id,
+        first_name=a.first_name,
+        surname=a.surname,
+        age=a.age,
+        nationality=a.nationality,
+        profile_photo=a.profile_photo,
+        profile_video=a.profile_video,
+        desktop_url=a.desktop_url,
+        desktop_mode=a.desktop_mode,
+        user_desktop_id=a.user_desktop_id,
+        user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+        user_desktop_url=user_desktop_url,
+        user_desktop_mode=user_desktop_mode,
+        about=a.about,
+        phone_country=a.phone_country,
+        weekly_limit=(float(a.weekly_limit) if a.weekly_limit is not None else None),
+        max_parallel=a.max_parallel,
+        created_at=a.created_at,
+        updated_at=a.updated_at,
+        phone=phone_override if phone_override is not None else a.phone,
+        email=email_override if email_override is not None else a.email,
+        user_phone=a.user_phone,
+        user_whatsapp_number=a.user_whatsapp_number,
+        assistant_whatsapp_number=(
+            whatsapp_override
+            if whatsapp_override is not None
+            else a.assistant_whatsapp_number
+        ),
+        voice_id=a.voice_id,
+        voice_provider=a.voice_provider,
+        voice_mode=a.voice_mode,
+        timezone=a.timezone,
+        demo_id=a.demo_id,
+        monthly_spending_cap=(
+            float(a.monthly_spending_cap)
+            if a.monthly_spending_cap is not None
+            else None
+        ),
+        api_key=api_key,
+        secrets=secrets,
+        user_first_name=user_first_name,
+        user_last_name=user_last_name,
+        user_email=user_email,
+    )
 
 
 @router.post(
@@ -209,7 +267,6 @@ async def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Create a new assistant for the authenticated user.
@@ -219,7 +276,7 @@ async def create_assistant(
     to the authenticated user's account. Creating an assistant incurs a credit cost.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    user_dao = UserDAO(session)
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
@@ -282,9 +339,14 @@ async def create_assistant(
                 )
 
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
-
-            if user.credits < total_creation_cost:
+            try:
+                billing_entity = get_billing_entity(session, user_id, organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Billing is not set up. Please add a payment method first.",
+                )
+            if billing_entity.credits < total_creation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -306,7 +368,8 @@ async def create_assistant(
             profile_video=assistant_in.profile_video,
             desktop_url=assistant_in.desktop_url,
             desktop_mode=assistant_in.desktop_mode,
-            is_user_desktop=assistant_in.is_user_desktop,
+            user_desktop_id=assistant_in.user_desktop_id,
+            user_desktop_filesys_sync=assistant_in.user_desktop_filesys_sync or False,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -436,7 +499,7 @@ async def create_assistant(
         created_phone = None
         created_pubsub = None
         assigned_whatsapp = None
-        created_windows_vm = None
+        created_vm = None
 
         if assistant_in.create_infra:
             current_infra_step = "initializing"
@@ -516,23 +579,21 @@ async def create_assistant(
                 created_pubsub = True
                 print(f"PUBSUB CREATED: {assistant_id}")
 
-                # Step 6: Create Windows VM if is_user_desktop=False and desktop_mode="windows"
-                if (
-                    assistant_in.desktop_mode == "windows"
-                    and assistant_in.is_user_desktop is False
-                ):
-                    current_infra_step = "create_windows_vm"
-                    vm_response = await create_windows_vm(
+                # Step 6: Create VM if desktop_mode is windows/ubuntu
+                if assistant_in.desktop_mode in ("windows", "ubuntu"):
+                    current_infra_step = "create_vm"
+                    vm_response = await create_vm(
                         assistant_id=str(assistant_id),
                         unify_apikey=request.state.api_key,
-                        assistant_name=f"{assistant_in.first_name}{assistant_in.surname}",
+                        assistant_name=str(assistant_id),
+                        vm_type=assistant_in.desktop_mode,
                     )
                     if "detail" in vm_response or "error" in vm_response:
                         raise Exception(
-                            f"Windows VM creation failed: {vm_response.get('detail') or vm_response.get('error')}",
+                            f"VM creation failed: {vm_response.get('detail') or vm_response.get('error')}",
                         )
-                    created_windows_vm = vm_response
-                    print(f"WINDOWS VM CREATED: {assistant_id}")
+                    created_vm = vm_response
+                    print(f"VM CREATED ({assistant_in.desktop_mode}): {assistant_id}")
 
                 # Refresh database session after long infrastructure operations
                 logging.info(
@@ -551,8 +612,8 @@ async def create_assistant(
                     "assistant_whatsapp_number": assigned_whatsapp,
                 }
                 # Add desktop_url from VM creation if applicable
-                if created_windows_vm and created_windows_vm.get("desktop_url"):
-                    update_data["desktop_url"] = created_windows_vm["desktop_url"]
+                if created_vm and created_vm.get("desktop_url"):
+                    update_data["desktop_url"] = created_vm["desktop_url"]
                 assistant_dao.update_assistant(
                     user_id=user_id,
                     agent_id=assistant_id,
@@ -596,13 +657,16 @@ async def create_assistant(
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
 
-                # Delete Windows VM first (created last)
-                if created_windows_vm:
+                # Delete VM first (created last)
+                if created_vm:
                     try:
-                        await delete_windows_vm(str(assistant_id))
+                        await delete_vm(
+                            str(assistant_id),
+                            vm_type=assistant_in.desktop_mode,
+                        )
                     except Exception as e:
-                        rollback_errors.append(f"Failed to delete Windows VM: {str(e)}")
-                    print(f"WINDOWS VM DELETED: {assistant_id}")
+                        rollback_errors.append(f"Failed to delete VM: {str(e)}")
+                    print(f"VM DELETED ({assistant_in.desktop_mode}): {assistant_id}")
 
                 if created_pubsub:
                     try:
@@ -635,7 +699,7 @@ async def create_assistant(
                     # First, delete the chat context if it was created
                     if assistant_in.pre_hire_chat:
                         try:
-                            context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcripts"
+                            context_name = f"{user_id}/{assistant_id}/Transcripts"
                             assistants_project = project_dao.get_by_user_and_name(
                                 user_id=user_id,
                                 name="Assistants",
@@ -693,15 +757,13 @@ async def create_assistant(
             detail=f"Failed to create assistant: {str(e_prepare)}",
         )
 
-    # Phase 2: Deduct credits. The commit within recharge_credit will persist
-    # both the assistant and the credit change atomically.
+    # Phase 2: Deduct credits from the correct billing account (user or org).
     if not settings.is_staging:
         try:
-            # Refresh session before credit operation to ensure connection is valid
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(total_creation_cost),
-            )
+            from orchestra.lib.billing import deduct_credits
+
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(session, billing_entity, Decimal(str(total_creation_cost)))
             session.commit()
         except Exception as e_commit:
             raise HTTPException(
@@ -749,39 +811,7 @@ async def create_assistant(
 
     # Phase 4: Prepare and return response
     return InfoResponse(
-        info=AssistantRead(
-            agent_id=str(assistant.agent_id),
-            user_id=assistant.user_id,
-            organization_id=assistant.organization_id,
-            first_name=assistant.first_name,
-            surname=assistant.surname,
-            age=assistant.age,
-            nationality=assistant.nationality,
-            profile_photo=assistant.profile_photo,
-            profile_video=assistant.profile_video,
-            desktop_url=assistant.desktop_url,
-            desktop_mode=assistant.desktop_mode,
-            is_user_desktop=assistant.is_user_desktop,
-            about=assistant.about,
-            weekly_limit=(
-                float(assistant.weekly_limit)
-                if assistant.weekly_limit is not None
-                else None
-            ),
-            max_parallel=assistant.max_parallel,
-            created_at=assistant.created_at,
-            updated_at=assistant.updated_at,
-            phone=assistant.phone,
-            email=assistant.email,
-            voice_id=assistant.voice_id,
-            voice_provider=assistant.voice_provider,
-            voice_mode=assistant.voice_mode,
-            phone_country=assistant.phone_country,
-            user_whatsapp_number=assistant.user_whatsapp_number,
-            assistant_whatsapp_number=assistant.assistant_whatsapp_number,
-            user_phone=assistant.user_phone,
-            timezone=assistant.timezone,
-        ),
+        info=_build_assistant_read(assistant, session),
     )
 
 
@@ -863,6 +893,14 @@ def list_assistants(
         False,
         description="If True and using an org API key, list ALL assistants in the organization (not just those created by the current user). Requires assistant:read permission.",
     ),
+    demo: bool = Query(
+        False,
+        description="If True, include demo assistants in results.",
+    ),
+    demo_only: bool = Query(
+        False,
+        description="If True, only return demo assistants.",
+    ),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List assistants based on API key context.
@@ -899,6 +937,8 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                include_demo=demo,
+                demo_only=demo_only,
             )
         else:
             # Personal context OR org context with list_all_org=False
@@ -907,44 +947,13 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                include_demo=demo,
+                demo_only=demo_only,
             )
         voice_dao = VoiceDAO(session)
 
         return InfoResponse(
-            info=[
-                AssistantRead(
-                    agent_id=str(a.agent_id),
-                    user_id=a.user_id,
-                    organization_id=a.organization_id,
-                    first_name=a.first_name,
-                    surname=a.surname,
-                    age=a.age,
-                    nationality=a.nationality,
-                    profile_photo=a.profile_photo,
-                    profile_video=a.profile_video,
-                    desktop_url=a.desktop_url,
-                    desktop_mode=a.desktop_mode,
-                    is_user_desktop=a.is_user_desktop,
-                    about=a.about,
-                    phone_country=a.phone_country,
-                    weekly_limit=(
-                        float(a.weekly_limit) if a.weekly_limit is not None else None
-                    ),
-                    max_parallel=a.max_parallel,
-                    created_at=a.created_at,
-                    updated_at=a.updated_at,
-                    phone=a.phone,
-                    user_phone=a.user_phone,
-                    user_whatsapp_number=a.user_whatsapp_number,
-                    assistant_whatsapp_number=a.assistant_whatsapp_number,
-                    email=a.email,
-                    voice_id=a.voice_id,
-                    voice_provider=a.voice_provider,
-                    voice_mode=a.voice_mode,
-                    timezone=a.timezone,
-                )
-                for a in assistants
-            ],
+            info=[_build_assistant_read(a, session) for a in assistants],
         )
     except HTTPException:
         raise
@@ -979,7 +988,6 @@ async def delete_assistant_contact(
     removal_payload: AssistantContactRemoval,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Remove a contact method from an assistant.
@@ -1053,39 +1061,7 @@ async def delete_assistant_contact(
             )
 
         return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(updated_assistant.agent_id),
-                user_id=updated_assistant.user_id,
-                organization_id=updated_assistant.organization_id,
-                first_name=updated_assistant.first_name,
-                surname=updated_assistant.surname,
-                age=updated_assistant.age,
-                nationality=updated_assistant.nationality,
-                profile_photo=updated_assistant.profile_photo,
-                profile_video=updated_assistant.profile_video,
-                desktop_url=updated_assistant.desktop_url,
-                desktop_mode=updated_assistant.desktop_mode,
-                is_user_desktop=updated_assistant.is_user_desktop,
-                about=updated_assistant.about,
-                phone_country=updated_assistant.phone_country,
-                weekly_limit=(
-                    float(updated_assistant.weekly_limit)
-                    if updated_assistant.weekly_limit is not None
-                    else None
-                ),
-                max_parallel=updated_assistant.max_parallel,
-                created_at=updated_assistant.created_at,
-                updated_at=updated_assistant.updated_at,
-                phone=updated_assistant.phone,
-                user_phone=updated_assistant.user_phone,
-                user_whatsapp_number=updated_assistant.user_whatsapp_number,
-                assistant_whatsapp_number=updated_assistant.assistant_whatsapp_number,
-                email=updated_assistant.email,
-                voice_id=updated_assistant.voice_id,
-                voice_provider=updated_assistant.voice_provider,
-                voice_mode=updated_assistant.voice_mode,
-                timezone=updated_assistant.timezone,
-            ),
+            info=_build_assistant_read(updated_assistant, session),
         )
 
     except HTTPException:
@@ -1126,7 +1102,6 @@ async def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
@@ -1180,18 +1155,21 @@ async def delete_assistant(
             logging.error(f"Failed to stop job: {str(e)}")
             cleanup_errors.append(f"Failed to stop job: {str(e)}")
 
-        # Delete Windows VM if assistant has one (is_user_desktop=False AND desktop_mode="windows")
-        if assistant.desktop_mode == "windows" and assistant.is_user_desktop is False:
+        # Delete VM if assistant has one (desktop_mode is windows/ubuntu)
+        if assistant.desktop_mode in ("windows", "ubuntu"):
             try:
-                vm_response = await delete_windows_vm(str(assistant_id))
+                vm_response = await delete_vm(
+                    str(assistant_id),
+                    vm_type=assistant.desktop_mode,
+                )
                 if not vm_response.get("vm_deleted"):
                     cleanup_errors.append(
                         f"VM deletion reported issues: {vm_response}",
                     )
             except Exception as e:
-                logging.error(f"Failed to delete Windows VM: {str(e)}")
-                cleanup_errors.append(f"Failed to delete Windows VM: {str(e)}")
-            print(f"WINDOWS VM DELETED: {assistant_id}")
+                logging.error(f"Failed to delete VM: {str(e)}")
+                cleanup_errors.append(f"Failed to delete VM: {str(e)}")
+            print(f"VM DELETED ({assistant.desktop_mode}): {assistant_id}")
 
         # Delete the associated chat transcript context from the "Assistants" project
         try:
@@ -1214,22 +1192,16 @@ async def delete_assistant(
                     organization_id=None,
                 )
             if assistants_project:
-                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
-                # Find all contexts related to the assistant
-                # Supports both old 2-tier and new 3-tier context structures:
-                # - 2-tier: "AdaLovelace", "AdaLovelace/Transcripts"
-                # - 3-tier: "User/AdaLovelace", "User/AdaLovelace/Transcripts"
+                assistant_context_id = str(assistant_id)
+                user_ctx = request.state.user_id
+                context_prefix = f"{user_ctx}/{assistant_context_id}"
                 contexts_to_delete = (
                     session.query(Context)
                     .filter(
                         Context.project_id == assistants_project.id,
                         or_(
-                            # Old 2-tier patterns
-                            Context.name == assistant_context_prefix,
-                            Context.name.like(f"{assistant_context_prefix}/%"),
-                            # New 3-tier patterns: User/Assistant or User/Assistant/*
-                            Context.name.like(f"%/{assistant_context_prefix}"),
-                            Context.name.like(f"%/{assistant_context_prefix}/%"),
+                            Context.name == context_prefix,
+                            Context.name.like(f"{context_prefix}/%"),
                         ),
                     )
                     .all()
@@ -1284,6 +1256,26 @@ async def delete_assistant(
                 )
                 cleanup_errors.append(f"Failed to delete profile video: {str(e_gcs)}")
 
+        # Delete all assistant GCS data (recordings, media, attachments) under {assistant_id}/
+        try:
+            cleanup_counts = bucket_service.delete_all_assistant_data(
+                assistant_id,
+                is_staging=settings.is_staging,
+            )
+            total = sum(cleanup_counts.values())
+            if total > 0:
+                print(
+                    f"GCS CLEANUP: {total} file(s) deleted "
+                    f"(media={cleanup_counts['media']}, "
+                    f"recordings={cleanup_counts['recordings']}, "
+                    f"attachments={cleanup_counts['attachments']})",
+                )
+        except Exception as e:
+            logging.error(
+                f"Failed to clean up GCS data for assistant {assistant_id}: {str(e)}",
+            )
+            cleanup_errors.append(f"Failed to clean up GCS data: {str(e)}")
+
         # Wait before starting other infra cleanup (same as rollback operations)
         await asyncio.sleep(10)
 
@@ -1309,6 +1301,21 @@ async def delete_assistant(
             except Exception as e:
                 cleanup_errors.append(f"Failed to delete email: {str(e)}")
         print(f"EMAIL DELETED: {assistant.email}")
+
+        # Delete demo assistant metadata if this is a demo assistant
+        if assistant.demo_id:
+            try:
+                demo_meta = (
+                    session.query(DemoAssistantMeta)
+                    .filter(
+                        DemoAssistantMeta.id == assistant.demo_id,
+                    )
+                    .first()
+                )
+                if demo_meta:
+                    session.delete(demo_meta)
+            except Exception as e:
+                cleanup_errors.append(f"Failed to delete demo metadata: {str(e)}")
 
         # Finally delete the assistant record (matching rollback error handling)
         try:
@@ -1419,7 +1426,6 @@ async def update_assistant_config(
     update: AssistantUpdate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
@@ -1429,7 +1435,7 @@ async def update_assistant_config(
     """
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    users_dao = UsersDAO(session)
+    user_dao = UserDAO(session)
     assistant_dao = AssistantDAO(session)
     bucket_service = BucketService()
 
@@ -1595,17 +1601,26 @@ async def update_assistant_config(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
                         )
-                    user = users_dao.get_user_with_id(user_id)
                     decimal_cost = Decimal(cost)
-                    if user.credits < decimal_cost:
+                    try:
+                        billing_entity = get_billing_entity(
+                            session,
+                            user_id,
+                            organization_id,
+                        )
+                    except ValueError:
+                        raise HTTPException(
+                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                            detail="Billing is not set up. Please add a payment method first.",
+                        )
+                    if billing_entity.credits < decimal_cost:
                         raise HTTPException(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
                             detail="Insufficient credits to add a WhatsApp number.",
                         )
-                    users_dao.recharge_credit(
-                        user_id=user_id,
-                        quantity=-float(decimal_cost),
-                    )
+                    from orchestra.lib.billing import deduct_credits
+
+                    deduct_credits(session, billing_entity, decimal_cost)
 
                 assistant_whatsapp_number = (
                     await assign_whatsapp_sender(
@@ -1619,6 +1634,13 @@ async def update_assistant_config(
             del update_data["create_infra"]
         if "weekly_limit" in update_data and update.weekly_limit is not None:
             update_data["weekly_limit"] = Decimal(update.weekly_limit)
+        if (
+            "monthly_spending_cap" in update_data
+            and update.monthly_spending_cap is not None
+        ):
+            update_data["monthly_spending_cap"] = Decimal(
+                str(update.monthly_spending_cap),
+            )
         if assistant_email:
             update_data["email"] = assistant_email
         if assistant_phone:
@@ -1679,38 +1701,12 @@ async def update_assistant_config(
                 )
 
         return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(updated.agent_id),
-                user_id=updated.user_id,
-                organization_id=updated.organization_id,
-                first_name=updated.first_name,
-                surname=updated.surname,
-                age=updated.age,
-                nationality=updated.nationality,
-                profile_photo=updated.profile_photo,
-                profile_video=updated.profile_video,
-                desktop_url=updated.desktop_url,
-                desktop_mode=updated.desktop_mode,
-                is_user_desktop=updated.is_user_desktop,
-                about=updated.about,
-                phone_country=updated.phone_country,
-                weekly_limit=(
-                    float(updated.weekly_limit)
-                    if updated.weekly_limit is not None
-                    else None
-                ),
-                max_parallel=updated.max_parallel,
-                created_at=updated.created_at,
-                updated_at=updated.updated_at,
-                phone=assistant_phone,
-                email=assistant_email,
-                user_whatsapp_number=updated.user_whatsapp_number,
-                assistant_whatsapp_number=assistant_whatsapp_number,
-                user_phone=updated.user_phone,
-                voice_id=updated.voice_id,
-                voice_provider=updated.voice_provider,
-                voice_mode=updated.voice_mode,
-                timezone=updated.timezone,
+            info=_build_assistant_read(
+                updated,
+                session,
+                phone_override=assistant_phone,
+                email_override=assistant_email,
+                whatsapp_override=assistant_whatsapp_number,
             ),
         )
     except HTTPException:
@@ -1768,7 +1764,6 @@ def transfer_assistant_to_org(
     transfer_request: AssistantTransferToOrgRequest,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantTransferResponse]:
     """
     Transfer a personal assistant to an organization.
@@ -1910,17 +1905,15 @@ def transfer_assistant_to_org(
                             )
 
             if personal_project and org_project:
-                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
-                # Find all contexts related to the assistant
+                assistant_context_id = str(assistant_id)
+                context_prefix = f"{user_id}/{assistant_context_id}"
                 contexts_to_transfer = (
                     session.query(Context)
                     .filter(
                         Context.project_id == personal_project.id,
                         or_(
-                            Context.name == assistant_context_prefix,
-                            Context.name.like(f"{assistant_context_prefix}/%"),
-                            Context.name.like(f"%/{assistant_context_prefix}"),
-                            Context.name.like(f"%/{assistant_context_prefix}/%"),
+                            Context.name == context_prefix,
+                            Context.name.like(f"{context_prefix}/%"),
                         ),
                     )
                     .all()
@@ -2092,7 +2085,6 @@ def transfer_assistant_to_personal(
     transfer_request: AssistantTransferToPersonalRequest,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantTransferResponse]:
     """
     Transfer an organizational assistant to personal workspace.
@@ -2156,23 +2148,21 @@ def transfer_assistant_to_personal(
             )
             org_project = org_projects[0][0] if org_projects else None
             if org_project:
-                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                assistant_context_id = str(assistant_id)
                 contexts_to_delete = (
                     session.query(Context)
                     .filter(
                         Context.project_id == org_project.id,
                         or_(
-                            Context.name == assistant_context_prefix,
-                            Context.name.like(f"{assistant_context_prefix}/%"),
-                            Context.name.like(f"%/{assistant_context_prefix}"),
-                            Context.name.like(f"%/{assistant_context_prefix}/%"),
+                            Context.name == assistant_context_id,
+                            Context.name.like(f"{assistant_context_id}/%"),
+                            Context.name.like(f"%/{assistant_context_id}"),
+                            Context.name.like(f"%/{assistant_context_id}/%"),
                         ),
                     )
                     .all()
                 )
                 for ctx in contexts_to_delete:
-                    # context_dao.delete() handles sibling cleanup automatically
-                    # for Assistants projects (removes logs from All/* and User/All/*)
                     context_dao.delete(ctx.id)
 
                 logs_deleted = len(contexts_to_delete) > 0
@@ -2224,243 +2214,6 @@ def transfer_assistant_to_personal(
         )
 
 
-@admin_router.post(
-    "/assistant/recordings",
-    response_model=InfoResponse[RecordingInfo],
-    status_code=status.HTTP_200_OK,
-    summary="Add a call recording for an assistant",
-    description="Uploads a new call recording for the specified assistant.",
-    tags=["Recordings"],
-    responses={
-        200: {
-            "description": "Recording added successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": {
-                            "id": 123,
-                            "url": "https://storage.example.com/recordings/call_123.mp3",
-                            "created_at": "2025-05-08T14:30:00Z",
-                        },
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Assistant Not Found",
-            "content": {
-                "application/json": {"example": {"detail": "Assistant not found."}},
-            },
-        },
-        400: {
-            "description": "Recording Error",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "Error processing recording."},
-                },
-            },
-        },
-    },
-)
-async def create_recording(
-    recording: RecordingCreate,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[RecordingInfo]:
-    """
-    Add a new call recording for the specified assistant.
-
-    This endpoint allows uploading a call recording by providing base64-encoded audio data.
-    The system will decode the audio, store it securely, and associate it with the assistant.
-    """
-    assistant_dao = AssistantDAO(session)
-    recording_dao = RecordingDAO(session)
-    bucket_service = BucketService()
-    recording_service = CallRecordingService(
-        assistant_dao=assistant_dao,
-        recording_dao=recording_dao,
-        bucket_service=bucket_service,
-    )
-    try:
-        mime = recording.content_type or "application/octet-stream"
-        recording_model = await recording_service.record_call(
-            user_id=recording.user_id,
-            agent_id=recording.assistant_id,
-            conference_name=recording.conference_name,
-            recording_raw=recording.recording_raw,
-            content_type=mime,
-            is_staging=settings.is_staging,
-        )
-
-        return InfoResponse(
-            info=RecordingInfo(
-                id=recording_model.id,
-                url=recording_model.url,
-                created_at=recording_model.created_at,
-            ),
-        )
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error processing recording: {str(e)}",
-        )
-
-
-@router.get(
-    "/assistant/{assistant_id}/recordings",
-    response_model=InfoResponse[List[RecordingInfo]],
-    status_code=status.HTTP_200_OK,
-    summary="List all recordings for an assistant",
-    description="Returns a list of all call recordings for the specified assistant.",
-    tags=["Recordings"],
-    responses={
-        200: {
-            "description": "List of recordings retrieved successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": [
-                            {
-                                "id": 123,
-                                "url": "https://storage.example.com/recordings/call_123.mp3",
-                                "created_at": "2025-05-08T14:30:00Z",
-                            },
-                            {
-                                "id": 124,
-                                "url": "https://storage.example.com/recordings/call_124.mp3",
-                                "created_at": "2025-05-09T10:15:00Z",
-                            },
-                        ],
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Assistant Not Found",
-            "content": {
-                "application/json": {"example": {"detail": "Assistant not found."}},
-            },
-        },
-    },
-)
-def list_recordings(
-    assistant_id: int,
-    request: Request,
-    session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
-) -> InfoResponse[List[RecordingInfo]]:
-    """
-    List all call recordings for the specified assistant.
-
-    Retrieves all call recordings associated with the assistant, including their
-    URLs and creation timestamps.
-    """
-    assistant_dao = AssistantDAO(session)
-    recording_dao = RecordingDAO(session)
-    try:
-        # Verify assistant exists and belongs to user
-        assistant = assistant_dao.get_assistant_by_id(
-            user_id=request.state.user_id,
-            agent_id=assistant_id,
-        )
-        if not assistant:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assistant not found.",
-            )
-
-        recordings = recording_dao.list_recordings(agent_id=assistant_id)
-
-        return InfoResponse(
-            info=[
-                RecordingInfo(
-                    id=recording.id,
-                    url=recording.url,
-                    created_at=recording.created_at,
-                )
-                for recording in recordings
-            ],
-        )
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error fetching recordings: {str(e)}",
-        )
-
-
-@router.delete(
-    "/assistant/{assistant_id}/recordings/{recording_id}",
-    status_code=status.HTTP_200_OK,
-    summary="Delete a recording",
-    description="Deletes a specific call recording by ID for the specified assistant.",
-    responses={
-        200: {
-            "description": "Recording deleted successfully",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Recording deleted successfully"},
-                },
-            },
-        },
-        404: {
-            "description": "Recording Not Found",
-            "content": {
-                "application/json": {"example": {"detail": "Recording not found."}},
-            },
-        },
-    },
-)
-def delete_recording(
-    assistant_id: int,
-    recording_id: int,
-    request: Request,
-    session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
-) -> InfoResponse[str]:
-    """
-    Delete a call recording by ID for the specified assistant.
-
-    Permanently removes the specified recording from the system.
-    This action cannot be undone.
-    """
-    assistant_dao = AssistantDAO(session)
-    recording_dao = RecordingDAO(session)
-    try:
-        # Verify assistant exists and belongs to user
-        assistant = assistant_dao.get_assistant_by_id(
-            user_id=request.state.user_id,
-            agent_id=assistant_id,
-        )
-        if not assistant:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assistant not found.",
-            )
-
-        # Delete the recording
-        success = recording_dao.delete_recording(
-            recording_id=recording_id,
-            agent_id=assistant_id,
-        )
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Recording not found.",
-            )
-
-        return InfoResponse(info="Recording deleted successfully")
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error deleting recording: {str(e)}",
-        )
-
-
 @router.post(
     "/assistant/voice",
     response_model=InfoResponse[VoiceRead],
@@ -2509,7 +2262,6 @@ def register_voice(
     voice_in: VoiceCreate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     dao = VoiceDAO(session)
     try:
@@ -2583,7 +2335,6 @@ async def clone_voice(
     gender: Optional[str] = Form(None, example="female"),
     provider: str = Form("cartesia"),
     file: UploadFile = File(..., example="voice_sample.wav"),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -2759,7 +2510,6 @@ async def clone_voice(
 def list_voices(
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[VoiceRead]]:
     """
     List all voices saved by the authenticated user.
@@ -2822,7 +2572,6 @@ async def delete_voice(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -2928,7 +2677,6 @@ async def generate_speech(
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> Response:
     user_id = request.state.user_id
     audio_bytes: bytes
@@ -3006,7 +2754,6 @@ async def design_voice_generate_previews_endpoint(
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceDesignGeneratePreviewsAPIResponse]:
     user_id = request.state.user_id
     final_voice_description = request_data.voice_description
@@ -3091,7 +2838,6 @@ async def design_voice_create_from_preview_endpoint(
     elevenlabs_service: ElevenLabsService = Depends(),
     deepgram_service: DeepgramService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -3277,7 +3023,6 @@ def create_secret(
     secret_in: SecretCreate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[SecretRead]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -3344,7 +3089,6 @@ def update_secret(
     secret_in: SecretUpdate,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[SecretRead]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -3403,7 +3147,6 @@ def delete_secret(
     secret_name: str,
     request: Request,
     session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[dict]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -3449,7 +3192,6 @@ def delete_secret(
 async def upload_assistant_photo(
     request: Request,
     file: UploadFile = File(..., example="assistant_photo.jpg"),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3509,7 +3251,6 @@ async def upload_assistant_photo(
 async def upload_assistant_video(
     request: Request,
     file: UploadFile = File(..., example="assistant_video.mp4"),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3572,7 +3313,6 @@ async def generate_assistant_photo(
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
     openai_service: OpenAIService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Generate a new assistant profile photo from a text prompt.
@@ -3581,7 +3321,7 @@ async def generate_assistant_photo(
     text prompt. The user's account is charged for this operation.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    organization_id = getattr(request.state, "organization_id", None)
 
     # 1. Moderate the prompt
     try:
@@ -3599,8 +3339,14 @@ async def generate_assistant_photo(
 
     # 2. Pre-check credits if not in staging
     if not settings.is_staging:
-        user = users_dao.get_user_with_id(user_id)
-        if user.credits < settings.photo_generation_cost:
+        try:
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Billing is not set up. Please add a payment method first.",
+            )
+        if billing_entity.credits < settings.photo_generation_cost:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Insufficient credits to generate a photo.",
@@ -3619,9 +3365,13 @@ async def generate_assistant_photo(
 
         # 4. Deduct credits after successful generation if not in staging
         if not settings.is_staging:
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(settings.photo_generation_cost),
+            from orchestra.lib.billing import deduct_credits
+
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(
+                session,
+                billing_entity,
+                Decimal(str(settings.photo_generation_cost)),
             )
             session.commit()
 
@@ -3667,7 +3417,6 @@ async def edit_assistant_photo(
     aspect_ratio: str = Form("match_input_image", example="1:1"),
     output_format: str = Form("jpg", example="jpg"),
     safety_tolerance: float = Form(2.0, example=2.0),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Edit an assistant profile photo using a text prompt and an input image.
@@ -3677,7 +3426,8 @@ async def edit_assistant_photo(
     The user's account is charged for this operation.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    organization_id = getattr(request.state, "organization_id", None)
+
     temp_gcs_url_to_delete: Optional[str] = None
     input_image_for_replicate: Optional[str] = None
 
@@ -3752,8 +3502,14 @@ async def edit_assistant_photo(
 
         # 2. Pre-check credits if not in staging
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.photo_generation_cost:
+            try:
+                billing_entity = get_billing_entity(session, user_id, organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Billing is not set up. Please add a payment method first.",
+                )
+            if billing_entity.credits < settings.photo_generation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to edit a photo.",
@@ -3770,9 +3526,13 @@ async def edit_assistant_photo(
 
         # 4. Deduct credits after successful edit if not in staging
         if not settings.is_staging:
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(settings.photo_generation_cost),
+            from orchestra.lib.billing import deduct_credits
+
+            edit_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(
+                session,
+                edit_entity,
+                Decimal(str(settings.photo_generation_cost)),
             )
             session.commit()
 
@@ -3829,10 +3589,9 @@ async def animate_video_endpoint(
     audio_file: Optional[UploadFile] = File(None),
     seed: Optional[int] = Form(None),
     duration: Optional[int] = Form(None),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    organization_id = getattr(request.state, "organization_id", None)
 
     temp_image_gcs_url: Optional[str] = None
     final_image_url_for_replicate: Optional[str] = None
@@ -3871,7 +3630,7 @@ async def animate_video_endpoint(
                     detail="Invalid file type for 'image_file'. Only images are allowed.",
                 )
             image_content = await image_file.read()
-            (public_img_url, gcs_img_url) = bucket_service.upload_temp_assistant_file(
+            public_img_url, gcs_img_url = bucket_service.upload_temp_assistant_file(
                 image_content,
                 user_id,
                 image_file.content_type,
@@ -3961,10 +3720,17 @@ async def animate_video_endpoint(
 
         # Pre-check credits (assuming video_generation_cost is defined in settings)
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.video_generation_cost * (
+            try:
+                billing_entity = get_billing_entity(session, user_id, organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Billing is not set up. Please add a payment method first.",
+                )
+            video_cost = settings.video_generation_cost * (
                 duration if duration is not None else settings.default_video_duration
-            ):
+            )
+            if billing_entity.credits < video_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to generate video.",
@@ -3981,9 +3747,13 @@ async def animate_video_endpoint(
 
         # Deduct credits after successful generation
         if not settings.is_staging:
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(settings.video_generation_cost),
+            from orchestra.lib.billing import deduct_credits
+
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(
+                session,
+                billing_entity,
+                Decimal(str(settings.video_generation_cost)),
             )
             session.commit()
 
@@ -4046,7 +3816,6 @@ def get_animation_prediction(
     prediction_id: str,
     request: Request,
     replicate_service: ReplicateService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.get_prediction(prediction_id)
@@ -4071,7 +3840,6 @@ def cancel_animation_prediction(
     prediction_id: str,
     request: Request,
     replicate_service: ReplicateService = Depends(),
-    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.cancel_prediction(prediction_id)
@@ -4188,7 +3956,7 @@ def admin_update_user_by_assistant(
     For org assistants: finds the org member by email and updates their profile.
     """
     assistant_dao = AssistantDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
 
     # Get assistant without user/org context (admin bypass)
@@ -4205,13 +3973,13 @@ def admin_update_user_by_assistant(
     if assistant.organization_id is None:
         # Personal assistant: check if target_user_email matches owner
         assistant_type = "personal"
-        owner = auth_user_dao.get_by_id(assistant.user_id)
+        owner = user_dao.get_by_id(assistant.user_id)
         if not owner:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant owner not found.",
             )
-        # owner is a tuple (AuthUser,)
+        # owner is a tuple (User,)
         owner_user = owner[0]
         if owner_user.email != request_body.target_user_email:
             raise HTTPException(
@@ -4228,7 +3996,7 @@ def admin_update_user_by_assistant(
         # Find member whose email matches target_user_email
         for member_tuple in members:
             member = member_tuple[0]
-            user_row = auth_user_dao.get_by_id(member.user_id)
+            user_row = user_dao.get_by_id(member.user_id)
             if user_row:
                 user = user_row[0]
                 if user.email == request_body.target_user_email:
@@ -4257,7 +4025,7 @@ def admin_update_user_by_assistant(
 
     # Update the user
     try:
-        auth_user_dao.update(id=target_user_id, **update_kwargs)
+        user_dao.update(id=target_user_id, **update_kwargs)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -4355,9 +4123,9 @@ def admin_update_assistant(
 
 @admin_router.get(
     "/assistant",
-    response_model=InfoResponse[List[AssistantRead]],
     summary="Admin: list all assistants",
-    description="Retrieve every assistant in the system, optionally filtered by phone or email.",
+    description="Retrieve every assistant in the system, optionally filtered by phone or email. "
+    "Use 'fields' parameter for selective field retrieval to improve performance.",
     tags=["Assistants", "Admin"],
 )
 def admin_list_all_assistants(
@@ -4385,10 +4153,22 @@ def admin_list_all_assistants(
         None,
         description="Only return assistants whose agent_id matches this value.",
     ),
+    from_fields: Optional[str] = Query(
+        None,
+        description="Comma-separated list of fields to return (e.g., 'email,agent_id,phone'). "
+        "If omitted, returns full AssistantRead objects. Using this parameter skips "
+        "expensive lookups (api_key, secrets, user info) when those fields aren't requested.",
+        example="email,agent_id,first_name",
+    ),
     session: Session = Depends(get_db_session),
-) -> InfoResponse[List[AssistantRead]]:
+):
     """
-    List all assistants in the system with optional filtering by phone or email.
+    List all assistants in the system with optional filtering and field selection.
+
+    When 'from_fields' is specified, returns only the requested fields, skipping expensive
+    database lookups for unrequested fields like api_key, secrets, and user details.
+
+    When 'from_fields' is omitted, returns full AssistantRead objects.
     """
     # Normalize filter parameters to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
@@ -4397,8 +4177,33 @@ def admin_list_all_assistants(
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    user_dao = UserDAO(session)
     secret_dao = AssistantSecretDAO(session)
+
+    # Dynamically get all valid field names from AssistantRead model
+    VALID_FIELDS = set(AssistantRead.model_fields.keys())
+
+    # Parse and validate requested fields before any database operations
+    requested_fields: Optional[set] = None
+    if from_fields is not None and from_fields.strip():
+        raw_fields = [f.strip() for f in from_fields.split(",") if f.strip()]
+
+        if not raw_fields:
+            raise HTTPException(
+                status_code=422,
+                detail="The 'from_fields' parameter cannot be empty. Provide comma-separated field names.",
+            )
+
+        invalid_fields = [f for f in raw_fields if f not in VALID_FIELDS]
+        if invalid_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid field name(s): {', '.join(sorted(invalid_fields))}. "
+                f"Valid fields are: {', '.join(sorted(VALID_FIELDS))}",
+            )
+
+        requested_fields = set(raw_fields)
+
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -4412,10 +4217,8 @@ def admin_list_all_assistants(
         # Get API key based on assistant type (personal vs organizational)
         def get_api_key_for_assistant(assistant):
             if assistant.organization_id is None:
-                # Personal assistant - get user's personal API key
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
-                # Org assistant - get org API key
                 keys = api_key_dao.filter(organization_id=assistant.organization_id)
             return keys[0][0].key if keys else None
 
@@ -4427,50 +4230,51 @@ def admin_list_all_assistants(
             )
             return {s.secret_name: s.secret_value for s in secrets}
 
-        api_keys = [get_api_key_for_assistant(a) for a in assistants]
-        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
-        user_ids = [a.user_id for a in assistants]
-        auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
-        return InfoResponse(
-            info=[
-                AssistantRead(
-                    agent_id=str(a.agent_id),
-                    user_id=a.user_id,
-                    organization_id=a.organization_id,
-                    first_name=a.first_name,
-                    surname=a.surname,
-                    age=a.age,
-                    nationality=a.nationality,
-                    profile_photo=a.profile_photo,
-                    profile_video=a.profile_video,
-                    desktop_url=a.desktop_url,
-                    desktop_mode=a.desktop_mode,
-                    is_user_desktop=a.is_user_desktop,
-                    about=a.about,
-                    weekly_limit=float(a.weekly_limit)
-                    if a.weekly_limit is not None
-                    else None,
-                    max_parallel=a.max_parallel,
-                    created_at=a.created_at,
-                    updated_at=a.updated_at,
-                    phone=a.phone,
-                    user_phone=a.user_phone,
-                    email=a.email,
-                    user_whatsapp_number=a.user_whatsapp_number,
-                    assistant_whatsapp_number=a.assistant_whatsapp_number,
-                    voice_id=a.voice_id,
-                    voice_provider=a.voice_provider,
-                    voice_mode=a.voice_mode,
-                    timezone=a.timezone,
-                    api_key=api_keys[i],
-                    user_first_name=auth_users[i].name,
-                    user_last_name=auth_users[i].last_name,
-                    user_email=auth_users[i].email,
-                    secrets=secrets_list[i],
-                )
-                for i, a in enumerate(assistants)
-            ],
+        # Perform expensive lookups only if needed
+        api_keys = (
+            [get_api_key_for_assistant(a) for a in assistants]
+            if (requested_fields is None or "api_key" in requested_fields)
+            else None
         )
+        secrets_list = (
+            [get_secrets_for_assistant(a) for a in assistants]
+            if (requested_fields is None or "secrets" in requested_fields)
+            else None
+        )
+        users = (
+            [user_dao.get_by_id(a.user_id)[0] for a in assistants]
+            if (
+                requested_fields is None
+                or bool(
+                    requested_fields
+                    & {"user_email", "user_first_name", "user_last_name"},
+                )
+            )
+            else None
+        )
+
+        # Build AssistantRead objects
+        assistant_reads = [
+            _build_assistant_read(
+                a,
+                session,
+                api_key=api_keys[i] if api_keys else None,
+                user_first_name=users[i].name if users else None,
+                user_last_name=users[i].last_name if users else None,
+                user_email=users[i].email if users else None,
+                secrets=secrets_list[i] if secrets_list else None,
+            )
+            for i, a in enumerate(assistants)
+        ]
+
+        # If from_fields were requested, filter using Pydantic's model_dump
+        if requested_fields is not None:
+            result = [ar.model_dump(include=requested_fields) for ar in assistant_reads]
+            return InfoResponse(info=result)
+
+        # No from_fields parameter - return full AssistantRead objects
+        return InfoResponse(info=assistant_reads)
+
     except Exception as e:
         raise HTTPException(
             status_code=400,
@@ -4577,36 +4381,9 @@ def admin_update_assistant_by_filter(
 
     # Return updated assistant
     return InfoResponse(
-        info=AssistantRead(
-            agent_id=str(updated.agent_id),
-            user_id=updated.user_id,
-            organization_id=updated.organization_id,
-            first_name=updated.first_name,
-            surname=updated.surname,
-            age=updated.age,
-            nationality=updated.nationality,
-            profile_photo=updated.profile_photo,
-            profile_video=updated.profile_video,
-            desktop_url=updated.desktop_url,
-            desktop_mode=updated.desktop_mode,
-            is_user_desktop=updated.is_user_desktop,
-            about=updated.about,
-            phone_country=updated.phone_country,
-            weekly_limit=float(updated.weekly_limit)
-            if updated.weekly_limit is not None
-            else None,
-            max_parallel=updated.max_parallel,
-            created_at=updated.created_at,
-            updated_at=updated.updated_at,
-            phone=updated.phone,
-            user_phone=updated.user_phone,
-            email=updated.email,
-            user_whatsapp_number=updated.user_whatsapp_number,
-            assistant_whatsapp_number=updated.assistant_whatsapp_number,
-            voice_id=updated.voice_id,
-            voice_provider=updated.voice_provider,
-            voice_mode=updated.voice_mode,
-            timezone=updated.timezone,
+        info=_build_assistant_read(
+            updated,
+            session,
             api_key=api_key,
             secrets=secrets_dict,
         ),
@@ -4683,35 +4460,9 @@ def admin_list_assistants_for_user(
 
         return InfoResponse(
             info=[
-                AssistantRead(
-                    agent_id=str(a.agent_id),
-                    user_id=a.user_id,
-                    organization_id=a.organization_id,
-                    first_name=a.first_name,
-                    surname=a.surname,
-                    age=a.age,
-                    nationality=a.nationality,
-                    profile_photo=a.profile_photo,
-                    profile_video=a.profile_video,
-                    desktop_url=a.desktop_url,
-                    desktop_mode=a.desktop_mode,
-                    is_user_desktop=a.is_user_desktop,
-                    about=a.about,
-                    weekly_limit=float(a.weekly_limit)
-                    if a.weekly_limit is not None
-                    else None,
-                    max_parallel=a.max_parallel,
-                    created_at=a.created_at,
-                    updated_at=a.updated_at,
-                    phone=a.phone,
-                    user_phone=a.user_phone,
-                    email=a.email,
-                    user_whatsapp_number=a.user_whatsapp_number,
-                    assistant_whatsapp_number=a.assistant_whatsapp_number,
-                    voice_id=a.voice_id,
-                    voice_provider=a.voice_provider,
-                    voice_mode=a.voice_mode,
-                    timezone=a.timezone,
+                _build_assistant_read(
+                    a,
+                    session,
                     api_key=api_keys[i],
                     secrets=secrets_list[i],
                 )
@@ -4823,3 +4574,574 @@ def admin_list_contacts(
         contact["user_id"] = user_map.get(eid)
         results.append(contact)
     return results
+
+
+# ============================================================================
+# Spending Limit Endpoints
+# ============================================================================
+
+
+@router.get(
+    "/assistant/{agent_id}/spending-limit",
+    response_model=AssistantSpendingLimitResponse,
+    responses={
+        200: {
+            "description": "Spending limit retrieved successfully",
+        },
+        404: {
+            "description": "Assistant not found",
+        },
+    },
+)
+async def get_assistant_spending_limit(
+    request: Request,
+    agent_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Get the monthly spending limit for an assistant.
+
+    Returns the assistant's limit and effective limit (considering parent limits).
+    """
+    user_id = request.state.user_id
+
+    # Get the assistant and verify access
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    # Verify user owns the assistant
+    if assistant.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    # Get the limit
+    monthly_cap = assistant_dao.get_spending_cap(agent_id)
+
+    # Calculate effective limit based on context
+    effective_limit = monthly_cap
+    if assistant.organization_id is not None:
+        # Org assistant - check member and org limits
+        from orchestra.db.dao.organization_dao import OrganizationDAO
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+
+        org_dao = OrganizationDAO(session)
+        org_member_dao = OrganizationMemberDAO(session)
+
+        org = org_dao.get(assistant.organization_id)
+        member = org_member_dao.get_member(user_id, assistant.organization_id)
+
+        parent_limits = []
+        if member and member.monthly_spending_cap is not None:
+            parent_limits.append(float(member.monthly_spending_cap))
+        if org and org.monthly_spending_cap is not None:
+            parent_limits.append(float(org.monthly_spending_cap))
+
+        if parent_limits:
+            parent_limit = min(parent_limits)
+            if effective_limit is None:
+                effective_limit = parent_limit
+            else:
+                effective_limit = min(effective_limit, parent_limit)
+    else:
+        # Personal assistant - check user limit
+        user_row = UserDAO(session).get_by_id(user_id)
+        if user_row:
+            user = user_row[0]
+            if user.monthly_spending_cap is not None:
+                parent_limit = float(user.monthly_spending_cap)
+                if effective_limit is None:
+                    effective_limit = parent_limit
+                else:
+                    effective_limit = min(effective_limit, parent_limit)
+
+    return AssistantSpendingLimitResponse(
+        agent_id=agent_id,
+        monthly_spending_cap=monthly_cap,
+        effective_limit=effective_limit,
+    )
+
+
+@router.put(
+    "/assistant/{agent_id}/spending-limit",
+    response_model=AssistantSpendingLimitResponse,
+    responses={
+        200: {
+            "description": "Spending limit set successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "agent_id": 123,
+                        "monthly_spending_cap": 100.00,
+                        "effective_limit": 100.00,
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid limit",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Assistant limit cannot exceed user limit ($50.00)",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Assistant not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Assistant not found."},
+                },
+            },
+        },
+    },
+)
+async def set_assistant_spending_limit(
+    request: Request,
+    agent_id: int,
+    body: SpendingLimitRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Set the monthly spending limit for an assistant.
+
+    For personal assistants (no organization):
+    - Limit cannot exceed the user's personal spending limit
+
+    For organizational assistants:
+    - Limit cannot exceed the member's org spending limit
+    - Limit cannot exceed the organization's spending limit
+
+    Setting to null removes the limit.
+    """
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    try:
+        result = assistant_dao.set_spending_cap(
+            agent_id=agent_id,
+            user_id=user_id,
+            monthly_spending_cap=body.monthly_spending_cap,
+        )
+        session.commit()
+
+        return AssistantSpendingLimitResponse(
+            agent_id=agent_id,
+            monthly_spending_cap=result.monthly_spending_cap,
+            effective_limit=result.effective_limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============================================================================
+# Admin Spend Endpoints (for UniLLM service calls)
+# ============================================================================
+
+
+@admin_router.get("/assistant/{agent_id}/spend")
+def admin_get_assistant_spend(
+    agent_id: int,
+    month: str = Query(
+        ...,
+        description="Month in YYYY-MM format",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        examples=["2026-01"],
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """
+    Admin endpoint: Get an assistant's cumulative spend for a given month.
+
+    This endpoint is for internal service calls (e.g., UniLLM) and does not
+    require the caller to own the assistant.
+    """
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
+    limit = assistant_dao.get_spending_cap(agent_id)
+
+    percent_used = None
+    if limit is not None and limit > 0:
+        percent_used = round((cumulative_spend / limit) * 100, 2)
+
+    # Include credit balance from the billing account (for credit guard checks).
+    # The billing account comes from the org (if org assistant) or the user.
+    credit_balance = None
+    if assistant.organization_id is not None:
+        from orchestra.db.models.orchestra_models import Organization
+
+        org = (
+            session.query(Organization)
+            .filter(Organization.id == assistant.organization_id)
+            .first()
+        )
+        if org and org.billing_account:
+            credit_balance = float(org.billing_account.credits)
+    else:
+        from orchestra.db.models.orchestra_models import User
+
+        user = session.query(User).filter(User.id == assistant.user_id).first()
+        if user and user.billing_account:
+            credit_balance = float(user.billing_account.credits)
+
+    return AssistantSpendResponse(
+        agent_id=agent_id,
+        month=month,
+        cumulative_spend=cumulative_spend,
+        limit=limit,
+        limit_set_at=assistant.monthly_spending_cap_set_at,
+        percent_used=percent_used,
+        credit_balance=credit_balance,
+    )
+
+
+# ============================================================================
+# Demo Assistant Endpoints
+# ============================================================================
+
+
+@demo_router.post(
+    "/assistant",
+    response_model=InfoResponse[AssistantRead],
+    status_code=status.HTTP_200_OK,
+    summary="Create a demo assistant",
+    description="Create a demo assistant by cloning from a source assistant. Only available to Unify organization members.",
+    tags=["Demo Assistants"],
+    include_in_schema=False,  # Hidden from public API docs
+)
+async def create_demo_assistant(
+    request: Request,
+    demo_create: DemoAssistantCreate,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    """
+    Create a demo assistant for product demonstrations.
+
+    This endpoint is only available to members of the Unify organization.
+    It clones configuration from a source assistant and provisions phone
+    infrastructure for demo calls.
+    """
+    user_id = request.state.user_id
+
+    # Validate user is in Unify organization
+    unify_org_name = settings.orchestra_organization_name
+
+    # Get the Unify organization
+    org_query = (
+        session.query(Organization)
+        .filter(
+            Organization.name == unify_org_name,
+        )
+        .first()
+    )
+
+    if not org_query:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo assistant creation requires Unify organization membership.",
+        )
+
+    # Check if user is a member of the Unify organization
+    member = (
+        session.query(OrganizationMember)
+        .filter(
+            OrganizationMember.user_id == user_id,
+            OrganizationMember.organization_id == org_query.id,
+        )
+        .first()
+    )
+
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a member of the Unify organization to create demo assistants.",
+        )
+
+    # Get the source assistant
+    assistant_dao = AssistantDAO(session)
+    source_assistant = assistant_dao.get_assistant_by_agent_id(
+        agent_id=demo_create.source_assistant_id,
+    )
+
+    if not source_assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Source assistant {demo_create.source_assistant_id} not found or you don't have access to it.",
+        )
+
+    # Check name uniqueness for the new assistant
+    existing = assistant_dao.get_assistant_by_name(
+        user_id=user_id,
+        first_name=demo_create.first_name,
+        surname=demo_create.surname,
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"An assistant with name '{demo_create.first_name} {demo_create.surname}' already exists.",
+        )
+
+    try:
+        # Create the demo metadata (including optional prospect details)
+        demo_meta = DemoAssistantMeta(
+            source_assistant_id=source_assistant.agent_id,
+            demoer_user_id=user_id,
+            label=demo_create.label,
+            # Optional prospect details for pre-populating boss contact
+            prospect_first_name=demo_create.prospect_first_name,
+            prospect_surname=demo_create.prospect_surname,
+            prospect_email=demo_create.prospect_email,
+            prospect_phone=demo_create.prospect_phone,
+        )
+        session.add(demo_meta)
+        session.flush()  # Get the demo_meta.id
+
+        # Create the demo assistant, cloning config from source
+        demo_assistant = Assistant(
+            user_id=user_id,
+            organization_id=None,  # Personal assistant for the demoer
+            first_name=demo_create.first_name,
+            surname=demo_create.surname,
+            # Clone from source
+            age=source_assistant.age,
+            nationality=source_assistant.nationality,
+            about=source_assistant.about,
+            profile_photo=source_assistant.profile_photo,
+            profile_video=source_assistant.profile_video,
+            voice_id=source_assistant.voice_id,
+            voice_provider=source_assistant.voice_provider,
+            voice_mode=source_assistant.voice_mode,
+            # Demo-specific settings
+            user_phone=demo_create.demoer_phone,
+            timezone="UTC",  # Default timezone for demos
+            monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),
+            # Link to demo metadata
+            demo_id=demo_meta.id,
+        )
+        session.add(demo_assistant)
+        session.flush()  # Get the agent_id
+
+        # Provision phone infrastructure
+        # Use provided phone_country, fallback to source assistant's country, then default to US
+        phone_country = demo_create.phone_country or "US"
+        try:
+            phone_response = await create_phone_number(
+                phone_country=phone_country,
+                is_staging=settings.is_staging,
+            )
+            if "detail" in phone_response:
+                raise Exception(f"Phone creation failed: {phone_response['detail']}")
+            demo_assistant.phone = phone_response.get("phoneNumber")
+            demo_assistant.phone_country = phone_country
+        except Exception as e:
+            logging.error(f"Failed to provision phone for demo assistant: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to provision phone number: {str(e)}",
+            )
+
+        # Optionally provision email infrastructure
+        if demo_create.provision_email:
+            try:
+                email_local = assistant_dao.generate_unique_email_local(
+                    demo_create.first_name,
+                    demo_create.surname,
+                )
+                email_response = await create_email(
+                    email_local,
+                    demo_create.first_name,
+                    demo_create.surname,
+                )
+                if "detail" in email_response:
+                    raise Exception(
+                        f"Email creation failed: {email_response['detail']}",
+                    )
+                created_email = email_response.get("user", {}).get("primaryEmail")
+                demo_assistant.email = created_email
+                logging.info(f"Email provisioned for demo assistant: {created_email}")
+
+                # Wait and set up email watch
+                await asyncio.sleep(10)
+                watch_response = await watch_email(
+                    created_email,
+                    is_staging=settings.is_staging,
+                )
+                if "detail" in watch_response:
+                    logging.warning(
+                        f"Email watch setup failed for demo assistant: {watch_response['detail']}",
+                    )
+            except Exception as e:
+                logging.error(f"Failed to provision email for demo assistant: {e}")
+                # Don't fail the whole creation - email is optional
+                # The phone is already provisioned, so we continue
+
+        # Create pubsub topic
+        try:
+            await create_pubsub_topic(
+                str(demo_assistant.agent_id),
+                is_staging=settings.is_staging,
+            )
+        except Exception as e:
+            logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
+
+        # Commit the transaction BEFORE waking up the assistant
+        # This ensures the assistant is visible to Adapters when it queries Orchestra
+        session.commit()
+
+        # Wake up the assistant with demo mode
+        # This must happen AFTER commit so Adapters can find the assistant in the database
+        try:
+            await wake_up_assistant(
+                str(demo_assistant.agent_id),
+                is_staging=settings.is_staging,
+            )
+        except Exception as e:
+            logging.warning(f"Failed to wake up demo assistant: {e}")
+
+        return InfoResponse(
+            info=_build_assistant_read(demo_assistant, session),
+        )
+
+    except IntegrityError as e:
+        session.rollback()
+        logging.error(f"Database integrity error creating demo assistant: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to create demo assistant due to a constraint violation.",
+        )
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Unexpected error creating demo assistant: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create demo assistant: {str(e)}",
+        )
+
+
+@demo_router.get(
+    "/assistant/{demo_id}/meta",
+    response_model=InfoResponse[DemoAssistantMetaRead],
+    status_code=status.HTTP_200_OK,
+    summary="Get demo assistant metadata",
+    description="Get metadata for a demo assistant.",
+    tags=["Demo Assistants"],
+    include_in_schema=False,  # Hidden from public API docs
+)
+async def get_demo_assistant_meta(
+    request: Request,
+    demo_id: int,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[DemoAssistantMetaRead]:
+    """
+    Get metadata for a demo assistant.
+
+    The caller must own an assistant with this demo_id.
+    """
+    user_id = request.state.user_id
+
+    # Verify the user owns an assistant with this demo_id
+    assistant = (
+        session.query(Assistant)
+        .filter(
+            Assistant.demo_id == demo_id,
+            Assistant.user_id == user_id,
+        )
+        .first()
+    )
+
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Demo assistant not found or you don't have access to it.",
+        )
+
+    # Get the demo metadata
+    demo_meta = (
+        session.query(DemoAssistantMeta)
+        .filter(
+            DemoAssistantMeta.id == demo_id,
+        )
+        .first()
+    )
+
+    if not demo_meta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Demo metadata not found.",
+        )
+
+    return InfoResponse(
+        info=DemoAssistantMetaRead(
+            id=demo_meta.id,
+            source_assistant_id=demo_meta.source_assistant_id,
+            demoer_user_id=demo_meta.demoer_user_id,
+            label=demo_meta.label,
+            created_at=demo_meta.created_at,
+            prospect_first_name=demo_meta.prospect_first_name,
+            prospect_surname=demo_meta.prospect_surname,
+            prospect_email=demo_meta.prospect_email,
+            prospect_phone=demo_meta.prospect_phone,
+        ),
+    )
+
+
+@demo_router.get(
+    "/assistant/meta/list",
+    response_model=InfoResponse[List[DemoAssistantMetaRead]],
+    status_code=status.HTTP_200_OK,
+    summary="List all demo assistant metadata for current user",
+    description="List all demo assistant metadata for the authenticated user.",
+    tags=["Demo Assistants"],
+    include_in_schema=False,  # Hidden from public API docs
+)
+async def list_demo_assistant_meta(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[List[DemoAssistantMetaRead]]:
+    """
+    List all demo assistant metadata for the authenticated user.
+
+    Returns metadata for all demo assistants owned by the current user,
+    including labels and prospect details for UI display.
+    """
+    user_id = request.state.user_id
+
+    # Get all demo meta entries for assistants owned by this user
+    demo_metas = (
+        session.query(DemoAssistantMeta)
+        .join(
+            Assistant,
+            Assistant.demo_id == DemoAssistantMeta.id,
+        )
+        .filter(
+            Assistant.user_id == user_id,
+        )
+        .order_by(DemoAssistantMeta.created_at.desc())
+        .all()
+    )
+
+    return InfoResponse(
+        info=[
+            DemoAssistantMetaRead(
+                id=meta.id,
+                source_assistant_id=meta.source_assistant_id,
+                demoer_user_id=meta.demoer_user_id,
+                label=meta.label,
+                created_at=meta.created_at,
+                prospect_first_name=meta.prospect_first_name,
+                prospect_surname=meta.prospect_surname,
+                prospect_email=meta.prospect_email,
+                prospect_phone=meta.prospect_phone,
+            )
+            for meta in demo_metas
+        ],
+    )

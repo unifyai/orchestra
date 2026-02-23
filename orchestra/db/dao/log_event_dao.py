@@ -145,6 +145,7 @@ class LogEventDAO:
                         context_id=context_id,
                         unique_keys=unique_keys or {},
                         provided_values=provided_unique_ids,
+                        log_event_ids=log_event_ids,
                     )
                 except ValueError as e:
                     # Convert ValueError to a more user-friendly error
@@ -373,9 +374,11 @@ class LogEventDAO:
 
         for key, value in filters.items():
             query = query.where(
-                LogEvent.data[key].astext == str(value)
-                if isinstance(value, str)
-                else LogEvent.data[key] == cast(literal(value), JSONB),
+                (
+                    LogEvent.data[key].astext == str(value)
+                    if isinstance(value, str)
+                    else LogEvent.data[key] == cast(literal(value), JSONB)
+                ),
             )
         result = self.session.execute(query)
         return [row[0] for row in result]
@@ -501,6 +504,7 @@ class LogEventDAO:
         context_id: int,
         unique_keys: Dict[str, str],
         provided_values: List[Dict[str, Any]],
+        log_event_ids: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generate composite key values for unique_keys and auto-counting fields.
@@ -697,6 +701,9 @@ class LogEventDAO:
             completed.append(ordered_row)
 
         if unique_key_columns:
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
+            # Step 1: Check for duplicates within the batch
             seen = set()
             for row in completed:
                 combo = tuple(row.get(col) for col in unique_key_columns)
@@ -710,27 +717,26 @@ class LogEventDAO:
                     )
                 seen.add(combo)
 
-            or_conditions = []
-            for row in completed:
-                combo = {col: row[col] for col in unique_key_columns}
-                or_conditions.append(
-                    LogEvent.data.op("@>")(cast(literal(json.dumps(combo)), JSONB)),
+            # Step 2: Check against existing data using UniqueConstraintDAO
+            unique_dao = UniqueConstraintDAO(self.session)
+
+            # Use real log_event_ids if provided, otherwise skip constraint insertion
+            if log_event_ids and len(log_event_ids) == len(completed):
+                log_entries = [
+                    (log_event_ids[i], {col: row[col] for col in unique_key_columns})
+                    for i, row in enumerate(completed)
+                ]
+
+                duplicate = unique_dao.check_composite_keys_batch(
+                    context_id=context_id,
+                    log_entries=log_entries,
+                    key_columns=list(unique_key_columns),
                 )
 
-            if or_conditions:
-                existing = (
-                    self.session.query(LogEvent.id)
-                    .join(
-                        LogEventContext,
-                        LogEventContext.log_event_id == LogEvent.id,
-                    )
-                    .filter(LogEventContext.context_id == context_id)
-                    .filter(or_(*or_conditions))
-                    .first()
-                )
-                if existing:
+                if duplicate:
+                    _, key_values = duplicate
                     raise ValueError(
-                        "Duplicate composite key already exists for this context.",
+                        f"Duplicate composite key already exists for this context: {key_values}",
                     )
 
         return completed
@@ -940,7 +946,7 @@ class LogEventDAO:
         field_type_map: Dict[tuple, FieldType] = {}
         if enum_field_info:
             or_conditions = []
-            for (proj_id, ctx_id, fld_name) in enum_field_info.keys():
+            for proj_id, ctx_id, fld_name in enum_field_info.keys():
                 if ctx_id is None:
                     or_conditions.append(
                         and_(
@@ -981,17 +987,17 @@ class LogEventDAO:
                 new_values = [v for v in values_in_batch if v not in existing_values]
 
                 if new_values and ft.enum_restrict:
-                    restricted_enum_errors[
-                        field_key
-                    ] = f"Value '{new_values[0]}' is not in allowed enum values for field '{field_name}': {existing_values}"
+                    restricted_enum_errors[field_key] = (
+                        f"Value '{new_values[0]}' is not in allowed enum values for field '{field_name}': {existing_values}"
+                    )
                 elif new_values:
                     fields_to_expand[field_key] = new_values
             else:
                 for v in values_in_batch:
                     if enum_values and v not in enum_values and enum_restrict:
-                        restricted_enum_errors[
-                            field_key
-                        ] = f"Value '{v}' is not in allowed enum values for field '{field_name}': {enum_values}"
+                        restricted_enum_errors[field_key] = (
+                            f"Value '{v}' is not in allowed enum values for field '{field_name}': {enum_values}"
+                        )
                         break
                 else:
                     fields_to_create.append(
@@ -1447,6 +1453,7 @@ class LogEventDAO:
                         value=non_null_val,
                         context_id=template.context_id,
                         field_category="derived_entry",
+                        mutable=False,  # Derived entries are always immutable
                         infer_type=True,
                     )
                 except Exception as e:

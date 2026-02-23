@@ -7,16 +7,20 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    ActiveDerivedLog,
     Context,
     ContextVersion,
+    Embedding,
+    EmbeddingQueue,
     LogEvent,
     LogEventContext,
     LogEventVersion,
+    LogUniqueConstraint,
     ProjectVersion,
 )
 from orchestra.db.utils import FKPathParser, PathSegment
@@ -51,6 +55,185 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
         text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
         {"log_event_ids": orphaned_ids},
     )
+
+
+def cleanup_orphaned_field_types(session: Session, context_id: int) -> None:
+    """
+    Delete FieldType records for fields that no longer exist in any log events
+    for the given context.
+
+    This is called after rollback to clean up field metadata for fields that
+    were created after the rolled-back commit point.
+    """
+    # Get all field names that currently exist in log events for this context
+    existing_fields_result = session.execute(
+        text(
+            """
+            SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+            """,
+        ),
+        {"context_id": context_id},
+    ).fetchall()
+
+    existing_field_names = {row[0] for row in existing_fields_result}
+
+    # Delete FieldType records for fields that no longer exist
+    # Only delete context-specific field types (context_id is not NULL)
+    if existing_field_names:
+        session.execute(
+            text(
+                """
+                DELETE FROM field_type
+                WHERE context_id = :context_id
+                  AND field_name NOT IN :existing_fields
+                """,
+            ),
+            {"context_id": context_id, "existing_fields": tuple(existing_field_names)},
+        )
+    else:
+        # No fields exist - delete all field types for this context
+        session.execute(
+            text(
+                """
+                DELETE FROM field_type
+                WHERE context_id = :context_id
+                """,
+            ),
+            {"context_id": context_id},
+        )
+
+
+def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) -> None:
+    """
+    Delete ActiveDerivedLog templates for derived fields that no longer exist
+    in any log events for the given context.
+
+    This is called after rollback to clean up derived field templates that were
+    created after the rolled-back commit point.
+    """
+    # Get all field names that currently exist in log events for this context
+    existing_fields_result = session.execute(
+        text(
+            """
+            SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+            """,
+        ),
+        {"context_id": context_id},
+    ).fetchall()
+
+    existing_field_names = {row[0] for row in existing_fields_result}
+
+    # Delete ActiveDerivedLog templates for derived fields that no longer exist
+    if existing_field_names:
+        session.execute(
+            text(
+                """
+                DELETE FROM active_derived_log_template
+                WHERE context_id = :context_id
+                  AND key NOT IN :existing_fields
+                """,
+            ),
+            {"context_id": context_id, "existing_fields": tuple(existing_field_names)},
+        )
+    else:
+        # No fields exist - delete all derived log templates for this context
+        session.execute(
+            text(
+                """
+                DELETE FROM active_derived_log_template
+                WHERE context_id = :context_id
+                """,
+            ),
+            {"context_id": context_id},
+        )
+
+
+def cleanup_plots_created_after_commit(
+    session: Session,
+    project_id: int,
+    context_name: str,
+    commit_timestamp: datetime,
+) -> int:
+    """
+    Delete Plot records that reference the given context and were created
+    after the commit timestamp.
+
+    This is called after rollback to clean up plots that were created after
+    the rolled-back commit point.
+
+    Returns:
+        Number of plots deleted.
+    """
+    result = session.execute(
+        text(
+            """
+            DELETE FROM plot
+            WHERE project_id = :project_id
+              AND project_config->>'context' = :context_name
+              AND created_at > :commit_timestamp
+            RETURNING id
+            """,
+        ),
+        {
+            "project_id": project_id,
+            "context_name": context_name,
+            "commit_timestamp": commit_timestamp,
+        },
+    )
+    deleted_count = len(result.fetchall())
+    if deleted_count > 0:
+        logger.info(
+            f"Deleted {deleted_count} plots created after rollback point for "
+            f"context '{context_name}' in project {project_id}",
+        )
+    return deleted_count
+
+
+def cleanup_table_views_created_after_commit(
+    session: Session,
+    project_id: int,
+    context_name: str,
+    commit_timestamp: datetime,
+) -> int:
+    """
+    Delete TableView records that reference the given context and were created
+    after the commit timestamp.
+
+    This is called after rollback to clean up table views that were created after
+    the rolled-back commit point.
+
+    Returns:
+        Number of table views deleted.
+    """
+    result = session.execute(
+        text(
+            """
+            DELETE FROM table_view
+            WHERE project_id = :project_id
+              AND project_config->>'context' = :context_name
+              AND created_at > :commit_timestamp
+            RETURNING id
+            """,
+        ),
+        {
+            "project_id": project_id,
+            "context_name": context_name,
+            "commit_timestamp": commit_timestamp,
+        },
+    )
+    deleted_count = len(result.fetchall())
+    if deleted_count > 0:
+        logger.info(
+            f"Deleted {deleted_count} table views created after rollback point for "
+            f"context '{context_name}' in project {project_id}",
+        )
+    return deleted_count
 
 
 class ContextDAO:
@@ -644,9 +827,9 @@ class ContextDAO:
             ref_context = self.filter(project_id=project_id, name=ref_context_name)
             if not ref_context:
                 # Referenced context doesn't exist - mark all logs using this FK as failed
-                valid_fk_values[
-                    (ref_context_name, ref_column, fk_path, is_nested)
-                ] = set()
+                valid_fk_values[(ref_context_name, ref_column, fk_path, is_nested)] = (
+                    set()
+                )
                 continue
 
             ref_context_id = ref_context[0][0].id
@@ -690,9 +873,9 @@ class ContextDAO:
                     # If conversion fails, skip this value
                     pass
 
-            valid_fk_values[
-                (ref_context_name, ref_column, fk_path, is_nested)
-            ] = valid_values
+            valid_fk_values[(ref_context_name, ref_column, fk_path, is_nested)] = (
+                valid_values
+            )
 
         # Step 3: Check each log's FK values against valid sets
         failed_validations = {}
@@ -759,9 +942,9 @@ class ContextDAO:
                 # Check if this FK was validated
                 if key not in valid_fk_values:
                     # Referenced context doesn't exist
-                    failed_validations[
-                        idx
-                    ] = f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist"
+                    failed_validations[idx] = (
+                        f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist"
+                    )
                     break  # Stop checking this log's other FKs
 
                 # Check if all values are in valid set
@@ -2719,6 +2902,47 @@ class ContextDAO:
         else:
             raise ValueError(f"Context with id {id} not found")
 
+    def rename_with_children(
+        self,
+        project_id: int,
+        old_prefix: str,
+        new_prefix: str,
+    ) -> int:
+        """Rename a context and all its children by replacing the name prefix.
+
+        Returns the number of contexts renamed.
+        """
+        if not re.match(r"^[a-zA-Z0-9_/]+$", new_prefix):
+            raise ValueError(
+                "Context name must contain only alphanumeric characters and '/'",
+            )
+        old_len = len(old_prefix)
+        stmt = (
+            update(Context)
+            .where(
+                Context.project_id == project_id,
+                Context.name.like(f"{old_prefix}/%"),
+            )
+            .values(
+                name=func.concat(new_prefix, func.substring(Context.name, old_len + 1)),
+            )
+        )
+        child_result = self.session.execute(stmt)
+
+        parent_stmt = (
+            update(Context)
+            .where(
+                Context.project_id == project_id,
+                Context.name == old_prefix,
+            )
+            .values(name=new_prefix)
+        )
+        parent_result = self.session.execute(parent_stmt)
+
+        total = child_result.rowcount + parent_result.rowcount
+        self.session.commit()
+        return total
+
     def delete(self, id: int) -> None:
         from orchestra.db.dao.log_event_dao import LogEventDAO
         from orchestra.db.dao.plot_dao import PlotDAO
@@ -2726,6 +2950,7 @@ class ContextDAO:
             get_assistants_sibling_context_info,
             remove_logs_from_sibling_contexts,
         )
+        from orchestra.db.dao.table_view_dao import TableViewDAO
 
         try:
             context = self.session.query(Context).filter_by(id=id).one()
@@ -2742,6 +2967,19 @@ class ContextDAO:
                 logger.info(
                     f"Deleted {deleted_plots} plots for context '{context.name}' "
                     f"in project {project.id}",
+                )
+
+            # Delete table views that reference this context
+            # Table views store context as a string in project_config JSONB, not as FK
+            table_view_dao = TableViewDAO(self.session)
+            deleted_table_views = table_view_dao.delete_by_project(
+                project_id=project.id,
+                context=context.name,
+            )
+            if deleted_table_views > 0:
+                logger.info(
+                    f"Deleted {deleted_table_views} table views for context "
+                    f"'{context.name}' in project {project.id}",
                 )
 
             # For Assistants/UnityTests projects, clean up sibling contexts first
@@ -3421,6 +3659,23 @@ class ContextDAO:
 
             # Step 2: Garbage collection in a new transaction
             delete_orphaned_log_events(self.session, context.project_id)
+            cleanup_orphaned_field_types(self.session, context_id)
+            cleanup_orphaned_derived_log_templates(self.session, context_id)
+
+            # Clean up plots and table views created after the commit point
+            cleanup_plots_created_after_commit(
+                self.session,
+                context.project_id,
+                context.name,
+                context_version.archived_at,
+            )
+            cleanup_table_views_created_after_commit(
+                self.session,
+                context.project_id,
+                context.name,
+                context_version.archived_at,
+            )
+
             self.session.commit()
 
         except Exception as e:
@@ -3612,3 +3867,245 @@ class ContextDAO:
             ]
             stmt_assoc = pg_insert(LogEventContext).values(assoc_values)
             self.session.execute(stmt_assoc)
+
+    # -------------------------------------------------------------------------
+    # Deep-copy helpers (used by admin_copy_context endpoint)
+    # -------------------------------------------------------------------------
+
+    def get_log_event_ids(self, context_id: int) -> List[int]:
+        """Return ordered list of log event IDs in a context.
+
+        Args:
+            context_id: The context to query.
+
+        Returns:
+            Sorted list of log event IDs.
+        """
+        rows = self.session.execute(
+            select(LogEventContext.log_event_id)
+            .where(LogEventContext.context_id == context_id)
+            .order_by(LogEventContext.log_event_id),
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def batch_copy_log_events(
+        self,
+        source_log_event_ids: List[int],
+        target_context_id: int,
+        target_project_id: int,
+        batch_size: int = 10000,
+    ) -> Dict[int, int]:
+        """Deep-copy log events and associate them with a target context.
+
+        Processes in batches, committing after each batch to keep transactions
+        bounded. Returns a mapping of ``{old_id: new_id}`` for downstream use
+        (unique constraints, embeddings, etc.).
+
+        Args:
+            source_log_event_ids: Ordered list of source LogEvent IDs.
+            target_context_id: Context to associate the new log events with.
+            target_project_id: Project the new log events belong to.
+            batch_size: Number of log events per batch.
+
+        Returns:
+            Dictionary mapping old log event IDs to their new copies.
+        """
+        id_map: Dict[int, int] = {}
+        now = datetime.now(timezone.utc)
+
+        for offset in range(0, len(source_log_event_ids), batch_size):
+            batch_ids = source_log_event_ids[offset : offset + batch_size]
+
+            source_events = (
+                self.session.query(LogEvent)
+                .filter(LogEvent.id.in_(batch_ids))
+                .order_by(LogEvent.id)
+                .all()
+            )
+
+            le_values = [
+                {
+                    "project_id": target_project_id,
+                    "data": le.data,
+                    "key_order": le.key_order,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                for le in source_events
+            ]
+
+            stmt = pg_insert(LogEvent).values(le_values).returning(LogEvent.id)
+            new_ids = [row[0] for row in self.session.execute(stmt).fetchall()]
+
+            for i, le in enumerate(source_events):
+                id_map[le.id] = new_ids[i]
+
+            lec_values = [
+                {"log_event_id": new_id, "context_id": target_context_id}
+                for new_id in new_ids
+            ]
+            self.session.execute(pg_insert(LogEventContext).values(lec_values))
+
+            self.session.commit()
+
+        return id_map
+
+    def copy_derived_templates(
+        self,
+        source_context_id: int,
+        target_context_id: int,
+        target_project_id: int,
+    ) -> int:
+        """Copy active derived-log templates from one context to another.
+
+        Args:
+            source_context_id: Context to copy templates from.
+            target_context_id: Context to copy templates to.
+            target_project_id: Project ID for the target templates.
+
+        Returns:
+            Number of templates copied.
+        """
+        templates = (
+            self.session.query(ActiveDerivedLog)
+            .filter(ActiveDerivedLog.context_id == source_context_id)
+            .all()
+        )
+        if not templates:
+            return 0
+
+        values = [
+            {
+                "project_id": target_project_id,
+                "context_id": target_context_id,
+                "key": t.key,
+                "equation": t.equation,
+                "referenced_logs": t.referenced_logs,
+                "filter_expression": t.filter_expression,
+                "inferred_type": t.inferred_type,
+                "referenced_keys": t.referenced_keys,
+                "is_active": t.is_active,
+            }
+            for t in templates
+        ]
+        self.session.execute(pg_insert(ActiveDerivedLog).values(values))
+        self.session.flush()
+        return len(values)
+
+    def copy_unique_constraints(
+        self,
+        source_context_id: int,
+        target_context_id: int,
+        id_map: Dict[int, int],
+        batch_size: int = 10000,
+    ) -> int:
+        """Copy unique-constraint lookup rows, remapping log event IDs.
+
+        Args:
+            source_context_id: Context to copy constraints from.
+            target_context_id: Context to copy constraints to.
+            id_map: Mapping of old log event ID → new log event ID.
+            batch_size: Number of rows to process per batch.
+
+        Returns:
+            Total number of constraint rows copied.
+        """
+        old_ids = list(id_map.keys())
+        total = 0
+
+        for offset in range(0, len(old_ids), batch_size):
+            batch_old = old_ids[offset : offset + batch_size]
+
+            rows = (
+                self.session.query(LogUniqueConstraint)
+                .filter(
+                    LogUniqueConstraint.context_id == source_context_id,
+                    LogUniqueConstraint.log_event_id.in_(batch_old),
+                )
+                .all()
+            )
+            if not rows:
+                continue
+
+            values = [
+                {
+                    "context_id": target_context_id,
+                    "field_name": r.field_name,
+                    "value_hash": r.value_hash,
+                    "log_event_id": id_map[r.log_event_id],
+                }
+                for r in rows
+                if r.log_event_id in id_map
+            ]
+            if values:
+                self.session.execute(pg_insert(LogUniqueConstraint).values(values))
+                total += len(values)
+
+        if total:
+            self.session.commit()
+        return total
+
+    def queue_embedding_copies(
+        self,
+        id_map: Dict[int, int],
+        batch_size: int = 10000,
+    ) -> int:
+        """Queue copies of embeddings for HNSW-safe insertion.
+
+        Instead of inserting directly into the indexed ``embedding`` table
+        (which triggers expensive HNSW graph recomputations), this method
+        copies the *pre-generated vectors* into ``embedding_queue`` with
+        ``status='vector_ready'``. The existing Stage 2 background worker
+        (``/admin/index_ready_embeddings``) then inserts them at a controlled
+        rate.
+
+        Args:
+            id_map: Mapping of old log event ID → new log event ID.
+            batch_size: Chunk size for querying/inserting embeddings.
+
+        Returns:
+            Number of embedding-queue rows created.
+        """
+        if not id_map:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        old_ids = list(id_map.keys())
+        total = 0
+
+        for offset in range(0, len(old_ids), batch_size):
+            batch_old = old_ids[offset : offset + batch_size]
+
+            source_embeddings = (
+                self.session.query(Embedding)
+                .filter(
+                    Embedding.ref_id.in_(batch_old),
+                    Embedding.is_deleted.is_(False),
+                )
+                .all()
+            )
+            if not source_embeddings:
+                continue
+
+            values = [
+                {
+                    "ref_id": id_map[emb.ref_id],
+                    "key": emb.key,
+                    "text": "[copied]",
+                    "model": emb.model,
+                    "status": "vector_ready",
+                    "generated_vector": emb.vector,
+                    "vector_generated_at": now,
+                    "created_at": now,
+                }
+                for emb in source_embeddings
+                if emb.ref_id in id_map
+            ]
+
+            if values:
+                self.session.execute(pg_insert(EmbeddingQueue).values(values))
+                total += len(values)
+
+        if total:
+            self.session.commit()
+        return total

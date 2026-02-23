@@ -1169,6 +1169,7 @@ async def test_pydantic_schema_future_value_validation():
 @pytest.mark.anyio
 async def test_arbitrary_pydantic_nesting_depth():
     """Test that arbitrarily deep nesting is handled correctly."""
+
     # Create a deeply nested Pydantic model
     class Level3(BaseModel):
         value: str
@@ -1604,3 +1605,165 @@ async def test_infer_type_from_empty_containers():
     assert types_match("dict", infer_type_from_value({})) is True
     assert infer_type_from_value(set()) == "Set[Any]"
     assert infer_type_from_value(()) == "Tuple[Any]"
+
+
+# ================================================================================
+# JSON Schema Type Aliases Tests
+# ================================================================================
+# Orchestra now accepts standard JSON Schema type names alongside Python-style types.
+# This enables seamless integration with Pydantic's model_json_schema() output.
+
+from orchestra.web.api.log.utils.type_utils import (
+    JSON_SCHEMA_TYPE_ALIASES,
+    ORCHESTRA_TO_JSON_SCHEMA,
+)
+
+
+@pytest.mark.anyio
+async def test_json_schema_type_aliases_exist():
+    """Test that JSON Schema type aliases are defined."""
+    expected_mappings = {
+        "string": "str",
+        "integer": "int",
+        "number": "float",
+        "boolean": "bool",
+        "array": "list",
+        "object": "dict",
+        "null": "NoneType",
+    }
+    assert JSON_SCHEMA_TYPE_ALIASES == expected_mappings
+    # Verify reverse mapping
+    for json_type, orchestra_type in expected_mappings.items():
+        if orchestra_type != "NoneType":  # NoneType is special
+            assert ORCHESTRA_TO_JSON_SCHEMA.get(orchestra_type) == json_type
+
+
+@pytest.mark.anyio
+async def test_normalize_json_schema_types():
+    """Test normalization of JSON Schema type names to Orchestra types."""
+    # Simple JSON Schema types should normalize to Orchestra types
+    assert normalize_type_string("string") == "str"
+    assert normalize_type_string("integer") == "int"
+    assert normalize_type_string("number") == "float"
+    assert normalize_type_string("boolean") == "bool"
+    assert normalize_type_string("array") == "list"
+    assert normalize_type_string("object") == "dict"
+    assert normalize_type_string("null") == "NoneType"
+
+    # Case insensitive
+    assert normalize_type_string("STRING") == "str"
+    assert normalize_type_string("Integer") == "int"
+    assert normalize_type_string("NUMBER") == "float"
+    assert normalize_type_string("Boolean") == "bool"
+
+
+@pytest.mark.anyio
+async def test_is_valid_json_schema_types():
+    """Test that JSON Schema types are valid field types."""
+    # All JSON Schema types should be valid
+    assert is_valid_field_type("string") is True
+    assert is_valid_field_type("integer") is True
+    assert is_valid_field_type("number") is True
+    assert is_valid_field_type("boolean") is True
+    assert is_valid_field_type("array") is True
+    assert is_valid_field_type("object") is True
+
+    # Case insensitive
+    assert is_valid_field_type("STRING") is True
+    assert is_valid_field_type("Integer") is True
+
+
+@pytest.mark.anyio
+async def test_normalize_json_schema_container_types():
+    """Test normalization of container types with JSON Schema inner types."""
+    # List with JSON Schema types
+    assert normalize_type_string("List[string]") == "List[str]"
+    assert normalize_type_string("List[integer]") == "List[int]"
+    assert normalize_type_string("list[number]") == "List[float]"
+
+    # Dict with JSON Schema types
+    assert normalize_type_string("Dict[string, integer]") == "Dict[str, int]"
+    assert normalize_type_string("dict[string, number]") == "Dict[str, float]"
+
+    # Nested containers
+    assert (
+        normalize_type_string("List[Dict[string, integer]]") == "List[Dict[str, int]]"
+    )
+
+    # Mixed Python and JSON Schema types
+    assert normalize_type_string("Dict[str, integer]") == "Dict[str, int]"
+    assert normalize_type_string("List[string, int]") == "List[str, int]"
+
+
+@pytest.mark.anyio
+async def test_is_valid_json_schema_container_types():
+    """Test that container types with JSON Schema inner types are valid."""
+    assert is_valid_field_type("List[string]") is True
+    assert is_valid_field_type("List[integer]") is True
+    assert is_valid_field_type("Dict[string, number]") is True
+    assert is_valid_field_type("Dict[string, boolean]") is True
+    assert is_valid_field_type("Set[string]") is True
+    assert is_valid_field_type("Tuple[integer, ...]") is True
+
+
+@pytest.mark.anyio
+async def test_parse_json_schema_types():
+    """Test parsing of JSON Schema types in nested structures."""
+    # JSON Schema types are normalized before parsing
+    base, inner = parse_nested_type("List[string]")
+    assert base == "List"
+    assert inner == ["str"]
+
+    base, inner = parse_nested_type("Dict[string, integer]")
+    assert base == "Dict"
+    assert inner == ["str", "int"]
+
+
+@pytest.mark.anyio
+async def test_types_match_json_schema_types():
+    """Test types_match with JSON Schema types."""
+    # JSON Schema types should match after normalization
+    assert types_match("string", "str") is True
+    assert types_match("integer", "int") is True
+    assert types_match("number", "float") is True
+    assert types_match("boolean", "bool") is True
+    assert types_match("array", "list") is True
+    assert types_match("object", "dict") is True
+
+    # Container types with JSON Schema inner types
+    assert types_match("List[string]", "List[str]") is True
+    assert types_match("Dict[string, integer]", "Dict[str, int]") is True
+
+
+@pytest.mark.anyio
+async def test_get_base_storage_type_json_schema_types():
+    """Test get_base_storage_type with JSON Schema types."""
+    # JSON Schema types should return normalized Orchestra types
+    assert get_base_storage_type("string") == "str"
+    assert get_base_storage_type("integer") == "int"
+    assert get_base_storage_type("number") == "float"
+    assert get_base_storage_type("boolean") == "bool"
+    assert get_base_storage_type("array") == "list"
+    assert get_base_storage_type("object") == "dict"
+
+    # Container types
+    assert get_base_storage_type("List[string]") == "list"
+    assert get_base_storage_type("Dict[string, integer]") == "dict"
+
+
+@pytest.mark.anyio
+async def test_json_schema_types_backward_compatible():
+    """Test that Python-style types still work alongside JSON Schema types."""
+    # Python-style types should continue to work
+    assert normalize_type_string("str") == "str"
+    assert normalize_type_string("int") == "int"
+    assert normalize_type_string("float") == "float"
+    assert normalize_type_string("bool") == "bool"
+    assert normalize_type_string("list") == "list"
+    assert normalize_type_string("dict") == "dict"
+
+    # Both styles are valid
+    assert is_valid_field_type("str") is True
+    assert is_valid_field_type("string") is True
+    assert is_valid_field_type("int") is True
+    assert is_valid_field_type("integer") is True

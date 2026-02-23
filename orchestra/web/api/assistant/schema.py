@@ -94,13 +94,18 @@ class AssistantCreate(BaseModel):
     )
     desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Desktop operating system mode",
+        description="Desktop operating system mode for assistant's VM creation",
         example="windows",
     )
-    is_user_desktop: Optional[bool] = Field(
+    user_desktop_id: Optional[int] = Field(
         None,
-        description="Whether the desktop is user-owned",
-        example=True,
+        description="ID of the registered user desktop to assign to this assistant",
+        example=1,
+    )
+    user_desktop_filesys_sync: Optional[bool] = Field(
+        False,
+        description="Whether to enable filesystem sync with user's desktop",
+        example=False,
     )
     about: Optional[str] = Field(
         None,
@@ -197,7 +202,8 @@ class AssistantCreate(BaseModel):
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
-                "is_user_desktop": True,
+                "user_desktop_id": 1,
+                "user_desktop_filesys_sync": False,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -216,6 +222,16 @@ class AssistantRead(AssistantCreate):
     Schema for reading assistant data, extends AssistantCreate with additional fields.
     """
 
+    user_desktop_url: Optional[str] = Field(
+        None,
+        description="Resolved URL of the assigned user desktop (from device registry)",
+        example="https://abc123.tunnel.unify.ai",
+    )
+    user_desktop_mode: Optional[str] = Field(
+        None,
+        description="Resolved OS of the assigned user desktop (from device registry)",
+        example="macos",
+    )
     agent_id: str = Field(
         ...,
         description="Unique identifier for the assistant",
@@ -276,6 +292,16 @@ class AssistantRead(AssistantCreate):
         description="Dictionary of secret names to values. Only returned via admin endpoints.",
         example={"openai_api_key": "sk-..."},
     )
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="Monthly spending limit in dollars for this assistant.",
+        example=100.00,
+    )
+    demo_id: Optional[int] = Field(
+        None,
+        description="ID of demo metadata if this is a demo assistant, None for regular assistants.",
+        example=None,
+    )
 
     class Config:
         orm_mode = True
@@ -291,7 +317,8 @@ class AssistantRead(AssistantCreate):
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
-                "is_user_desktop": True,
+                "user_desktop_id": 1,
+                "user_desktop_filesys_sync": False,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -313,6 +340,167 @@ class AssistantRead(AssistantCreate):
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
                 "secrets": {"openai_api_key": "sk-..."},
+            },
+        }
+
+
+class DemoAssistantCreate(BaseModel):
+    """
+    Schema for creating a demo assistant.
+
+    Demo assistants are used by Unify employees to demonstrate the product
+    to prospects who haven't signed up yet. They are cloned from a source
+    assistant and configured for phone-only demo calls.
+    """
+
+    source_assistant_id: int = Field(
+        ...,
+        description="ID of the assistant to clone configuration from",
+        example=12345,
+    )
+    label: str = Field(
+        ...,
+        description="Human-readable label for this demo (e.g., 'Richard Branson demo')",
+        example="Richard Branson demo",
+    )
+    first_name: str = Field(
+        ...,
+        description="First name of the demo assistant",
+        example="Lucy",
+    )
+    surname: str = Field(
+        ...,
+        description="Surname of the demo assistant",
+        example="Branson-Demo",
+    )
+    demoer_phone: str = Field(
+        ...,
+        description="Phone number of the demoer (used as user_phone for contact validation)",
+        example="+14155559999",
+    )
+    monthly_spending_cap: Optional[float] = Field(
+        default=10.0,
+        ge=1.0,
+        le=100.0,
+        description="Monthly spending cap in USD for the demo assistant (default: $10, max: $100)",
+        example=10.0,
+    )
+    phone_country: Optional[str] = Field(
+        None,
+        description="Country code for phone number provisioning (e.g., US, GB). If not provided, uses source assistant's country or defaults to US.",
+        example="US",
+    )
+    # Optional email provisioning
+    provision_email: bool = Field(
+        default=False,
+        description="Whether to provision an email address for the demo assistant (default: false)",
+        example=False,
+    )
+    # Optional prospect details - if provided, Unity will pre-populate the boss contact
+    prospect_first_name: Optional[str] = Field(
+        None,
+        description="Prospect's first name (optional, for pre-populating boss contact in Unity)",
+        example="Richard",
+    )
+    prospect_surname: Optional[str] = Field(
+        None,
+        description="Prospect's surname (optional, for pre-populating boss contact in Unity)",
+        example="Branson",
+    )
+    prospect_email: Optional[str] = Field(
+        None,
+        description="Prospect's email address (optional, for pre-populating boss contact in Unity)",
+        example="richard@virgin.com",
+    )
+    prospect_phone: Optional[str] = Field(
+        None,
+        description="Prospect's phone number in E.164 format (optional, for pre-populating boss contact in Unity)",
+        example="+447700900000",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "source_assistant_id": 12345,
+                "label": "Richard Branson demo",
+                "first_name": "Lucy",
+                "surname": "Branson-Demo",
+                "demoer_phone": "+14155559999",
+                "monthly_spending_cap": 10.0,
+                "provision_email": False,
+                "prospect_first_name": "Richard",
+                "prospect_surname": "Branson",
+                "prospect_email": "richard@virgin.com",
+                "prospect_phone": "+447700900000",
+            },
+        }
+
+
+class DemoAssistantMetaRead(BaseModel):
+    """
+    Schema for reading demo assistant metadata.
+    """
+
+    id: int = Field(
+        ...,
+        description="Unique identifier for the demo metadata",
+        example=42,
+    )
+    source_assistant_id: Optional[int] = Field(
+        None,
+        description="ID of the assistant this demo was cloned from (may be None if source was deleted)",
+        example=12345,
+    )
+    demoer_user_id: str = Field(
+        ...,
+        description="ID of the user who created this demo assistant",
+        example="user_abc123",
+    )
+    label: str = Field(
+        ...,
+        description="Human-readable label for this demo",
+        example="Richard Branson demo",
+    )
+    created_at: datetime = Field(
+        ...,
+        description="When the demo assistant was created",
+        example="2026-02-10T14:30:00Z",
+    )
+    # Optional prospect details - stored if provided during creation
+    prospect_first_name: Optional[str] = Field(
+        None,
+        description="Prospect's first name (if provided during creation)",
+        example="Richard",
+    )
+    prospect_surname: Optional[str] = Field(
+        None,
+        description="Prospect's surname (if provided during creation)",
+        example="Branson",
+    )
+    prospect_email: Optional[str] = Field(
+        None,
+        description="Prospect's email address (if provided during creation)",
+        example="richard@virgin.com",
+    )
+    prospect_phone: Optional[str] = Field(
+        None,
+        description="Prospect's phone number in E.164 format (if provided during creation)",
+        example="+447700900000",
+    )
+
+    class Config:
+        orm_mode = True
+        schema_extra = {
+            "example": {
+                "id": 42,
+                "source_assistant_id": 12345,
+                "demoer_user_id": "user_abc123",
+                "label": "Richard Branson demo",
+                "created_at": "2026-02-10T14:30:00Z",
+                "prospect_first_name": "Richard",
+                "prospect_surname": "Branson",
+                "prospect_email": "richard@virgin.com",
+                "prospect_phone": "+447700900000",
             },
         }
 
@@ -350,13 +538,18 @@ class AssistantUpdate(BaseModel):
     )
     desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Desktop operating system mode",
+        description="Desktop operating system mode for VM creation",
         example="macos",
     )
-    is_user_desktop: Optional[bool] = Field(
+    user_desktop_id: Optional[int] = Field(
         None,
-        description="Whether the desktop is user-owned",
-        example=True,
+        description="ID of the registered user desktop to assign to this assistant",
+        example=1,
+    )
+    user_desktop_filesys_sync: Optional[bool] = Field(
+        None,
+        description="Whether to enable filesystem sync with user's desktop",
+        example=False,
     )
     about: Optional[str] = Field(
         None,
@@ -412,6 +605,11 @@ class AssistantUpdate(BaseModel):
         True,
         description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
         exclude=True,
+    )
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="Monthly spending limit in dollars. Set to null to remove the limit.",
+        example=100.00,
     )
 
     @field_validator("timezone")
@@ -476,7 +674,8 @@ class AssistantUpdate(BaseModel):
                 "profile_video": "https://example.com/videos/ada_new.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "macos",
-                "is_user_desktop": True,
+                "user_desktop_id": 1,
+                "user_desktop_filesys_sync": True,
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
@@ -516,60 +715,6 @@ class AssistantStatus(BaseModel):
             "example_inactive": {
                 "running": False,
                 "job_name": None,
-            },
-        }
-
-
-class RecordingCreate(BaseModel):
-    user_id: str = Field(
-        ...,
-        description="ID of the user to associate the recording with",
-        example="123",
-    )
-    assistant_id: int = Field(
-        ...,
-        description="ID of the assistant to associate the recording with",
-        example=123,
-    )
-    conference_name: str = (
-        Field(
-            ...,
-            description="Name of the conference to associate the recording with",
-            example="Unity_Sample_Conference",
-        ),
-    )
-    recording_raw: str = Field(
-        ...,
-        description="Base64-encoded audio payload",
-        example="UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
-    )
-    content_type: Optional[str] = Field(
-        None,
-        description="Content type of the audio file",
-        example="audio/wav",
-    )
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "recording_raw": "UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
-                "content_type": "audio/wav",
-            },
-        }
-
-
-class RecordingInfo(BaseModel):
-    id: int
-    url: HttpUrl
-    created_at: datetime
-
-    class Config:
-        orm_mode = True
-        schema_extra = {
-            "example": {
-                "id": 123,
-                "url": "https://storage.example.com/recordings/call_123.wav",
-                "created_at": "2025-05-08T14:30:00Z",
             },
         }
 
@@ -1275,3 +1420,181 @@ class Contact(BaseModel):
     whatsapp_number: Optional[str] = None
     description: Optional[str] = None
     custom_fields: Dict[str, Any] = {}
+
+
+# ============================================================================
+# Spending Limit Schemas
+# ============================================================================
+
+
+class SpendingLimitRequest(BaseModel):
+    """Request body for setting a spending limit."""
+
+    monthly_spending_cap: Optional[float] = Field(
+        ...,
+        description="Monthly spending limit in dollars. Set to null to remove the limit.",
+        example=100.00,
+        ge=0,
+    )
+
+
+class AssistantSpendResponse(BaseModel):
+    """Response for getting assistant monthly spend."""
+
+    agent_id: int = Field(..., description="Assistant ID.")
+    month: str = Field(..., description="Month in YYYY-MM format.")
+    cumulative_spend: float = Field(
+        ...,
+        description="Total spend for this assistant in the specified month.",
+        example=78.50,
+    )
+    limit: Optional[float] = Field(
+        None,
+        description="Monthly spending limit for this assistant.",
+        example=100.00,
+    )
+    limit_set_at: Optional[datetime] = Field(
+        None,
+        description="When the spending limit was last changed.",
+        example="2026-02-01T10:00:00Z",
+    )
+    percent_used: Optional[float] = Field(
+        None,
+        description="Percentage of limit used (null if no limit set).",
+        example=78.5,
+    )
+    credit_balance: Optional[float] = Field(
+        None,
+        description="Current credit balance of the billing account.",
+    )
+
+
+class AssistantSpendingLimitResponse(BaseModel):
+    """Response for setting assistant spending limit."""
+
+    agent_id: int = Field(..., description="Assistant ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit.",
+        example=100.00,
+    )
+    effective_limit: Optional[float] = Field(
+        None,
+        description="Effective limit (may be lower due to user/org limit).",
+        example=100.00,
+    )
+
+
+class UserSpendingLimitResponse(BaseModel):
+    """Response for setting user spending limit."""
+
+    user_id: str = Field(..., description="User ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit.",
+        example=200.00,
+    )
+    effective_limit: Optional[float] = Field(
+        None,
+        description="Effective limit (may be lower due to org limit).",
+        example=200.00,
+    )
+    cascaded_updates: Optional[Dict[str, int]] = Field(
+        None,
+        description="Count of child entities that had their limits capped.",
+        example={"assistants_capped": 3},
+    )
+
+
+class OrgSpendingLimitResponse(BaseModel):
+    """Response for setting organization spending limit."""
+
+    organization_id: int = Field(..., description="Organization ID.")
+    monthly_spending_cap: Optional[float] = Field(
+        None,
+        description="The set monthly spending limit.",
+        example=500.00,
+    )
+    cascaded_updates: Optional[Dict[str, int]] = Field(
+        None,
+        description="Count of child entities that had their limits capped.",
+        example={"users_capped": 3, "assistants_capped": 7},
+    )
+
+
+# ============================================================================
+# Spending Limit Notification Schemas
+# ============================================================================
+
+
+class SpendingLimitReachedRequest(BaseModel):
+    """Request body for notifying that a spending limit was reached."""
+
+    limit_type: Literal["assistant", "user", "member", "organization"] = Field(
+        ...,
+        description="Type of limit that was reached.",
+        example="assistant",
+    )
+    entity_id: str = Field(
+        ...,
+        description="ID of the entity whose limit was reached.",
+        example="123",
+    )
+    limit_value: float = Field(
+        ...,
+        description="The limit value that was reached.",
+        example=100.00,
+        ge=0,
+    )
+    current_spend: float = Field(
+        ...,
+        description="Current spend amount.",
+        example=100.50,
+        ge=0,
+    )
+    month: str = Field(
+        ...,
+        description="Billing month in YYYY-MM format.",
+        example="2026-02",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    )
+    limit_set_at: Optional[datetime] = Field(
+        None,
+        description="When the limit was last configured (for re-enable detection).",
+        example="2026-02-01T10:00:00Z",
+    )
+    entity_name: Optional[str] = Field(
+        None,
+        description="Name of the entity (for email content).",
+        example="Ada Lovelace",
+    )
+    organization_id: Optional[int] = Field(
+        None,
+        description="Organization ID (required for member limits, entity_id is the user_id).",
+        example=123,
+    )
+
+
+class SpendingLimitReachedResponse(BaseModel):
+    """Response for spending limit notification endpoint."""
+
+    notified: bool = Field(
+        ...,
+        description="Whether a notification was sent.",
+        example=True,
+    )
+    reason: Optional[str] = Field(
+        None,
+        description="Reason for skipping notification (if notified=False).",
+        example="already_notified",
+    )
+    recipient_count: Optional[int] = Field(
+        None,
+        description="Number of users who received the notification.",
+        example=1,
+    )
+    notified_user_ids: Optional[List[str]] = Field(
+        None,
+        description="List of user IDs who received the notification.",
+        example=["user_abc123"],
+    )

@@ -1,5 +1,3 @@
-import base64
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,18 +15,11 @@ async def approve_default_user(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     # Approve the user
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
     ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
-
-
-def _get_sample_wav_bytes() -> bytes:
-    sample_path = (
-        Path(__file__).parent.parent / "sample_datasets" / "sample_recording.wav"
-    )
-    return sample_path.read_bytes()
 
 
 @pytest.fixture(autouse=True)
@@ -53,31 +44,6 @@ def mock_assistant_infra_calls(request):
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
 
         yield mock_wake_up, mock_reawaken
-
-
-@pytest.mark.anyio
-async def test_create_assistant_unapproved_user_fails(client: AsyncClient):
-    """Test that a user who is not approved cannot create an assistant."""
-    unapproved_user = await create_test_user(
-        client,
-        "unapproved@example.com",
-        hiring_approved=False,
-    )
-    payload = {
-        "first_name": "Should",
-        "surname": "Fail",
-        "create_infra": False,
-    }
-    resp = await client.post(
-        "/v0/assistant",
-        json=payload,
-        headers=unapproved_user["headers"],
-    )
-    assert resp.status_code == status.HTTP_403_FORBIDDEN
-    assert (
-        "You need to request approval first by going to console.unify.ai/assistants"
-        in resp.json()["detail"]
-    )
 
 
 @pytest.mark.anyio
@@ -478,7 +444,7 @@ async def test_update_desktop_mode_only(client: AsyncClient):
     created_data = create_resp.json()["info"]
     agent_id = created_data["agent_id"]
     assert created_data["desktop_mode"] is None
-    assert created_data["is_user_desktop"] is None
+    assert created_data["user_desktop_mode"] is None
 
     # Now, update only the desktop_mode field
     new_desktop_mode = "macos"
@@ -493,33 +459,49 @@ async def test_update_desktop_mode_only(client: AsyncClient):
     assert patch_resp.status_code == 200
     updated_data = patch_resp.json()["info"]
     assert updated_data["desktop_mode"] == new_desktop_mode
-    assert updated_data["is_user_desktop"] is None
+    assert updated_data["user_desktop_mode"] is None
     assert updated_data["first_name"] == payload["first_name"]
     assert updated_data["nationality"] == payload["nationality"]
     assert updated_data["weekly_limit"] == payload["weekly_limit"]
 
 
 @pytest.mark.anyio
-async def test_update_is_user_desktop_only(client: AsyncClient):
+async def test_assign_user_desktop_to_assistant(client: AsyncClient):
+    # Register a desktop
+    desktop_payload = {
+        "name": "My MacBook",
+        "url": "https://abc123.tunnel.unify.ai",
+        "os": "macos",
+    }
+    desktop_resp = await client.post(
+        "/v0/desktop",
+        json=desktop_payload,
+        headers=HEADERS,
+    )
+    assert desktop_resp.status_code == 200
+    desktop_id = desktop_resp.json()["info"]["id"]
+
     # Create an assistant with default values
     payload = {
-        "first_name": "DesktopBool",
+        "first_name": "DesktopMode",
         "surname": "Tester",
         "age": 32,
         "weekly_limit": 12.0,
         "max_parallel": 2,
         "nationality": "Germany",
-        "about": "An assistant for testing is_user_desktop.",
+        "about": "An assistant for testing user_desktop_id.",
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
     agent_id = created_data["agent_id"]
-    assert created_data["is_user_desktop"] is None
+    assert created_data["user_desktop_id"] is None
+    assert created_data["user_desktop_url"] is None
+    assert created_data["user_desktop_mode"] is None
 
-    # Update only is_user_desktop field
-    update_payload = {"is_user_desktop": True, "create_infra": False}
+    # Assign desktop to assistant
+    update_payload = {"user_desktop_id": desktop_id, "create_infra": False}
     patch_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json=update_payload,
@@ -528,13 +510,29 @@ async def test_update_is_user_desktop_only(client: AsyncClient):
 
     assert patch_resp.status_code == 200
     updated_data = patch_resp.json()["info"]
-    assert updated_data["is_user_desktop"] is True
+    assert updated_data["user_desktop_id"] == desktop_id
+    assert updated_data["user_desktop_url"] == "https://abc123.tunnel.unify.ai"
+    assert updated_data["user_desktop_mode"] == "macos"
     assert updated_data["desktop_mode"] is None
 
 
 @pytest.mark.anyio
 async def test_create_assistant_with_desktop_fields(client: AsyncClient):
-    # Create an assistant with both desktop fields set
+    # Register a desktop first
+    desktop_payload = {
+        "name": "Dev Machine",
+        "url": "https://my-desktop.example.com",
+        "os": "macos",
+    }
+    desktop_resp = await client.post(
+        "/v0/desktop",
+        json=desktop_payload,
+        headers=HEADERS,
+    )
+    assert desktop_resp.status_code == 200
+    desktop_id = desktop_resp.json()["info"]["id"]
+
+    # Create an assistant with desktop fields set
     payload = {
         "first_name": "FullDesktop",
         "surname": "Tester",
@@ -544,14 +542,18 @@ async def test_create_assistant_with_desktop_fields(client: AsyncClient):
         "nationality": "Canada",
         "about": "An assistant with full desktop configuration.",
         "desktop_mode": "ubuntu",
-        "is_user_desktop": False,
+        "user_desktop_id": desktop_id,
+        "user_desktop_filesys_sync": True,
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
     assert created_data["desktop_mode"] == "ubuntu"
-    assert created_data["is_user_desktop"] is False
+    assert created_data["user_desktop_id"] == desktop_id
+    assert created_data["user_desktop_mode"] == "macos"
+    assert created_data["user_desktop_filesys_sync"] is True
+    assert created_data["user_desktop_url"] == "https://my-desktop.example.com"
 
 
 @pytest.mark.anyio
@@ -591,78 +593,6 @@ async def test_update_multiple_fields(client: AsyncClient):
     assert updated["timezone"] == update_payload["timezone"]
     assert updated["first_name"] == payload["first_name"]
     assert updated["nationality"] == payload["nationality"]
-
-
-@pytest.mark.anyio
-async def test_assistant_recordings_audio_lifecycle(client: AsyncClient):
-    # Create a new assistant
-    payload = {
-        "first_name": "Kevin",
-        "surname": "Brown",
-        "age": 29,
-        "weekly_limit": 18.0,
-        "max_parallel": 2,
-        "nationality": "South Africa",
-        "profile_photo": "https://example.com/photos/kevin.jpg",
-        "about": "Original bio information",
-        "create_infra": False,
-    }
-    create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert create.status_code == 200
-    assistant_info = create.json()["info"]
-    agent_id = assistant_info["agent_id"]
-    user_id = assistant_info["user_id"]
-
-    # Read and encode sample WAV file
-    raw_bytes = _get_sample_wav_bytes()
-    b64_audio = base64.b64encode(raw_bytes).decode()
-
-    # Upload raw recording
-    record_payload = {
-        "user_id": user_id,
-        "assistant_id": agent_id,
-        "conference_name": "test-conference-name",
-        "recording_raw": b64_audio,
-        "content_type": "audio/wav",
-    }
-
-    record_resp = await client.post(
-        "/v0/admin/assistant/recordings",
-        headers=ADMIN_HEADERS,
-        json=record_payload,
-    )
-    assert record_resp.status_code == 200
-    recording_info = record_resp.json()["info"]
-    rec_id = recording_info["id"]
-    assert isinstance(recording_info.get("url"), str) and recording_info.get(
-        "url",
-    ).startswith("http")
-
-    # Verify recording is listed
-    list_resp = await client.get(
-        f"/v0/assistant/{agent_id}/recordings",
-        headers=HEADERS,
-    )
-    assert list_resp.status_code == 200
-    recordings = list_resp.json()["info"]
-    assert isinstance(recordings, list) and len(recordings) == 1
-    listed = recordings[0]
-    assert listed["id"] == rec_id
-
-    # Delete the recording
-    delete_resp = await client.delete(
-        f"/v0/assistant/{agent_id}/recordings/{rec_id}",
-        headers=HEADERS,
-    )
-    assert delete_resp.status_code == 200
-
-    # Confirm removal
-    list_after_del = await client.get(
-        f"/v0/assistant/{agent_id}/recordings",
-        headers=HEADERS,
-    )
-    assert list_after_del.status_code == 200
-    assert list_after_del.json()["info"] == []
 
 
 @pytest.mark.anyio
@@ -933,7 +863,7 @@ async def test_admin_list_assistants_filter_agent_id(client: AsyncClient):
 async def test_admin_list_assistants_for_user(client: AsyncClient):
     # Create a second test user via create_test_user
     # (default HEADERS user will serve as user1)
-    user2 = await create_test_user(client, "u2@test.com", hiring_approved=True)
+    user2 = await create_test_user(client, "u2@test.com")
 
     # Determine default user ID for HEADERS (user1)
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
@@ -1097,16 +1027,18 @@ async def test_create_assistant_duplicate_name_fails(
     user2 = await create_test_user(
         client,
         "user2-for-duplicate-test@example.com",
-        hiring_approved=True,
     )
     user2_headers = user2["headers"]
 
     # Add credits to user2 so they can create an assistant
-    from orchestra.db.dao.users_dao import UsersDAO
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.dao.user_dao import UserDAO
     from orchestra.settings import settings
 
-    users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(user2["id"], settings.assistant_creation_cost)
+    user_dao = UserDAO(dbsession)
+    ba_dao = BillingAccountDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user2["id"])
+    ba_dao.add_credits(user_obj.billing_account_id, settings.assistant_creation_cost)
     dbsession.commit()
 
     resp3 = await client.post("/v0/assistant", json=payload, headers=user2_headers)
@@ -1222,14 +1154,16 @@ async def test_delete_assistant_deletes_contexts(
     assistant_id = assistant_info["agent_id"]
 
     # Manually create a project and contexts to simulate logs being present
-    # Using 3-tier context structure: User/Assistant/Ctx, User/All/Ctx, All/Ctx
+    # Using 3-tier context structure: user_id/assistant_id/Ctx, user_id/All/Ctx, All/Ctx
     project_name = "Assistants"
-    user_name = "TestUser"
-    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+    # Get the actual user_id that the backend sees via request.state.user_id
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+    assistant_name = str(assistant_id)
 
-    # 3-tier contexts
-    user_assistant_context = f"{user_name}/{assistant_name}/Transcripts"
-    user_all_context = f"{user_name}/All/Transcripts"
+    # 3-tier contexts using the real user_id (must match what the delete endpoint uses)
+    user_assistant_context = f"{user_id}/{assistant_name}/Transcripts"
+    user_all_context = f"{user_id}/All/Transcripts"
     global_all_context = "All/Transcripts"
 
     # The "Assistants" project is created automatically on first assistant creation
@@ -1240,7 +1174,7 @@ async def test_delete_assistant_deletes_contexts(
         "entries": [
             {
                 "message": "test",
-                "_user": user_name,
+                "_user": user_id,
                 "_assistant": assistant_name,
             },
         ],
@@ -1302,19 +1236,28 @@ async def test_delete_assistant_deletes_contexts(
             logs_after_delete.json()["count"] == 0
         ), f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."
 
-    # Verify the log is also removed from sibling contexts (User/All/Ctx and All/Ctx)
-    # The sibling cleanup should remove the log from these contexts when the
-    # User/Assistant/Ctx context is deleted
-    for sibling_ctx in [user_all_context, global_all_context]:
-        sibling_logs = await client.get(
-            f"/v0/logs?project_name={project_name}&context={sibling_ctx}",
-            headers=HEADERS,
-        )
-        if sibling_logs.status_code == 200:
-            log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
-            assert (
-                log_id not in log_ids
-            ), f"Log {log_id} should be removed from sibling context {sibling_ctx}"
+    # Verify the log is removed from User/All/Ctx (tier2 - not protected)
+    # but remains in All/Ctx (tier1 - protected archive)
+    sibling_logs = await client.get(
+        f"/v0/logs?project_name={project_name}&context={user_all_context}",
+        headers=HEADERS,
+    )
+    if sibling_logs.status_code == 200:
+        log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
+        assert (
+            log_id not in log_ids
+        ), f"Log {log_id} should be removed from sibling context {user_all_context}"
+
+    # Archive protection: logs remain in topmost All/* contexts for historical record
+    archive_logs = await client.get(
+        f"/v0/logs?project_name={project_name}&context={global_all_context}",
+        headers=HEADERS,
+    )
+    if archive_logs.status_code == 200:
+        log_ids = [log["id"] for log in archive_logs.json()["logs"]]
+        assert (
+            log_id in log_ids
+        ), f"Log {log_id} should remain in archive context {global_all_context}"
 
 
 @pytest.mark.anyio
@@ -1770,3 +1713,70 @@ async def test_update_assistant_with_invalid_voice_config(
     )
     assert resp.status_code == 422
     assert error_msg in resp.text
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
+    """Deleting an assistant should delete its call recordings from GCS."""
+    payload = {
+        "first_name": "Recorded",
+        "surname": "Assistant",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    with patch(
+        "orchestra.web.api.assistant.views.BucketService",
+    ) as MockBucketServiceClass:
+        mock_instance = MockBucketServiceClass.return_value
+        mock_instance.delete_assistant_file.return_value = True
+        mock_instance.delete_all_assistant_data.return_value = {
+            "media": 1,
+            "recordings": 3,
+            "attachments": 0,
+        }
+
+        del_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}",
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == 200
+
+        mock_instance.delete_all_assistant_data.assert_called_once_with(
+            int(assistant_id),
+            is_staging=False,
+        )
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
+    client: AsyncClient,
+):
+    """Recording cleanup failures should not prevent assistant deletion."""
+    payload = {
+        "first_name": "Resilient",
+        "surname": "Assistant",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    with patch(
+        "orchestra.web.api.assistant.views.BucketService",
+    ) as MockBucketServiceClass:
+        mock_instance = MockBucketServiceClass.return_value
+        mock_instance.delete_assistant_file.return_value = True
+        mock_instance.delete_all_assistant_data.side_effect = Exception(
+            "GCS bucket unreachable",
+        )
+
+        del_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}",
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == 200
+        assert "cleanup issues" in del_resp.json()["info"]
+        assert "GCS" in del_resp.json()["info"]

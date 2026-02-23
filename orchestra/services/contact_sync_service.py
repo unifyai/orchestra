@@ -25,8 +25,8 @@ class ContactSyncService:
     Handles:
     - User timezone → Contact logs (first_name + surname, is_system=True)
     - User bio → Contact logs (first_name + surname, is_system=True)
-    - Assistant timezone → Contact logs (_assistant=FirstSurname, contact_id=0)
-    - Assistant about → Contact logs (_assistant=FirstSurname, contact_id=0)
+    - Assistant timezone → Contact logs (_assistant=str(agent_id), contact_id=0)
+    - Assistant about → Contact logs (_assistant=str(agent_id), contact_id=0)
     """
 
     ASSISTANTS_PROJECT_NAME = "Assistants"
@@ -169,7 +169,7 @@ class ContactSyncService:
     def _update_contact_logs_assistant(
         self,
         context_id: int,
-        assistant_name: str,
+        assistant_context_id: str,
         update_field: str,
         new_value: Optional[str],
     ) -> int:
@@ -178,7 +178,7 @@ class ContactSyncService:
 
         Args:
             context_id: The context ID to search within
-            assistant_name: The _assistant value to filter by (FirstSurname)
+            assistant_context_id: The _assistant value to filter by (str(agent_id))
             update_field: The field name to update (e.g., "timezone", "bio")
             new_value: The new value to set
 
@@ -195,7 +195,7 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND le.data->>'_assistant' = :assistant_name
+                  AND le.data->>'_assistant' = :assistant_context_id
                   AND (le.data->>'contact_id')::int = 0
             )
         """,
@@ -205,7 +205,7 @@ class ContactSyncService:
             query,
             {
                 "context_id": context_id,
-                "assistant_name": assistant_name,
+                "assistant_context_id": assistant_context_id,
                 "update_field": update_field,
                 "new_value": new_value,
             },
@@ -325,33 +325,25 @@ class ContactSyncService:
         self,
         user_id: str,
         organization_id: Optional[int],
-        first_name: Optional[str],
-        surname: Optional[str],
+        agent_id: int,
         new_timezone: Optional[str],
     ) -> int:
         """
         Sync assistant timezone to All/Contacts logs.
 
         Updates logs where:
-        - _assistant = "{first_name}{surname}"
+        - _assistant = str(agent_id)
         - contact_id = 0
 
         Args:
             user_id: The user ID (owner for personal, creator for org)
             organization_id: The organization ID (None for personal assistants)
-            first_name: Assistant's first name
-            surname: Assistant's surname
+            agent_id: The assistant's agent_id
             new_timezone: The new timezone value to set
 
         Returns:
             Number of logs updated
         """
-        if not first_name and not surname:
-            logger.debug("Skipping assistant timezone sync: no name available")
-            return 0
-
-        assistant_name = f"{first_name or ''}{surname or ''}"
-
         project = self._get_assistants_project_for_assistant(user_id, organization_id)
         if not project:
             logger.debug("Skipping assistant timezone sync: no Assistants project")
@@ -364,7 +356,7 @@ class ContactSyncService:
 
         updated = self._update_contact_logs_assistant(
             context_id=context.id,
-            assistant_name=assistant_name,
+            assistant_context_id=str(agent_id),
             update_field="timezone",
             new_value=new_timezone,
         )
@@ -378,33 +370,25 @@ class ContactSyncService:
         self,
         user_id: str,
         organization_id: Optional[int],
-        first_name: Optional[str],
-        surname: Optional[str],
+        agent_id: int,
         new_bio: Optional[str],
     ) -> int:
         """
         Sync assistant about/bio to All/Contacts logs.
 
         Updates logs where:
-        - _assistant = "{first_name}{surname}"
+        - _assistant = str(agent_id)
         - contact_id = 0
 
         Args:
             user_id: The user ID (owner for personal, creator for org)
             organization_id: The organization ID (None for personal assistants)
-            first_name: Assistant's first name
-            surname: Assistant's surname
+            agent_id: The assistant's agent_id
             new_bio: The new bio value to set
 
         Returns:
             Number of logs updated
         """
-        if not first_name and not surname:
-            logger.debug("Skipping assistant bio sync: no name available")
-            return 0
-
-        assistant_name = f"{first_name or ''}{surname or ''}"
-
         project = self._get_assistants_project_for_assistant(user_id, organization_id)
         if not project:
             logger.debug("Skipping assistant bio sync: no Assistants project")
@@ -417,7 +401,7 @@ class ContactSyncService:
 
         updated = self._update_contact_logs_assistant(
             context_id=context.id,
-            assistant_name=assistant_name,
+            assistant_context_id=str(agent_id),
             update_field="bio",
             new_value=new_bio,
         )

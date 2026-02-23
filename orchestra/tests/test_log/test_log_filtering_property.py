@@ -1530,7 +1530,7 @@ async def test_property_based_filtering(client, setup_test_data, expr_and_type):
     This tests that the server's SQL query generation (via build_sql_query)
     returns the same results as our Python reference implementation.
     """
-    (expr_str, expr_type) = expr_and_type
+    expr_str, expr_type = expr_and_type
     print(f"Testing expression: {expr_str}")
 
     # Ensure we're only testing boolean expressions for filtering

@@ -26,7 +26,7 @@ async def approve_default_user(client: AsyncClient):
     """Ensures the default test user for this module is approved for hiring."""
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
     user_id = credits_resp.json()["id"]
-    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
     approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
     assert (
         approve_resp.status_code == status.HTTP_200_OK
@@ -152,15 +152,15 @@ def mock_tts_services_factory(fastapi_app):
     with patch(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
     ) as mock_send_pubsub:
-        fastapi_app.dependency_overrides[
-            OriginalCartesiaService
-        ] = lambda: cartesia_mock
-        fastapi_app.dependency_overrides[
-            OriginalElevenLabsService
-        ] = lambda: elevenlabs_mock
-        fastapi_app.dependency_overrides[
-            OriginalDeepgramService
-        ] = lambda: deepgram_mock
+        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
+            lambda: cartesia_mock
+        )
+        fastapi_app.dependency_overrides[OriginalElevenLabsService] = (
+            lambda: elevenlabs_mock
+        )
+        fastapi_app.dependency_overrides[OriginalDeepgramService] = (
+            lambda: deepgram_mock
+        )
         fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
 
         yield cartesia_mock, elevenlabs_mock, deepgram_mock, openai_mock

@@ -6,7 +6,6 @@ preserve log_event_id and comprehension indices (__comp_idx__, __parent_idx__),
 replacing 22+ duplicate patterns across jsonb_builder.py.
 """
 
-
 __all__ = [
     "build_result_subquery",
     "build_result_subquery_with_join",

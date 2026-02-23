@@ -69,6 +69,7 @@ cover/
 *.sql
 *.txt
 *.json
+!.cursor/worktrees.json
 *.csv
 # Django stuff:
 *.log

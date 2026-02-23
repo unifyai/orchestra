@@ -93,9 +93,11 @@ def _span_to_dict(span: ReadableSpan) -> dict:
         "kind": span.kind.name if span.kind else None,
         "start_time": span.start_time,
         "end_time": span.end_time,
-        "duration_ms": (span.end_time - span.start_time) / 1_000_000
-        if span.end_time and span.start_time
-        else None,
+        "duration_ms": (
+            (span.end_time - span.start_time) / 1_000_000
+            if span.end_time and span.start_time
+            else None
+        ),
         "status": {
             "code": span.status.status_code.name if span.status else None,
             "description": span.status.description if span.status else None,

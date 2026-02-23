@@ -1,6 +1,5 @@
 """Tests for phone number validation utility."""
 
-
 from orchestra.web.api.utils.phone_number_validator import (
     PhoneNumberValidator,
     validate_phone_number,

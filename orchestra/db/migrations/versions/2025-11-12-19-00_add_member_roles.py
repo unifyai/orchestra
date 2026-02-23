@@ -5,6 +5,7 @@ Revises: add_rbac_teams_resource_access
 Create Date: 2025-11-12 19:00:00.000000
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 

@@ -408,7 +408,7 @@ async def test_admin_endpoints_fix_orphaned_project_workflow(
     # Step 4: Verify user can now access via regular API
     # Get org API key
     user_info_resp = await client.get(
-        f"/v0/admin/auth-user/by-email?email=orphan_workflow_owner@test.com",
+        f"/v0/admin/user/by-email?email=orphan_workflow_owner@test.com",
         headers=ADMIN_HEADERS,
     )
     user_info = user_info_resp.json()

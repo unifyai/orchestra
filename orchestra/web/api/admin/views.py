@@ -1,35 +1,40 @@
-import base64
-import os
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import List, Optional
 
 import stripe
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
-from google.cloud.storage import Client
-from google.oauth2.service_account import Credentials
+from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.billing_account_dao import (
+    MIN_AUTORECHARGE_AMOUNT,
+    MIN_SPEND_FOR_AUTO_RECHARGE,
+    BillingAccountDAO,
+)
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
+from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    BillingAccount,
     CreditCardFingerprint,
+    Organization,
     Recharge,
     RechargeStatus,
     RechargeType,
-    Users,
+    User,
 )
-from orchestra.env import get_env
+from orchestra.services.spending_limit_notification_service import (
+    SpendingLimitNotificationService,
+)
+from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     CreditCardFingerprintModelResponse,
-    FileUploadUrlRequest,
-    FileWriteRequest,
     OrganizationListItem,
     OrganizationListResponse,
     RechargeModelRequest,
@@ -38,22 +43,80 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     RechargeTypeModelResponse,
     UsersModelResponse,
 )
+from orchestra.web.api.assistant.schema import (
+    SpendingLimitReachedRequest,
+    SpendingLimitReachedResponse,
+)
 
 router = APIRouter()
+
+
+def _resolve_billing_account(
+    session: Session,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+) -> BillingAccount:
+    """
+    Resolve a BillingAccount from either a user_id or an organization_id.
+
+    Exactly one of the two parameters must be provided.
+
+    :param session: Database session.
+    :param user_id: User ID (for personal billing accounts).
+    :param organization_id: Organization ID (for org billing accounts).
+    :return: The resolved BillingAccount.
+    :raises HTTPException: If neither/both provided, or entity not found.
+    """
+    if user_id and organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either user_id or organization_id, not both.",
+        )
+    if not user_id and not organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either user_id or organization_id.",
+        )
+
+    if user_id:
+        user_dao = UserDAO(session)
+        user = user_dao.get_user_with_id(user_id)
+        ba = user.billing_account
+        if ba is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User {user_id} has no billing account.",
+            )
+        return ba
+
+    # organization_id path
+    org = session.query(Organization).filter_by(id=organization_id).first()
+    if org is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Organization {organization_id} not found.",
+        )
+    ba = org.billing_account
+    if ba is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Organization {organization_id} has no billing account.",
+        )
+    return ba
 
 
 @router.get("/get_all_users", response_model=List[UsersModelResponse])
 def get_all_users_models(
     session=Depends(get_db_session),
-) -> List[Users]:
+) -> List[User]:
     """
     Retrieve all users objects from the database.
 
-    :param users_dao: DAO for users models.
+    :param user_dao: DAO for users models.
     :return: list of users objects from database.
     """
-    users_dao = UsersDAO(session)
-    return users_dao.get_all_users()
+    user_dao = UserDAO(session)
+    return user_dao.get_all_users()
 
 
 @router.get(
@@ -77,8 +140,6 @@ def admin_list_organizations(
     :param session: Database session.
     :return: Paginated list of organizations with member counts.
     """
-    from orchestra.db.dao.organization_dao import OrganizationDAO
-
     org_dao = OrganizationDAO(session)
     member_dao = OrganizationMemberDAO(session)
 
@@ -92,7 +153,6 @@ def admin_list_organizations(
                 id=org.id,
                 name=org.name,
                 owner_id=org.owner_id,
-                billing_user_id=org.billing_user_id,
                 created_at=org.created_at,
                 member_count=member_count,
             ),
@@ -109,16 +169,16 @@ def admin_list_organizations(
 def get_user(
     id: str,  # noqa: WPS125
     session=Depends(get_db_session),
-) -> List[Users]:
+) -> List[User]:
     """
     Retrieve specific users object from the database.
 
     :param id: id of users instance.
-    :param users_dao: DAO for users models.
+    :param user_dao: DAO for users models.
     :return: list of users objects from database.
     """
-    users_dao = UsersDAO(session)
-    return users_dao.filter(id=id)
+    user_dao = UserDAO(session)
+    return user_dao.filter(id=id)
 
 
 @router.get("/get_all_recharge_types", response_model=List[RechargeTypeModelResponse])
@@ -177,7 +237,7 @@ def get_recharge_models(
 def get_recharge(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     at: Optional[datetime] = None,
-    user_id: Optional[str] = None,
+    billing_account_id: Optional[int] = None,
     quantity: Optional[int] = None,
     type: Optional[str] = None,  # noqa: WPS125
     session=Depends(get_db_session),
@@ -187,7 +247,7 @@ def get_recharge(  # noqa: WPS211
 
     :param id: id of recharge instance.
     :param at: at of recharge instance.
-    :param user_id: user_id of recharge instance.
+    :param billing_account_id: billing_account_id of recharge instance.
     :param quantity: quantity of recharge instance.
     :param type: type of recharge instance.
     :param recharge_dao: DAO for recharge models.
@@ -197,7 +257,7 @@ def get_recharge(  # noqa: WPS211
     return recharge_dao.filter(
         id=id,
         at=at,
-        user_id=user_id,
+        billing_account_id=billing_account_id,
         quantity=quantity,
         type=type,
     )
@@ -209,25 +269,31 @@ def create_recharge_model(
     session=Depends(get_db_session),
 ) -> None:
     """
-    Creates recharge model in the database.
+    Create a recharge record and credit the billing account.
 
-    :param new_recharge_object: new recharge model item.
-    :param recharge_dao: DAO for recharge models.
-    :param user_dao: DAO for user models.
+    The request body accepts ``user_id`` and/or ``organization_id``.  Exactly
+    one must be provided.  The billing account is resolved from whichever is
+    given.
+
+    :param new_recharge_object: Recharge details (see schema).
     """
     import logging
 
     logger = logging.getLogger(__name__)
 
-    # Log the incoming recharge request
+    entity_label = (
+        f"user={new_recharge_object.user_id}"
+        if new_recharge_object.user_id
+        else f"org={new_recharge_object.organization_id}"
+    )
     logger.info(
-        f"Creating recharge - User: {new_recharge_object.user_id}, "
+        f"Creating recharge - {entity_label}, "
         f"Type: {new_recharge_object.type}, "
         f"Quantity: {new_recharge_object.quantity}",
     )
 
     recharge_dao = RechargeDAO(session)
-    user_dao = UsersDAO(session)
+
     if (
         new_recharge_object.type == "payment"
         and new_recharge_object.transaction_id is None
@@ -237,22 +303,25 @@ def create_recharge_model(
             detail="Transaction id must be specified when adding a payment.",
         )
 
-    at = datetime.now(timezone.utc)
-    user_dao.recharge_credit(
+    # Resolve billing account from user_id or organization_id
+    ba = _resolve_billing_account(
+        session,
         user_id=new_recharge_object.user_id,
-        quantity=new_recharge_object.quantity,
+        organization_id=new_recharge_object.organization_id,
     )
 
-    # Calculate amount_usd and invoice_group for the new billing system
+    at = datetime.now(timezone.utc)
+
+    # Credit the billing account
+    ba.credits += Decimal(str(new_recharge_object.quantity))
+
+    # Calculate amount_usd and invoice_group
     amount_usd = new_recharge_object.quantity
 
-    # Handle custom invoice grouping for testing
     if new_recharge_object.target_month:
         try:
             year, month = map(int, new_recharge_object.target_month.split("-"))
-            # Create a date for the first day of the target month
             target_date = datetime(year, month, 1, tzinfo=timezone.utc)
-            # Calculate month-end date for the target month
             first_next_month = (
                 target_date.replace(day=1) + timedelta(days=32)
             ).replace(day=1)
@@ -263,134 +332,72 @@ def create_recharge_model(
                 detail="Invalid target_month format. Use 'YYYY-MM' (e.g., '2025-06')",
             )
     else:
-        # Default behavior: use month-end date for current month
         first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
         invoice_group = (first_next_month - timedelta(microseconds=1)).date()
 
-    # Set status based on recharge type:
-    # - "payment": Already paid via Stripe checkout → PAID (exclude from invoicing)
-    # - "auto": Usage-based recharge → PENDING_INVOICE (include in invoicing)
-    # - "promo": Free credits → PAID (exclude from invoicing)
+    # Set status based on recharge type
     if new_recharge_object.type in ["payment", "promo"]:
         status = RechargeStatus.PAID
-    else:  # "auto" and any other types
+    else:
         status = RechargeStatus.PENDING_INVOICE
 
     # For "auto" recharges, also create Stripe invoice item immediately
     if new_recharge_object.type == "auto":
-        logger.info(f"Processing auto recharge for user {new_recharge_object.user_id}")
-
-        # Get user to check for Stripe customer ID
-        user = user_dao.filter(id=new_recharge_object.user_id)
-        logger.info(f"User lookup result: {len(user) if user else 0} users found")
-
-        if user and len(user) > 0:
-            logger.info(
-                f"User data - ID: {user[0].id}, "
-                f"Stripe Customer ID: {user[0].stripe_customer_id}",
-            )
-
-            if user[0].stripe_customer_id:
-                logger.info(
-                    f"User has Stripe customer ID: {user[0].stripe_customer_id}",
-                )
-                try:
-                    # Configure Stripe API key
-                    stripe_key = os.environ.get("STRIPE_SECRET_KEY")
-                    logger.info(
-                        f"Stripe key status: {'Present' if stripe_key else 'Missing'}, "
-                        f"Key prefix: {stripe_key[:10] if stripe_key else 'N/A'}",
-                    )
-
-                    if stripe_key:
-                        stripe.api_key = stripe_key
-                        logger.info("Stripe API key set successfully")
-
-                        # Use Stripe product for consistent 1:1 pricing (1 credit = $1)
-                        quantity = int(new_recharge_object.quantity)
-                        logger.info(f"Creating invoice item for quantity: {quantity}")
-
-                        if quantity > 0:  # Only create if there's an actual quantity
-                            # Create Stripe invoice item using amount instead of price to avoid custom_unit_amount issues
-                            logger.info(
-                                f"Calling Stripe API - Customer: {user[0].stripe_customer_id}, "
-                                f"Amount: ${new_recharge_object.quantity} ({new_recharge_object.quantity * 100} cents)",
-                            )
-
-                            invoice_item = stripe.InvoiceItem.create(
-                                customer=user[0].stripe_customer_id,
-                                amount=int(
-                                    new_recharge_object.quantity * 100,
-                                ),  # Convert to cents
-                                currency="usd",
-                                description=f"{new_recharge_object.quantity} credits",
-                                metadata={
-                                    "recharge_type": "auto",
-                                    "user_id": new_recharge_object.user_id,
-                                    "invoice_group": str(invoice_group),
-                                },
-                            )
-
-                            logger.info(
-                                f"Stripe invoice item created successfully - "
-                                f"Invoice Item ID: {invoice_item.id}, "
-                                f"Customer: {invoice_item.customer}, "
-                                f"Amount: {invoice_item.amount} cents",
-                            )
-                        else:
-                            logger.warning(
-                                f"Skipping invoice item creation - quantity is 0",
-                            )
-                    else:
-                        logger.error("STRIPE_SECRET_KEY environment variable not set")
-                        raise ValueError(
-                            "STRIPE_SECRET_KEY environment variable not set",
-                        )
-                except stripe.error.StripeError as e:
-                    logger.error(
-                        f"Stripe API error for auto-recharge - "
-                        f"Type: {type(e).__name__}, "
-                        f"Message: {str(e)}, "
-                        f"Code: {getattr(e, 'code', 'N/A')}, "
-                        f"Param: {getattr(e, 'param', 'N/A')}",
-                    )
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Stripe error: {str(e)}",
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Unexpected error creating Stripe invoice item for auto-recharge - "
-                        f"Type: {type(e).__name__}, "
-                        f"Message: {str(e)}",
-                    )
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Failed to create auto-recharge invoice item: {str(e)}",
-                    )
-            else:
-                logger.warning(
-                    f"User {new_recharge_object.user_id} has no Stripe customer ID",
-                )
-        else:
-            logger.warning(f"User {new_recharge_object.user_id} not found in database")
-    else:
+        stripe_cid = ba.stripe_customer_id
         logger.info(
-            f"Recharge type is '{new_recharge_object.type}', skipping Stripe invoice item creation",
+            f"Processing auto recharge for {entity_label}, "
+            f"Stripe Customer ID: {stripe_cid}",
         )
 
-    # Create the recharge record in database
-    logger.info(
-        f"Creating recharge record in database - "
-        f"User: {new_recharge_object.user_id}, "
-        f"Quantity: {new_recharge_object.quantity}, "
-        f"Amount USD: {amount_usd}, "
-        f"Status: {status}, "
-        f"Invoice Group: {invoice_group}",
-    )
+        if stripe_cid:
+            try:
+                stripe_key = settings.stripe_secret_key
+                if not stripe_key:
+                    raise ValueError("STRIPE_SECRET_KEY environment variable not set")
 
+                stripe.api_key = stripe_key
+                quantity = int(new_recharge_object.quantity)
+
+                if quantity > 0:
+                    invoice_item = stripe.InvoiceItem.create(
+                        customer=stripe_cid,
+                        amount=int(new_recharge_object.quantity * 100),
+                        currency="usd",
+                        description=f"{new_recharge_object.quantity} credits",
+                        metadata={
+                            "recharge_type": "auto",
+                            "billing_account_id": str(ba.id),
+                            "invoice_group": str(invoice_group),
+                        },
+                    )
+                    logger.info(
+                        f"Stripe invoice item created: {invoice_item.id}",
+                    )
+                else:
+                    logger.warning("Skipping invoice item creation - quantity is 0")
+
+            except stripe.error.StripeError as e:
+                logger.error(f"Stripe API error for auto-recharge: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Stripe error: {str(e)}",
+                )
+            except Exception as e:
+                logger.error(f"Unexpected error creating Stripe invoice item: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create auto-recharge invoice item: {str(e)}",
+                )
+        else:
+            logger.warning(f"Billing account {ba.id} has no Stripe customer ID")
+    else:
+        logger.info(
+            f"Recharge type '{new_recharge_object.type}', skipping Stripe invoice item",
+        )
+
+    # Create the recharge record
     recharge_dao.create_recharge(
-        user_id=new_recharge_object.user_id,
+        billing_account_id=ba.id,
         quantity=int(new_recharge_object.quantity),
         amount_usd=amount_usd,
         invoice_group=invoice_group,
@@ -399,9 +406,7 @@ def create_recharge_model(
         status=status,
     )
 
-    logger.info(
-        f"Recharge record created successfully for user {new_recharge_object.user_id}",
-    )
+    logger.info(f"Recharge record created for billing_account {ba.id}")
 
 
 @router.put("/create_recharge_type")
@@ -422,87 +427,141 @@ def create_recharge_type_model(
 
 
 @router.put("/stripe_customer_id")
-def update_user_stripe_customer_id(  # noqa: WPS211
-    id: str,  # noqa: WPS125
-    stripe_customer_id: str,
+def update_stripe_customer_id(  # noqa: WPS211
+    stripe_customer_id: Optional[str] = None,
+    id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> None:
     """
-    Update the stripe customer id of a user.
+    Set or clear the Stripe customer ID on a billing account.
 
-    :param id: id of the user to be updated.
-    :param stripe_customer_id: stripe customer id.
-    :param users_dao: DAO for users models.
+    Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
+    Pass ``stripe_customer_id`` to set it, or omit / pass empty string
+    to clear it (set to NULL).
+
+    :param stripe_customer_id: Stripe customer ID, or None/empty to clear.
+    :param id: (deprecated) Alias for user_id.
+    :param user_id: User ID.
+    :param organization_id: Organization ID.
     """
-    users_dao = UsersDAO(session)
-    users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
-    users_dao.session.commit()
+    effective_user_id = user_id or id
+    ba = _resolve_billing_account(
+        session,
+        user_id=effective_user_id,
+        organization_id=organization_id,
+    )
+    ba.stripe_customer_id = stripe_customer_id if stripe_customer_id else None
+    session.commit()
 
 
 @router.put("/enable_autorecharge")
-def update_user_autorecharge(  # noqa: WPS211
-    id: str,  # noqa: WPS125
+def update_autorecharge(  # noqa: WPS211
     enable: bool,
+    id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> None:
     """
-    Update the autorecharge status of a user.
+    Enable or disable auto-recharge on a billing account.
 
-    :param id: id of the user to be updated.
-    :param enable: whether to enable or disable autorecharge.
-    :param users_dao: DAO for users models.
+    Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
+
+    When *enabling*, the account must have met the minimum spending
+    threshold (fraud-prevention measure).
+
+    :param enable: Whether to enable or disable autorecharge.
+    :param id: (deprecated) Alias for user_id.
+    :param user_id: User ID.
+    :param organization_id: Organization ID.
     """
-    users_dao = UsersDAO(session)
-    try:
-        users_dao.enable_autorecharge(user_id=id, enable=enable)
-        users_dao.session.commit()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException as e:
-        # Re-raise HTTPExceptions (like 404 for user not found)
-        raise e
+    effective_user_id = user_id or id
+    ba = _resolve_billing_account(
+        session,
+        user_id=effective_user_id,
+        organization_id=organization_id,
+    )
+
+    if enable:
+        ba_dao = BillingAccountDAO(session)
+        if not ba_dao.can_enable_auto_recharge(ba.id):
+            total_spending = float(ba_dao.get_total_spending(ba.id))
+            min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"User must spend at least ${min_required:.2f} before enabling "
+                    f"auto-recharge. Current spending: ${total_spending:.2f}"
+                ),
+            )
+
+    ba.autorecharge = enable
+    session.commit()
 
 
 @router.put("/autorecharge_threshold")
-def update_user_autorecharge_threshold(  # noqa: WPS211
-    id: str,  # noqa: WPS125
+def update_autorecharge_threshold(  # noqa: WPS211
     threshold: float,
+    id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> None:
     """
-    Update the autorecharge threshold of a user.
+    Set the autorecharge threshold on a billing account.
 
-    :param id: id of the user to be updated.
-    :param threshold: new autorecharge threshold.
-    :param users_dao: DAO for users models.
+    Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
+
+    :param threshold: New autorecharge threshold.
+    :param id: (deprecated) Alias for user_id.
+    :param user_id: User ID.
+    :param organization_id: Organization ID.
     """
-    users_dao = UsersDAO(session)
-    users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
-    users_dao.session.commit()
+    effective_user_id = user_id or id
+    ba = _resolve_billing_account(
+        session,
+        user_id=effective_user_id,
+        organization_id=organization_id,
+    )
+    ba.autorecharge_threshold = Decimal(str(threshold))
+    session.commit()
 
 
 @router.put("/autorecharge_qty")
-def update_user_autorecharge_qty(  # noqa: WPS211
-    id: str,  # noqa: WPS125
+def update_autorecharge_qty(  # noqa: WPS211
     qty: float,
+    id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> None:
     """
-    Update the autorecharge quantity of a user.
+    Set the autorecharge quantity on a billing account.
 
-    :param id: id of the user to be updated.
-    :param qty: new autorecharge quantity.
-    :param users_dao: DAO for users models.
+    Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
+
+    :param qty: New autorecharge quantity.
+    :param id: (deprecated) Alias for user_id.
+    :param user_id: User ID.
+    :param organization_id: Organization ID.
     """
-    users_dao = UsersDAO(session)
-    try:
-        users_dao.set_autorecharge_qty(user_id=id, qty=qty)
-        users_dao.session.commit()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException as e:
-        # Re-raise HTTPExceptions (like 404 for user not found)
-        raise e
+    if qty < float(MIN_AUTORECHARGE_AMOUNT):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Minimum auto-recharge amount is ${MIN_AUTORECHARGE_AMOUNT}. "
+            f"Provided: ${qty:.2f}",
+        )
+
+    effective_user_id = user_id or id
+    ba = _resolve_billing_account(
+        session,
+        user_id=effective_user_id,
+        organization_id=organization_id,
+    )
+    ba.autorecharge_qty = Decimal(str(qty))
+    session.commit()
 
 
 @router.put("/update_user_prompt_telemetry")
@@ -514,8 +573,8 @@ def update_user_prompt_telemetry(
     """
     Updates database evaluation model in the database.
     """
-    users_dao = UsersDAO(session)
-    users_dao.set_prompt_telemetry(user_id, activated)
+    user_dao = UserDAO(session)
+    user_dao.set_prompt_telemetry(user_id, activated)
 
 
 @router.get("/user_prompt_telemetry")
@@ -526,38 +585,52 @@ def get_user_prompt_telemetry(
     """
     Returns state of the store prompts attr for a given user.
     """
-    users_dao = UsersDAO(session)
-    return users_dao.is_telemetry_activated(user_id)
+    user_dao = UserDAO(session)
+    return user_dao.is_telemetry_activated(user_id)
 
 
 @router.post("/credit_card_fingerprint")
 def create_credit_card_fingerprint(
-    user_id: str,
     fingerprint: str,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> None:
     """
-    Creates a credit card fingerprint entry in the database.
+    Store a credit card fingerprint for a billing account.
+
+    Accepts ``user_id`` or ``organization_id``.
     """
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    credit_card_fingerprint_dao.create(user_id, fingerprint)
+    credit_card_fingerprint_dao.create(ba.id, fingerprint)
 
 
 @router.get("/duplicated_credit_card_fingerprint")
 def duplicated_credit_card_fingerprint(
-    user_id: str,
     fingerprint: str,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> bool:
     """
-    Creates a credit card fingerprint entry in the database.
+    Check if a credit card fingerprint is used by another billing account.
+
+    Accepts ``user_id`` or ``organization_id``.
     """
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
     results = credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
-    results = [r for r in results if r.user_id != user_id]
-    if len(results) > 0:
-        return True
-    return False
+    results = [r for r in results if r.billing_account_id != ba.id]
+    return len(results) > 0
 
 
 @router.get(
@@ -565,558 +638,22 @@ def duplicated_credit_card_fingerprint(
     response_model=List[CreditCardFingerprintModelResponse],
 )
 def get_credit_card_fingerprint(
-    user_id: str,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> List[CreditCardFingerprint]:
     """
-    Returns the credit card fingerprints entry in the database matching a user id.
+    Get credit card fingerprints for a billing account.
+
+    Accepts ``user_id`` or ``organization_id``.
     """
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    return credit_card_fingerprint_dao.filter(user_id=user_id)
-
-
-@router.post(
-    "/file",
-    responses={
-        200: {
-            "description": "File uploaded successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "message": "File uploaded successfully",
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def write_files(
-    request: FileWriteRequest,
-    session=Depends(get_db_session),
-):
-    """
-    Write/Update files to the Google Cloud Storage bucket.
-    The files will be stored at <user-id>/<project>/<path>
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    # Admin endpoint - use any context lookup
-    project = project_dao.get_by_user_and_name_any_context(
-        user_id=request.user_id,
-        name=request.project_name,
-    )
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {request.project_name} not found.",
-        )
-
-    try:
-        # Initialize the Google Cloud Storage client
-        client = Client()
-        bucket = client.bucket(
-            (
-                "interface-file-system-staging"
-                if request.staging
-                else "interface-file-system"
-            ),
-        )
-
-        # Construct the full path in the bucket
-        for file_path, file_content in request.files.items():
-            full_path = f"{request.user_id}/{project.name}/{file_path}"
-
-            # Create a new blob and upload the file contents
-            blob = bucket.blob(full_path)
-            # Expect file_content to be a base64-encoded string; decode and upload bytes
-            data_bytes = base64.b64decode(file_content)
-            blob.upload_from_string(data_bytes, content_type="application/octet-stream")
-
-        return {
-            "message": "Files uploaded successfully",
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to upload file: {str(e)}",
-        )
-
-
-@router.get(
-    "/file",
-    responses={
-        200: {
-            "description": "List of files retrieved successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "123/my-project/file1.txt": "SGVsbG8sIHdvcmxkIQ==",
-                        "123/my-project/folder/file2.txt": "SGVsbG8sIHdvcmxkIQ==",
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def get_files(
-    user_id: str,
-    project_name: str,
-    staging: bool = False,
-    session=Depends(get_db_session),
-):
-    """
-    Get all files in a user's project folder in the bucket.
-    Returns a flat list of file paths mapped to base64-encoded contents.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    # Admin endpoint - use any context lookup
-    project_obj = project_dao.get_by_user_and_name_any_context(
-        user_id=user_id,
-        name=project_name,
-    )
-    if not project_obj:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
-
-    try:
-        # Initialize the Google Cloud Storage client
-        client = Client()
-        bucket = client.bucket(
-            "interface-file-system-staging" if staging else "interface-file-system",
-        )
-
-        # Construct the prefix to list files under
-        prefix = f"{user_id}/{project_obj.name}/"
-
-        # List all blobs under the prefix
-        blobs = bucket.list_blobs(prefix=prefix)
-
-        # Extract the full paths and contents (base64-encoded)
-        files = dict()
-        for blob in blobs:
-            if blob.name.endswith("/"):
-                # Skip folder placeholders
-                continue
-            data_bytes = blob.download_as_bytes()
-            content_b64 = base64.b64encode(data_bytes).decode("ascii")
-            files[blob.name.replace(prefix, "")] = content_b64
-
-        return files
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get files: {str(e)}",
-        )
-
-
-@router.get(
-    "/file/contents",
-    responses={
-        200: {
-            "description": "File contents retrieved successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "contents": "SGVsbG8sIHdvcmxkIQ==",
-                        "path": "my-app/folder/file.txt",
-                    },
-                },
-            },
-        },
-        404_1: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-        404_2: {
-            "description": "File Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "File not found at path: <path>",
-                    },
-                },
-            },
-        },
-    },
-)
-def get_file_contents(
-    user_id: str,
-    project_name: str,
-    path: str,
-    staging: bool = False,
-    session=Depends(get_db_session),
-):
-    """
-    Get the contents of a specific file in the bucket.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    # Admin endpoint - use any context lookup
-    project_obj = project_dao.get_by_user_and_name_any_context(
-        user_id=user_id,
-        name=project_name,
-    )
-    if not project_obj:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
-
-    try:
-        # Initialize the Google Cloud Storage client
-        client = Client()
-        bucket = client.bucket(
-            "interface-file-system-staging" if staging else "interface-file-system",
-        )
-
-        # Construct the full path in the bucket
-        full_path = f"{user_id}/{project_obj.name}/{path}"
-
-        # Get the blob
-        blob = bucket.blob(full_path)
-
-        # Check if the file exists
-        if not blob.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"File not found at path: {full_path}",
-            )
-
-        # Download the contents and return as base64
-        data_bytes = blob.download_as_bytes()
-        contents_b64 = base64.b64encode(data_bytes).decode("ascii")
-
-        return {
-            "contents": contents_b64,
-            "path": full_path,
-        }
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get file contents: {str(e)}",
-        )
-
-
-@router.delete(
-    "/file",
-    responses={
-        200: {
-            "description": "File or folder deleted successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "message": "File or folder deleted successfully",
-                        "path": "my-app/folder/file.txt",
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project or File Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found or file not found at path: <path>",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_file_or_folder(
-    user_id: str,
-    project_name: str,
-    path: str,
-    staging: bool = False,
-    session=Depends(get_db_session),
-):
-    """
-    Delete a file or folder from the user's project directory.
-    If the path points to a folder, all contents will be deleted recursively.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    # Admin endpoint - use any context lookup
-    project_obj = project_dao.get_by_user_and_name_any_context(
-        user_id=user_id,
-        name=project_name,
-    )
-    if not project_obj:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
-
-    try:
-        # Initialize the Google Cloud Storage client
-        client = Client()
-        bucket = client.bucket(
-            "interface-file-system-staging" if staging else "interface-file-system",
-        )
-
-        # Construct the full path in the bucket
-        full_path = f"{user_id}/{project_obj.name}/{path}"
-
-        # Check if the path exists
-        blobs = list(bucket.list_blobs(prefix=full_path))
-        if not blobs:
-            raise HTTPException(
-                status_code=404,
-                detail=f"File or folder not found at path: {full_path}",
-            )
-
-        # Delete all blobs under the path (handles both files and folders)
-        for blob in blobs:
-            blob.delete()
-
-        return {
-            "message": "File or folder deleted successfully",
-            "path": full_path,
-        }
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete file or folder: {str(e)}",
-        )
-
-
-@router.post(
-    "/file/upload_url",
-    responses={
-        200: {
-            "description": "Signed resumable upload URL created",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "upload_url": "https://storage.googleapis.com/upload/storage/v1/b/...",
-                        "path": "123/my-project/path/to/file.bin",
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def create_upload_url(
-    request: FileUploadUrlRequest,
-    session=Depends(get_db_session),
-):
-    """
-    Create a signed URL for a GCS resumable upload session.
-    Clients should upload the file directly to this URL using the resumable protocol.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    # Admin endpoint - use any context lookup
-    project = project_dao.get_by_user_and_name_any_context(
-        user_id=request.user_id,
-        name=request.project_name,
-    )
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {request.project_name} not found.",
-        )
-
-    # Basic path validation: no traversal, no leading slash
-    if request.path.startswith("/") or ".." in request.path:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    try:
-        client = Client()
-        bucket = client.bucket(
-            (
-                "interface-file-system-staging"
-                if request.staging
-                else "interface-file-system"
-            ),
-        )
-
-        full_path = f"{request.user_id}/{project.name}/{request.path}"
-        blob = bucket.blob(full_path)
-
-        upload_url = blob.create_resumable_upload_session(
-            content_type=request.content_type or "application/octet-stream",
-            timeout=3600,
-        )
-
-        return {
-            "upload_url": upload_url,
-            "path": full_path,
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create upload URL: {str(e)}",
-        )
-
-
-@router.get(
-    "/file/download_url",
-    responses={
-        200: {
-            "description": "Signed download URL created",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "download_url": "https://storage.googleapis.com/storage/v1/b/...",
-                        "path": "123/my-project/path/to/file.bin",
-                        "expires_in": 3600,
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project or File Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <project> not found or file not found",
-                    },
-                },
-            },
-        },
-    },
-)
-def create_download_url(
-    user_id: str,
-    project_name: str,
-    path: str,
-    staging: bool = False,
-    expires_in: int = 3600,
-    as_prefix: bool = False,
-    session=Depends(get_db_session),
-):
-    """
-    Create a time-bound signed URL for downloading a file from GCS.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    # Admin endpoint - use any context lookup
-    project_obj = project_dao.get_by_user_and_name_any_context(
-        user_id=user_id,
-        name=project_name,
-    )
-    if not project_obj:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
-
-    if path.startswith("/") or ".." in path:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    try:
-        # Uses get_env for fallback: ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON -> GOOGLE_APPLICATION_CREDENTIALS
-        creds = Credentials.from_service_account_file(
-            get_env("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"),
-        )
-        client = Client(credentials=creds)
-        bucket = client.bucket(
-            "interface-file-system-staging" if staging else "interface-file-system",
-        )
-        full_path = f"{user_id}/{project_obj.name}/{path}"
-
-        if as_prefix:
-            blobs = list(bucket.list_blobs(prefix=full_path))
-            # Filter out directory placeholders
-            blobs = [b for b in blobs if not b.name.endswith("/")]
-            if not blobs:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No files found under prefix: {full_path}",
-                )
-            items = []
-            for b in blobs:
-                url = b.generate_signed_url(
-                    version="v4",
-                    expiration=timedelta(seconds=expires_in),
-                    method="GET",
-                )
-                items.append(
-                    {
-                        "path": b.name,
-                        "download_url": url,
-                    },
-                )
-            return {
-                "prefix": full_path,
-                "expires_in": expires_in,
-                "items": items,
-            }
-        else:
-            blob = bucket.blob(full_path)
-            if not blob.exists():
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"File not found at path: {full_path}",
-                )
-
-            download_url = blob.generate_signed_url(
-                version="v4",
-                expiration=timedelta(seconds=expires_in),
-                method="GET",
-            )
-            return {
-                "download_url": download_url,
-                "path": full_path,
-                "expires_in": expires_in,
-            }
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create download URL: {str(e)}",
-        )
+    return credit_card_fingerprint_dao.filter(billing_account_id=ba.id)
 
 
 @router.post("/billing/invoice-month")
@@ -1158,131 +695,424 @@ def trigger_billing_guard(
     session=Depends(get_db_session),
 ) -> dict:
     """
-    Trigger billing guard to suspend past-due users with zero credits.
+    Trigger billing guard to suspend past-due billing accounts with zero credits.
 
+    Operates on **all** billing accounts (users and organizations).
     This endpoint is designed to be called by Cloud Scheduler.
     """
     try:
-        # Import here to avoid circular imports
-        from orchestra.routines.billing_guard import suspend_past_due_users
+        from orchestra.routines.billing_guard import suspend_past_due_accounts
 
-        # Pass the session directly instead of letting the function manage its own
-        suspend_past_due_users(session=session)
+        suspend_past_due_accounts(session=session)
 
         return {
             "status": "success",
-            "message": "Billing guard completed - past due users with zero credits suspended",
+            "message": "Billing guard completed - past-due accounts with zero credits suspended",
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Billing guard failed: {str(e)}")
 
 
-@router.get("/user_billing_eligibility")
-def get_user_billing_eligibility(
-    user_id: str,
+# ============================================================================
+# Generalized billing-account operations (freeze, status, stripe-id)
+# ============================================================================
+
+
+@router.post("/billing/freeze")
+def freeze_billing_account(
+    freeze: bool = True,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> dict:
     """
-    Get billing eligibility information for a specific user.
+    Freeze (suspend) or unfreeze (activate) a billing account.
 
-    Checks if the user has spent at least $100 to be eligible for monthly billing.
+    Accepts ``user_id`` or ``organization_id`` (exactly one).
 
-    :param user_id: The user ID to check
-    :param session: Database session
-    :return: Dictionary with eligibility information
+    :param freeze: True to suspend, False to activate.
+    :param user_id: User ID.
+    :param organization_id: Organization ID.
     """
-    users_dao = UsersDAO(session)
-
-    try:
-        user = users_dao.get_user_with_id(user_id)
-        total_spending = users_dao.get_total_spending(user_id)
-        can_enable = users_dao.can_enable_monthly_billing(user_id)
-
-        return {
-            "user_id": user_id,
-            "total_spending": total_spending,
-            "can_enable_monthly_billing": can_enable,
-            "minimum_spend_required": 100.0,
-            "remaining_spend_needed": max(0, 100.0 - total_spending),
-        }
-    except HTTPException:
-        # Re-raise HTTPExceptions (like 404 for user not found) as-is
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    ba.account_status = "SUSPENDED" if freeze else "ACTIVE"
+    session.commit()
+    status_str = "frozen" if freeze else "unfrozen"
+    result: dict = {
+        "message": f"Account {status_str} successfully!",
+        "billing_account_id": ba.id,
+    }
+    if user_id:
+        result["user_id"] = user_id
+    if organization_id:
+        result["organization_id"] = organization_id
+    return result
 
 
-@router.post("/billing/migrate-users")
-def migrate_users_to_billing_compliance(
+@router.post("/billing/freeze-by-stripe-id")
+def freeze_billing_account_by_stripe_id(
+    stripe_id: str,
+    freeze: bool = True,
     session=Depends(get_db_session),
 ) -> dict:
     """
-    Migrate all users to comply with new billing requirements.
+    Freeze (suspend) or unfreeze (activate) a billing account looked up by
+    its Stripe customer ID.
+
+    Works for both user and organization billing accounts.
+
+    :param stripe_id: Stripe customer ID.
+    :param freeze: True to suspend, False to activate.
+    """
+    ba_dao = BillingAccountDAO(session)
+    ba = ba_dao.get_by_stripe_customer_id(stripe_id)
+    if not ba:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Billing account with Stripe ID {stripe_id} not found.",
+        )
+    new_status = "SUSPENDED" if freeze else "ACTIVE"
+    ba_dao.set_account_status(ba.id, new_status)
+    status_str = "frozen" if freeze else "unfrozen"
+    return {
+        "message": f"Account with stripe_id {stripe_id} {status_str} successfully!",
+        "billing_account_id": ba.id,
+    }
+
+
+@router.get("/billing/is-frozen")
+def is_billing_account_frozen(
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Check whether a billing account is frozen (SUSPENDED or CLOSED).
+
+    Accepts ``user_id`` or ``organization_id`` (exactly one).
+
+    :param user_id: User ID.
+    :param organization_id: Organization ID.
+    :return: ``{"is_frozen": bool, "billing_account_id": int, ...}``
+    """
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    frozen = ba.account_status in ("SUSPENDED", "CLOSED")
+    result: dict = {
+        "billing_account_id": ba.id,
+        "is_frozen": frozen,
+        "account_status": ba.account_status,
+    }
+    if user_id:
+        result["user_id"] = user_id
+    if organization_id:
+        result["organization_id"] = organization_id
+    return result
+
+
+@router.get("/billing/account-info")
+def get_billing_account_info(
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Get billing account info (stripe customer ID, credits, auto-recharge
+    settings) for a user or organization.
+
+    Accepts ``user_id`` or ``organization_id`` (exactly one).
+
+    :param user_id: User ID (for personal billing accounts).
+    :param organization_id: Organization ID (for org billing accounts).
+    :return: Billing account details.
+    """
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    result: dict = {
+        "billing_account_id": ba.id,
+        "stripe_customer_id": ba.stripe_customer_id,
+        "credits": float(ba.credits) if ba.credits else 0,
+        "autorecharge": ba.autorecharge,
+        "autorecharge_threshold": (
+            float(ba.autorecharge_threshold) if ba.autorecharge_threshold else 0
+        ),
+        "autorecharge_qty": float(ba.autorecharge_qty) if ba.autorecharge_qty else 0,
+        "account_status": ba.account_status,
+    }
+    if user_id:
+        result["user_id"] = user_id
+    if organization_id:
+        result["organization_id"] = organization_id
+    return result
+
+
+@router.put("/billing/stripe-id")
+def set_stripe_id(
+    stripe_id: str,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Set (or create) the Stripe customer ID on a billing account.
+
+    Accepts ``user_id`` or ``organization_id`` (exactly one).
+    If the entity has no billing account yet, one is created.
+
+    :param stripe_id: Stripe customer ID to set.
+    :param user_id: User ID.
+    :param organization_id: Organization ID.
+    """
+    ba_dao = BillingAccountDAO(session)
+
+    if user_id and organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either user_id or organization_id, not both.",
+        )
+    if not user_id and not organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either user_id or organization_id.",
+        )
+
+    if user_id:
+        user_dao = UserDAO(session)
+        user_row = user_dao.get_by_id(user_id)
+        if not user_row:
+            raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
+        user_instance = user_row[0]
+        ba = user_instance.billing_account
+        if ba is None:
+            ba = ba_dao.create(stripe_customer_id=stripe_id)
+            user_instance.billing_account_id = ba.id
+        else:
+            ba.stripe_customer_id = stripe_id
+    else:
+        org = session.query(Organization).filter_by(id=organization_id).first()
+        if org is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Organization {organization_id} not found.",
+            )
+        ba = org.billing_account
+        if ba is None:
+            ba = ba_dao.create(stripe_customer_id=stripe_id)
+            org.billing_account_id = ba.id
+        else:
+            ba.stripe_customer_id = stripe_id
+
+    session.commit()
+    entity_label = f"user {user_id}" if user_id else f"organization {organization_id}"
+    return {"message": f"Stripe ID set for {entity_label}", "billing_account_id": ba.id}
+
+
+VALID_TIERS = {"developer", "professional", "enterprise"}
+
+
+@router.put("/billing/tier")
+def set_billing_account_tier(
+    tier: str,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Set the tier on a billing account.
+
+    Accepts ``user_id`` or ``organization_id`` (exactly one).
+
+    :param tier: One of ``developer``, ``professional``, ``enterprise``.
+    :param user_id: User ID (for personal billing accounts).
+    :param organization_id: Organization ID (for org billing accounts).
+    """
+    if tier not in VALID_TIERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tier must be one of {', '.join(sorted(VALID_TIERS))}.",
+        )
+
+    ba_dao = BillingAccountDAO(session)
+
+    # Resolve or create billing account
+    if user_id and organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either user_id or organization_id, not both.",
+        )
+    if not user_id and not organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either user_id or organization_id.",
+        )
+
+    if user_id:
+        user_dao = UserDAO(session)
+        user_rows = user_dao.filter(id=user_id)
+        if not user_rows:
+            raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
+        user_instance = user_rows[0][0]
+        ba = user_instance.billing_account
+        if ba is None:
+            ba = ba_dao.create(tier=tier)
+            user_instance.billing_account_id = ba.id
+        else:
+            ba.tier = tier
+    else:
+        org = session.query(Organization).filter_by(id=organization_id).first()
+        if org is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Organization {organization_id} not found.",
+            )
+        ba = org.billing_account
+        if ba is None:
+            ba = ba_dao.create(tier=tier)
+            org.billing_account_id = ba.id
+        else:
+            ba.tier = tier
+
+    session.commit()
+    entity_label = f"user {user_id}" if user_id else f"organization {organization_id}"
+    return {
+        "message": f"Tier set to '{tier}' for {entity_label}",
+        "billing_account_id": ba.id,
+    }
+
+
+@router.get("/billing_eligibility")
+@router.get("/user_billing_eligibility")  # backward-compat alias
+def get_billing_eligibility(
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Get auto-recharge eligibility for a billing account.
+
+    Accepts either ``user_id`` or ``organization_id`` (exactly one).
+
+    Checks if the account has spent at least the minimum threshold in
+    real-money transactions before it can enable automatic top-ups.
+    This is a fraud-prevention measure to stop bot accounts from setting
+    up very low, repeated automatic refills and then disputing the charges.
+
+    :param user_id: User ID (for personal billing).
+    :param organization_id: Organization ID (for org billing).
+    :param session: Database session.
+    :return: Dictionary with eligibility information.
+    """
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    ba_dao = BillingAccountDAO(session)
+
+    total_spending = float(ba_dao.get_total_spending(ba.id))
+    can_enable = ba_dao.can_enable_auto_recharge(ba.id)
+    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
+
+    result: dict = {
+        "billing_account_id": ba.id,
+        "total_spending": total_spending,
+        "can_enable_auto_recharge": can_enable,
+        "minimum_spend_required": min_required,
+        "remaining_spend_needed": max(0.0, min_required - total_spending),
+    }
+    # Include the caller's key for backward compatibility
+    if user_id:
+        result["user_id"] = user_id
+    if organization_id:
+        result["organization_id"] = organization_id
+    return result
+
+
+@router.post("/billing/migrate-accounts")
+@router.post("/billing/migrate-users")  # backward-compat alias
+def migrate_billing_accounts_to_compliance(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Migrate **all** billing accounts (users + organizations) to comply with
+    auto-recharge requirements.
 
     This endpoint will:
-    1. Disable autorecharge for users who have spent less than $100
-    2. Set autorecharge amount to $25 for users with amounts below $25
+    1. Disable auto-recharge for accounts that haven't met the minimum spend threshold.
+    2. Set auto-recharge amount to $25 for accounts with amounts below $25.
 
-    :param session: Database session
-    :return: Dictionary with migration results
+    :param session: Database session.
+    :return: Dictionary with migration results.
     """
-    users_dao = UsersDAO(session)
+    ba_dao = BillingAccountDAO(session)
 
-    # Get all users with autorecharge enabled or with low autorecharge amounts
-    all_users = users_dao.get_all_users()
+    # Fetch every billing account in the system
+    all_accounts: List[BillingAccount] = session.query(BillingAccount).all()
 
-    results = {
-        "total_users_processed": 0,
-        "users_disabled": [],
-        "users_amount_updated": [],
-        "users_unaffected": [],
+    results: dict = {
+        "total_accounts_processed": 0,
+        "accounts_disabled": [],
+        "accounts_amount_updated": [],
+        "accounts_unaffected": [],
         "errors": [],
     }
 
-    for user in all_users:
-        try:
-            results["total_users_processed"] += 1
-            user_id = user.id
-            total_spending = users_dao.get_total_spending(user_id)
-            can_enable_billing = users_dao.can_enable_monthly_billing(user_id)
+    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
 
-            # Capture original values before any modifications
-            original_autorecharge = user.autorecharge
-            original_autorecharge_qty = user.autorecharge_qty
+    for ba in all_accounts:
+        try:
+            results["total_accounts_processed"] += 1
+
+            total_spending = float(ba_dao.get_total_spending(ba.id))
+            can_enable = ba_dao.can_enable_auto_recharge(ba.id)
+
+            original_autorecharge = ba.autorecharge
+            original_autorecharge_qty = ba.autorecharge_qty
 
             changes_made = False
 
-            # Check if user has autorecharge enabled but insufficient spending
-            if user.autorecharge and not can_enable_billing:
-                # Force disable autorecharge
-                users_dao.enable_autorecharge(user_id, False)
-                results["users_disabled"].append(
+            # Disable auto-recharge for accounts that haven't met the spend threshold
+            if original_autorecharge and not can_enable:
+                ba.autorecharge = False
+                results["accounts_disabled"].append(
                     {
-                        "user_id": user_id,
+                        "billing_account_id": ba.id,
                         "spending": total_spending,
-                        "reason": f"Insufficient spending (${total_spending:.2f} < $100.00)",
+                        "reason": f"Insufficient spending (${total_spending:.2f} < ${min_required:.2f})",
                     },
                 )
                 changes_made = True
 
-            # Check if user has autorecharge amount below $25 or None (regardless of enabled/disabled status)
-            if original_autorecharge_qty is None or original_autorecharge_qty < 25.0:
-                # Force update to $25 for everyone with low amounts or None values
-                users_dao.set_autorecharge_qty(user_id, 25.0)
-                results["users_amount_updated"].append(
+            # Enforce minimum auto-recharge amount of $25
+            if original_autorecharge_qty is None or float(
+                original_autorecharge_qty,
+            ) < float(MIN_AUTORECHARGE_AMOUNT):
+                ba.autorecharge_qty = MIN_AUTORECHARGE_AMOUNT
+                old_amt = (
+                    float(original_autorecharge_qty)
+                    if original_autorecharge_qty is not None
+                    else None
+                )
+                results["accounts_amount_updated"].append(
                     {
-                        "user_id": user_id,
-                        "old_amount": (
-                            float(original_autorecharge_qty)
-                            if original_autorecharge_qty is not None
-                            else None
-                        ),
-                        "new_amount": 25.0,
+                        "billing_account_id": ba.id,
+                        "old_amount": old_amt,
+                        "new_amount": float(MIN_AUTORECHARGE_AMOUNT),
                         "reason": (
-                            f"Amount below minimum (${original_autorecharge_qty:.2f} < $25.00)"
-                            if original_autorecharge_qty is not None
-                            else "Amount was None, set to minimum $25.00"
+                            f"Amount below minimum (${old_amt:.2f} < ${MIN_AUTORECHARGE_AMOUNT})"
+                            if old_amt is not None
+                            else f"Amount was None, set to minimum ${MIN_AUTORECHARGE_AMOUNT}"
                         ),
                         "autorecharge_enabled": original_autorecharge,
                     },
@@ -1290,9 +1120,9 @@ def migrate_users_to_billing_compliance(
                 changes_made = True
 
             if not changes_made:
-                results["users_unaffected"].append(
+                results["accounts_unaffected"].append(
                     {
-                        "user_id": user_id,
+                        "billing_account_id": ba.id,
                         "autorecharge_enabled": original_autorecharge,
                         "autorecharge_amount": (
                             float(original_autorecharge_qty)
@@ -1300,14 +1130,14 @@ def migrate_users_to_billing_compliance(
                             else None
                         ),
                         "spending": total_spending,
-                        "billing_eligible": can_enable_billing,
+                        "auto_recharge_eligible": can_enable,
                     },
                 )
 
         except Exception as e:
             results["errors"].append(
                 {
-                    "user_id": user.id if hasattr(user, "id") else "unknown",
+                    "billing_account_id": ba.id if hasattr(ba, "id") else "unknown",
                     "error": str(e),
                 },
             )
@@ -1316,10 +1146,11 @@ def migrate_users_to_billing_compliance(
     # Commit all changes
     try:
         session.commit()
+        total = results["total_accounts_processed"]
         results["status"] = "success"
-        results[
-            "message"
-        ] = f"Migration completed successfully. Processed {results['total_users_processed']} users."
+        results["message"] = (
+            f"Migration completed successfully. Processed {total} billing account(s)."
+        )
     except Exception as e:
         session.rollback()
         results["status"] = "error"
@@ -1327,120 +1158,6 @@ def migrate_users_to_billing_compliance(
         raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
 
     return results
-
-
-@router.post("/billing/test-auto-recharge")
-def test_queue_auto_recharge(
-    user_id: str,
-    credits: int = 50,
-    session=Depends(get_db_session),
-) -> dict:
-    """
-    Test endpoint to manually trigger auto-recharge for a user.
-
-    This endpoint allows admins to test the auto-recharge functionality
-    without waiting for a user's credits to fall below their threshold.
-
-    :param user_id: The user ID to trigger auto-recharge for
-    :param credits: Number of credits to recharge (default 50)
-    :param session: Database session
-    :return: Dictionary with results
-    """
-    import logging
-
-    from orchestra.lib.billing import queue_auto_recharge
-
-    logger = logging.getLogger(__name__)
-    users_dao = UsersDAO(session)
-
-    try:
-        # Get the user
-        user = users_dao.get_user_with_id(user_id)
-
-        # Log current state
-        logger.info(
-            f"Test auto-recharge triggered - "
-            f"User: {user_id}, "
-            f"Current credits: {user.credits}, "
-            f"Stripe customer ID: {user.stripe_customer_id}, "
-            f"Requested recharge: {credits} credits",
-        )
-
-        # Queue the auto-recharge
-        queue_auto_recharge(session, user, credits)
-
-        # Also credit the user immediately (like the real auto-recharge flow does)
-        users_dao.recharge_credit(user_id, credits)
-        session.commit()
-
-        # Get updated user state
-        updated_user = users_dao.get_user_with_id(user_id)
-
-        # Check if a recharge record was created
-        recharge_dao = RechargeDAO(session)
-        recent_recharges = recharge_dao.filter(
-            user_id=user_id,
-            type="auto",
-        )
-        latest_recharge = recent_recharges[-1] if recent_recharges else None
-
-        result = {
-            "status": "success",
-            "message": f"Auto-recharge test completed for user {user_id}",
-            "user": {
-                "id": user_id,
-                "credits_before": user.credits
-                - credits,  # Approximate, since we already credited
-                "credits_after": updated_user.credits,
-                "stripe_customer_id": user.stripe_customer_id,
-                "autorecharge_enabled": user.autorecharge,
-                "autorecharge_threshold": user.autorecharge_threshold,
-                "autorecharge_qty": user.autorecharge_qty,
-            },
-            "recharge": {
-                "created": latest_recharge is not None,
-                "id": latest_recharge.id if latest_recharge else None,
-                "quantity": (
-                    float(latest_recharge.quantity) if latest_recharge else None
-                ),
-                "status": latest_recharge.status if latest_recharge else None,
-                "invoice_group": (
-                    str(latest_recharge.invoice_group) if latest_recharge else None
-                ),
-            },
-            "notes": [],
-        }
-
-        # Add any relevant notes
-        if not user.stripe_customer_id:
-            result["notes"].append(
-                "User has no Stripe customer ID - invoice item was NOT created in Stripe",
-            )
-        else:
-            result["notes"].append(
-                "Stripe invoice item should have been created (check Stripe dashboard)",
-            )
-
-        if not user.autorecharge:
-            result["notes"].append("User has autorecharge disabled")
-
-        logger.info(f"Test auto-recharge completed successfully: {result}")
-        return result
-
-    except HTTPException:
-        # Re-raise HTTPExceptions (like 404 for user not found)
-        raise
-    except Exception as e:
-        logger.error(
-            f"Error in test auto-recharge - "
-            f"User: {user_id}, "
-            f"Error type: {type(e).__name__}, "
-            f"Message: {str(e)}",
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to test auto-recharge: {str(e)}",
-        )
 
 
 @router.post(
@@ -1478,3 +1195,256 @@ def admin_cleanup_expired_invites(
             status_code=500,
             detail=f"Failed to cleanup expired invites: {str(e)}",
         )
+
+
+# ============================================================================
+# Spending Limit Notification Endpoints
+# ============================================================================
+
+
+@router.post(
+    "/cleanup/spending-limit-notifications",
+    summary="Cleanup old spending limit notifications",
+    description="Delete spending limit notifications older than 6 months. "
+    "Called by scheduled cleanup job.",
+)
+def admin_cleanup_spending_limit_notifications(
+    months_to_keep: int = 6,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Clean up old spending limit notifications.
+
+    This endpoint is designed to be called by a scheduled job (e.g., GitHub Actions cron).
+    It deletes all spending limit notification records where the month is older than
+    the specified retention period.
+
+    :param months_to_keep: Number of months of notifications to retain (default: 6).
+    :param session: Database session.
+    :return: Count of deleted notifications and timestamp.
+    """
+    from orchestra.db.dao.spending_limit_notification_dao import (
+        SpendingLimitNotificationDAO,
+    )
+
+    notification_dao = SpendingLimitNotificationDAO(session)
+
+    try:
+        deleted_count = notification_dao.cleanup_old_notifications(months_to_keep)
+        session.commit()
+
+        return {
+            "deleted_count": deleted_count,
+            "months_retained": months_to_keep,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Successfully deleted {deleted_count} old notification(s)",
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cleanup spending limit notifications: {str(e)}",
+        )
+
+
+@router.get(
+    "/spending-limit-notifications",
+    summary="Get recent spending limit notifications",
+    description="Query the spending_limit_notifications table for debugging. "
+    "Returns recent notifications with optional filters.",
+)
+def admin_get_spending_limit_notifications(
+    entity_type: Optional[str] = Query(None, description="Filter by entity type"),
+    entity_id: Optional[str] = Query(None, description="Filter by entity ID"),
+    month: Optional[str] = Query(None, description="Filter by month (YYYY-MM)"),
+    limit: int = Query(50, ge=1, le=500),
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Get recent spending limit notifications for debugging.
+
+    :param entity_type: Optional filter by entity type (assistant, user, member, organization)
+    :param entity_id: Optional filter by entity ID
+    :param month: Optional filter by month in YYYY-MM format
+    :param limit: Maximum number of results (default: 50, max: 500)
+    :param session: Database session
+    :return: List of notification records
+    """
+    from orchestra.db.dao.spending_limit_notification_dao import (
+        SpendingLimitNotificationDAO,
+    )
+
+    notification_dao = SpendingLimitNotificationDAO(session)
+
+    try:
+        notifications = notification_dao.get_recent_notifications(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            month=month,
+            limit=limit,
+        )
+
+        return {
+            "count": len(notifications),
+            "notifications": [
+                {
+                    "id": n.id,
+                    "entity_type": n.entity_type,
+                    "entity_id": n.entity_id,
+                    "entity_name": n.entity_name,
+                    "month": n.month,
+                    "limit_value": float(n.limit_value) if n.limit_value else None,
+                    "current_spend": (
+                        float(n.current_spend) if n.current_spend else None
+                    ),
+                    "notified_user_ids": n.notified_user_ids,
+                    "notified_at": n.notified_at.isoformat() if n.notified_at else None,
+                    "limit_set_at": (
+                        n.limit_set_at.isoformat() if n.limit_set_at else None
+                    ),
+                }
+                for n in notifications
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get spending limit notifications: {str(e)}",
+        )
+
+
+@router.post(
+    "/spending-limit-reached",
+    response_model=SpendingLimitReachedResponse,
+    summary="Notify users when a spending limit is reached",
+    description="""
+    Called by Unity when a spending limit blocks an LLM call.
+    Sends email notifications to relevant users and records the notification
+    for deduplication.
+
+    **Entity Types:**
+    - `assistant`: Notifies the assistant owner
+    - `user`: Notifies the user
+    - `member`: Notifies the organization member
+    - `organization`: Notifies all org members who have assistants
+
+    **Deduplication:**
+    - Notifications are deduplicated by (entity_type, entity_id, month, limit_value)
+    - If `limit_set_at` is provided and is after the last notification, a new
+      notification is sent (handles the "limit removed then re-enabled" scenario)
+    """,
+)
+async def admin_spending_limit_reached(
+    body: SpendingLimitReachedRequest,
+    session: Session = Depends(get_db_session),
+) -> SpendingLimitReachedResponse:
+    """
+    Handle spending limit reached notification.
+
+    This endpoint:
+    1. Checks if we've already notified for this limit (deduplication)
+    2. Gets the relevant recipients based on entity type
+    3. Sends emails asynchronously (fire-and-forget)
+    4. Records the notification for future deduplication
+    """
+    notification_service = SpendingLimitNotificationService(session)
+
+    result = notification_service.process_limit_reached(
+        limit_type=body.limit_type,
+        entity_id=body.entity_id,
+        limit_value=body.limit_value,
+        current_spend=body.current_spend,
+        month=body.month,
+        limit_set_at=body.limit_set_at,
+        entity_name=body.entity_name,
+        organization_id=body.organization_id,
+    )
+
+    if result.notified:
+        session.commit()
+
+    return SpendingLimitReachedResponse(
+        notified=result.notified,
+        reason=result.reason,
+        recipient_count=result.recipient_count,
+        notified_user_ids=result.notified_user_ids,
+    )
+
+
+# =============================================================================
+# Rate Limit Administration
+# =============================================================================
+
+
+@router.post(
+    "/rate-limits/cleanup",
+    summary="Clean up old rate limit records",
+    description="Remove rate limit records older than 48 hours. Returns count of deleted records.",
+    tags=["Rate Limiting"],
+)
+def admin_rate_limit_cleanup(
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Manually trigger cleanup of old rate limit records.
+
+    This removes records older than 48 hours (the cleanup threshold).
+    This should normally run automatically via scheduled job.
+    """
+    from orchestra.routines.rate_limit_cleanup import cleanup_rate_limit_records
+
+    deleted_count = cleanup_rate_limit_records(session)
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+    }
+
+
+@router.get(
+    "/rate-limits/stats",
+    summary="Get rate limit statistics",
+    description="Get statistics about rate limit records for monitoring.",
+    tags=["Rate Limiting"],
+)
+def admin_rate_limit_stats(
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get statistics about rate limit records.
+
+    Returns:
+    - total_records: Total number of records in the table
+    - active_records_24h: Records in the active rate limiting window
+    - cleanup_eligible_48h: Records that will be deleted on next cleanup
+    - unique_users_24h: Number of unique users with requests in last 24h
+    - records_by_category: Breakdown by rate limit category
+    """
+    from orchestra.routines.rate_limit_cleanup import get_rate_limit_stats
+
+    return get_rate_limit_stats(session)
+
+
+@router.get(
+    "/rate-limits/user/{user_id}",
+    summary="Get rate limit usage for a user",
+    description="Get the current rate limit usage for a specific user.",
+    tags=["Rate Limiting"],
+)
+def admin_rate_limit_user_usage(
+    user_id: str,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get rate limit usage summary for a specific user.
+
+    Shows current usage counts for all categories in the 24-hour window.
+    """
+    from orchestra.db.dao.rate_limit_counter_dao import RateLimitCounterDAO
+
+    dao = RateLimitCounterDAO(session)
+    usage = dao.get_usage_summary(user_id=user_id)
+
+    return {
+        "user_id": user_id,
+        "usage_24h": usage,
+    }
