@@ -195,6 +195,10 @@ async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
             return response.json()
         except httpx.TimeoutException:
             print("Pubsub topic creation timed out")
+            return {
+                "success": True,
+                "message": "Pubsub topic creation timed out",
+            }
 
 
 async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
