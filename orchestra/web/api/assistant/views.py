@@ -3201,10 +3201,11 @@ async def upload_assistant_photo(
             detail="User not authenticated.",
         )
 
-    if not file.content_type or not file.content_type.startswith("image/"):
+    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file type. Only images are allowed.",
+            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_IMAGE_TYPES)}",
         )
 
     MAX_SIZE_BYTES = 5 * 1024 * 1024
@@ -3236,7 +3237,7 @@ async def upload_assistant_photo(
         logging.error(f"Error uploading assistant photo for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not upload photo: {str(e)}",
+            detail="Could not upload photo",
         )
 
 
@@ -3260,10 +3261,11 @@ async def upload_assistant_video(
             detail="User not authenticated.",
         )
 
-    if not file.content_type or not file.content_type.startswith("video/"):
+    ALLOWED_VIDEO_TYPES = {"video/mp4", "video/webm", "video/quicktime"}
+    if not file.content_type or file.content_type not in ALLOWED_VIDEO_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file type. Only videos are allowed.",
+            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_VIDEO_TYPES)}",
         )
 
     MAX_SIZE_BYTES = 50 * 1024 * 1024  # 50MB limit for videos
