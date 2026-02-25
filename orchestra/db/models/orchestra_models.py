@@ -1165,6 +1165,7 @@ class Assistant(Base):
     )
     voice_provider = Column(String, nullable=True)
     voice_mode = Column(String, nullable=True)
+    is_local = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Demo assistant metadata FK (NULL for regular assistants)
     demo_id = Column(

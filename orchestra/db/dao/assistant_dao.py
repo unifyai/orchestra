@@ -59,6 +59,7 @@ class AssistantDAO:
         voice_mode: Optional[str] = None,
         timezone: Optional[str] = None,
         organization_id: Optional[int] = None,
+        is_local: bool = False,
     ) -> Assistant:
         """
         Create a new Assistant.
@@ -99,6 +100,7 @@ class AssistantDAO:
             voice_mode=voice_mode,
             phone_country=phone_country,
             timezone=timezone,
+            is_local=is_local,
         )
         self.session.add(assistant)
         self.session.flush()

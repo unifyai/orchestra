@@ -147,6 +147,13 @@ class AssistantCreate(BaseModel):
         description="Whether to create the infrastructure for the assistant",
         exclude=True,
     )
+    is_local: Optional[bool] = Field(
+        False,
+        description=(
+            "Whether this is a local assistant (runs unity locally instead of on GKE). "
+            "Local assistants skip wakeup calls and GKE job management in the adapters."
+        ),
+    )
     phone_country: Optional[str] = Field(
         "US",
         description="Country code for phone number provisioning (e.g., US, GB)",
@@ -302,6 +309,10 @@ class AssistantRead(AssistantCreate):
         description="ID of demo metadata if this is a demo assistant, None for regular assistants.",
         example=None,
     )
+    is_local: Optional[bool] = Field(
+        None,
+        description="Whether this is a local assistant (runs unity locally instead of on GKE).",
+    )
 
     class Config:
         orm_mode = True
@@ -340,6 +351,7 @@ class AssistantRead(AssistantCreate):
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
                 "secrets": {"openai_api_key": "sk-..."},
+                "is_local": False,
             },
         }
 
@@ -605,6 +617,10 @@ class AssistantUpdate(BaseModel):
         True,
         description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
         exclude=True,
+    )
+    is_local: Optional[bool] = Field(
+        None,
+        description="Whether this is a local assistant (runs unity locally instead of on GKE).",
     )
     monthly_spending_cap: Optional[float] = Field(
         None,
