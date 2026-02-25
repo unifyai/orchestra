@@ -66,9 +66,9 @@ class Settings(BaseSettings):
     # Variables for the database
     db_host: str = "localhost"
     db_port: int = 5432
-    db_user: str = os.environ.get("ORCHESTRA_DB_USER", "orchestra")
-    db_pass: str = os.environ.get("ORCHESTRA_DB_PASS", "orchestra")
-    db_base: str = os.environ.get("ORCHESTRA_DB_BASE", "orchestra")
+    db_user: str = os.environ.get("ORCHESTRA_DB_USER", "")
+    db_pass: str = os.environ.get("ORCHESTRA_DB_PASS", "")
+    db_base: str = os.environ.get("ORCHESTRA_DB_BASE", "")
     db_path_query: str = ""
     db_send_host: bool = True
     db_echo: bool = False
@@ -274,10 +274,20 @@ class Settings(BaseSettings):
         # When running in Cloud Run with a Cloud SQL connection configured,
         # the Auth Proxy sidecar exposes a Unix socket under /cloudsql/.
         # Route through it so the proxy handles SSL/mTLS automatically.
+        # The proxy may still be starting when this runs (race condition),
+        # so poll until the socket directory appears.
         if os.path.isdir("/cloudsql"):
-            entries = [
-                e for e in os.listdir("/cloudsql") if os.path.isdir(f"/cloudsql/{e}")
-            ]
+            import time
+
+            for _ in range(30):
+                entries = [
+                    e
+                    for e in os.listdir("/cloudsql")
+                    if os.path.isdir(f"/cloudsql/{e}")
+                ]
+                if entries:
+                    break
+                time.sleep(1)
             if entries:
                 from urllib.parse import quote
 
