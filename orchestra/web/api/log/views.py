@@ -5503,12 +5503,12 @@ def process_traffic_logs(
         }
 
     except Exception as e:
-        import traceback
+        import logging as _logging
 
-        error_message = traceback.format_exc()
+        _logging.getLogger(__name__).exception("Error processing traffic logs")
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Error processing traffic logs: {error_message}"},
+            content={"detail": "Internal server error"},
         )
 
 
@@ -5711,12 +5711,12 @@ def run_index_maintenance(
             )
 
     except Exception as e:
-        import traceback
+        import logging as _logging
 
-        error_message = traceback.format_exc()
+        _logging.getLogger(__name__).exception("Error running index maintenance")
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Error running index maintenance: {error_message}"},
+            content={"detail": "Internal server error"},
         )
 
 
@@ -5849,12 +5849,12 @@ def generate_pending_embeddings(
         }
 
     except Exception as e:
-        import traceback
+        import logging as _logging
 
-        error_message = traceback.format_exc()
+        _logging.getLogger(__name__).exception("Error generating embeddings")
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Error generating embeddings: {error_message}"},
+            content={"detail": "Internal server error"},
         )
 
 
@@ -5961,10 +5961,10 @@ def index_ready_embeddings(
         }
 
     except Exception as e:
-        import traceback
+        import logging as _logging
 
-        error_message = traceback.format_exc()
+        _logging.getLogger(__name__).exception("Error inserting embeddings")
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Error inserting embeddings: {error_message}"},
+            content={"detail": "Internal server error"},
         )

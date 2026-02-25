@@ -375,6 +375,7 @@ async def wake_up_assistant(assistant_id: str, is_staging: bool = False):
         return await client.post(
             wake_up_url,
             data={"assistant_id": assistant_id},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             timeout=20,
         )
 
@@ -393,6 +394,7 @@ async def reawaken_assistant(assistant_id: str, is_staging: bool = False):
         response = await client.post(
             reawaken_url,
             data={"assistant_id": assistant_id},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             timeout=20,
         )
         response.raise_for_status()  # Raise an exception for bad status codes

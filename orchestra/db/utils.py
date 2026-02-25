@@ -21,9 +21,8 @@ def create_database(worker_id=None) -> None:
 
     with engine.connect() as conn:
         database_existance = conn.execute(
-            text(
-                f"SELECT 1 FROM pg_database WHERE datname='{datname}'",  # noqa: E501, S608
-            ),
+            text("SELECT 1 FROM pg_database WHERE datname = :name"),
+            {"name": datname},
         )
         database_exists = database_existance.scalar() == 1
 
@@ -49,13 +48,15 @@ def drop_database(worker_id=None) -> None:
     engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
 
     with engine.connect() as conn:
-        disc_users = (
-            "SELECT pg_terminate_backend(pg_stat_activity.pid) "  # noqa: S608
-            "FROM pg_stat_activity "
-            f"WHERE pg_stat_activity.datname = '{datname}' "
-            "AND pid <> pg_backend_pid();"
+        conn.execute(
+            text(
+                "SELECT pg_terminate_backend(pg_stat_activity.pid) "
+                "FROM pg_stat_activity "
+                "WHERE pg_stat_activity.datname = :name "
+                "AND pid <> pg_backend_pid()",
+            ),
+            {"name": datname},
         )
-        conn.execute(text(disc_users))
         conn.execute(text(f'DROP DATABASE "{datname}"'))
 
 
