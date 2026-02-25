@@ -39,6 +39,46 @@ This repo includes the code for Orchestra, the core API server and database laye
 - Orchestra Production API URL: https://api.unify.ai/v0
 - Orchestra Staging API URL: https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0
 
+## Security
+
+### Authentication
+
+All API endpoints under `/v0/` require a Bearer token via the `Authorization` header, except:
+- `GET /v0/health` — unauthenticated health check
+- `POST /v0/webhooks/stripe` — Stripe signature verification (no API key)
+
+Admin endpoints under `/v0/admin/` require the `ORCHESTRA_ADMIN_KEY`. This key comparison uses `secrets.compare_digest()` for timing-attack resistance. Admin endpoints also support OIDC token verification from the `CLOUD_SCHEDULER_SERVICE_ACCOUNT` service account.
+
+### Prometheus Metrics
+
+The `/metrics` endpoint requires Bearer token authentication via the `PROMETHEUS_METRICS_TOKEN` environment variable. User email addresses are excluded from metric labels to avoid PII exposure.
+
+### Rate Limiting
+
+An IP-based rate limiter protects admin endpoints, `/metrics`, and webhook endpoints (60 requests per IP per 60-second window).
+
+### Security Headers
+
+All responses include: `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-Security`, `Referrer-Policy`, `X-XSS-Protection`, and `Permissions-Policy`.
+
+### Required Environment Variables (Security)
+
+| Variable | Purpose |
+|----------|---------|
+| `ORCHESTRA_ADMIN_KEY` | Admin API authentication |
+| `PROMETHEUS_METRICS_TOKEN` | Metrics endpoint authentication |
+| `CLOUD_SCHEDULER_SERVICE_ACCOUNT` | (Optional) Service account email for OIDC-based scheduler auth |
+
+### GCP Infrastructure (not tracked in code)
+
+The following infrastructure settings are configured directly in GCP (`saas-368716`):
+
+- **Cloud SQL**: SSL required on `prod-ssd` and `staging-ssd`; Auth Proxy enforcement on `prod-ssd`
+- **Firewall rules**: Elasticsearch restricted to VPC internal (`10.0.0.0/8`); Grafana/Loki/Tempo restricted to VPC internal; default SSH and RDP rules deleted (use IAP instead)
+- **Storage buckets**: Public access prevention enforced on all 12 buckets
+- **Cloud Armor**: OWASP WAF rules (SQLi, XSS, LFI, RFI, RCE) on all security policies
+- **Cloud Scheduler**: All scheduler jobs in both `saas-368716` and `responsive-city-458413-a2` include `Authorization` headers
+
 ## Docs and other READMEs
 
 - [API Endpoints README](./orchestra/web/api/README.md): How to add new endpoints to the orchestra API, How to secure the endpoints.
