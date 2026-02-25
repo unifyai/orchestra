@@ -58,13 +58,18 @@ def get_app() -> FastAPI:
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
         default_response_class=UJSONResponse,
     )
-    # Set up CORS middleware
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "Origin",
+            "X-Requested-With",
+        ],
     )
 
     # IP-based rate limiting for admin and auth endpoints

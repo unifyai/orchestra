@@ -99,9 +99,9 @@ def auth_admin_key(
     if expected_key and secrets.compare_digest(admin_key, expected_key):
         return
 
-    # Check for Cloud Scheduler OIDC token
+    # Verify Cloud Scheduler OIDC tokens with full JWT signature verification
     scheduler_sa = os.environ.get("CLOUD_SCHEDULER_SERVICE_ACCOUNT")
-    if scheduler_sa and admin_key.startswith("eyJ"):
+    if scheduler_sa:
         try:
             from google.auth.transport import requests as google_requests
             from google.oauth2 import id_token
@@ -112,8 +112,8 @@ def auth_admin_key(
             )
             if claims.get("email") == scheduler_sa:
                 return
-        except Exception as e:
-            logger.warning(f"OIDC token verification failed: {e}")
+        except Exception:
+            pass
 
     # If not, check if the user is an admin user in the database
     try:
