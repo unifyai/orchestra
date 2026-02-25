@@ -275,7 +275,9 @@ class Settings(BaseSettings):
         # the Auth Proxy sidecar exposes a Unix socket under /cloudsql/.
         # Route through it so the proxy handles SSL/mTLS automatically.
         if os.path.isdir("/cloudsql"):
-            entries = [e for e in os.listdir("/cloudsql") if not e.startswith(".")]
+            entries = [
+                e for e in os.listdir("/cloudsql") if os.path.isdir(f"/cloudsql/{e}")
+            ]
             if entries:
                 from urllib.parse import quote
 
