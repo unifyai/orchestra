@@ -74,6 +74,7 @@ steps:
   - '--vpc-egress=all-traffic'
   - '--no-cpu-throttling'
   - '--cpu-boost'
+  - '--update-env-vars=ORCHESTRA_CLOUD_SQL_INSTANCE=$_CLOUDSQL_INSTANCE'
   id: Deploy Orchestra
   entrypoint: gcloud
   waitFor:
