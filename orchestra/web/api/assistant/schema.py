@@ -127,11 +127,6 @@ class AssistantCreate(BaseModel):
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
-    voice_mode: Optional[Literal["tts", "sts"]] = Field(
-        None,
-        description="The type of voice interaction, either text-to-speech (tts) or speech-to-speech (sts).",
-        example="tts",
-    )
     user_phone: Optional[str] = Field(
         None,
         description="Contact phone number of the user",
@@ -178,21 +173,17 @@ class AssistantCreate(BaseModel):
 
     @model_validator(mode="after")
     def check_voice_fields(cls, self):
-        voice_id, voice_provider, voice_mode = (
+        voice_id, voice_provider = (
             self.voice_id,
             self.voice_provider,
-            self.voice_mode,
         )
 
         # If any voice field is provided, id and provider are required.
-        if any(v is not None for v in [voice_id, voice_provider, voice_mode]):
+        if any(v is not None for v in [voice_id, voice_provider]):
             if voice_id is None or voice_provider is None:
                 raise ValueError(
                     "If providing voice information, both 'voice_id' and 'voice_provider' are required.",
                 )
-            # Default voice_mode if it wasn't specified
-            if voice_mode is None:
-                self.voice_mode = "tts"
         return self
 
     class Config:
@@ -217,7 +208,6 @@ class AssistantCreate(BaseModel):
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
-                "voice_mode": "tts",
                 "user_phone": "+15551234567",
                 "user_whatsapp_number": "+15551234567",
             },
@@ -340,7 +330,6 @@ class AssistantRead(AssistantCreate):
                 "assistant_whatsapp_number": "+15551234567",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
-                "voice_mode": "tts",
                 "agent_id": "12345",
                 "user_id": "123",
                 "organization_id": None,
@@ -603,11 +592,6 @@ class AssistantUpdate(BaseModel):
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
-    voice_mode: Optional[Literal["tts", "sts"]] = Field(
-        None,
-        description="The type of voice interaction, either text-to-speech (tts) or speech-to-speech (sts).",
-        example="tts",
-    )
     timezone: Optional[str] = Field(
         None,
         description="Timezone of the assistant in IANA format",
@@ -642,16 +626,14 @@ class AssistantUpdate(BaseModel):
 
         has_id = "voice_id" in provided
         has_provider = "voice_provider" in provided
-        has_mode = "voice_mode" in provided
 
         # No voice fields provided, nothing to do
-        if not any([has_id, has_provider, has_mode]):
+        if not any([has_id, has_provider]):
             return self
 
         # Clearing voice by sending "voice_id": null
         if has_id and self.voice_id is None:
             self.voice_provider = None
-            self.voice_mode = None
             return self
 
         # Setting/updating voice: if one of id/provider is given, both must be.
@@ -667,16 +649,6 @@ class AssistantUpdate(BaseModel):
                 raise ValueError(
                     "'voice_provider' cannot be null when setting a voice.",
                 )
-
-            # Default voice_mode if not provided
-            if not has_mode:
-                self.voice_mode = "tts"
-
-        # Only mode was provided, which is not allowed.
-        elif has_mode:
-            raise ValueError(
-                "Cannot update 'voice_mode' alone. Please provide 'voice_id' and 'voice_provider'.",
-            )
 
         return self
 
@@ -700,7 +672,6 @@ class AssistantUpdate(BaseModel):
                 "email": "ada.lovelace@newdomain.com",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
-                "voice_mode": "tts",
                 "phone_country": "GB",
                 "timezone": "Europe/London",
             },
