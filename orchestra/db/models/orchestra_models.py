@@ -1164,7 +1164,6 @@ class Assistant(Base):
         index=True,
     )
     voice_provider = Column(String, nullable=True)
-    voice_mode = Column(String, nullable=True)
     is_local = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Demo assistant metadata FK (NULL for regular assistants)
@@ -1205,10 +1204,6 @@ class Assistant(Base):
         sa.CheckConstraint(
             "desktop_mode IN ('ubuntu', 'windows', 'macos')",
             name="ck_assistant_desktop_mode",
-        ),
-        sa.CheckConstraint(
-            "voice_mode IN ('tts', 'sts')",
-            name="ck_assistant_voice_mode",
         ),
     )
 

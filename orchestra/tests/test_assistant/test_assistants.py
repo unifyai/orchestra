@@ -1545,7 +1545,6 @@ async def test_create_assistant_with_valid_voice_config(client: AsyncClient):
         "surname": "Full",
         "voice_id": "voice123",
         "voice_provider": "cartesia",
-        "voice_mode": "sts",
         "create_infra": False,
     }
     resp_full = await client.post("/v0/assistant", json=payload_full, headers=HEADERS)
@@ -1553,15 +1552,13 @@ async def test_create_assistant_with_valid_voice_config(client: AsyncClient):
     data_full = resp_full.json()["info"]
     assert data_full["voice_id"] == "voice123"
     assert data_full["voice_provider"] == "cartesia"
-    assert data_full["voice_mode"] == "sts"
 
-    # Case 2: Partial voice config (mode should default to 'tts')
+    # Case 2: Voice config with id and provider
     payload_partial = {
         "first_name": "Voice",
         "surname": "Partial",
         "voice_id": "voice456",
         "voice_provider": "elevenlabs",
-        # voice_mode is omitted
         "create_infra": False,
     }
     resp_partial = await client.post(
@@ -1573,7 +1570,6 @@ async def test_create_assistant_with_valid_voice_config(client: AsyncClient):
     data_partial = resp_partial.json()["info"]
     assert data_partial["voice_id"] == "voice456"
     assert data_partial["voice_provider"] == "elevenlabs"
-    assert data_partial["voice_mode"] == "tts"  # Check default
 
 
 @pytest.mark.anyio
@@ -1586,7 +1582,6 @@ async def test_create_assistant_with_valid_voice_config(client: AsyncClient):
             "surname": "Voice2",
             "voice_provider": "only_provider",
         },
-        {"first_name": "Invalid", "surname": "Voice3", "voice_mode": "tts"},
     ],
 )
 async def test_create_assistant_with_invalid_voice_config(
@@ -1645,7 +1640,6 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
     update_full = {
         "voice_id": "v_upd_1",
         "voice_provider": "openai",
-        "voice_mode": "sts",
     }
     patch1 = await client.patch(
         f"/v0/assistant/{assistant_id}/config",
@@ -1654,13 +1648,9 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
     )
     assert patch1.status_code == 200, patch1.text
     d1 = patch1.json()["info"]
-    assert (
-        d1["voice_id"] == "v_upd_1"
-        and d1["voice_provider"] == "openai"
-        and d1["voice_mode"] == "sts"
-    )
+    assert d1["voice_id"] == "v_upd_1" and d1["voice_provider"] == "openai"
 
-    # 3. Update with partial config (mode defaults to 'tts')
+    # 3. Update voice to a different provider
     update_partial = {"voice_id": "v_upd_2", "voice_provider": "cartesia"}
     patch2 = await client.patch(
         f"/v0/assistant/{assistant_id}/config",
@@ -1669,11 +1659,7 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
     )
     assert patch2.status_code == 200, patch2.text
     d2 = patch2.json()["info"]
-    assert (
-        d2["voice_id"] == "v_upd_2"
-        and d2["voice_provider"] == "cartesia"
-        and d2["voice_mode"] == "tts"
-    )
+    assert d2["voice_id"] == "v_upd_2" and d2["voice_provider"] == "cartesia"
 
     # 4. Clear voice config
     update_clear = {"voice_id": None}
@@ -1684,11 +1670,7 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
     )
     assert patch3.status_code == 200, patch3.text
     d3 = patch3.json()["info"]
-    assert (
-        d3["voice_id"] is None
-        and d3["voice_provider"] is None
-        and d3["voice_mode"] is None
-    )
+    assert d3["voice_id"] is None and d3["voice_provider"] is None
 
 
 @pytest.mark.anyio
@@ -1703,7 +1685,6 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
             {"voice_provider": "cartesia"},
             "both 'voice_id' and 'voice_provider' must be provided",
         ),
-        ({"voice_mode": "sts"}, "Cannot update 'voice_mode' alone"),
         (
             {"voice_id": "v_inv_2", "voice_provider": None},
             "'voice_provider' cannot be null",
