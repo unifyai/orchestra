@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 from contextlib import contextmanager
 
 from fastapi import Depends, Request
@@ -94,9 +95,25 @@ def auth_admin_key(
     """
     admin_key = credentials.credentials
 
-    # First check if the provided key matches the admin key from environment
-    if admin_key == os.environ["ORCHESTRA_ADMIN_KEY"]:
+    expected_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    if expected_key and secrets.compare_digest(admin_key, expected_key):
         return
+
+    # Check for Cloud Scheduler OIDC token
+    scheduler_sa = os.environ.get("CLOUD_SCHEDULER_SERVICE_ACCOUNT")
+    if scheduler_sa and admin_key.startswith("eyJ"):
+        try:
+            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token
+
+            claims = id_token.verify_oauth2_token(
+                admin_key,
+                google_requests.Request(),
+            )
+            if claims.get("email") == scheduler_sa:
+                return
+        except Exception as e:
+            logger.warning(f"OIDC token verification failed: {e}")
 
     # If not, check if the user is an admin user in the database
     try:

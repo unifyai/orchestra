@@ -27,6 +27,14 @@ def get_app() -> FastAPI:
 
     :return: application.
     """
+    import os
+
+    if os.environ.get("ON_PREM") and os.environ.get("GCP_PROJECT_ID") == "saas-368716":
+        raise RuntimeError(
+            "ON_PREM must not be set in cloud deployments. "
+            "This flag disables authentication and is only for self-hosted instances.",
+        )
+
     if settings.sentry_dsn:
         # Enables sentry integration.
         sentry_sdk.init(
@@ -58,6 +66,67 @@ def get_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # IP-based rate limiting for admin and auth endpoints
+    import time as _time
+    from collections import defaultdict
+
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class RateLimitMiddleware(BaseHTTPMiddleware):
+        """Limits requests per IP on sensitive paths (admin, webhooks, metrics)."""
+
+        def __init__(self, app, max_requests: int = 60, window_seconds: int = 60):
+            super().__init__(app)
+            self.max_requests = max_requests
+            self.window_seconds = window_seconds
+            self._requests: dict[str, list[float]] = defaultdict(list)
+
+        async def dispatch(self, request, call_next):
+            path = request.url.path
+            if not (
+                path.startswith("/v0/admin")
+                or path == "/metrics"
+                or path.startswith("/v0/webhooks")
+            ):
+                return await call_next(request)
+
+            client_ip = request.client.host if request.client else "unknown"
+            now = _time.monotonic()
+            window_start = now - self.window_seconds
+            timestamps = self._requests[client_ip]
+            self._requests[client_ip] = [t for t in timestamps if t > window_start]
+            if len(self._requests[client_ip]) >= self.max_requests:
+                from starlette.responses import JSONResponse
+
+                return JSONResponse(
+                    {"detail": "Rate limit exceeded"},
+                    status_code=429,
+                    headers={"Retry-After": str(self.window_seconds)},
+                )
+            self._requests[client_ip].append(now)
+            return await call_next(request)
+
+    app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
+
+    # Security headers middleware
+
+    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            response = await call_next(request)
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+            response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+            response.headers["X-XSS-Protection"] = "1; mode=block"
+            response.headers["Permissions-Policy"] = (
+                "camera=(), microphone=(), geolocation=()"
+            )
+            return response
+
+    app.add_middleware(SecurityHeadersMiddleware)
     # Add Prometheus metrics middleware
     app.add_middleware(
         PrometheusMiddleware,
