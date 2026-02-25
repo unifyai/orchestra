@@ -38,6 +38,7 @@ steps:
   - >-
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_JOB_REGION'
+  - '--set-cloudsql-instances=$_CLOUDSQL_INSTANCE'
   - '--quiet'
   id: Update migration image
   entrypoint: gcloud
@@ -92,6 +93,7 @@ substitutions:
   _PLATFORM: managed
   _JOB_NAME: orchestra-staging-migrator
   _FIXED_COMMIT_HASH: 8f98f587e9081412d4570356c3e43441d0ff1705
+  _CLOUDSQL_INSTANCE: saas-368716:europe-west3:staging-ssd
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
