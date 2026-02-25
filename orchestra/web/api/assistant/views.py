@@ -181,6 +181,7 @@ def _build_assistant_read(
         voice_mode=a.voice_mode,
         timezone=a.timezone,
         demo_id=a.demo_id,
+        is_local=a.is_local,
         monthly_spending_cap=(
             float(a.monthly_spending_cap)
             if a.monthly_spending_cap is not None
@@ -382,6 +383,7 @@ async def create_assistant(
             user_whatsapp_number=assistant_in.user_whatsapp_number,
             timezone=assistant_in.timezone,
             organization_id=organization_id,
+            is_local=assistant_in.is_local or False,
         )
 
         # For org assistants, grant Owner role to creator
@@ -778,19 +780,22 @@ async def create_assistant(
             detail="Failed to create assistant.",
         )
 
-    # Phase 3: Wake up assistant
-    response = await wake_up_assistant(
-        assistant.agent_id,
-        is_staging=settings.is_staging,
-    )
-    if response.status_code != 200:
-        logging.error(f"Failed to wake up assistant: {response.text}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to wake up assistant.",
+    # Phase 3: Wake up assistant (skip for local assistants -- unity runs locally)
+    if not assistant_in.is_local:
+        response = await wake_up_assistant(
+            assistant.agent_id,
+            is_staging=settings.is_staging,
         )
+        if response.status_code != 200:
+            logging.error(f"Failed to wake up assistant: {response.text}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to wake up assistant.",
+            )
+        else:
+            print(f"ASSISTANT AWAKENED: {assistant.agent_id}")
     else:
-        print(f"ASSISTANT AWAKENED: {assistant.agent_id}")
+        print(f"SKIPPED WAKEUP (local assistant): {assistant.agent_id}")
 
     # (Optional) Log pre-hire chat if provided
     if assistant_in.pre_hire_chat:

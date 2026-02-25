@@ -84,6 +84,25 @@ async def test_create_assistant_success(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_calls):
+    # `POST /v0/assistant` with is_local=True should persist the flag
+    # and skip the wake_up_assistant call.
+    mock_wake_up, _ = mock_assistant_infra_calls
+    payload = {
+        "first_name": "LocalDev",
+        "surname": "Bot",
+        "is_local": True,
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    data = resp.json()["info"]
+    assert data["is_local"] is True
+    assert data["first_name"] == "LocalDev"
+    mock_wake_up.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_create_assistant_missing_field(client: AsyncClient):
     # `POST /v0/assistant` missing surname -> 200 OK (as it's optional)
     payload = {
