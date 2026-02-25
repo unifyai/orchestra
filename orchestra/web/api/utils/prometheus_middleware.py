@@ -1,8 +1,11 @@
+import os
 import re
+import secrets
 import time
 import uuid
 from typing import Tuple
 
+from fastapi import HTTPException
 from opentelemetry import trace
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 from prometheus_client.openmetrics.exposition import (
@@ -13,7 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Match
-from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
+from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_500_INTERNAL_SERVER_ERROR
 from starlette.types import ASGIApp
 
 from orchestra.web.api.utils.inactivity_shutdown import record_activity
@@ -73,7 +76,7 @@ REQUESTS_IN_PROGRESS = Gauge(
 REQUESTS_WITH_USER = Counter(
     "orchestra_user_requests_total",
     "Total count of requests by user, method and path.",
-    ["user_id", "user_email", "method", "path", "app_name", "request_id"],
+    ["user_id", "method", "path", "app_name", "request_id"],
 )
 
 # Billing metrics
@@ -164,13 +167,9 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
             after_time = time.perf_counter()
 
             user_id = getattr(request.state, "user_id", None)
-            user_email = getattr(request.state, "user_email", None)
-            # Record request with user information in Prometheus
             if user_id:
-                # Track authenticated requests with more detailed user info
                 REQUESTS_WITH_USER.labels(
                     user_id=user_id,
-                    user_email=user_email or "unknown",
                     method=method,
                     path=path,
                     app_name=self.app_name,
@@ -239,25 +238,26 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
 def metrics(request: Request) -> Response:
     """
     Endpoint that returns the aggregated Prometheus metrics.
-    Includes simple Bearer-token authentication to secure the endpoint.
+    Protected by Bearer-token authentication.
     """
-    # TODO: figure out basic auth for prometheus
-    # # Bearer token required
-    # auth_header = request.headers.get("Authorization")
-    # if not auth_header or not auth_header.startswith("Bearer "):
-    #     raise HTTPException(
-    #         status_code=HTTP_401_UNAUTHORIZED,
-    #         detail="Missing or invalid Authorization header",
-    #     )
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid Authorization header",
+        )
 
-    # incoming_token = auth_header[len("Bearer ") :]
+    incoming_token = auth_header[len("Bearer ") :]
 
-    # expected_token = os.getenv("PROMETHEUS_METRICS_TOKEN")
-    # if not expected_token or (incoming_token != expected_token):
-    #     raise HTTPException(
-    #         status_code=HTTP_401_UNAUTHORIZED,
-    #         detail="Invalid token",
-    #     )
+    expected_token = os.getenv("PROMETHEUS_METRICS_TOKEN")
+    if not expected_token or not secrets.compare_digest(
+        incoming_token,
+        expected_token,
+    ):
+        raise HTTPException(
+            status_code=HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+        )
 
     return Response(
         generate_latest(REGISTRY),
