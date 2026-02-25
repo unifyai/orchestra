@@ -73,11 +73,19 @@ All responses include: `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Tran
 
 The following infrastructure settings are configured directly in GCP (`saas-368716`):
 
-- **Cloud SQL**: SSL required on `prod-ssd` and `staging-ssd`; Auth Proxy enforcement on `prod-ssd`
-- **Firewall rules**: Elasticsearch restricted to VPC internal (`10.0.0.0/8`); Grafana/Loki/Tempo restricted to VPC internal; default SSH and RDP rules deleted (use IAP instead)
-- **Storage buckets**: Public access prevention enforced on all 12 buckets
-- **Cloud Armor**: OWASP WAF rules (SQLi, XSS, LFI, RFI, RCE) on all security policies
-- **Cloud Scheduler**: All scheduler jobs in both `saas-368716` and `responsive-city-458413-a2` include `Authorization` headers
+- **Cloud SQL**: SSL required on all instances (`prod-ssd`, `staging-ssd`, `dev`). `prod-ssd` uses Auth Proxy enforcement. The `dev` instance requires `sslMode: ENCRYPTED_ONLY`.
+- **Secret Manager**: `EVAL_SERVER_PASSWORD` and `EVAL_SERVER_URL` are stored in Secret Manager and mounted into the Cloud Run service as secrets (not plaintext environment variables).
+- **Firewall rules**: Elasticsearch restricted to VPC internal (`10.0.0.0/8`); Grafana/Loki/Tempo restricted to VPC internal; SSH/RDP restricted to IAP tunnel range (`35.235.240.0/20`); `allow-omniparser-port-8000` restricted to IAP range.
+- **Storage buckets**: `publicAccessPrevention` enforced on all 18 buckets. No `allUsers` or `allAuthenticatedUsers` bindings on any bucket.
+- **Cloud Run ingress**: `orchestra`, `saas-web-app` (Console), and `landing-page` services use `internal-and-cloud-load-balancing` ingress (not `all`). External traffic must route through the load balancer.
+- **Prometheus VM**: Network tags limited to `monitoring` only (no `http-server`/`https-server`). Grafana, Loki, Tempo, and Prometheus are not directly reachable from the internet; access is via IAP or VPN.
+- **Cloud Armor**: OWASP WAF rules (SQLi, XSS, LFI, RFI, RCE) on all security policies.
+- **Cloud Scheduler**: All scheduler jobs in both `saas-368716` and `responsive-city-458413-a2` include `Authorization` headers.
+
+### GitHub Repository Settings (not tracked in code)
+
+- **Branch protection** on `main`: Requires 1 approving pull request review. Force pushes and branch deletions are blocked.
+- **Dependabot**: Vulnerability alerts and automated security fixes are enabled.
 
 ## Docs and other READMEs
 
