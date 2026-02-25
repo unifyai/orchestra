@@ -152,15 +152,15 @@ def mock_tts_services_factory(fastapi_app):
     with patch(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
     ) as mock_send_pubsub:
-        fastapi_app.dependency_overrides[
-            OriginalCartesiaService
-        ] = lambda: cartesia_mock
-        fastapi_app.dependency_overrides[
-            OriginalElevenLabsService
-        ] = lambda: elevenlabs_mock
-        fastapi_app.dependency_overrides[
-            OriginalDeepgramService
-        ] = lambda: deepgram_mock
+        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
+            lambda: cartesia_mock
+        )
+        fastapi_app.dependency_overrides[OriginalElevenLabsService] = (
+            lambda: elevenlabs_mock
+        )
+        fastapi_app.dependency_overrides[OriginalDeepgramService] = (
+            lambda: deepgram_mock
+        )
         fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
 
         yield cartesia_mock, elevenlabs_mock, deepgram_mock, openai_mock

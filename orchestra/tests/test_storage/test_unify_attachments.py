@@ -594,7 +594,8 @@ class TestDeleteAssistantRecordings:
             yield service, new_blob, legacy_blob
 
     def test_deletes_from_new_and_legacy_paths(
-        self, bucket_service_with_recording_mocks
+        self,
+        bucket_service_with_recording_mocks,
     ):
         service, new_blob, legacy_blob = bucket_service_with_recording_mocks
 
