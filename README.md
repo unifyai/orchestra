@@ -77,7 +77,7 @@ The following infrastructure settings are configured directly in GCP (`saas-3687
 - **Secret Manager**: `EVAL_SERVER_PASSWORD` and `EVAL_SERVER_URL` are stored in Secret Manager and mounted into the Cloud Run service as secrets (not plaintext environment variables).
 - **Firewall rules**: Elasticsearch restricted to VPC internal (`10.0.0.0/8`); Grafana/Loki/Tempo restricted to VPC internal; SSH/RDP restricted to IAP tunnel range (`35.235.240.0/20`); `allow-omniparser-port-8000` restricted to IAP range.
 - **Storage buckets**: `publicAccessPrevention` enforced on all 18 buckets. No `allUsers` or `allAuthenticatedUsers` bindings on any bucket.
-- **Cloud Run ingress**: `orchestra`, `saas-web-app` (Console), and `landing-page` services use `internal-and-cloud-load-balancing` ingress (not `all`). External traffic must route through the load balancer.
+- **Cloud Run ingress**: Currently `all` (default). Restricting to `internal-and-cloud-load-balancing` requires migrating from Cloud Run custom domain mappings to a proper Google Cloud Load Balancer with serverless NEGs first — custom domain mapping traffic is classified as external and gets rejected with 404.
 - **Prometheus VM**: Network tags limited to `monitoring` only (no `http-server`/`https-server`). Grafana, Loki, Tempo, and Prometheus are not directly reachable from the internet; access is via IAP or VPN.
 - **Cloud Armor**: OWASP WAF rules (SQLi, XSS, LFI, RFI, RCE) on all security policies.
 - **Cloud Scheduler**: All scheduler jobs in both `saas-368716` and `responsive-city-458413-a2` include `Authorization` headers.
