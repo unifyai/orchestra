@@ -39,6 +39,7 @@ steps:
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_JOB_REGION'
   - '--set-cloudsql-instances=$_CLOUDSQL_INSTANCE'
+  - '--update-env-vars=ORCHESTRA_CLOUD_SQL_INSTANCE=$_CLOUDSQL_INSTANCE'
   - '--quiet'
   id: Update migration image
   entrypoint: gcloud

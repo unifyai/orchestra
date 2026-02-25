@@ -271,33 +271,18 @@ class Settings(BaseSettings):
 
         :return: database URL.
         """
-        # When running in Cloud Run with a Cloud SQL connection configured,
-        # the Auth Proxy sidecar exposes a Unix socket under /cloudsql/.
-        # Route through it so the proxy handles SSL/mTLS automatically.
-        # The proxy may still be starting when this runs (race condition),
-        # so poll until the socket directory appears.
-        if os.path.isdir("/cloudsql"):
-            import time
+        # When the Cloud SQL Auth Proxy socket exists, route through it
+        # so the proxy handles SSL/mTLS automatically.
+        socket_dir = f"/cloudsql/{self.cloud_sql_instance}"
+        if os.path.isdir(socket_dir):
+            from urllib.parse import quote
 
-            for _ in range(30):
-                entries = [
-                    e
-                    for e in os.listdir("/cloudsql")
-                    if os.path.isdir(f"/cloudsql/{e}")
-                ]
-                if entries:
-                    break
-                time.sleep(1)
-            if entries:
-                from urllib.parse import quote
-
-                socket_dir = f"/cloudsql/{entries[0]}"
-                return URL(
-                    f"postgresql+psycopg2://"
-                    f"{quote(self.db_user, safe='')}:"
-                    f"{quote(self.db_pass, safe='')}@"
-                    f"/{self.db_base}?host={socket_dir}",
-                )
+            return URL(
+                f"postgresql+psycopg2://"
+                f"{quote(self.db_user, safe='')}:"
+                f"{quote(self.db_pass, safe='')}@"
+                f"/{self.db_base}?host={socket_dir}",
+            )
 
         host = self.db_host
         port = self.db_port
