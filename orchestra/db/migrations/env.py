@@ -65,6 +65,30 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
+def _wait_for_cloudsql_proxy(timeout: int = 30) -> None:
+    """
+    Block until the Cloud SQL Auth Proxy socket is ready.
+
+    Cloud Run jobs start the command and proxy sidecar concurrently,
+    so the socket may not exist yet when Alembic begins.
+    """
+    import os
+    import time
+
+    socket_dir = f"/cloudsql/{settings.cloud_sql_instance}"
+    if not os.path.isdir("/cloudsql"):
+        return
+    for i in range(timeout):
+        if os.path.isdir(socket_dir):
+            return
+        time.sleep(1)
+    raise RuntimeError(
+        f"Cloud SQL Auth Proxy socket not ready at {socket_dir} "
+        f"after {timeout}s. Check that ORCHESTRA_CLOUD_SQL_INSTANCE "
+        f"matches the instance configured on the Cloud Run job.",
+    )
+
+
 def run_migrations_online() -> None:
     """
     Run migrations in 'online' mode.
@@ -72,6 +96,7 @@ def run_migrations_online() -> None:
     In this scenario we need to create an Engine
     and associate a connection with the context.
     """
+    _wait_for_cloudsql_proxy()
     connectable = create_engine(str(settings.db_url))
 
     with connectable.connect() as connection:
