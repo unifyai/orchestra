@@ -703,25 +703,27 @@ class LogEventDAO:
         if unique_key_columns:
             from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
-            # Step 1: Check for duplicates within the batch
-            seen = set()
-            for row in completed:
-                combo = tuple(row.get(col) for col in unique_key_columns)
-                if None in combo:
-                    raise ValueError(
-                        "Composite key columns must all have values.",
-                    )
-                if combo in seen:
-                    raise ValueError(
-                        f"Duplicate composite key values in batch: {combo}",
-                    )
-                seen.add(combo)
-
-            # Step 2: Check against existing data using UniqueConstraintDAO
             unique_dao = UniqueConstraintDAO(self.session)
 
-            # Use real log_event_ids if provided, otherwise skip constraint insertion
-            if log_event_ids and len(log_event_ids) == len(completed):
+            _MAX_CONFLICT_RETRIES = 3
+            for _attempt in range(_MAX_CONFLICT_RETRIES):
+                # Check for duplicates within the batch
+                seen = set()
+                for row in completed:
+                    combo = tuple(row.get(col) for col in unique_key_columns)
+                    if None in combo:
+                        raise ValueError(
+                            "Composite key columns must all have values.",
+                        )
+                    if combo in seen:
+                        raise ValueError(
+                            f"Duplicate composite key values in batch: {combo}",
+                        )
+                    seen.add(combo)
+
+                if not (log_event_ids and len(log_event_ids) == len(completed)):
+                    break
+
                 log_entries = [
                     (log_event_ids[i], {col: row[col] for col in unique_key_columns})
                     for i, row in enumerate(completed)
@@ -733,11 +735,51 @@ class LogEventDAO:
                     key_columns=list(unique_key_columns),
                 )
 
-                if duplicate:
+                if not duplicate:
+                    break
+
+                if _attempt == _MAX_CONFLICT_RETRIES - 1:
                     _, key_values = duplicate
                     raise ValueError(
                         f"Duplicate composite key already exists for this context: {key_values}",
                     )
+
+                # Bump counters past the conflicting value so _next_counter_value
+                # returns a fresh ID on the next call, then recompute the
+                # affected row(s).
+                _, conflicting_kv = duplicate
+                for col in unique_key_columns:
+                    if col not in auto_counting:
+                        continue
+                    cval = conflicting_kv.get(col)
+                    if cval is None:
+                        continue
+                    parent_col = auto_counting.get(col)
+                    pv: Dict[str, Any] = {}
+                    cur = parent_col
+                    while cur is not None:
+                        pv[cur] = conflicting_kv.get(cur)
+                        cur = auto_counting.get(cur)
+                    ck = (col, tuple(sorted(pv.items())))
+                    reserved_counters[ck] = max(
+                        reserved_counters.get(ck, -1),
+                        cval,
+                    )
+
+                for row in completed:
+                    if all(
+                        row.get(c) == conflicting_kv.get(c) for c in unique_key_columns
+                    ):
+                        for col in unique_key_columns:
+                            if col not in auto_counting:
+                                continue
+                            parent_col = auto_counting.get(col)
+                            pv = {}
+                            cur = parent_col
+                            while cur is not None:
+                                pv[cur] = row[cur]
+                                cur = auto_counting.get(cur)
+                            row[col] = _next_counter_value(col, pv)
 
         return completed
 

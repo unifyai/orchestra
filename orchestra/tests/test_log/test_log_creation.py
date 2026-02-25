@@ -1710,3 +1710,46 @@ async def test_create_with_nested_pydantic_schema_and_nullable_fields(
     import json
 
     assert fields["order"]["data_type"] == json.dumps(order_schema)
+
+
+@pytest.mark.anyio
+async def test_concurrent_auto_counting_produces_unique_ids(client: AsyncClient):
+    """Two concurrent log creates on the same auto-counted context must both
+    succeed with distinct row_id values, not collide on the same value."""
+    import asyncio
+
+    project_name = "concurrent-auto-count-project"
+    context_name = "concurrent-auto-count-ctx"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"row_id": "int"},
+            "auto_counting": {"row_id": None},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    async def _create_one(label: str):
+        return await _create_log(
+            client,
+            project_name,
+            context=context_name,
+            entries={"label": label},
+        )
+
+    r1, r2 = await asyncio.gather(
+        _create_one("a"),
+        _create_one("b"),
+    )
+
+    assert r1.status_code == 200, r1.text
+    assert r2.status_code == 200, r2.text
+
+    ids = sorted(
+        r1.json()["row_ids"]["ids"][0] + r2.json()["row_ids"]["ids"][0],
+    )
+    assert ids == [0, 1], f"Expected distinct sequential ids [0, 1], got {ids}"
