@@ -4832,13 +4832,13 @@ async def create_demo_assistant(
     user_id = request.state.user_id
 
     # Validate user is in Unify organization
-    unify_org_name = settings.orchestra_organization_name
+    unify_org_id = settings.orchestra_organization_id
 
     # Get the Unify organization
     org_query = (
         session.query(Organization)
         .filter(
-            Organization.name == unify_org_name,
+            Organization.id == unify_org_id,
         )
         .first()
     )

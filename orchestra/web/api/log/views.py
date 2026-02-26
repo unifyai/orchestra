@@ -5414,9 +5414,9 @@ def process_traffic_logs(
         from orchestra.settings import settings
 
         # 1. Fetch the 'Production Traffic' project
-        ORGANIZATION_NAME = settings.orchestra_organization_name
+        ORCHESTRA_ORGANIZATION_ID = settings.orchestra_organization_id
         PROJ_NAME = settings.orchestra_prod_traffic_name
-        admin_org = organization_dao.filter(name=ORGANIZATION_NAME)[0][0]
+        admin_org = organization_dao.filter(id=ORCHESTRA_ORGANIZATION_ID)[0][0]
         project_id = project_dao.filter(organization_id=admin_org.id, name=PROJ_NAME)[
             0
         ][0].id
