@@ -489,6 +489,15 @@ class Organization(Base):
     monthly_spending_cap = Column(Numeric, nullable=True)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    # === MFA ENFORCEMENT ===
+    # When True, all email/password members must enable MFA to access this org
+    require_mfa = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
     # === VERIFICATION FIELDS ===
     # Verified orgs get higher rate limits
     verified = Column(
