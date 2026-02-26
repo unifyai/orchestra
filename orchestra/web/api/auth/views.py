@@ -1,5 +1,5 @@
 """
-Email authentication endpoints (Phase 1).
+Email authentication & MFA endpoints.
 
 Admin-key endpoints (called by the Next.js server on behalf of users):
   - POST /admin/auth/register
@@ -9,9 +9,16 @@ Admin-key endpoints (called by the Next.js server on behalf of users):
   - POST /admin/auth/reset-password
   - POST /admin/auth/resend-verification
   - GET  /admin/auth/providers-for-email
+  - POST /admin/auth/mfa/verify          → validate TOTP code during login
+  - POST /admin/auth/mfa/verify-recovery → validate recovery code during login
 
-User-API-key endpoint (called by the authenticated user):
+User-API-key endpoints (called by the authenticated user):
   - POST /auth/change-password
+  - POST /auth/mfa/setup         → generate TOTP secret, return QR URI
+  - POST /auth/mfa/confirm       → validate first TOTP code, enable MFA
+  - DELETE /auth/mfa             → disable MFA (requires current code)
+  - POST /auth/mfa/recovery-codes → regenerate recovery codes
+  - GET  /auth/mfa/status        → check MFA status
 """
 
 import logging
@@ -31,6 +38,7 @@ from orchestra.db.dao.email_verification_dao import (
     is_disposable_email,
     verify_turnstile_token,
 )
+from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO, MFARecoveryDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.auth.schema import (
@@ -43,6 +51,16 @@ from orchestra.web.api.auth.schema import (
     EmailRegisterRequest,
     EmailVerifyRequest,
     ForgotPasswordRequest,
+    MFAConfirmRequest,
+    MFAConfirmResponse,
+    MFADisableRequest,
+    MFARegenerateRecoveryResponse,
+    MFASetupResponse,
+    MFAStatusResponse,
+    MFAVerifyRecoveryRequest,
+    MFAVerifyRecoveryResponse,
+    MFAVerifyRequest,
+    MFAVerifyResponse,
     ProvidersForEmailResponse,
     ResendVerificationRequest,
     ResetPasswordRequest,
@@ -346,13 +364,18 @@ def authenticate(
             },
         )
 
+    # Check for enabled MFA credentials
+    mfa_dao = MFACredentialDAO(session)
+    mfa_required = mfa_dao.has_enabled_mfa(user.id)
+
     session.commit()
     return AuthenticateResponse(
         id=str(user.id),
         email=user.email,
         name=user.name,
+        last_name=user.last_name,
         image=user.image,
-        mfa_required=False,
+        mfa_required=mfa_required,
     )
 
 
@@ -710,3 +733,333 @@ def change_password(
     session.commit()
 
     return {"message": "Password changed successfully."}
+
+
+# =============================================================================
+# MFA — User-API-key endpoints (authenticated user)
+# =============================================================================
+
+
+@router.post(
+    "/auth/mfa/setup",
+    response_model=MFASetupResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_setup(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Initiate TOTP setup.
+
+    Generates a new TOTP secret, encrypts it, stores a pending
+    MFACredential, and returns the provisioning URI for QR-code display.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "message": "Authentication required."},
+        )
+
+    mfa_dao = MFACredentialDAO(session)
+
+    # Block if user already has an enabled TOTP credential
+    existing = mfa_dao.get_enabled_totp(user_id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "mfa_already_enabled",
+                "message": "Two-factor authentication is already enabled.",
+            },
+        )
+
+    # Get user email for the provisioning URI
+    user_dao = UserDAO(session)
+    user = user_dao.get_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "user_not_found", "message": "User not found."},
+        )
+
+    credential, provisioning_uri = mfa_dao.create_totp_credential(
+        user_id=user_id,
+        user_email=user.email,
+    )
+    session.commit()
+
+    return MFASetupResponse(qr_code_uri=provisioning_uri)
+
+
+@router.post(
+    "/auth/mfa/confirm",
+    response_model=MFAConfirmResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_confirm(
+    body: MFAConfirmRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Confirm TOTP setup.
+
+    Validates the user's first TOTP code, enables the credential,
+    generates recovery codes, and returns them.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "message": "Authentication required."},
+        )
+
+    mfa_dao = MFACredentialDAO(session)
+    credential = mfa_dao.get_pending_totp(user_id)
+
+    if credential is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "no_pending_setup",
+                "message": "No pending TOTP setup found. Please initiate setup first.",
+            },
+        )
+
+    # Verify the TOTP code against the pending credential
+    if not mfa_dao.verify_totp_code(credential, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_code",
+                "message": "Invalid TOTP code. Please try again.",
+            },
+        )
+
+    # Enable the credential
+    mfa_dao.confirm_totp(credential)
+
+    # Generate recovery codes
+    recovery_dao = MFARecoveryDAO(session)
+    plaintext_codes = recovery_dao.generate_and_store(user_id)
+
+    session.commit()
+    return MFAConfirmResponse(recovery_codes=plaintext_codes)
+
+
+@router.delete(
+    "/auth/mfa",
+    status_code=status.HTTP_200_OK,
+)
+def mfa_disable(
+    body: MFADisableRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Disable MFA.
+
+    Requires a valid TOTP code for confirmation. Deletes the credential
+    and all recovery codes.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "message": "Authentication required."},
+        )
+
+    mfa_dao = MFACredentialDAO(session)
+    credential = mfa_dao.get_enabled_totp(user_id)
+
+    if credential is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "mfa_not_enabled",
+                "message": "Two-factor authentication is not enabled.",
+            },
+        )
+
+    # Verify the code before disabling
+    if not mfa_dao.verify_totp_code(credential, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_code",
+                "message": "Invalid TOTP code. Please try again.",
+            },
+        )
+
+    # Delete credential and recovery codes
+    mfa_dao.delete_credential(credential)
+    recovery_dao = MFARecoveryDAO(session)
+    recovery_dao.delete_all_for_user(user_id)
+
+    session.commit()
+    return {"message": "Two-factor authentication has been disabled."}
+
+
+@router.post(
+    "/auth/mfa/recovery-codes",
+    response_model=MFARegenerateRecoveryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_regenerate_recovery_codes(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Regenerate recovery codes.
+
+    Deletes existing codes and generates a fresh set. The user must
+    have MFA enabled.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "message": "Authentication required."},
+        )
+
+    mfa_dao = MFACredentialDAO(session)
+    if not mfa_dao.has_enabled_mfa(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "mfa_not_enabled",
+                "message": "Two-factor authentication is not enabled.",
+            },
+        )
+
+    recovery_dao = MFARecoveryDAO(session)
+    plaintext_codes = recovery_dao.generate_and_store(user_id)
+
+    session.commit()
+    return MFARegenerateRecoveryResponse(recovery_codes=plaintext_codes)
+
+
+@router.get(
+    "/auth/mfa/status",
+    response_model=MFAStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_status(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check the user's MFA status.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "message": "Authentication required."},
+        )
+
+    mfa_dao = MFACredentialDAO(session)
+    credential = mfa_dao.get_enabled_totp(user_id)
+
+    if credential is None:
+        return MFAStatusResponse(enabled=False)
+
+    recovery_dao = MFARecoveryDAO(session)
+    remaining = recovery_dao.remaining_count(user_id)
+
+    return MFAStatusResponse(
+        enabled=True,
+        method="totp",
+        confirmed_at=(
+            str(credential.confirmed_at) if credential.confirmed_at else None
+        ),
+        recovery_codes_remaining=remaining,
+    )
+
+
+# =============================================================================
+# MFA — Admin-key endpoints (called by Next.js server during login)
+# =============================================================================
+
+
+@admin_router.post(
+    "/auth/mfa/verify",
+    response_model=MFAVerifyResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_verify(
+    body: MFAVerifyRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Verify a TOTP code during the login flow.
+
+    Called by the Next.js server after the user enters their 2FA code
+    on the /login/mfa page.
+    """
+    mfa_dao = MFACredentialDAO(session)
+    credential = mfa_dao.get_enabled_totp(body.user_id)
+
+    if credential is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "mfa_not_enabled",
+                "message": "Two-factor authentication is not enabled for this user.",
+            },
+        )
+
+    if not mfa_dao.verify_totp_code(credential, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_code",
+                "message": "Invalid or expired TOTP code.",
+            },
+        )
+
+    session.commit()
+    return MFAVerifyResponse(success=True)
+
+
+@admin_router.post(
+    "/auth/mfa/verify-recovery",
+    response_model=MFAVerifyRecoveryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_verify_recovery(
+    body: MFAVerifyRecoveryRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Verify a recovery code during the login flow.
+
+    Called by the Next.js server when the user uses a recovery code
+    instead of a TOTP code.
+    """
+    mfa_dao = MFACredentialDAO(session)
+    if not mfa_dao.has_enabled_mfa(body.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "mfa_not_enabled",
+                "message": "Two-factor authentication is not enabled for this user.",
+            },
+        )
+
+    recovery_dao = MFARecoveryDAO(session)
+    remaining = recovery_dao.verify_and_consume(body.user_id, body.code)
+
+    if remaining is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_recovery_code",
+                "message": "Invalid or already used recovery code.",
+            },
+        )
+
+    session.commit()
+    return MFAVerifyRecoveryResponse(success=True, remaining_codes=remaining)
