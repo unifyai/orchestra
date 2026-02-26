@@ -39,7 +39,9 @@ async def unify_member_user(client: AsyncClient, dbsession):
     Create the Unify organization with the test user as owner.
 
     This fixture enables demo assistant creation which requires Unify org membership.
-    Uses the API endpoint to properly create org with roles.
+    Uses the API endpoint to properly create org with roles, then patches
+    settings.orchestra_organization_id to match the created org's actual ID
+    so the demo endpoint's ID-based lookup finds it.
     """
     # Get the test user ID
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
@@ -65,6 +67,7 @@ async def unify_member_user(client: AsyncClient, dbsession):
             .first()
         )
         if existing_member:
+            settings.orchestra_organization_id = org.id
             return {"user_id": user_id, "org_id": org.id}
 
     # Create org via API - this handles role creation properly
@@ -82,11 +85,14 @@ async def unify_member_user(client: AsyncClient, dbsession):
             .filter(Organization.name == unify_org_name)
             .first()
         )
+        if org:
+            settings.orchestra_organization_id = org.id
         return {"user_id": user_id, "org_id": org.id if org else None}
 
     assert create_resp.status_code == 201, f"Failed to create org: {create_resp.json()}"
     org_data = create_resp.json()
 
+    settings.orchestra_organization_id = org_data["id"]
     return {"user_id": user_id, "org_id": org_data["id"]}
 
 
