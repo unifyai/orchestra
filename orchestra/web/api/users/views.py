@@ -213,6 +213,7 @@ def get_user_by_email(
     has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
         user_instance.id,
     )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -284,6 +285,7 @@ def get_user_by_account(
     has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
         user_instance.id,
     )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
