@@ -117,13 +117,18 @@ def _get_interface(
                 detail=f"Interface with ID {interface_id} not found.",
             )
         if not only_interface:
-            # Get project to verify access
-            project_obj = project_dao.get(interface.project_id)
-            if not project_obj:
+            organization_id = getattr(request_fastapi.state, "organization_id", None)
+            projects = project_dao.filter_by_user_access(
+                user_id=request_fastapi.state.user_id,
+                organization_id=organization_id,
+                id=interface.project_id,
+            )
+            if not projects:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Project with ID {interface.project_id} not found.",
+                    detail=f"Interface with ID {interface_id} not found.",
                 )
+            project_obj = projects[0]
     # Get by project and name
     elif project_name and name:
         # Verify project exists and user has access
@@ -544,13 +549,18 @@ def update_interface(
                 status_code=404,
                 detail=f"Interface with ID {interface_id} not found.",
             )
-        # Get project to verify access
-        project_obj = project_dao.get(interface.project_id)
-        if not project_obj:
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
+        projects = project_dao.filter_by_user_access(
+            user_id=request_fastapi.state.user_id,
+            organization_id=organization_id,
+            id=interface.project_id,
+        )
+        if not projects:
             raise HTTPException(
                 status_code=404,
-                detail=f"Project with ID {interface.project_id} not found.",
+                detail=f"Interface with ID {interface_id} not found.",
             )
+        project_obj = projects[0]
     # Get by project and name
     elif project_name and name:
         # Verify project exists and user has access
