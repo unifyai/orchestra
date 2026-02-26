@@ -1161,6 +1161,43 @@ def migrate_billing_accounts_to_compliance(
 
 
 @router.post(
+    "/cleanup/email-verifications",
+    summary="Admin: Cleanup expired email verification codes",
+    description="Delete all expired email verification records (signup and password reset codes). "
+    "Called by scheduled cleanup job.",
+)
+def admin_cleanup_email_verifications(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Clean up expired email verification codes.
+
+    This endpoint is designed to be called by a scheduled job (e.g., GitHub Actions cron).
+    It deletes all email_verification rows where expires_at is in the past.
+
+    :param session: Database session.
+    :return: Count of deleted records and timestamp.
+    """
+    try:
+        from orchestra.routines.email_verification_cleanup import (
+            cleanup_expired_verifications,
+        )
+
+        deleted_count = cleanup_expired_verifications(session)
+        return {
+            "deleted_count": deleted_count,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Successfully deleted {deleted_count} expired verification(s)",
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cleanup email verifications: {str(e)}",
+        )
+
+
+@router.post(
     "/cleanup/expired-invites",
     summary="Admin: Cleanup expired organization invites",
     description="Delete all expired pending organization invites. "

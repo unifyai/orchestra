@@ -312,6 +312,79 @@ class Account(Base):
     expires_at = Column(TIMESTAMP)
 
 
+class EmailAccount(Base):
+    """
+    Email/password credentials for a user.
+
+    Users who only use OAuth will have no row here. One row per user maximum.
+    The email address itself is not duplicated — it is always read from User.email.
+    """
+
+    __tablename__ = "email_account"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    password_hash = Column(String, nullable=False)  # argon2id hash
+    email_verified = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )  # Safety-net default; set to True at creation after verification
+    password_changed_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+    )  # Set on every password change; used for session invalidation
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    # ORM relationship
+    user = relationship("User", backref=backref("email_account", uselist=False))
+
+
+class EmailVerification(Base):
+    """
+    Short-lived verification codes for signup and password reset.
+
+    During signup, this table also serves as temporary storage for the user's
+    credentials until their email is verified — no User or EmailAccount row is
+    created until verification succeeds.
+
+    Row lifecycle: rows are always deleted on success (both signup and password
+    reset). Expired rows are cleaned up by a periodic job.
+    """
+
+    __tablename__ = "email_verification"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(
+        String,
+        nullable=False,
+        index=True,
+    )  # Not a FK — user may not exist yet (signup)
+    code_hash = Column(String, nullable=False)  # SHA-256 hash of the 6-digit code
+    purpose = Column(String, nullable=False)  # "signup" | "password_reset"
+    password_hash = Column(
+        String,
+        nullable=True,
+    )  # argon2id hash — only for purpose="signup"
+    name = Column(String, nullable=True)  # User's first name — only for signup
+    last_name = Column(String, nullable=True)  # User's last name — only for signup
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    attempts = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )  # Max 5 attempts before invalidation
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+
 class Organization(Base):
     """
     Organization model.
