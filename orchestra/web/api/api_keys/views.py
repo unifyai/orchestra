@@ -106,9 +106,9 @@ def revoke_api_key(
     try:
         api_key_dao.delete(key_id)
         return None
-    except Exception as e:
+    except Exception:
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to revoke API key: {str(e)}",
+            detail="Failed to revoke API key",
         )
