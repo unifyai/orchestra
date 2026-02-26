@@ -37,6 +37,7 @@ from orchestra.web.api.organization.schema import (
     MemberSpendingLimitRequest,
     MemberSpendingLimitResponse,
     MemberSpendResponse,
+    MFAEnforcementStatusResponse,
     OrganizationBillingResponse,
     OrganizationBillingUpdate,
     OrganizationBusinessProfileResponse,
@@ -51,6 +52,8 @@ from orchestra.web.api.organization.schema import (
     OrganizationResponse,
     OrganizationStripeCustomerCreateRequest,
     OrganizationUpdate,
+    OrgMFASettingsRequest,
+    OrgMFASettingsResponse,
     OrgSpendingLimitRequest,
     OrgSpendingLimitResponse,
     OrgSpendResponse,
@@ -3067,3 +3070,140 @@ def admin_get_organization_verification(
         "verified": org.verified,
         "verified_at": org.verified_at.isoformat() if org.verified_at else None,
     }
+
+
+# =============================================================================
+# Organization MFA Enforcement
+# =============================================================================
+
+
+@router.get(
+    "/organizations/{organization_id}/mfa-settings",
+    response_model=OrgMFASettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_org_mfa_settings(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Get MFA enforcement settings for an organization.
+
+    Requires org:read permission.
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this organization",
+        )
+
+    settings = org_dao.get_mfa_settings(organization_id)
+    return OrgMFASettingsResponse(**settings)
+
+
+@router.put(
+    "/organizations/{organization_id}/mfa-settings",
+    response_model=OrgMFASettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+def update_org_mfa_settings(
+    request_fastapi: Request,
+    organization_id: int,
+    body: OrgMFASettingsRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Update MFA enforcement settings for an organization.
+
+    Requires org:write permission (Owner, Admin roles).
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this organization",
+        )
+
+    result = org_dao.update_mfa_settings(
+        org_id=organization_id,
+        require_mfa=body.require_mfa,
+    )
+    session.commit()
+
+    return OrgMFASettingsResponse(**result)
+
+
+@admin_router.get(
+    "/auth/mfa-enforcement-status",
+    response_model=MFAEnforcementStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_enforcement_status(
+    user_id: str,
+    org_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check whether a user must set up MFA to access a given organization.
+
+    Called by the Next.js server (admin-key auth) during workspace
+    resolution to decide if the user should be redirected to MFA setup.
+
+    MFA enforcement applies to all members regardless of auth provider
+    (email/password, Google, GitHub). If the org requires MFA and the
+    user hasn't set it up, ``setup_required`` is True.
+    """
+    from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
+
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(org_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {org_id} not found",
+        )
+
+    enforced = org.require_mfa
+
+    mfa_dao = MFACredentialDAO(session)
+    has_mfa = mfa_dao.has_enabled_mfa(user_id)
+
+    setup_required = enforced and not has_mfa
+
+    return MFAEnforcementStatusResponse(
+        enforced=enforced,
+        has_mfa=has_mfa,
+        setup_required=setup_required,
+    )

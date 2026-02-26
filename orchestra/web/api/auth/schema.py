@@ -55,7 +55,9 @@ class EmailRegisterRequest(BaseModel):
     name: Optional[str] = None
     last_name: Optional[str] = None
     password: str = Field(
-        ..., min_length=_PASSWORD_MIN_LENGTH, max_length=_PASSWORD_MAX_LENGTH
+        ...,
+        min_length=_PASSWORD_MIN_LENGTH,
+        max_length=_PASSWORD_MAX_LENGTH,
     )
     captcha_token: Optional[str] = None  # Cloudflare Turnstile token
 
@@ -247,3 +249,10 @@ class MFARegenerateRecoveryResponse(BaseModel):
     """Response after regenerating recovery codes."""
 
     recovery_codes: List[str]
+
+
+class MFAStatusByEmailResponse(BaseModel):
+    """Response for checking MFA status by email (admin endpoint)."""
+
+    user_found: bool
+    mfa_enabled: bool = False
