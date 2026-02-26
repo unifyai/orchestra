@@ -1,14 +1,11 @@
 """DAO for TableView model operations."""
 
-import logging
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, joinedload
 
 from orchestra.db.models.orchestra_models import TableView
-
-logger = logging.getLogger(__name__)
 
 
 class TokenGenerationError(Exception):
@@ -73,8 +70,6 @@ class TableViewDAO:
 
         self.session.add(table_view)
         self.session.flush()
-
-        logger.info(f"Created table_view with token {token} for project {project_id}")
         return table_view
 
     def get_by_token(self, token: str) -> Optional[TableView]:
@@ -248,7 +243,6 @@ class TableViewDAO:
             table_view.organization_id = organization_id
 
         self.session.flush()
-        logger.info(f"Updated table_view {table_view_id}")
         return table_view
 
     def delete(self, table_view_id: int) -> bool:
@@ -267,7 +261,6 @@ class TableViewDAO:
 
         self.session.delete(table_view)
         self.session.flush()
-        logger.info(f"Deleted table_view {table_view_id}")
         return True
 
     def delete_by_token(self, token: str) -> bool:
@@ -286,7 +279,6 @@ class TableViewDAO:
 
         self.session.delete(table_view)
         self.session.flush()
-        logger.info(f"Deleted table_view with token {token}")
         return True
 
     def delete_by_project(
@@ -312,10 +304,6 @@ class TableViewDAO:
         count = query.delete(synchronize_session="fetch")
         self.session.flush()
 
-        logger.info(
-            f"Deleted {count} table_views for project {project_id}"
-            + (f" with context '{context}'" if context else ""),
-        )
         return count
 
     def update_organization_id(
@@ -344,8 +332,4 @@ class TableViewDAO:
             )
         )
         self.session.flush()
-        logger.info(
-            f"Updated organization_id to {organization_id} for {result} table_views "
-            f"in project {project_id}",
-        )
         return result
