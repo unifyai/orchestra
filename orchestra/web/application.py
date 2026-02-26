@@ -35,6 +35,15 @@ def get_app() -> FastAPI:
             "This flag disables authentication and is only for self-hosted instances.",
         )
 
+    if (
+        os.environ.get("SKIP_STRIPE_SIGNATURE_VERIFICATION", "").lower() == "true"
+        and os.environ.get("GCP_PROJECT_ID") == "saas-368716"
+    ):
+        raise RuntimeError(
+            "SKIP_STRIPE_SIGNATURE_VERIFICATION must not be set in cloud deployments. "
+            "This flag disables Stripe webhook security.",
+        )
+
     if settings.sentry_dsn:
         # Enables sentry integration.
         sentry_sdk.init(
@@ -50,11 +59,13 @@ def get_app() -> FastAPI:
                 SqlalchemyIntegration(),
             ],
         )
+    is_production = settings.environment == "production"
     app = FastAPI(
         title="UnifyAI HTTP API Reference",
         version=metadata.version("orchestra"),
-        redoc_url="/v0/redoc",
-        openapi_url="/v0/openapi.json",
+        docs_url=None if is_production else "/v0/docs",
+        redoc_url=None if is_production else "/v0/redoc",
+        openapi_url=None if is_production else "/v0/openapi.json",
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
         default_response_class=UJSONResponse,
     )
