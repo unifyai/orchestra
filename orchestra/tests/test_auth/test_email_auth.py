@@ -9,6 +9,7 @@ Covers:
 - Change password (authenticated, wrong current password)
 - Resend verification (signup, password reset)
 - Providers-for-email (multiple providers, no user)
+- Cloudflare Turnstile CAPTCHA (skipped when unconfigured, enforced when configured)
 - Edge cases (case sensitivity, whitespace, code reuse)
 """
 
@@ -26,6 +27,10 @@ from orchestra.db.models.orchestra_models import EmailVerification
 
 # Patch target for the email sending function (imported lazily inside views)
 _EMAIL_PATCH_TARGET = "orchestra.web.api.utils.email.send_email_async"
+# Patch target for Turnstile token verification
+_TURNSTILE_PATCH_TARGET = (
+    "orchestra.db.dao.email_verification_dao.verify_turnstile_token"
+)
 
 ADMIN_HEADERS = {
     "accept": "application/json",
@@ -191,7 +196,8 @@ async def test_register_invalid_email_format(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_register_overwrites_pending_signup(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     """Re-registering the same email overwrites the previous pending signup."""
     email = "overwrite_pending@example.com"
@@ -477,7 +483,8 @@ async def test_authenticate_unverified_email(client: AsyncClient, dbsession: Ses
 
 @pytest.mark.anyio
 async def test_authenticate_email_case_insensitive(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     """Authentication works regardless of email case."""
     email = "auth_case@example.com"
@@ -744,7 +751,8 @@ async def test_change_password_wrong_current(client: AsyncClient, dbsession: Ses
 
 @pytest.mark.anyio
 async def test_change_password_sets_password_changed_at(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     """Change password sets password_changed_at for session invalidation."""
     email = "change_pw_ts@example.com"
@@ -835,7 +843,8 @@ async def test_resend_verification_no_pending(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_providers_for_email_with_email_account(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     """Returns 'email' when user has an EmailAccount."""
     email = "providers_email@example.com"
@@ -984,7 +993,8 @@ async def test_multiple_users_independent(client: AsyncClient, dbsession: Sessio
 
 @pytest.mark.anyio
 async def test_verification_code_cannot_be_reused(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     """After verification succeeds, the code cannot be used again."""
     email = "code_reuse@example.com"
@@ -1014,7 +1024,8 @@ async def test_password_hash_not_exposed(client: AsyncClient, dbsession: Session
 
 @pytest.mark.anyio
 async def test_register_preserves_whitespace_trimming(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     """Email whitespace is trimmed during registration."""
     email_with_spaces = "  whitespace@example.com  "
@@ -1056,3 +1067,139 @@ async def test_reset_password_for_nonexistent_user(client: AsyncClient):
         headers=ADMIN_HEADERS,
     )
     assert resp.status_code == 400
+
+
+# =============================================================================
+# Cloudflare Turnstile CAPTCHA Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_register_skips_captcha_when_not_configured(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Registration succeeds without a captcha token when TURNSTILE_SECRET_KEY is unset."""
+    # Default test env has no TURNSTILE_SECRET_KEY, so captcha is skipped.
+    email = "turnstile_skip@example.com"
+
+    with patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = True
+        resp = await _register(client, email)
+
+    assert resp.status_code == 200
+    assert resp.json()["email"] == email
+
+
+@pytest.mark.anyio
+async def test_register_rejects_missing_token_when_configured(
+    client: AsyncClient,
+):
+    """Registration fails when Turnstile is configured but no token is provided."""
+    with patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify:
+        # Simulate: secret key is set but no token → verify_turnstile_token returns False
+        mock_verify.return_value = False
+
+        resp = await client.post(
+            "/v0/admin/auth/register",
+            json={
+                "email": "captcha_missing@example.com",
+                "password": "secureP@ss1",
+                "name": "Test",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "captcha_failed"
+
+
+@pytest.mark.anyio
+async def test_register_rejects_invalid_captcha_token(
+    client: AsyncClient,
+):
+    """Registration fails when Cloudflare rejects the Turnstile token."""
+    with patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = False
+
+        resp = await client.post(
+            "/v0/admin/auth/register",
+            json={
+                "email": "captcha_invalid@example.com",
+                "password": "secureP@ss1",
+                "name": "Test",
+                "captcha_token": "bad-token-value",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "captcha_failed"
+    # Ensure verify was called with the provided token
+    mock_verify.assert_called_once()
+    call_args = mock_verify.call_args
+    assert call_args[0][0] == "bad-token-value"  # first positional arg = token
+
+
+@pytest.mark.anyio
+async def test_register_succeeds_with_valid_captcha_token(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Registration succeeds when Turnstile validation passes."""
+    email = "captcha_ok@example.com"
+
+    with (
+        patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify,
+        patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send,
+    ):
+        mock_verify.return_value = True
+        mock_send.return_value = True
+
+        resp = await client.post(
+            "/v0/admin/auth/register",
+            json={
+                "email": email,
+                "password": "secureP@ss1",
+                "name": "Test",
+                "captcha_token": "valid-token",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["email"] == email
+
+    # Verify the token was forwarded to the verification function
+    mock_verify.assert_called_once()
+    call_args = mock_verify.call_args
+    assert call_args[0][0] == "valid-token"
+
+
+@pytest.mark.anyio
+async def test_register_captcha_failure_prevents_side_effects(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """When captcha fails, no verification entry is created (early exit)."""
+    email = "captcha_no_sideeffects@example.com"
+
+    with patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = False
+
+        resp = await client.post(
+            "/v0/admin/auth/register",
+            json={
+                "email": email,
+                "password": "secureP@ss1",
+                "captcha_token": "bad-token",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 400
+
+    # No EmailVerification entry should exist for this email
+    dao = EmailVerificationDAO(dbsession)
+    entry = dao.get_pending(email, "signup")
+    assert entry is None

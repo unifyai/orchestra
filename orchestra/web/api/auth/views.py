@@ -29,6 +29,7 @@ from orchestra.db.dao.email_verification_dao import (
     EmailVerificationDAO,
     generate_verification_code,
     is_disposable_email,
+    verify_turnstile_token,
 )
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
@@ -76,6 +77,7 @@ def _get_linked_providers(
 )
 async def register(
     body: EmailRegisterRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -86,6 +88,18 @@ async def register(
     a verification email. No User row is created at this stage.
     """
     email = body.email.lower().strip()
+
+    # 0. Validate CAPTCHA (Cloudflare Turnstile)
+    remote_ip = request.client.host if request.client else None
+    captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
+    if not captcha_ok:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "captcha_failed",
+                "message": "CAPTCHA verification failed. Please try again.",
+            },
+        )
 
     # 1. Check disposable email domain
     if is_disposable_email(email):
@@ -338,7 +352,7 @@ def authenticate(
         email=user.email,
         name=user.name,
         image=user.image,
-        mfa_required=False,  # Phase 2 will check MFACredential here
+        mfa_required=False,
     )
 
 
@@ -499,7 +513,7 @@ async def resend_verification(
         if existing is None:
             # No pending signup — silently return to prevent enumeration
             return {
-                "message": "If a pending verification exists, a new code has been sent."
+                "message": "If a pending verification exists, a new code has been sent.",
             }
 
         code = generate_verification_code()
@@ -516,14 +530,14 @@ async def resend_verification(
         user_rows = user_dao.filter(email=email)
         if not user_rows:
             return {
-                "message": "If a pending verification exists, a new code has been sent."
+                "message": "If a pending verification exists, a new code has been sent.",
             }
 
         user = user_rows[0][0]
         email_account_dao = EmailAccountDAO(session)
         if email_account_dao.get_by_user_id(user.id) is None:
             return {
-                "message": "If a pending verification exists, a new code has been sent."
+                "message": "If a pending verification exists, a new code has been sent.",
             }
 
         code = generate_verification_code()

@@ -1,22 +1,35 @@
 """
 Data Access Object for EmailVerification (signup and password reset codes).
+
+Also contains anti-abuse utilities:
+- ``is_disposable_email`` – blocks disposable/throwaway email domains.
+- ``verify_turnstile_token`` – validates Cloudflare Turnstile CAPTCHA tokens.
 """
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import httpx
 from disposable_email_domains import blocklist as disposable_blocklist
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import EmailVerification
+from orchestra.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # TTL constants
 SIGNUP_TTL_HOURS = 1
 PASSWORD_RESET_TTL_MINUTES = 10
 MAX_ATTEMPTS = 5
+
+# Turnstile constants
+_TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+_TURNSTILE_TIMEOUT_SECONDS = 5
 
 
 def generate_verification_code() -> str:
@@ -33,6 +46,55 @@ def is_disposable_email(email: str) -> bool:
     """Check if an email domain is in the disposable email blocklist."""
     domain = email.rsplit("@", 1)[-1].lower()
     return domain in disposable_blocklist
+
+
+async def verify_turnstile_token(
+    token: Optional[str],
+    remote_ip: Optional[str] = None,
+) -> bool:
+    """
+    Verify a Turnstile token with Cloudflare's siteverify API.
+
+    Returns True if:
+      - the secret key is not configured (skipped in dev), OR
+      - the token passes Cloudflare's verification.
+
+    Returns False if:
+      - the secret key IS configured but no token was provided, OR
+      - Cloudflare rejects the token, OR
+      - the siteverify call fails (network error, timeout, etc.).
+    """
+    secret_key = settings.turnstile_secret_key
+    if not secret_key:
+        logger.debug(
+            "Turnstile secret key not configured — skipping CAPTCHA validation",
+        )
+        return True
+
+    if not token:
+        logger.warning("Turnstile token missing but secret key is configured")
+        return False
+
+    payload: dict[str, str] = {
+        "secret": secret_key,
+        "response": token,
+    }
+    if remote_ip:
+        payload["remoteip"] = remote_ip
+
+    try:
+        async with httpx.AsyncClient(timeout=_TURNSTILE_TIMEOUT_SECONDS) as client:
+            resp = await client.post(_TURNSTILE_SITEVERIFY_URL, data=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            success = result.get("success", False)
+            if not success:
+                error_codes = result.get("error-codes", [])
+                logger.warning(f"Turnstile verification failed: {error_codes}")
+            return success
+    except Exception:
+        logger.exception("Turnstile siteverify request failed")
+        return False
 
 
 class EmailVerificationDAO:
