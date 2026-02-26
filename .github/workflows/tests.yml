@@ -198,6 +198,9 @@ jobs:
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost
+        ORCHESTRA_DB_USER: orchestra
+        ORCHESTRA_DB_PASS: orchestra
+        ORCHESTRA_DB_BASE: orchestra
         # Logging
         ORCHESTRA_LOG_DIR: ${{ env.LOGS_DIR }}/orchestra
         # GCP configuration (from org-level variables)
