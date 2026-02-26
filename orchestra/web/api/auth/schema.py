@@ -114,3 +114,74 @@ class AuthErrorResponse(BaseModel):
     error: str
     message: str
     providers: Optional[List[str]] = None
+
+
+# ---------------------------------------------------------------------------
+# MFA (Phase 2) schemas
+# ---------------------------------------------------------------------------
+
+
+class MFASetupResponse(BaseModel):
+    """Response after initiating TOTP setup."""
+
+    qr_code_uri: str
+
+
+class MFAConfirmRequest(BaseModel):
+    """Request to confirm TOTP setup with a verification code."""
+
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class MFAConfirmResponse(BaseModel):
+    """Response after successful TOTP confirmation."""
+
+    recovery_codes: List[str]
+
+
+class MFAVerifyRequest(BaseModel):
+    """Request to verify a TOTP code during login."""
+
+    user_id: str
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class MFAVerifyResponse(BaseModel):
+    """Response after successful TOTP verification during login."""
+
+    success: bool = True
+
+
+class MFAVerifyRecoveryRequest(BaseModel):
+    """Request to verify a recovery code during login."""
+
+    user_id: str
+    code: str = Field(..., min_length=1, max_length=20)
+
+
+class MFAVerifyRecoveryResponse(BaseModel):
+    """Response after successful recovery code verification."""
+
+    success: bool = True
+    remaining_codes: int
+
+
+class MFADisableRequest(BaseModel):
+    """Request to disable MFA (requires current TOTP code)."""
+
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class MFAStatusResponse(BaseModel):
+    """Response for MFA status check."""
+
+    enabled: bool
+    method: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    recovery_codes_remaining: int = 0
+
+
+class MFARegenerateRecoveryResponse(BaseModel):
+    """Response after regenerating recovery codes."""
+
+    recovery_codes: List[str]
