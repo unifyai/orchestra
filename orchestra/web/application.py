@@ -135,10 +135,18 @@ def get_app() -> FastAPI:
                 "max-age=31536000; includeSubDomains"
             )
             response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-            response.headers["X-XSS-Protection"] = "1; mode=block"
             response.headers["Permissions-Policy"] = (
                 "camera=(), microphone=(), geolocation=()"
             )
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'"
+            )
+            # X-XSS-Protection deliberately omitted: the browser XSS Auditor
+            # it controlled was removed from Chrome 78+ (2019) and was never
+            # implemented in Firefox. Setting "1; mode=block" on legacy
+            # browsers is itself exploitable (auditor can be abused to
+            # selectively disable page scripts). CSP above is the modern
+            # replacement. See https://owasp.org/www-project-secure-headers/
             return response
 
     app.add_middleware(SecurityHeadersMiddleware)
