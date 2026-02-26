@@ -59,13 +59,12 @@ def get_app() -> FastAPI:
                 SqlalchemyIntegration(),
             ],
         )
-    is_production = settings.environment == "production"
     app = FastAPI(
         title="UnifyAI HTTP API Reference",
         version=metadata.version("orchestra"),
-        docs_url=None if is_production else "/v0/docs",
-        redoc_url=None if is_production else "/v0/redoc",
-        openapi_url=None if is_production else "/v0/openapi.json",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
         default_response_class=UJSONResponse,
     )
