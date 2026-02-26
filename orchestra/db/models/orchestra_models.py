@@ -385,6 +385,75 @@ class EmailVerification(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
+class MFACredential(Base):
+    """
+    Polymorphic MFA credential.
+
+    For TOTP, one row per user (the same secret can be scanned into multiple
+    authenticator apps). For WebAuthn (future), one row per registered device.
+
+    ``credential_data`` is an encrypted JSON blob whose structure depends on
+    ``method_type`` (e.g. ``{"secret": "BASE32..."}`` for TOTP).
+    """
+
+    __tablename__ = "mfa_credential"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    method_type = Column(String, nullable=False)  # "totp", "webauthn", "sms"
+    credential_data = Column(sa.LargeBinary, nullable=False)  # Encrypted JSON blob
+    enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    confirmed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    last_used_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_mfa_credential_user_type", "user_id", "method_type"),)
+
+    # ORM relationship
+    user = relationship("User", backref=backref("mfa_credentials", lazy="dynamic"))
+
+
+class MFARecovery(Base):
+    """
+    Recovery codes for MFA.
+
+    Tied to the user (not to a specific MFA method). 10 codes generated
+    per setup, each 8 alphanumeric characters. Stored as SHA-256 hashes.
+    Each code is single-use.
+    """
+
+    __tablename__ = "mfa_recovery"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    code_hash = Column(String, nullable=False)  # SHA-256 hash
+    used = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    used_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # ORM relationship
+    user = relationship("User", backref=backref("mfa_recovery_codes", lazy="dynamic"))
+
+
 class Organization(Base):
     """
     Organization model.
