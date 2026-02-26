@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -314,3 +314,64 @@ class OrganizationDAO:
         if result and result.spend:
             return float(result.spend)
         return 0.0
+
+    # =================================================================
+    # MFA Enforcement
+    # =================================================================
+
+    def get_mfa_settings(self, org_id: int) -> Optional[Dict]:
+        """
+        Return MFA enforcement settings for an organization.
+
+        :param org_id: Organization ID.
+        :return: Dict with require_mfa, or None if org not found.
+        """
+        org = self.get(org_id)
+        if org is None:
+            return None
+        return {
+            "require_mfa": org.require_mfa,
+        }
+
+    def update_mfa_settings(
+        self,
+        org_id: int,
+        require_mfa: bool,
+    ) -> Optional[Dict]:
+        """
+        Update MFA enforcement settings for an organization.
+
+        :param org_id: Organization ID.
+        :param require_mfa: Whether to require MFA for email/password members.
+        :return: Updated settings dict, or None if org not found.
+        """
+        org = self.get(org_id)
+        if org is None:
+            return None
+
+        org.require_mfa = require_mfa
+
+        return {
+            "require_mfa": org.require_mfa,
+        }
+
+    def get_mfa_requiring_orgs_for_user(self, user_id: str) -> List[Organization]:
+        """
+        Return all organizations that require MFA and that the given user
+        is a member of.
+
+        :param user_id: User ID.
+        :return: List of organizations requiring MFA.
+        """
+        query = (
+            select(Organization)
+            .join(
+                OrganizationMember,
+                OrganizationMember.organization_id == Organization.id,
+            )
+            .where(
+                OrganizationMember.user_id == user_id,
+                Organization.require_mfa.is_(True),
+            )
+        )
+        return list(self.session.execute(query).scalars().all())

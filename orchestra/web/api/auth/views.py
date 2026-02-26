@@ -11,6 +11,7 @@ Admin-key endpoints (called by the Next.js server on behalf of users):
   - GET  /admin/auth/providers-for-email
   - POST /admin/auth/mfa/verify          → validate TOTP code during login
   - POST /admin/auth/mfa/verify-recovery → validate recovery code during login
+  - GET  /admin/auth/mfa/status-by-email → check MFA status for OAuth sign-in
 
 User-API-key endpoints (called by the authenticated user):
   - POST /auth/change-password
@@ -57,6 +58,7 @@ from orchestra.web.api.auth.schema import (
     MFADisableRequest,
     MFARegenerateRecoveryResponse,
     MFASetupResponse,
+    MFAStatusByEmailResponse,
     MFAStatusResponse,
     MFAVerifyRecoveryRequest,
     MFAVerifyRecoveryResponse,
@@ -875,7 +877,12 @@ def mfa_disable(
 
     Requires a valid TOTP code for confirmation. Deletes the credential
     and all recovery codes.
+
+    Blocks the request if the user is a member of any organization that
+    requires MFA (``Organization.require_mfa = True``).
     """
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
         raise HTTPException(
@@ -892,6 +899,23 @@ def mfa_disable(
             detail={
                 "error": "mfa_not_enabled",
                 "message": "Two-factor authentication is not enabled.",
+            },
+        )
+
+    # Check if any org requires MFA for this user
+    org_dao = OrganizationDAO(session)
+    blocking_orgs = org_dao.get_mfa_requiring_orgs_for_user(user_id)
+    if blocking_orgs:
+        org_names = [org.name for org in blocking_orgs]
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "mfa_required_by_org",
+                "message": (
+                    f"MFA is required by {org_names[0]}. "
+                    f"You cannot disable it while you are a member."
+                ),
+                "org_names": org_names,
             },
         )
 
@@ -1075,3 +1099,33 @@ def mfa_verify_recovery(
 
     session.commit()
     return MFAVerifyRecoveryResponse(success=True, remaining_codes=remaining)
+
+
+@admin_router.get(
+    "/auth/mfa/status-by-email",
+    response_model=MFAStatusByEmailResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_status_by_email(
+    email: str,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check whether a user has MFA enabled, given their email address.
+
+    Called by the Next.js server during OAuth sign-in (jwt callback)
+    to determine whether the OAuth user should be prompted for TOTP
+    verification before completing login.
+    """
+    email = email.lower().strip()
+
+    user_dao = UserDAO(session)
+    existing = user_dao.filter(email=email)
+    if not existing:
+        return MFAStatusByEmailResponse(user_found=False, mfa_enabled=False)
+
+    user = existing[0][0]
+    mfa_dao = MFACredentialDAO(session)
+    has_mfa = mfa_dao.has_enabled_mfa(user.id)
+
+    return MFAStatusByEmailResponse(user_found=True, mfa_enabled=has_mfa)
