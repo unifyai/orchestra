@@ -34,6 +34,7 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.email_account_dao import EmailAccountDAO
 from orchestra.db.dao.email_verification_dao import (
     EmailVerificationDAO,
+    check_user_agent,
     generate_verification_code,
     is_disposable_email,
     verify_turnstile_token,
@@ -107,7 +108,18 @@ async def register(
     """
     email = body.email.lower().strip()
 
-    # 0. Validate CAPTCHA (Cloudflare Turnstile)
+    # 0a. User-Agent heuristic check
+    user_agent = request.headers.get("user-agent")
+    if not check_user_agent(user_agent):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "suspicious_request",
+                "message": "Request blocked. Please use a standard browser.",
+            },
+        )
+
+    # 0b. Validate CAPTCHA (Cloudflare Turnstile)
     remote_ip = request.client.host if request.client else None
     captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
     if not captcha_ok:
