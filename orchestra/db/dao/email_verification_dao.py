@@ -4,10 +4,12 @@ Data Access Object for EmailVerification (signup and password reset codes).
 Also contains anti-abuse utilities:
 - ``is_disposable_email`` – blocks disposable/throwaway email domains.
 - ``verify_turnstile_token`` – validates Cloudflare Turnstile CAPTCHA tokens.
+- ``check_user_agent`` – basic bot/abuse detection via User-Agent heuristics.
 """
 
 import hashlib
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -31,6 +33,30 @@ MAX_ATTEMPTS = 5
 _TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 _TURNSTILE_TIMEOUT_SECONDS = 5
 
+# ---------------------------------------------------------------------------
+# User-Agent heuristics
+# ---------------------------------------------------------------------------
+
+# Known bot / automation user-agent substrings (case-insensitive).
+_BOT_UA_PATTERNS: list[re.Pattern] = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bcurl\b",
+        r"\bwget\b",
+        r"\bpython-requests\b",
+        r"\bhttpie\b",
+        r"\bpostman\b",
+        r"\bscrapy\b",
+        r"\bphantomjs\b",
+        r"\bheadless\b",
+        r"\bbot\b",
+        r"\bcrawler\b",
+        r"\bspider\b",
+        r"\bsemrush\b",
+        r"\bahrefs\b",
+    )
+]
+
 
 def generate_verification_code() -> str:
     """Generate a cryptographically random 6-digit code."""
@@ -46,6 +72,33 @@ def is_disposable_email(email: str) -> bool:
     """Check if an email domain is in the disposable email blocklist."""
     domain = email.rsplit("@", 1)[-1].lower()
     return domain in disposable_blocklist
+
+
+def check_user_agent(user_agent: Optional[str]) -> bool:
+    """
+    Return ``True`` if the User-Agent looks like a legitimate browser.
+
+    Returns ``False`` (suspicious) when:
+      - The header is missing or empty.
+      - The UA matches a known bot / automation tool pattern.
+
+    This is a *heuristic* — it's trivially spoofable and should be used
+    alongside other anti-abuse measures (Turnstile, rate limiting, etc.),
+    not as a sole gatekeeper.
+    """
+    if not user_agent or not user_agent.strip():
+        logger.warning("Suspicious request: missing or empty User-Agent header")
+        return False
+
+    for pattern in _BOT_UA_PATTERNS:
+        if pattern.search(user_agent):
+            logger.warning(
+                f"Suspicious User-Agent blocked: {user_agent!r} "
+                f"(matched {pattern.pattern!r})",
+            )
+            return False
+
+    return True
 
 
 async def verify_turnstile_token(
