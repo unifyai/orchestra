@@ -1,8 +1,51 @@
 """Pydantic schemas for email authentication endpoints."""
 
+import re
 from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
+
+# ---------------------------------------------------------------------------
+# Shared password validation
+# ---------------------------------------------------------------------------
+
+_PASSWORD_MIN_LENGTH = 8
+_PASSWORD_MAX_LENGTH = 128
+
+# Each rule: (compiled regex, human-readable message)
+_PASSWORD_RULES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"[a-z]"), "at least one lowercase letter"),
+    (re.compile(r"[A-Z]"), "at least one uppercase letter"),
+    (re.compile(r"\d"), "at least one digit"),
+    (re.compile(r"[^A-Za-z0-9]"), "at least one special character"),
+]
+
+
+def _validate_password_strength(password: str) -> str:
+    """
+    Validate password strength rules.
+
+    Requires:
+      - 8–128 characters
+      - At least one lowercase letter
+      - At least one uppercase letter
+      - At least one digit
+      - At least one special character (non-alphanumeric)
+
+    Raises ``ValueError`` with a descriptive message on failure.
+    """
+    if len(password) < _PASSWORD_MIN_LENGTH:
+        raise ValueError(
+            f"Password must be at least {_PASSWORD_MIN_LENGTH} characters.",
+        )
+
+    missing = [msg for pattern, msg in _PASSWORD_RULES if not pattern.search(password)]
+    if missing:
+        raise ValueError(
+            "Password must contain " + ", ".join(missing) + ".",
+        )
+
+    return password
 
 
 class EmailRegisterRequest(BaseModel):
@@ -11,15 +54,15 @@ class EmailRegisterRequest(BaseModel):
     email: EmailStr
     name: Optional[str] = None
     last_name: Optional[str] = None
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(
+        ..., min_length=_PASSWORD_MIN_LENGTH, max_length=_PASSWORD_MAX_LENGTH
+    )
     captcha_token: Optional[str] = None  # Cloudflare Turnstile token
 
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        return v
+        return _validate_password_strength(v)
 
 
 class EmailVerifyRequest(BaseModel):
@@ -47,14 +90,32 @@ class ResetPasswordRequest(BaseModel):
 
     email: EmailStr
     code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
-    new_password: str = Field(..., min_length=8, max_length=128)
+    new_password: str = Field(
+        ...,
+        min_length=_PASSWORD_MIN_LENGTH,
+        max_length=_PASSWORD_MAX_LENGTH,
+    )
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
 
 
 class ChangePasswordRequest(BaseModel):
     """Request to change password (authenticated user)."""
 
     current_password: str
-    new_password: str = Field(..., min_length=8, max_length=128)
+    new_password: str = Field(
+        ...,
+        min_length=_PASSWORD_MIN_LENGTH,
+        max_length=_PASSWORD_MAX_LENGTH,
+    )
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
 
 
 class ResendVerificationRequest(BaseModel):
@@ -89,6 +150,7 @@ class AuthenticateResponse(BaseModel):
     id: str
     email: str
     name: Optional[str] = None
+    last_name: Optional[str] = None
     image: Optional[str] = None
     mfa_required: bool = False
 
