@@ -1,21 +1,23 @@
 """
 Data Access Object for EmailVerification (signup and password reset codes).
 
-Also contains anti-abuse utilities:
-- ``is_disposable_email`` – blocks disposable/throwaway email domains.
-- ``verify_turnstile_token`` – validates Cloudflare Turnstile CAPTCHA tokens.
-- ``check_user_agent`` – basic bot/abuse detection via User-Agent heuristics.
+Also contains:
+- Anti-abuse utilities (disposable email blocking, Turnstile CAPTCHA, UA heuristics).
+- JWT verification-token helpers for the two-step verify-code → action flow.
 """
 
 import hashlib
 import logging
+import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
+import jwt
 from disposable_email_domains import blocklist as disposable_blocklist
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -29,9 +31,77 @@ SIGNUP_TTL_HOURS = 1
 PASSWORD_RESET_TTL_MINUTES = 10
 MAX_ATTEMPTS = 5
 
+# Verification constants
+VERIFY_TOKEN_TTL_MINUTES = 5
+VERIFY_TOKEN_SECRET = os.environ.get("ORCHESTRA_ADMIN_KEY", "dev-secret-change-me")
+
 # Turnstile constants
-_TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
-_TURNSTILE_TIMEOUT_SECONDS = 5
+TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+TURNSTILE_TIMEOUT_SECONDS = 5
+
+
+# ---------------------------------------------------------------------------
+# Verification token helpers (JWT)
+# ---------------------------------------------------------------------------
+
+
+def sign_verification_token(email: str, purpose: str) -> str:
+    """
+    Create a short-lived JWT proving the email code was verified.
+
+    :param email: The verified email address.
+    :param purpose: ``"signup"`` or ``"password_reset"``.
+    :return: Encoded JWT string.
+    """
+    payload = {
+        "sub": email,
+        "purpose": purpose,
+        "exp": datetime.now(tz=timezone.utc)
+        + timedelta(minutes=VERIFY_TOKEN_TTL_MINUTES),
+        "iat": datetime.now(tz=timezone.utc),
+    }
+    return jwt.encode(payload, VERIFY_TOKEN_SECRET, algorithm="HS256")
+
+
+def decode_verification_token(token: str, expected_purpose: str) -> str:
+    """
+    Decode and validate a verification token.
+
+    :param token: The JWT string.
+    :param expected_purpose: Required purpose (``"signup"`` or ``"password_reset"``).
+    :return: The email address from the token.
+    :raises HTTPException: On expired, invalid, or wrong-purpose tokens.
+    """
+    try:
+        payload = jwt.decode(token, VERIFY_TOKEN_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "token_expired",
+                "message": "Verification token has expired. Please verify the code again.",
+            },
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_token",
+                "message": "Invalid verification token.",
+            },
+        )
+
+    if payload.get("purpose") != expected_purpose:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "wrong_purpose",
+                "message": "This token cannot be used for this action.",
+            },
+        )
+
+    return payload["sub"]
+
 
 # ---------------------------------------------------------------------------
 # User-Agent heuristics
@@ -136,8 +206,8 @@ async def verify_turnstile_token(
         payload["remoteip"] = remote_ip
 
     try:
-        async with httpx.AsyncClient(timeout=_TURNSTILE_TIMEOUT_SECONDS) as client:
-            resp = await client.post(_TURNSTILE_SITEVERIFY_URL, data=payload)
+        async with httpx.AsyncClient(timeout=TURNSTILE_TIMEOUT_SECONDS) as client:
+            resp = await client.post(TURNSTILE_SITEVERIFY_URL, data=payload)
             resp.raise_for_status()
             result = resp.json()
             success = result.get("success", False)
@@ -178,7 +248,7 @@ class EmailVerificationDAO:
         :return: The created EmailVerification instance.
         """
         # Delete any existing pending signup for this email
-        self._delete_by_email_and_purpose(email, "signup")
+        self.delete_by_email_and_purpose(email, "signup")
 
         verification = EmailVerification(
             email=email,
@@ -208,7 +278,7 @@ class EmailVerificationDAO:
         :return: The created EmailVerification instance.
         """
         # Delete any existing pending reset for this email
-        self._delete_by_email_and_purpose(email, "password_reset")
+        self.delete_by_email_and_purpose(email, "password_reset")
 
         verification = EmailVerification(
             email=email,
@@ -304,7 +374,7 @@ class EmailVerificationDAO:
         )
         return result
 
-    def _delete_by_email_and_purpose(self, email: str, purpose: str) -> int:
+    def delete_by_email_and_purpose(self, email: str, purpose: str) -> int:
         """
         Delete all verification entries for an email and purpose.
 
