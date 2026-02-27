@@ -826,7 +826,7 @@ def set_password(
     session.commit()
 
     return {
-        "message": "Password set successfully. You can now sign in with your email and password."
+        "message": "Password set successfully. You can now sign in with your email and password.",
     }
 
 
@@ -872,12 +872,13 @@ def mfa_setup(
 
     # Get user email for the provisioning URI
     user_dao = UserDAO(session)
-    user = user_dao.get_by_id(user_id)
-    if not user:
+    user_row = user_dao.get_by_id(user_id)
+    if not user_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "user_not_found", "message": "User not found."},
         )
+    user = user_row[0]
 
     credential, provisioning_uri = mfa_dao.create_totp_credential(
         user_id=user_id,
@@ -1000,19 +1001,33 @@ def mfa_disable(
             },
         )
 
-    # Verify the code before disabling
-    if not mfa_dao.verify_totp_code(credential, body.code):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "invalid_code",
-                "message": "Invalid TOTP code. Please try again.",
-            },
-        )
+    # Verify the code before disabling (TOTP or recovery code)
+    recovery_dao = MFARecoveryDAO(session)
+
+    if body.code:
+        # Verify TOTP code
+        if not mfa_dao.verify_totp_code(credential, body.code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_code",
+                    "message": "Invalid TOTP code. Please try again.",
+                },
+            )
+    elif body.recovery_code:
+        # Verify recovery code
+        remaining = recovery_dao.verify_and_consume(user_id, body.recovery_code)
+        if remaining is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_recovery_code",
+                    "message": "Invalid recovery code. Please try again.",
+                },
+            )
 
     # Delete credential and recovery codes
     mfa_dao.delete_credential(credential)
-    recovery_dao = MFARecoveryDAO(session)
     recovery_dao.delete_all_for_user(user_id)
 
     session.commit()
