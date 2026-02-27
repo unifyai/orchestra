@@ -68,10 +68,43 @@ class EmailRegisterRequest(BaseModel):
 
 
 class EmailVerifyRequest(BaseModel):
-    """Request to verify a 6-digit email code."""
+    """Request to verify a 6-digit email code (with purpose)."""
 
     email: EmailStr
     code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    purpose: str = Field(
+        default="signup",
+        description="Purpose of the verification: 'signup' or 'password_reset'",
+    )
+
+
+class VerifyCodeResponse(BaseModel):
+    """Response after successful code verification — contains a short-lived token."""
+
+    token: str
+    message: str = "Code verified."
+
+
+class CreateUserRequest(BaseModel):
+    """Request to create a user after email verification (token-based)."""
+
+    token: str
+
+
+class ResetPasswordWithTokenRequest(BaseModel):
+    """Request to reset password using a verification token (no raw code)."""
+
+    token: str
+    new_password: str = Field(
+        ...,
+        min_length=_PASSWORD_MIN_LENGTH,
+        max_length=_PASSWORD_MAX_LENGTH,
+    )
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
 
 
 class EmailAuthenticateRequest(BaseModel):

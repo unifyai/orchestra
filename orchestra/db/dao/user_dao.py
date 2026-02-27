@@ -423,8 +423,8 @@ class UserDAO:
     def get_linked_providers(
         self,
         user_id: str,
-        account_dao: "AccountDAO",
-        email_account_dao: "EmailAccountDAO",
+        account_dao: Optional["AccountDAO"] = None,
+        email_account_dao: Optional["EmailAccountDAO"] = None,
     ) -> List[str]:
         """
         Get the list of auth providers linked to a user.
@@ -433,10 +433,18 @@ class UserDAO:
         and "email" if the user has an EmailAccount.
 
         :param user_id: The user's ID.
-        :param account_dao: AccountDAO instance.
-        :param email_account_dao: EmailAccountDAO instance.
+        :param account_dao: Optional AccountDAO instance (created from session if omitted).
+        :param email_account_dao: Optional EmailAccountDAO instance (created if omitted).
         :return: List of provider name strings.
         """
+        from orchestra.db.dao.account_dao import AccountDAO
+        from orchestra.db.dao.email_account_dao import EmailAccountDAO
+
+        if account_dao is None:
+            account_dao = AccountDAO(self.session)
+        if email_account_dao is None:
+            email_account_dao = EmailAccountDAO(self.session)
+
         providers = []
         # Check OAuth providers
         accounts = account_dao.filter(user_id=user_id)
