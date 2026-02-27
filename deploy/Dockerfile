@@ -32,6 +32,10 @@ RUN apt-get purge -y \
 COPY . /app/src/
 RUN poetry install --only main
 
+RUN groupadd -r orchestra && useradd -r -g orchestra -d /app/src -s /sbin/nologin orchestra \
+    && chown -R orchestra:orchestra /app/src
+USER orchestra
+
 CMD if [ "$ON_PREM" = "true" ]; then \
   echo "Running on prem"; \
   bash ./on_prem_setup.sh; \

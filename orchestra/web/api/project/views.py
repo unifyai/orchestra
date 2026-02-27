@@ -915,14 +915,14 @@ def delete_project(
         )
 
     # Check if trying to delete the protected project (Production Traffic)
-    ORGANIZATION_NAME = settings.orchestra_organization_name
+    ORCHESTRA_ORGANIZATION_ID = settings.orchestra_organization_id
     OWNER_ID = settings.orchestra_owner_id
     PROD_TRAFFIC_PROJECT_NAME = settings.orchestra_prod_traffic_name
     CHAT_COMPLETIONS_PROJECT_NAME = settings.chat_completions_project_name
     orchestra_org = (
         session.query(Organization)
         .filter(
-            Organization.name == ORGANIZATION_NAME,
+            Organization.id == ORCHESTRA_ORGANIZATION_ID,
             Organization.owner_id == OWNER_ID,
         )
         .first()
