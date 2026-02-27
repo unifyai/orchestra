@@ -121,19 +121,7 @@ async def register(
             },
         )
 
-    # 0b. Validate CAPTCHA (Cloudflare Turnstile)
-    remote_ip = request.client.host if request.client else None
-    captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
-    if not captcha_ok:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "captcha_failed",
-                "message": "CAPTCHA verification failed. Please try again.",
-            },
-        )
-
-    # 1. Check disposable email domain
+    # 1. Check disposable email domain (cheap, no CAPTCHA needed)
     if is_disposable_email(email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -143,23 +131,48 @@ async def register(
             },
         )
 
-    # 2. Check if email already registered
+    # 2. Check if email already registered (cheap DB lookup, no CAPTCHA needed)
     user_dao = UserDAO(session)
     existing = user_dao.filter(email=email)
     if existing:
         user = existing[0][0]
         providers = _get_linked_providers(user.id, session)
+
+        # If the user already has an email/password account, give a simple message
+        if "email" in providers:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "email_exists",
+                    "message": "This email is already registered. Please sign in instead.",
+                    "providers": providers,
+                },
+            )
+
+        # User exists via OAuth only — tell them which provider to use
         provider_str = ", ".join(providers) if providers else "another method"
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "error": "email_exists",
                 "message": (
-                    f"This email is already registered with {provider_str}. "
+                    f"This email is registered with {provider_str}. "
                     f"Please sign in with {provider_str}, then link "
                     f"email/password from your profile settings."
                 ),
                 "providers": providers,
+            },
+        )
+
+    # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new registrations
+    remote_ip = request.client.host if request.client else None
+    captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
+    if not captcha_ok:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "captcha_failed",
+                "message": "CAPTCHA verification failed. Please try again.",
             },
         )
 
@@ -232,7 +245,7 @@ def verify_email(
                 "error": "invalid_code",
                 "message": (
                     "Invalid or expired verification code. "
-                    "Please check the code and try again."
+                    "Please check try again or request a new code."
                 ),
             },
         )
