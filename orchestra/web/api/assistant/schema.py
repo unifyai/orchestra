@@ -303,6 +303,11 @@ class AssistantRead(AssistantCreate):
         None,
         description="Whether this is a local assistant (runs unity locally instead of on GKE).",
     )
+    team_ids: List[int] = Field(
+        default_factory=list,
+        description="Team IDs the assistant's user belongs to within the assistant's organization. "
+        "Empty for personal assistants or when the user has no team memberships.",
+    )
 
     class Config:
         orm_mode = True
