@@ -415,14 +415,13 @@ def ensure_production_traffic_project_exists(app: FastAPI):
     try:
         # 1. Find or create 'Admin Organization'
         org_dao = OrganizationDAO(session=session)
-        ORGANIZATION_ID = settings.orchestra_organization_id
         ORGANIZATION_NAME = settings.orchestra_organization_name
         OWNER_ID = settings.orchestra_owner_id
         PROJ_NAME = settings.orchestra_prod_traffic_name
         logging.info(
             f"Ensuring {ORGANIZATION_NAME} with owner {OWNER_ID} and {PROJ_NAME} exist",
         )
-        orgs = org_dao.filter(id=ORGANIZATION_ID)
+        orgs = org_dao.filter(name=ORGANIZATION_NAME)
         if orgs:
             admin_org = orgs[0][0]
         else:
