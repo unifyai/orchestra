@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Callable
 
+import starlette.routing
 from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -296,14 +297,20 @@ def setup_opentelemetry(app: FastAPI) -> None:
 
     # Instrument per-app components (FastAPI and SQLAlchemy)
     # These are safe to call multiple times for different app/engine instances
-    excluded_endpoints = [
-        app.url_path_for("health_check"),
-        app.url_path_for("openapi"),
-        app.url_path_for("swagger_ui_html"),
-        app.url_path_for("swagger_ui_redirect"),
-        app.url_path_for("redoc_html"),
-        app.url_path_for("metrics"),
+    _exclude_names = [
+        "health_check",
+        "openapi",
+        "swagger_ui_html",
+        "swagger_ui_redirect",
+        "redoc_html",
+        "metrics",
     ]
+    excluded_endpoints = []
+    for name in _exclude_names:
+        try:
+            excluded_endpoints.append(str(app.url_path_for(name)))
+        except starlette.routing.NoMatchFound:
+            pass
 
     FastAPIInstrumentor().instrument_app(
         app,
@@ -408,13 +415,14 @@ def ensure_production_traffic_project_exists(app: FastAPI):
     try:
         # 1. Find or create 'Admin Organization'
         org_dao = OrganizationDAO(session=session)
+        ORGANIZATION_ID = settings.orchestra_organization_id
         ORGANIZATION_NAME = settings.orchestra_organization_name
         OWNER_ID = settings.orchestra_owner_id
         PROJ_NAME = settings.orchestra_prod_traffic_name
         logging.info(
             f"Ensuring {ORGANIZATION_NAME} with owner {OWNER_ID} and {PROJ_NAME} exist",
         )
-        orgs = org_dao.filter(name=ORGANIZATION_NAME)
+        orgs = org_dao.filter(id=ORGANIZATION_ID)
         if orgs:
             admin_org = orgs[0][0]
         else:
