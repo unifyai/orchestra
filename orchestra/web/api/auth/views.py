@@ -15,6 +15,7 @@ Admin-key endpoints (called by the Next.js server on behalf of users):
   - GET  /admin/auth/mfa/status-by-email → check MFA status for OAuth sign-in
 
 User-API-key endpoints (called by the authenticated user):
+  - POST /auth/set-password
   - POST /auth/change-password
   - POST /auth/mfa/setup         → generate TOTP secret, return QR URI
   - POST /auth/mfa/confirm       → validate first TOTP code, enable MFA
@@ -69,6 +70,7 @@ from orchestra.web.api.auth.schema import (
     ProvidersForEmailResponse,
     ResendVerificationRequest,
     ResetPasswordWithTokenRequest,
+    SetPasswordRequest,
     VerifyCodeResponse,
 )
 
@@ -781,6 +783,51 @@ def change_password(
     session.commit()
 
     return {"message": "Password changed successfully."}
+
+
+@router.post(
+    "/auth/set-password",
+    status_code=status.HTTP_200_OK,
+)
+def set_password(
+    body: SetPasswordRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Set a password for an OAuth-only user.
+
+    Allows users who signed up via OAuth (Google/GitHub) to add email/password
+    credentials so they can also sign in with their email and a password.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "message": "Authentication required."},
+        )
+
+    email_account_dao = EmailAccountDAO(session)
+    existing = email_account_dao.get_by_user_id(user_id)
+
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "password_already_set",
+                "message": "You already have a password. Try changing your password if you want to update it.",
+            },
+        )
+
+    email_account_dao.create(
+        user_id=user_id,
+        password_hash=ph.hash(body.new_password),
+    )
+    session.commit()
+
+    return {
+        "message": "Password set successfully. You can now sign in with your email and password."
+    }
 
 
 # =============================================================================
