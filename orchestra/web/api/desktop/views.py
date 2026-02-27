@@ -130,7 +130,7 @@ def update_desktop(
     response_model=InfoResponse[str],
     status_code=status.HTTP_200_OK,
     summary="Unregister a desktop",
-    description="Unregister a desktop. Fails if the desktop is currently assigned to an assistant.",
+    description="Unregister a desktop. If assigned to an assistant, the assignment is cleared automatically.",
 )
 def delete_desktop(
     desktop_id: int,
@@ -140,12 +140,7 @@ def delete_desktop(
     user_id = request.state.user_id
     dao = DesktopDAO(session)
 
-    assigned = dao.get_assigned_assistant_id(desktop_id)
-    if assigned is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Desktop is assigned to assistant {assigned}. Unassign it first.",
-        )
+    dao.unlink_from_assistant(desktop_id)
 
     deleted = dao.delete(desktop_id, user_id)
     if not deleted:
