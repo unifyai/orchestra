@@ -153,6 +153,21 @@ class ChangePasswordRequest(BaseModel):
         return _validate_password_strength(v)
 
 
+class SetPasswordRequest(BaseModel):
+    """Request to set a password for an OAuth-only user."""
+
+    new_password: str = Field(
+        ...,
+        min_length=_PASSWORD_MIN_LENGTH,
+        max_length=_PASSWORD_MAX_LENGTH,
+    )
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        return _validate_password_strength(v)
+
+
 class ResendVerificationRequest(BaseModel):
     """Request to resend a verification code."""
 
