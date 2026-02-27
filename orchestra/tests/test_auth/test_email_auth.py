@@ -64,11 +64,30 @@ async def _register(
     )
 
 
-async def _verify(client: AsyncClient, email: str, code: str):
-    """Helper to verify email."""
+async def _verify_code(
+    client: AsyncClient, email: str, code: str, purpose: str = "signup"
+):
+    """Helper to verify a code and get a token."""
     return await client.post(
-        "/v0/admin/auth/verify-email",
-        json={"email": email, "code": code},
+        "/v0/admin/auth/verify-code",
+        json={"email": email, "code": code, "purpose": purpose},
+        headers=ADMIN_HEADERS,
+    )
+
+
+async def _verify(client: AsyncClient, email: str, code: str):
+    """Helper to verify email and create user (signup)."""
+    # Step 1: Verify code
+    verify_resp = await _verify_code(client, email, code, purpose="signup")
+    if verify_resp.status_code != 200:
+        return verify_resp
+
+    token = verify_resp.json()["token"]
+
+    # Step 2: Create user
+    return await client.post(
+        "/v0/admin/auth/create-user",
+        json={"token": token},
         headers=ADMIN_HEADERS,
     )
 
@@ -586,10 +605,15 @@ async def test_reset_password_happy_path(client: AsyncClient, dbsession: Session
     entry.code_hash = hash_code(code)
     dbsession.flush()
 
-    # Reset the password
+    # Step 1: Verify the code
+    verify_resp = await _verify_code(client, email, code, purpose="password_reset")
+    assert verify_resp.status_code == 200
+    token = verify_resp.json()["token"]
+
+    # Step 2: Reset the password using the token
     resp = await client.post(
         "/v0/admin/auth/reset-password",
-        json={"email": email, "code": code, "new_password": new_password},
+        json={"token": token, "new_password": new_password},
         headers=ADMIN_HEADERS,
     )
     assert resp.status_code == 200
@@ -619,7 +643,7 @@ async def test_reset_password_happy_path(client: AsyncClient, dbsession: Session
 
 @pytest.mark.anyio
 async def test_reset_password_wrong_code(client: AsyncClient, dbsession: Session):
-    """Reset password with wrong code fails."""
+    """Reset password with wrong code fails at the verify-code step."""
     email = "reset_wrong@example.com"
     await _register_and_verify(client, dbsession, email)
 
@@ -631,17 +655,13 @@ async def test_reset_password_wrong_code(client: AsyncClient, dbsession: Session
             headers=ADMIN_HEADERS,
         )
 
-    resp = await client.post(
-        "/v0/admin/auth/reset-password",
-        json={"email": email, "code": "000000", "new_password": "newPass1234"},
-        headers=ADMIN_HEADERS,
-    )
+    resp = await _verify_code(client, email, "000000", purpose="password_reset")
     assert resp.status_code == 400
 
 
 @pytest.mark.anyio
 async def test_reset_password_expired_code(client: AsyncClient, dbsession: Session):
-    """Reset password with expired code fails."""
+    """Reset password with expired code fails at the verify-code step."""
     email = "reset_expired@example.com"
     await _register_and_verify(client, dbsession, email)
 
@@ -667,11 +687,7 @@ async def test_reset_password_expired_code(client: AsyncClient, dbsession: Sessi
     entry.code_hash = hash_code(code)
     dbsession.flush()
 
-    resp = await client.post(
-        "/v0/admin/auth/reset-password",
-        json={"email": email, "code": code, "new_password": "newPass1234"},
-        headers=ADMIN_HEADERS,
-    )
+    resp = await _verify_code(client, email, code, purpose="password_reset")
     assert resp.status_code == 400
 
 
@@ -953,10 +969,15 @@ async def test_full_forgot_reset_login_flow(client: AsyncClient, dbsession: Sess
     entry.code_hash = hash_code(code)
     dbsession.flush()
 
-    # Reset
+    # Step 1: Verify code
+    verify_resp = await _verify_code(client, email, code, purpose="password_reset")
+    assert verify_resp.status_code == 200
+    token = verify_resp.json()["token"]
+
+    # Step 2: Reset password using token
     resp = await client.post(
         "/v0/admin/auth/reset-password",
-        json={"email": email, "code": code, "new_password": new_password},
+        json={"token": token, "new_password": new_password},
         headers=ADMIN_HEADERS,
     )
     assert resp.status_code == 200
@@ -1002,7 +1023,7 @@ async def test_verification_code_cannot_be_reused(
 
     # Try to verify again with any code
     resp = await _verify(client, email, "123456")
-    # Should fail because the verification entry was deleted AND user exists
+    # Should fail because the verification entry was deleted by create-user
     assert resp.status_code in (400, 409)
 
 
@@ -1056,15 +1077,12 @@ async def test_disposable_email_various_domains(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_reset_password_for_nonexistent_user(client: AsyncClient):
-    """Reset password fails gracefully when no user exists for the email."""
-    resp = await client.post(
-        "/v0/admin/auth/reset-password",
-        json={
-            "email": "nobody_reset@example.com",
-            "code": "123456",
-            "new_password": "newPw12345",
-        },
-        headers=ADMIN_HEADERS,
+    """Verify-code fails gracefully when no verification entry exists."""
+    resp = await _verify_code(
+        client,
+        "nobody_reset@example.com",
+        "123456",
+        purpose="password_reset",
     )
     assert resp.status_code == 400
 

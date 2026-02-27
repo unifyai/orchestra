@@ -6,6 +6,7 @@ Admin-key endpoints (called by the Next.js server on behalf of users):
   - POST /admin/auth/verify-email
   - POST /admin/auth/authenticate
   - POST /admin/auth/forgot-password
+  - POST /admin/auth/verify-code
   - POST /admin/auth/reset-password
   - POST /admin/auth/resend-verification
   - GET  /admin/auth/providers-for-email
@@ -23,21 +24,21 @@ User-API-key endpoints (called by the authenticated user):
 """
 
 import logging
-from typing import List
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.email_account_dao import EmailAccountDAO
 from orchestra.db.dao.email_verification_dao import (
     EmailVerificationDAO,
     check_user_agent,
+    decode_verification_token,
     generate_verification_code,
     is_disposable_email,
+    sign_verification_token,
     verify_turnstile_token,
 )
 from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO, MFARecoveryDAO
@@ -48,6 +49,7 @@ from orchestra.web.api.auth.schema import (
     AuthRegisterResponse,
     AuthVerifyResponse,
     ChangePasswordRequest,
+    CreateUserRequest,
     EmailAuthenticateRequest,
     EmailCredentialsResponse,
     EmailRegisterRequest,
@@ -66,24 +68,14 @@ from orchestra.web.api.auth.schema import (
     MFAVerifyResponse,
     ProvidersForEmailResponse,
     ResendVerificationRequest,
-    ResetPasswordRequest,
+    ResetPasswordWithTokenRequest,
+    VerifyCodeResponse,
 )
 
 admin_router = APIRouter()
 router = APIRouter()
 logger = logging.getLogger(__name__)
 ph = PasswordHasher()
-
-
-def _get_linked_providers(
-    user_id: str,
-    session: Session,
-) -> List[str]:
-    """Get the list of auth providers linked to a user via UserDAO."""
-    user_dao = UserDAO(session)
-    account_dao = AccountDAO(session)
-    email_account_dao = EmailAccountDAO(session)
-    return user_dao.get_linked_providers(user_id, account_dao, email_account_dao)
 
 
 # =============================================================================
@@ -136,7 +128,7 @@ async def register(
     existing = user_dao.filter(email=email)
     if existing:
         user = existing[0][0]
-        providers = _get_linked_providers(user.id, session)
+        providers = UserDAO(session).get_linked_providers(user.id)
 
         # If the user already has an email/password account, give a simple message
         if "email" in providers:
@@ -206,10 +198,10 @@ async def register(
             impersonate_email="hello@unify.ai",
         )
         if not sent:
-            logger.warning(f"[LOCAL DEV] Verification code for {email}: {code}")
+            print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
     except Exception:
         logger.exception(f"Failed to send verification email to {email}")
-        logger.warning(f"[LOCAL DEV] Verification code for {email}: {code}")
+        print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
         # Don't fail the registration — the user can resend
 
     session.commit()
@@ -217,51 +209,99 @@ async def register(
 
 
 @admin_router.post(
-    "/auth/verify-email",
-    response_model=AuthVerifyResponse,
+    "/auth/verify-code",
+    response_model=VerifyCodeResponse,
     status_code=status.HTTP_200_OK,
 )
-def verify_email(
+def verify_code(
     body: EmailVerifyRequest,
     session: Session = Depends(get_db_session),
 ):
     """
-    Verify a 6-digit email code and create the User + EmailAccount.
+    Unified code verification for both signup and password reset.
 
-    This is a single atomic transaction: validate the code, create the
-    User row, create the EmailAccount row, delete the verification entry.
+    Validates the 6-digit code, invalidates it (so it can't be re-used),
+    but keeps the verification row (signup entries store name/password_hash
+    that create-user needs). Returns a short-lived JWT token.
+
+    Follow-up endpoints:
+      - signup:         POST /auth/create-user    { token }
+      - password_reset: POST /auth/reset-password { token, new_password }
     """
     email = body.email.lower().strip()
+    purpose = body.purpose
+
+    if purpose not in ("signup", "password_reset"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_purpose",
+                "message": "Purpose must be 'signup' or 'password_reset'.",
+            },
+        )
 
     verification_dao = EmailVerificationDAO(session)
-    verification = verification_dao.validate_code(email, body.code, "signup")
+    verification = verification_dao.validate_code(email, body.code, purpose)
 
     if verification is None:
-        # Commit the incremented attempt counter
         session.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "error": "invalid_code",
-                "message": (
-                    "Invalid or expired verification code. "
-                    "Please check try again or request a new code."
-                ),
+                "message": "Invalid or expired code. Please try again or request a new one.",
             },
         )
+
+    # Code is valid — invalidate it so it can't be re-used, but keep the
+    # row intact (signup entries store name/password_hash needed by create-user).
+    verification.code_hash = ""
+    session.commit()
+
+    token = sign_verification_token(email, purpose)
+    return VerifyCodeResponse(token=token)
+
+
+@admin_router.post(
+    "/auth/create-user",
+    response_model=AuthVerifyResponse,
+    status_code=status.HTTP_200_OK,
+)
+def create_user_after_verification(
+    body: CreateUserRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Create a User + EmailAccount after email verification.
+
+    Accepts the JWT token from POST /auth/verify-code (purpose=signup).
+    Reads stored name, last_name, and password_hash from the verification
+    entry, creates the user, and deletes the entry.
+    """
+    email = decode_verification_token(body.token, expected_purpose="signup")
 
     # Check if user was created concurrently
     user_dao = UserDAO(session)
     existing = user_dao.filter(email=email)
     if existing:
-        # User already exists — clean up the verification entry
-        verification_dao.delete(verification.id)
         session.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "error": "email_exists",
                 "message": "This email is already registered.",
+            },
+        )
+
+    # Retrieve signup data from the verification entry
+    verification_dao = EmailVerificationDAO(session)
+    verification = verification_dao.get_pending(email, "signup")
+    if verification is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "no_pending_signup",
+                "message": "No pending signup found. Please register again.",
             },
         )
 
@@ -280,9 +320,6 @@ def verify_email(
     api_key_dao.create(key=new_api_key, name="", user_id=user.id)
 
     # Seed default project for the new user.
-    # Use a savepoint so that a seeder failure doesn't poison the
-    # outer transaction (PostgreSQL aborts all subsequent statements
-    # after an error unless it's isolated in a savepoint).
     try:
         from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 
@@ -308,8 +345,8 @@ def verify_email(
 
     # Delete the verification entry
     verification_dao.delete(verification.id)
-
     session.commit()
+
     return AuthVerifyResponse(
         id=str(user.id),
         email=user.email,
@@ -351,7 +388,7 @@ def authenticate(
 
     if email_account is None:
         # User exists but has no email/password — they signed up via OAuth
-        providers = _get_linked_providers(user.id, session)
+        providers = UserDAO(session).get_linked_providers(user.id)
         provider_str = ", ".join(providers) if providers else "another method"
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -461,10 +498,10 @@ async def forgot_password(
             impersonate_email="hello@unify.ai",
         )
         if not sent:
-            logger.warning(f"[LOCAL DEV] Password reset code for {email}: {code}")
+            print(f"[LOCAL DEV] Password reset code for {email}: {code}", flush=True)
     except Exception:
         logger.exception(f"Failed to send password reset email to {email}")
-        logger.warning(f"[LOCAL DEV] Password reset code for {email}: {code}")
+        print(f"[LOCAL DEV] Password reset code for {email}: {code}", flush=True)
 
     session.commit()
     return {"message": "If an account exists, a reset code has been sent."}
@@ -475,37 +512,21 @@ async def forgot_password(
     status_code=status.HTTP_200_OK,
 )
 def reset_password(
-    body: ResetPasswordRequest,
+    body: ResetPasswordWithTokenRequest,
     session: Session = Depends(get_db_session),
 ):
     """
-    Reset a password using a verification code.
+    Reset a password using a verification token from POST /auth/verify-code.
 
-    Validates the code, updates the password hash, sets password_changed_at
-    for session invalidation, and deletes the verification entry.
+    Validates the token, updates the password hash, sets password_changed_at
+    for session invalidation, and cleans up any leftover verification entries.
     """
-    email = body.email.lower().strip()
-
-    verification_dao = EmailVerificationDAO(session)
-    verification = verification_dao.validate_code(email, body.code, "password_reset")
-
-    if verification is None:
-        session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "invalid_code",
-                "message": (
-                    "Invalid or expired reset code. " "Please request a new one."
-                ),
-            },
-        )
+    email = decode_verification_token(body.token, expected_purpose="password_reset")
 
     # Find user + email account
     user_dao = UserDAO(session)
     existing = user_dao.filter(email=email)
     if not existing:
-        verification_dao.delete(verification.id)
         session.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -522,7 +543,6 @@ def reset_password(
         new_password_hash=ph.hash(body.new_password),
     )
     if result is None:
-        verification_dao.delete(verification.id)
         session.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -532,8 +552,9 @@ def reset_password(
             },
         )
 
-    # Delete the verification entry
-    verification_dao.delete(verification.id)
+    # Clean up any leftover verification entries for this email
+    verification_dao = EmailVerificationDAO(session)
+    verification_dao.delete_by_email_and_purpose(email, "password_reset")
     session.commit()
 
     return {"message": "Password has been reset successfully."}
@@ -631,10 +652,10 @@ async def resend_verification(
             impersonate_email="hello@unify.ai",
         )
         if not sent:
-            logger.warning(f"[LOCAL DEV] Verification code for {email}: {code}")
+            print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
     except Exception:
         logger.exception(f"Failed to resend verification email to {email}")
-        logger.warning(f"[LOCAL DEV] Verification code for {email}: {code}")
+        print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
 
     session.commit()
     return {"message": "If a pending verification exists, a new code has been sent."}
@@ -663,7 +684,7 @@ def providers_for_email(
         return ProvidersForEmailResponse(providers=[])
 
     user = existing[0][0]
-    providers = _get_linked_providers(user.id, session)
+    providers = UserDAO(session).get_linked_providers(user.id)
     return ProvidersForEmailResponse(providers=providers)
 
 
