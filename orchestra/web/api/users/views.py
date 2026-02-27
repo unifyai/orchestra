@@ -331,6 +331,7 @@ def update_user(
 @admin_router.delete("/user", response_model=AccountDeletionResponse)
 def delete_user(
     user_id: str,
+    request: Request,
     force: bool = Query(
         False,
         description="Skip organization ownership check (use with caution)",
@@ -348,7 +349,61 @@ def delete_user(
 
     Blocked if user has pending bills unless resolved first.
     Use force=True to skip organization ownership check.
+
+    If the user has MFA enabled, an ``x-mfa-code`` header with a valid
+    TOTP code is required.  When the header is missing or invalid the
+    endpoint returns ``403 { error: "mfa_required" }``.
     """
+    from orchestra.db.dao.mfa_credential_dao import (
+        MFACredentialDAO,
+        MFARecoveryDAO,
+        decrypt_secret,
+    )
+
+    # --- MFA gate for sensitive action ---
+    mfa_dao = MFACredentialDAO(session)
+    credential = mfa_dao.get_enabled_totp(user_id)
+    if credential:
+        mfa_code = request.headers.get("x-mfa-code")
+        mfa_recovery = request.headers.get("x-mfa-recovery-code")
+
+        if not mfa_code and not mfa_recovery:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "mfa_required",
+                    "message": "This action requires MFA verification.",
+                },
+            )
+
+        verified = False
+
+        if mfa_code:
+            # Verify TOTP directly (without updating last_used_at)
+            # to avoid a StaleDataError when the CASCADE delete removes
+            # the credential row during account deletion.
+            import pyotp
+
+            secret = decrypt_secret(credential.credential_data)
+            totp = pyotp.TOTP(secret)
+            verified = totp.verify(mfa_code, valid_window=1)
+        elif mfa_recovery:
+            recovery_dao = MFARecoveryDAO(session)
+            remaining = recovery_dao.verify_and_consume(user_id, mfa_recovery)
+            verified = remaining is not None
+
+        if not verified:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "mfa_required",
+                    "message": "Invalid MFA code. Please try again.",
+                },
+            )
+        # Remove the credential from the session so it doesn't interfere
+        # with the CASCADE delete triggered by delete_user_account.
+        session.expunge(credential)
+
     cleanup_service = UserAccountCleanupService(session)
     result = cleanup_service.delete_user_account(user_id, force_org_check=force)
 

@@ -3,7 +3,7 @@
 import re
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Shared password validation
@@ -279,9 +279,18 @@ class MFAVerifyRecoveryResponse(BaseModel):
 
 
 class MFADisableRequest(BaseModel):
-    """Request to disable MFA (requires current TOTP code)."""
+    """Request to disable MFA (requires current TOTP code or recovery code)."""
 
-    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    code: Optional[str] = Field(None, min_length=6, max_length=6, pattern=r"^\d{6}$")
+    recovery_code: Optional[str] = Field(None, min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def require_one_code(self) -> "MFADisableRequest":
+        if not self.code and not self.recovery_code:
+            raise ValueError(
+                "Either 'code' (TOTP) or 'recovery_code' must be provided."
+            )
+        return self
 
 
 class MFAStatusResponse(BaseModel):
