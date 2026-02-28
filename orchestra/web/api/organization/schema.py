@@ -147,6 +147,7 @@ class AcceptInviteResponse(BaseModel):
     organization_id: int
     organization_name: str
     api_key: str
+    mfa_setup_required: bool = False
 
 
 class DeclineInviteResponse(BaseModel):

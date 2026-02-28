@@ -1653,11 +1653,21 @@ async def accept_invite(
                     f"{assistant.agent_id}: {e_sync}",
                 )
 
+        # Check if org requires MFA and user hasn't set it up
+        mfa_setup_required = False
+        if org.require_mfa:
+            from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
+
+            mfa_cred_dao = MFACredentialDAO(session)
+            if not mfa_cred_dao.has_enabled_mfa(user_id):
+                mfa_setup_required = True
+
         return AcceptInviteResponse(
             message="Successfully joined organization",
             organization_id=org.id,
             organization_name=org.name,
             api_key=new_api_key,
+            mfa_setup_required=mfa_setup_required,
         )
 
     except Exception as e:
