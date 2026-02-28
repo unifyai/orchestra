@@ -193,8 +193,14 @@ async def register(
             to_email=email,
             email_subject="Verify your Unify account",
             email_body=(
-                f"<p>Your verification code is: <strong>{code}</strong></p>"
-                f"<p>This code expires in 1 hour.</p>"
+                f"<p>Thanks for signing up for Unify! Please use the code below "
+                f"to verify the email address <strong>{email}</strong>.</p>"
+                f"<p>Your verification code is:</p>"
+                f"<p style='font-size: 24px; font-weight: bold; letter-spacing: 4px; "
+                f"text-align: center; margin: 16px 0;'>{code}</p>"
+                f"<p>This code expires in <strong>1 hour</strong>.</p>"
+                f"<p style='color: #666; margin-top: 16px;'>If you did not create "
+                f"a Unify account, you can safely ignore this email.</p>"
             ),
             from_email="hello@unify.ai",
             impersonate_email="hello@unify.ai",
@@ -630,8 +636,14 @@ async def resend_verification(
         if body.purpose == "signup":
             subject = "Verify your Unify account"
             body_html = (
-                f"<p>Your verification code is: <strong>{code}</strong></p>"
-                f"<p>This code expires in 1 hour.</p>"
+                f"<p>Thanks for signing up for Unify! Please use the code below "
+                f"to verify the email address <strong>{email}</strong>.</p>"
+                f"<p>Your verification code is:</p>"
+                f"<p style='font-size: 24px; font-weight: bold; letter-spacing: 4px; "
+                f"text-align: center; margin: 16px 0;'>{code}</p>"
+                f"<p>This code expires in <strong>1 hour</strong>.</p>"
+                f"<p style='color: #666; margin-top: 16px;'>If you did not create "
+                f"a Unify account, you can safely ignore this email.</p>"
             )
         else:
             subject = "Reset your Unify password"
@@ -1139,7 +1151,7 @@ def mfa_verify(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "error": "mfa_not_enabled",
-                "message": "Two-factor authentication is not enabled for this user.",
+                "message": "Two-factor authentication is not enabled.",
             },
         )
 
@@ -1177,7 +1189,7 @@ def mfa_verify_recovery(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "error": "mfa_not_enabled",
-                "message": "Two-factor authentication is not enabled for this user.",
+                "message": "Two-factor authentication is not enabled.",
             },
         )
 
