@@ -1,6 +1,5 @@
 """Organization management endpoints."""
 
-import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -1328,7 +1327,7 @@ async def _send_invite_email(
         "UNIFY_CONSOLE_FRONTEND_URL",
         "https://console.unify.ai",
     ).rstrip("/")
-    invite_link = f"{frontend_url}/invite?token={invite.token}"
+    invite_link = f"{frontend_url}/login/invite?token={invite.token}"
 
     email_subject = f"You've been invited to join {org.name}"
     email_body = f"""
@@ -1347,27 +1346,25 @@ async def _send_invite_email(
     """
 
     try:
-        email_task = asyncio.create_task(
-            send_email_async(
-                invite.invitee_email,
-                email_subject,
-                email_body,
-                from_email="hello@unify.ai",
-            ),
+        sent = await send_email_async(
+            invite.invitee_email,
+            email_subject,
+            email_body,
+            from_email="hello@unify.ai",
         )
-
-        def _log_email_result(task: asyncio.Task) -> None:
-            try:
-                task.result()
-                logger.info(f"Invite email sent to {invite.invitee_email}")
-            except Exception as e:
-                logger.error(
-                    f"Failed to send invite email to {invite.invitee_email}: {e}",
-                )
-
-        email_task.add_done_callback(_log_email_result)
+        if sent:
+            logger.info(f"Invite email sent to {invite.invitee_email}")
+        else:
+            print(
+                f"[LOCAL DEV] Invite link for {invite.invitee_email}: {invite_link}",
+                flush=True,
+            )
     except Exception as e:
-        logger.error(f"Failed to schedule invite email: {e}")
+        logger.error(f"Failed to send invite email to {invite.invitee_email}: {e}")
+        print(
+            f"[LOCAL DEV] Invite link for {invite.invitee_email}: {invite_link}",
+            flush=True,
+        )
 
 
 @router.get(
