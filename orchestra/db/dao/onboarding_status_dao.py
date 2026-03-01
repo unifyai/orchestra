@@ -28,7 +28,7 @@ class OnboardingStatusDAO:
     def create(
         self,
         user_id: str,
-        current_step: str = "account_setup",
+        current_step: str = "workspace_setup",
         step_data: Optional[Dict[str, Any]] = None,
     ) -> OnboardingStatus:
         """
@@ -36,7 +36,7 @@ class OnboardingStatusDAO:
 
         Args:
             user_id: The user's ID
-            current_step: Initial step (default: "welcome")
+            current_step: Initial step (default: "workspace_setup")
             step_data: Optional initial step data
 
         Returns:
@@ -53,7 +53,7 @@ class OnboardingStatusDAO:
     def get_or_create(
         self,
         user_id: str,
-        current_step: str = "account_setup",
+        current_step: str = "workspace_setup",
         step_data: Optional[Dict[str, Any]] = None,
     ) -> OnboardingStatus:
         """
@@ -61,7 +61,7 @@ class OnboardingStatusDAO:
 
         Args:
             user_id: The user's ID
-            current_step: Step to use if creating (default: "welcome")
+            current_step: Step to use if creating (default: "workspace_setup")
             step_data: Step data to use if creating
 
         Returns:
@@ -133,18 +133,25 @@ class OnboardingStatusDAO:
         """
         Mark onboarding as completed.
 
+        Preserves existing step_data and adds the completed_at timestamp.
+
         Args:
             user_id: The user's ID
 
         Returns:
             The updated OnboardingStatus, or None if not found
         """
+        status = self.get_by_user_id(user_id)
+        if not status:
+            return None
+
+        merged_data = dict(status.step_data or {})
+        merged_data["completed_at"] = datetime.now(timezone.utc).isoformat()
+
         return self.update(
             user_id=user_id,
             current_step="completed",
-            step_data={
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            },
+            step_data=merged_data,
         )
 
     def delete(self, user_id: str) -> bool:
@@ -177,8 +184,8 @@ class OnboardingStatusDAO:
         """
         status = self.get_by_user_id(user_id)
         if status:
-            status.current_step = "account_setup"
+            status.current_step = "workspace_setup"
             status.step_data = {}
             status.updated_at = datetime.now(timezone.utc)
             return status
-        return self.create(user_id)
+        return self.create(user_id, current_step="workspace_setup")

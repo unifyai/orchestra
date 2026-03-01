@@ -43,6 +43,7 @@ from orchestra.db.dao.email_verification_dao import (
     verify_turnstile_token,
 )
 from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO, MFARecoveryDAO
+from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.auth.schema import (
@@ -351,6 +352,10 @@ def create_user_after_verification(
         email_verified=True,
     )
 
+    # Initialize onboarding status for the new user
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
+
     # Delete the verification entry
     verification_dao.delete(verification.id)
     session.commit()
@@ -440,6 +445,13 @@ def authenticate(
     mfa_dao = MFACredentialDAO(session)
     mfa_required = mfa_dao.has_enabled_mfa(user.id)
 
+    # Derive onboarding step from OnboardingStatus table
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user.id)
+    onboarding_step = (
+        onboarding_status.current_step if onboarding_status else "completed"
+    )
+
     session.commit()
     return AuthenticateResponse(
         id=str(user.id),
@@ -448,6 +460,7 @@ def authenticate(
         last_name=user.last_name,
         image=user.image,
         mfa_required=mfa_required,
+        onboarding_step=onboarding_step,
     )
 
 

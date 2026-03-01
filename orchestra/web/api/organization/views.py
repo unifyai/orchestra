@@ -1650,6 +1650,14 @@ async def accept_invite(
                     f"{assistant.agent_id}: {e_sync}",
                 )
 
+        # Mark user as onboarded (they're joining via invite, no workspace selection needed)
+        from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
+
+        onboarding_dao = OnboardingStatusDAO(session)
+        onboarding_status = onboarding_dao.get_by_user_id(user_id)
+        if onboarding_status and onboarding_status.current_step != "completed":
+            onboarding_dao.mark_completed(user_id)
+
         # Check if org requires MFA and user hasn't set it up
         mfa_setup_required = False
         if org.require_mfa:
