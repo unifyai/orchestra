@@ -25,6 +25,7 @@ User-API-key endpoints (called by the authenticated user):
 """
 
 import logging
+from datetime import datetime, timezone
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -593,11 +594,31 @@ async def resend_verification(
     Resend a verification code for signup or password reset.
 
     Creates a new code (overwriting any previous one for the same
-    email + purpose) and sends it.
+    email + purpose) and sends it.  Enforces a 60-second cooldown
+    between resends for the same email+purpose to prevent abuse.
     """
     email = body.email.lower().strip()
 
     verification_dao = EmailVerificationDAO(session)
+
+    # Cooldown: reject if the most recent entry for this email+purpose
+    # was created less than 60 seconds ago.
+    existing_for_cooldown = verification_dao.get_pending(email, body.purpose)
+    if existing_for_cooldown and existing_for_cooldown.created_at:
+        created = existing_for_cooldown.created_at
+        # Ensure timezone-aware comparison (TIMESTAMP columns may be naive).
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - created).total_seconds()
+        if age_seconds < 60:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": "cooldown",
+                    "message": "Please wait before requesting another code.",
+                    "retry_after": int(60 - age_seconds),
+                },
+            )
 
     if body.purpose == "signup":
         # Get existing pending signup to preserve the password_hash and name
