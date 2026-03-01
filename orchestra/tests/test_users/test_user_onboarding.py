@@ -28,7 +28,7 @@ class TestOnboardingStatusDAO:
 
         assert status is not None
         assert status.user_id == user.id
-        assert status.current_step == "account_setup"  # Initial step
+        assert status.current_step == "workspace_setup"  # Initial step
         assert status.step_data == {}
 
     @pytest.mark.anyio
@@ -43,13 +43,13 @@ class TestOnboardingStatusDAO:
         dao = OnboardingStatusDAO(dbsession)
         status = dao.create(
             user_id=user.id,
-            current_step="billing_setup",
-            step_data={"selected_type": "business", "organization_id": "org_123"},
+            current_step="completed",
+            step_data={"selected_type": "organization", "organization_id": "org_123"},
         )
         dbsession.commit()
 
-        assert status.current_step == "billing_setup"
-        assert status.step_data["selected_type"] == "business"
+        assert status.current_step == "completed"
+        assert status.step_data["selected_type"] == "organization"
         assert status.step_data["organization_id"] == "org_123"
 
     @pytest.mark.anyio
@@ -62,13 +62,13 @@ class TestOnboardingStatusDAO:
         user = user_dao.filter(email="test_onboarding3@example.com")[0][0]
 
         dao = OnboardingStatusDAO(dbsession)
-        dao.create(user_id=user.id, current_step="billing_setup")
+        dao.create(user_id=user.id, current_step="completed")
         dbsession.commit()
 
         # Retrieve
         status = dao.get_by_user_id(user.id)
         assert status is not None
-        assert status.current_step == "billing_setup"
+        assert status.current_step == "completed"
 
     @pytest.mark.anyio
     async def test_get_by_user_id_not_found(self, client: AsyncClient, dbsession):
@@ -92,7 +92,7 @@ class TestOnboardingStatusDAO:
 
         assert status is not None
         assert status.user_id == user.id
-        assert status.current_step == "account_setup"
+        assert status.current_step == "workspace_setup"
 
     @pytest.mark.anyio
     async def test_get_or_create_returns_existing(self, client: AsyncClient, dbsession):
@@ -109,7 +109,7 @@ class TestOnboardingStatusDAO:
         dbsession.commit()
 
         # get_or_create should return existing
-        status = dao.get_or_create(user.id, current_step="account_setup")
+        status = dao.get_or_create(user.id, current_step="workspace_setup")
         assert status.current_step == "completed"  # Not overwritten
 
     @pytest.mark.anyio
@@ -125,16 +125,19 @@ class TestOnboardingStatusDAO:
         dao.create(user_id=user.id)
         dbsession.commit()
 
-        # Update - user completed account setup, moving to billing
+        # Update - user completed workspace setup
         status = dao.update(
             user_id=user.id,
-            current_step="billing_setup",
-            step_data={"selected_type": "business", "organization_name": "Test Org"},
+            current_step="completed",
+            step_data={
+                "selected_type": "organization",
+                "organization_name": "Test Org",
+            },
         )
         dbsession.commit()
 
-        assert status.current_step == "billing_setup"
-        assert status.step_data["selected_type"] == "business"
+        assert status.current_step == "completed"
+        assert status.step_data["selected_type"] == "organization"
         assert status.step_data["organization_name"] == "Test Org"
 
     @pytest.mark.anyio
@@ -149,16 +152,16 @@ class TestOnboardingStatusDAO:
         dao = OnboardingStatusDAO(dbsession)
         dao.create(
             user_id=user.id,
-            current_step="account_setup",
+            current_step="workspace_setup",
             step_data={"some_field": "value"},
         )
         dbsession.commit()
 
         # Update only step
-        status = dao.update(user_id=user.id, current_step="billing_setup")
+        status = dao.update(user_id=user.id, current_step="completed")
         dbsession.commit()
 
-        assert status.current_step == "billing_setup"
+        assert status.current_step == "completed"
         assert status.step_data == {"some_field": "value"}  # Unchanged
 
     @pytest.mark.anyio
@@ -173,17 +176,17 @@ class TestOnboardingStatusDAO:
         dao = OnboardingStatusDAO(dbsession)
         dao.create(
             user_id=user.id,
-            step_data={"selected_type": "business", "organization_name": "Acme"},
+            step_data={"selected_type": "organization", "organization_name": "Acme"},
         )
         dbsession.commit()
 
-        # Update single field - add billing info
-        status = dao.update_step_data_field(user.id, "payment_method_added", True)
+        # Update single field
+        status = dao.update_step_data_field(user.id, "organization_id", "org_789")
         dbsession.commit()
 
-        assert status.step_data["selected_type"] == "business"  # Unchanged
+        assert status.step_data["selected_type"] == "organization"  # Unchanged
         assert status.step_data["organization_name"] == "Acme"  # Unchanged
-        assert status.step_data["payment_method_added"] is True  # Added
+        assert status.step_data["organization_id"] == "org_789"  # Added
 
     @pytest.mark.anyio
     async def test_mark_completed(self, client: AsyncClient, dbsession):
@@ -252,7 +255,7 @@ class TestOnboardingStatusDAO:
         status = dao.reset(user.id)
         dbsession.commit()
 
-        assert status.current_step == "account_setup"
+        assert status.current_step == "workspace_setup"
         assert status.step_data == {}
 
     @pytest.mark.anyio
@@ -269,7 +272,7 @@ class TestOnboardingStatusDAO:
         dbsession.commit()
 
         assert status is not None
-        assert status.current_step == "account_setup"
+        assert status.current_step == "workspace_setup"
 
 
 class TestOnboardingStatusAPI:
@@ -304,24 +307,24 @@ class TestOnboardingStatusAPI:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["current_step"] == "account_setup"  # Initial state
+        assert data["current_step"] == "workspace_setup"  # Initial state
 
     @pytest.mark.anyio
-    async def test_update_after_account_setup(self, client: AsyncClient):
-        """Test updating after completing account setup."""
+    async def test_update_after_workspace_setup(self, client: AsyncClient):
+        """Test updating after completing workspace setup."""
         test_user = await create_test_user(client, "onboarding_api3@example.com")
 
         # First get to create
         await client.get("/v0/user/onboarding", headers=test_user["headers"])
 
-        # User completed account setup, moving to billing
+        # User completed workspace setup, choosing organization
         response = await client.put(
             "/v0/user/onboarding",
             headers=test_user["headers"],
             json={
-                "current_step": "billing_setup",
+                "current_step": "completed",
                 "step_data": {
-                    "selected_type": "business",
+                    "selected_type": "organization",
                     "organization_id": "org_123",
                     "organization_name": "Test Corp",
                 },
@@ -330,13 +333,13 @@ class TestOnboardingStatusAPI:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["current_step"] == "billing_setup"
-        assert data["step_data"]["selected_type"] == "business"
+        assert data["current_step"] == "completed"
+        assert data["step_data"]["selected_type"] == "organization"
         assert data["step_data"]["organization_id"] == "org_123"
 
     @pytest.mark.anyio
-    async def test_update_to_completed_sets_onboarded_flag(self, client: AsyncClient):
-        """Test that completing onboarding sets the legacy onboarded flag."""
+    async def test_update_to_completed_derives_onboarded(self, client: AsyncClient):
+        """Test that completing onboarding is reflected in the legacy endpoint."""
         test_user = await create_test_user(client, "onboarding_api4@example.com")
 
         # Update to completed
@@ -347,13 +350,12 @@ class TestOnboardingStatusAPI:
                 "current_step": "completed",
                 "step_data": {
                     "selected_type": "personal",
-                    "billing_skipped": True,
                 },
             },
         )
         assert response.status_code == 200
 
-        # Check legacy endpoint
+        # Check legacy endpoint derives onboarded from OnboardingStatus
         legacy_response = await client.get(
             "/v0/user/onboarding-status",
             headers=test_user["headers"],
@@ -381,9 +383,9 @@ class TestOnboardingStatusAPI:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["current_step"] == "account_setup"
+        assert data["current_step"] == "workspace_setup"
 
-        # Check legacy flag is also reset
+        # Check legacy endpoint derives onboarded from OnboardingStatus
         legacy_response = await client.get(
             "/v0/user/onboarding-status",
             headers=test_user["headers"],
@@ -403,128 +405,72 @@ class TestOnboardingStatusAPI:
         assert response.status_code == 422  # Validation error
 
     @pytest.mark.anyio
-    async def test_accumulated_step_data(self, client: AsyncClient):
-        """Test that step_data accumulates as user progresses."""
+    async def test_step_data_in_completed(self, client: AsyncClient):
+        """Test that step_data is stored when completing onboarding."""
         test_user = await create_test_user(client, "onboarding_api7@example.com")
 
-        # Complete account setup
-        response = await client.put(
-            "/v0/user/onboarding",
-            headers=test_user["headers"],
-            json={
-                "current_step": "billing_setup",
-                "step_data": {
-                    "selected_type": "business",
-                    "organization_id": "org_456",
-                    "organization_name": "Acme Inc",
-                    "business_name": "Acme Incorporated",
-                },
-            },
-        )
-        assert response.status_code == 200
-
-        # Complete billing setup
+        # Complete workspace setup → completed
         response = await client.put(
             "/v0/user/onboarding",
             headers=test_user["headers"],
             json={
                 "current_step": "completed",
                 "step_data": {
-                    "selected_type": "business",
+                    "selected_type": "organization",
                     "organization_id": "org_456",
                     "organization_name": "Acme Inc",
-                    "business_name": "Acme Incorporated",
-                    "payment_method_added": True,
-                    "billing_skipped": False,
                 },
             },
         )
         assert response.status_code == 200
 
         data = response.json()
-        # All accumulated data should be present
-        assert data["step_data"]["selected_type"] == "business"
+        assert data["step_data"]["selected_type"] == "organization"
         assert data["step_data"]["organization_id"] == "org_456"
-        assert data["step_data"]["payment_method_added"] is True
-        assert data["step_data"]["billing_skipped"] is False
+        assert data["step_data"]["organization_name"] == "Acme Inc"
 
 
 class TestOnboardingStepProgression:
     """Tests for typical onboarding step progressions."""
 
     @pytest.mark.anyio
-    async def test_personal_account_flow(self, client: AsyncClient):
-        """Test complete personal account onboarding flow."""
+    async def test_personal_workspace_flow(self, client: AsyncClient):
+        """Test complete personal workspace onboarding flow."""
         test_user = await create_test_user(client, "onboarding_flow1@example.com")
         headers = test_user["headers"]
 
         # Step 1: Get initial status
         response = await client.get("/v0/user/onboarding", headers=headers)
-        assert response.json()["current_step"] == "account_setup"
+        assert response.json()["current_step"] == "workspace_setup"
 
-        # Step 2: Complete account setup (personal)
-        response = await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "billing_setup",
-                "step_data": {"selected_type": "personal"},
-            },
-        )
-        assert response.status_code == 200
-        assert response.json()["current_step"] == "billing_setup"
-
-        # Step 3: Complete billing (skipped)
+        # Step 2: Complete workspace setup (personal) → completed
         response = await client.put(
             "/v0/user/onboarding",
             headers=headers,
             json={
                 "current_step": "completed",
-                "step_data": {
-                    "selected_type": "personal",
-                    "billing_skipped": True,
-                },
+                "step_data": {"selected_type": "personal"},
             },
         )
         assert response.status_code == 200
         assert response.json()["current_step"] == "completed"
 
     @pytest.mark.anyio
-    async def test_business_account_flow(self, client: AsyncClient):
-        """Test complete business account onboarding flow."""
+    async def test_organization_workspace_flow(self, client: AsyncClient):
+        """Test complete organization workspace onboarding flow."""
         test_user = await create_test_user(client, "onboarding_flow2@example.com")
         headers = test_user["headers"]
 
-        # Step 1: Complete account setup (business with org)
-        response = await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "billing_setup",
-                "step_data": {
-                    "selected_type": "business",
-                    "organization_id": "org_test_123",
-                    "organization_name": "Test Corp",
-                    "business_name": "Test Corporation LLC",
-                },
-            },
-        )
-        assert response.status_code == 200
-        assert response.json()["current_step"] == "billing_setup"
-
-        # Step 2: Complete billing setup
+        # Step 1: Complete workspace setup (organization) → completed
         response = await client.put(
             "/v0/user/onboarding",
             headers=headers,
             json={
                 "current_step": "completed",
                 "step_data": {
-                    "selected_type": "business",
+                    "selected_type": "organization",
                     "organization_id": "org_test_123",
                     "organization_name": "Test Corp",
-                    "business_name": "Test Corporation LLC",
-                    "payment_method_added": True,
-                    "billing_skipped": False,
                 },
             },
         )
@@ -533,33 +479,17 @@ class TestOnboardingStepProgression:
 
     @pytest.mark.anyio
     async def test_resume_onboarding(self, client: AsyncClient):
-        """Test resuming onboarding from where user left off."""
+        """Test resuming onboarding from workspace_setup step."""
         test_user = await create_test_user(client, "onboarding_flow3@example.com")
         headers = test_user["headers"]
 
-        # User completed account setup but left before billing
-        await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "billing_setup",
-                "step_data": {
-                    "selected_type": "business",
-                    "organization_name": "Half Finished Corp",
-                },
-            },
-        )
-
-        # Later, user returns and gets their progress
+        # User starts but doesn't complete — workspace_setup is the initial step
         response = await client.get("/v0/user/onboarding", headers=headers)
         assert response.status_code == 200
 
         data = response.json()
-        # Should resume at billing_setup
-        assert data["current_step"] == "billing_setup"
-        # Should have accumulated data from account setup
-        assert data["step_data"]["selected_type"] == "business"
-        assert data["step_data"]["organization_name"] == "Half Finished Corp"
+        # Should be at workspace_setup (initial state)
+        assert data["current_step"] == "workspace_setup"
 
 
 # ============================================================================
@@ -571,59 +501,38 @@ class TestE2EUserOnboardingFlows:
     """
     End-to-end tests for complete user onboarding flows.
 
-    These tests simulate real user journeys through the onboarding process,
-    covering both personal and business paths as defined in the design document.
+    These tests simulate real user journeys through the simplified onboarding
+    process (workspace_setup → completed).
     """
 
     @pytest.mark.anyio
-    async def test_e2e_path_a_personal_direct_signup_with_billing(
+    async def test_e2e_personal_workspace_direct_signup(
         self,
         client: AsyncClient,
     ):
         """
-        E2E Test: Path A - Direct signup as personal user with billing setup.
+        E2E Test: Direct signup choosing personal workspace.
 
         Flow:
         1. User signs up (creates account)
-        2. Selects "Personal" in account setup
-        3. Adds payment method via checkout
-        4. Completes onboarding
+        2. Selects "Personal" in workspace setup
+        3. Completes onboarding
         """
-        # Step 1: Create user (simulating OAuth signup)
-        user = await create_test_user(client, "e2e_personal_billing@example.com")
+        user = await create_test_user(client, "e2e_personal@example.com")
         headers = user["headers"]
 
         # Verify initial onboarding state
         response = await client.get("/v0/user/onboarding", headers=headers)
         assert response.status_code == 200
-        assert response.json()["current_step"] == "account_setup"
+        assert response.json()["current_step"] == "workspace_setup"
 
-        # Step 2: Complete account setup - personal
-        response = await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "billing_setup",
-                "step_data": {"selected_type": "personal"},
-            },
-        )
-        assert response.status_code == 200
-        assert response.json()["current_step"] == "billing_setup"
-
-        # Step 3: User would add payment method via Stripe Checkout
-        # (simulated - actual checkout happens in browser)
-
-        # Step 4: Complete onboarding
+        # Complete workspace setup → completed
         response = await client.put(
             "/v0/user/onboarding",
             headers=headers,
             json={
                 "current_step": "completed",
-                "step_data": {
-                    "selected_type": "personal",
-                    "payment_method_added": True,
-                    "billing_skipped": False,
-                },
+                "step_data": {"selected_type": "personal"},
             },
         )
         assert response.status_code == 200
@@ -634,190 +543,61 @@ class TestE2EUserOnboardingFlows:
         assert legacy.json()["onboarded"] is True
 
     @pytest.mark.anyio
-    async def test_e2e_path_a_personal_direct_signup_skip_billing(
+    async def test_e2e_organization_workspace_direct_signup(
         self,
         client: AsyncClient,
     ):
         """
-        E2E Test: Path A - Direct signup as personal user, skip billing.
+        E2E Test: Direct signup choosing organization workspace.
 
         Flow:
         1. User signs up
-        2. Selects "Personal" in account setup
-        3. Skips billing setup
-        4. Completes onboarding (can hire assistants later)
+        2. Selects "For my team" → creates organization
+        3. Completes onboarding
         """
-        user = await create_test_user(client, "e2e_personal_skip@example.com")
+        user = await create_test_user(client, "e2e_org_full@example.com")
         headers = user["headers"]
 
-        # Complete account setup
-        await client.put(
-            "/v0/user/onboarding",
+        # Create organization
+        org_response = await client.post(
+            "/v0/organizations",
             headers=headers,
-            json={
-                "current_step": "billing_setup",
-                "step_data": {"selected_type": "personal"},
-            },
+            json={"name": "E2E Org Corp"},
         )
+        assert org_response.status_code == 201
+        org_id = str(org_response.json()["id"])
 
-        # Skip billing
+        # Complete workspace setup with organization → completed
         response = await client.put(
             "/v0/user/onboarding",
             headers=headers,
             json={
                 "current_step": "completed",
                 "step_data": {
-                    "selected_type": "personal",
-                    "billing_skipped": True,
-                    "payment_method_added": False,
+                    "selected_type": "organization",
+                    "organization_id": org_id,
+                    "organization_name": "E2E Org Corp",
                 },
             },
         )
         assert response.status_code == 200
         assert response.json()["current_step"] == "completed"
-        assert response.json()["step_data"]["billing_skipped"] is True
-
-    @pytest.mark.anyio
-    async def test_e2e_path_a_business_direct_signup_with_org(
-        self,
-        client: AsyncClient,
-    ):
-        """
-        E2E Test: Path A - Direct signup as business user with organization.
-
-        Flow:
-        1. User signs up
-        2. Selects "Business" → creates organization
-        3. Optionally adds business details (tax ID, address)
-        4. Adds payment method for organization
-        5. Completes onboarding
-        """
-        user = await create_test_user(client, "e2e_business_full@example.com")
-        headers = user["headers"]
-
-        # Step 2a: Create organization
-        org_response = await client.post(
-            "/v0/organizations",
-            headers=headers,
-            json={"name": "E2E Business Corp"},
-        )
-        assert org_response.status_code == 201
-        org_id = str(org_response.json()["id"])  # Convert to string
-
-        # Step 2b: Update onboarding with business selection
-        response = await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "billing_setup",
-                "step_data": {
-                    "selected_type": "business",
-                    "organization_id": org_id,
-                    "organization_name": "E2E Business Corp",
-                },
-            },
-        )
-        assert (
-            response.status_code == 200
-        ), f"Got {response.status_code}: {response.json()}"
-
-        # Step 3: Add business details to organization is optional
-        # In a real flow, this would be done via the billing/billing-profile endpoint
-        # after Stripe customer is set up
-
-        # Step 4: Complete onboarding
-        response = await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "completed",
-                "step_data": {
-                    "selected_type": "business",
-                    "organization_id": org_id,
-                    "organization_name": "E2E Business Corp",
-                    "payment_method_added": True,
-                    "billing_skipped": False,
-                },
-            },
-        )
-        assert response.status_code == 200
 
         # Verify organization was created and user is owner
         org = await client.get(f"/v0/organizations/{org_id}", headers=headers)
         assert org.status_code == 200
-        assert org.json()["name"] == "E2E Business Corp"
+        assert org.json()["name"] == "E2E Org Corp"
 
-    @pytest.mark.anyio
-    async def test_e2e_interrupted_onboarding_resume(self, client: AsyncClient):
-        """
-        E2E Test: User interrupts onboarding and resumes later.
-
-        Flow:
-        1. User starts onboarding
-        2. Completes account setup (selects business)
-        3. Creates organization
-        4. Leaves before billing setup
-        5. Returns later and resumes from billing_setup
-        6. Completes onboarding
-        """
-        user = await create_test_user(client, "e2e_interrupted@example.com")
-        headers = user["headers"]
-
-        # Create org and progress to billing setup
-        org_response = await client.post(
-            "/v0/organizations",
-            headers=headers,
-            json={"name": "Interrupted Corp"},
-        )
-        org_id = str(org_response.json()["id"])  # Convert to string
-
-        # Update onboarding and verify it was saved
-        update_response = await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "billing_setup",
-                "step_data": {
-                    "selected_type": "business",
-                    "organization_id": org_id,
-                },
-            },
-        )
-        assert update_response.status_code == 200, f"Got: {update_response.json()}"
-        assert update_response.json()["current_step"] == "billing_setup"
-
-        # Simulate user leaving (no action, just checking state persists)
-
-        # User returns - check they resume at billing_setup
-        resume_response = await client.get("/v0/user/onboarding", headers=headers)
-        assert resume_response.status_code == 200
-        data = resume_response.json()
-        assert data["current_step"] == "billing_setup"
-        # step_data fields may be normalized by schema
-        assert data["step_data"].get("selected_type") == "business"
-        assert data["step_data"].get("organization_id") == org_id
-
-        # Complete the flow
-        response = await client.put(
-            "/v0/user/onboarding",
-            headers=headers,
-            json={
-                "current_step": "completed",
-                "step_data": {
-                    "selected_type": "business",
-                    "organization_id": org_id,
-                    "payment_method_added": True,
-                },
-            },
-        )
-        assert response.status_code == 200
+        # Verify user is marked as onboarded
+        legacy = await client.get("/v0/user/onboarding-status", headers=headers)
+        assert legacy.json()["onboarded"] is True
 
     @pytest.mark.anyio
     async def test_e2e_user_can_restart_onboarding(self, client: AsyncClient):
         """
         E2E Test: User can reset and restart their onboarding.
 
-        Useful for users who made a mistake in account type selection.
+        Useful for users who made a mistake in workspace type selection.
         """
         user = await create_test_user(client, "e2e_restart@example.com")
         headers = user["headers"]
@@ -832,17 +612,16 @@ class TestE2EUserOnboardingFlows:
             },
         )
 
-        # User decides they want to switch to business
+        # User decides they want to switch to organization
         # Reset onboarding
         reset_response = await client.delete("/v0/user/onboarding", headers=headers)
         assert reset_response.status_code == 200
-        assert reset_response.json()["current_step"] == "account_setup"
+        assert reset_response.json()["current_step"] == "workspace_setup"
 
         # Start fresh
         response = await client.get("/v0/user/onboarding", headers=headers)
-        assert response.json()["current_step"] == "account_setup"
+        assert response.json()["current_step"] == "workspace_setup"
         # After reset, step_data should have cleared user-set values
-        # (schema may add nullable fields with None values)
         step_data = response.json()["step_data"]
         assert step_data.get("selected_type") is None
         assert step_data.get("organization_id") is None
@@ -855,12 +634,12 @@ class TestE2EUserOnboardingFlows:
         user = await create_test_user(client, "e2e_consistency@example.com")
         headers = user["headers"]
 
-        # Set state
+        # Set state to completed with custom data
         await client.put(
             "/v0/user/onboarding",
             headers=headers,
             json={
-                "current_step": "billing_setup",
+                "current_step": "completed",
                 "step_data": {
                     "selected_type": "personal",
                     "custom_field": "test_value",
@@ -868,10 +647,10 @@ class TestE2EUserOnboardingFlows:
             },
         )
 
-        # Get state multiple times
+        # Get state multiple times — should be consistent
         for _ in range(3):
             response = await client.get("/v0/user/onboarding", headers=headers)
-            assert response.json()["current_step"] == "billing_setup"
+            assert response.json()["current_step"] == "completed"
             assert response.json()["step_data"]["custom_field"] == "test_value"
 
     @pytest.mark.anyio
@@ -882,8 +661,7 @@ class TestE2EUserOnboardingFlows:
         Flow:
         1. User signs up as personal
         2. Completes onboarding
-        3. Later creates an organization
-        4. Organization gets its own billing entity
+        3. Later creates an organization from settings
         """
         user = await create_test_user(client, "e2e_later_org@example.com")
         headers = user["headers"]
@@ -894,10 +672,7 @@ class TestE2EUserOnboardingFlows:
             headers=headers,
             json={
                 "current_step": "completed",
-                "step_data": {
-                    "selected_type": "personal",
-                    "billing_skipped": True,
-                },
+                "step_data": {"selected_type": "personal"},
             },
         )
 

@@ -203,6 +203,7 @@ class AuthenticateResponse(BaseModel):
     last_name: Optional[str] = None
     image: Optional[str] = None
     mfa_required: bool = False
+    onboarding_step: str = "completed"
 
 
 class ProvidersForEmailResponse(BaseModel):
@@ -288,7 +289,7 @@ class MFADisableRequest(BaseModel):
     def require_one_code(self) -> "MFADisableRequest":
         if not self.code and not self.recovery_code:
             raise ValueError(
-                "Either 'code' (TOTP) or 'recovery_code' must be provided."
+                "Either 'code' (TOTP) or 'recovery_code' must be provided.",
             )
         return self
 

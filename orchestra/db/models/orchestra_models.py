@@ -267,7 +267,6 @@ class User(Base):
     # Toggles managed by usage quotas
     queries_enabled = Column(Boolean, nullable=False, server_default="true")
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
-    onboarded = Column(Boolean, nullable=False, server_default="false")
     store_prompts = Column(
         Boolean,
         nullable=False,
@@ -1425,14 +1424,12 @@ class OnboardingStatus(Base):
     Tracks user onboarding progress.
 
     The current_step represents WHERE TO RESUME next time:
-    - account_setup: User needs to complete account setup (initial state)
-    - billing_setup: Account done, user needs to add payment method
+    - workspace_setup: Initial state – user needs to choose personal vs. organization workspace
     - completed: All onboarding steps done
 
     step_data accumulates information from completed steps:
-    - selected_type: "personal" | "business"
-    - organization_id, organization_name (if business)
-    - billing_skipped, payment_method_added (after billing step)
+    - selected_type: "personal" | "organization"
+    - organization_id, organization_name (if organization)
     - completed_at (when completed)
     """
 

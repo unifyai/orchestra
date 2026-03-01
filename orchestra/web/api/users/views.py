@@ -96,6 +96,11 @@ def create_user(
         DefaultTasksSeeder.seed(session, user_id=new_user.id)
     except Exception as e:
         print(e)
+
+    # Initialize onboarding status for the new user
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+
     return {
         "id": new_user.id,
         "name": new_user.name,
@@ -149,6 +154,14 @@ def get_user(
     has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
         user_instance.id,
     )
+
+    # Derive onboarding step from OnboardingStatus table
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user_instance.id)
+    onboarding_step = (
+        onboarding_status.current_step if onboarding_status else "completed"
+    )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -164,7 +177,7 @@ def get_user(
         # backward-compat aliases (approval flow removed; always approved)
         "assistant_hiring_approval": "approved",
         "has_claimed_approval_link": has_claimed,
-        "onboarded": user_instance.onboarded,
+        "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
@@ -214,6 +227,13 @@ def get_user_by_email(
         user_instance.id,
     )
 
+    # Derive onboarding step from OnboardingStatus table
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user_instance.id)
+    onboarding_step = (
+        onboarding_status.current_step if onboarding_status else "completed"
+    )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -229,7 +249,7 @@ def get_user_by_email(
         # backward-compat aliases (approval flow removed; always approved)
         "assistant_hiring_approval": "approved",
         "has_claimed_approval_link": has_claimed,
-        "onboarded": user_instance.onboarded,
+        "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
@@ -286,6 +306,13 @@ def get_user_by_account(
         user_instance.id,
     )
 
+    # Derive onboarding step from OnboardingStatus table
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user_instance.id)
+    onboarding_step = (
+        onboarding_status.current_step if onboarding_status else "completed"
+    )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -301,7 +328,7 @@ def get_user_by_account(
         # backward-compat aliases (approval flow removed; always approved)
         "assistant_hiring_approval": "approved",
         "has_claimed_approval_link": has_claimed,
-        "onboarded": user_instance.onboarded,
+        "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
@@ -1119,14 +1146,17 @@ def get_onboarding_status(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
-    """Get the current user's onboarding status."""
+    """Get the current user's onboarding status (derived from OnboardingStatus table)."""
     user_dao = UserDAO(session)
     user_row = user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
-    user = user_row[0]
-    return OnboardingStatusResponse(onboarded=user.onboarded)
+    onboarding_dao = OnboardingStatusDAO(session)
+    status = onboarding_dao.get_by_user_id(request.state.user_id)
+    onboarded = status.current_step == "completed" if status else True
+
+    return OnboardingStatusResponse(onboarded=onboarded)
 
 
 @router.put("/user/onboarding-status")
@@ -1135,13 +1165,18 @@ def update_onboarding_status(
     body: UpdateOnboardingStatusRequest,
     session: Session = Depends(get_db_session),
 ):
-    """Update the current user's onboarding status."""
+    """Update the current user's onboarding status (syncs to OnboardingStatus table)."""
     user_dao = UserDAO(session)
     user_row = user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
-    user_dao.update(id=request.state.user_id, onboarded=body.onboarded)
+    onboarding_dao = OnboardingStatusDAO(session)
+    if body.onboarded:
+        onboarding_dao.mark_completed(request.state.user_id)
+    else:
+        onboarding_dao.reset(request.state.user_id)
+
     session.commit()
 
     return {"message": "Onboarding status updated successfully"}
@@ -1208,10 +1243,6 @@ def update_onboarding_progress(
         step_data=body.step_data,
     )
 
-    # If step is "completed", also set the legacy onboarded flag
-    if body.current_step == "completed":
-        user_dao.update(id=request.state.user_id, onboarded=True)
-
     session.commit()
 
     return OnboardingStatusDetailedResponse(
@@ -1241,9 +1272,6 @@ def reset_onboarding_progress(
         raise not_found("User")
 
     status = onboarding_dao.reset(request.state.user_id)
-
-    # Also reset the legacy onboarded flag
-    user_dao.update(id=request.state.user_id, onboarded=False)
 
     session.commit()
 
