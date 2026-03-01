@@ -10,7 +10,6 @@ import base64
 import hashlib
 import json
 import logging
-import os
 import secrets
 import string
 from datetime import datetime, timezone
@@ -37,13 +36,13 @@ TOTP_VALID_WINDOW = 1  # ±30 seconds tolerance
 ISSUER_NAME = "Unify"
 
 # GCP KMS configuration
-_GCP_PROJECT: str = getattr(settings, "gcp_project", "") or ""
-_GCP_LOCATION: str = getattr(settings, "gcp_location", "") or ""
-_KMS_KEYRING: str = os.environ.get("MFA_KMS_KEYRING", "mfa")
-_KMS_KEY: str = os.environ.get("MFA_KMS_KEY", "mfa-secrets")
+GCP_PROJECT: str = getattr(settings, "gcp_project")
+GCP_LOCATION: str = getattr(settings, "gcp_location")
+KMS_KEYRING: str = settings.mfa_kms_keyring
+KMS_KEY: str = settings.mfa_kms_key
 
 # Local fallback key (dev / CI).
-_LOCAL_KEY_ENV: Optional[str] = os.environ.get("MFA_ENCRYPTION_KEY")
+MFA_ENCRYPTION_KEY: Optional[str] = settings.mfa_encryption_key
 
 
 # ---------------------------------------------------------------------------
@@ -53,13 +52,13 @@ _LOCAL_KEY_ENV: Optional[str] = os.environ.get("MFA_ENCRYPTION_KEY")
 
 def _kms_available() -> bool:
     """Return True when GCP KMS can be used."""
-    return bool(_GCP_PROJECT and _GCP_LOCATION)
+    return bool(GCP_PROJECT and GCP_LOCATION)
 
 
 def _get_fernet() -> Fernet:
     """Return a Fernet instance for local encryption."""
-    if _LOCAL_KEY_ENV:
-        raw = _LOCAL_KEY_ENV.encode()
+    if MFA_ENCRYPTION_KEY:
+        raw = MFA_ENCRYPTION_KEY.encode()
     else:
         # Deterministic but unique-per-project seed for dev convenience.
         raw = b"orchestra-mfa-dev-key-do-not-use-in-prod"
@@ -84,10 +83,10 @@ def encrypt_secret(plaintext: str) -> bytes:
 
             client = kms.KeyManagementServiceClient()
             key_name = client.crypto_key_path(
-                _GCP_PROJECT,
-                _GCP_LOCATION,
-                _KMS_KEYRING,
-                _KMS_KEY,
+                GCP_PROJECT,
+                GCP_LOCATION,
+                KMS_KEYRING,
+                KMS_KEY,
             )
             response = client.encrypt(
                 request={"name": key_name, "plaintext": payload},
@@ -109,10 +108,10 @@ def decrypt_secret(ciphertext: bytes) -> str:
 
             client = kms.KeyManagementServiceClient()
             key_name = client.crypto_key_path(
-                _GCP_PROJECT,
-                _GCP_LOCATION,
-                _KMS_KEYRING,
-                _KMS_KEY,
+                GCP_PROJECT,
+                GCP_LOCATION,
+                KMS_KEYRING,
+                KMS_KEY,
             )
             response = client.decrypt(
                 request={"name": key_name, "ciphertext": ciphertext},
