@@ -199,7 +199,6 @@ class UserDAO:
         phone_number: Optional[str] = ...,
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
-        onboarded: Optional[bool] = ...,
         monthly_spending_cap: Optional[float] = ...,
     ) -> None:
         """
@@ -253,8 +252,6 @@ class UserDAO:
                 setattr(entry, "queries_enabled", queries_enabled)
             if evaluations_enabled is not ...:
                 setattr(entry, "evaluations_enabled", evaluations_enabled)
-            if onboarded is not ...:
-                setattr(entry, "onboarded", onboarded)
 
             # Handle monthly_spending_cap with cascade logic
             if monthly_spending_cap is not ...:
