@@ -29,12 +29,13 @@ def upgrade() -> None:
     #    created before the onboarding_status table existed.
     op.execute(
         """
-        INSERT INTO onboarding_status (id, user_id, current_step, step_data, created_at)
+        INSERT INTO onboarding_status (id, user_id, current_step, step_data, created_at, updated_at)
         SELECT
             gen_random_uuid()::text,
             u.id,
             'completed',
             '{}',
+            NOW(),
             NOW()
         FROM "user" u
         LEFT JOIN onboarding_status os ON os.user_id = u.id
@@ -44,7 +45,7 @@ def upgrade() -> None:
 
     # 2. Mark any existing incomplete onboarding_status rows as completed.
     op.execute(
-        "UPDATE onboarding_status SET current_step = 'completed' "
+        "UPDATE onboarding_status SET current_step = 'completed', updated_at = NOW() "
         "WHERE current_step != 'completed'",
     )
 

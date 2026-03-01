@@ -33,7 +33,7 @@ MAX_ATTEMPTS = 5
 
 # Verification constants
 VERIFY_TOKEN_TTL_MINUTES = 5
-VERIFY_TOKEN_SECRET = os.environ.get("ORCHESTRA_ADMIN_KEY", "dev-secret-change-me")
+VERIFY_TOKEN_SECRET = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 # Turnstile constants
 TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
