@@ -67,6 +67,8 @@ def _get_tab(
     tab_dao: TabDAO,
     for_update: bool = False,
     only_tab: bool = False,
+    request_fastapi: Optional["Request"] = None,
+    project_dao: Optional[ProjectDAO] = None,
 ) -> Tuple[Tab, Interface]:
     """Helper function to retrieve a tab by ID or by interface_id and name."""
     tab = None
@@ -81,13 +83,28 @@ def _get_tab(
                 detail=f"Tab with ID {tab_id} not found.",
             )
         if not only_tab:
-            # Get interface to verify access
             interface = interface_dao.get(tab.interface_id)
             if not interface:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Interface with ID {tab.interface_id} not found.",
+                    detail=f"Tab with ID {tab_id} not found.",
                 )
+            if request_fastapi and project_dao:
+                organization_id = getattr(
+                    request_fastapi.state,
+                    "organization_id",
+                    None,
+                )
+                projects = project_dao.filter_by_user_access(
+                    user_id=request_fastapi.state.user_id,
+                    organization_id=organization_id,
+                    id=interface.project_id,
+                )
+                if not projects:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Tab with ID {tab_id} not found.",
+                    )
     # Get by interface_id and name
     elif interface_id and name:
         # Get interface
@@ -312,6 +329,7 @@ def create_tab(
     },
 )
 def get_tab(
+    request_fastapi: Request,
     tab_id: Optional[str] = Query(None, description="The ID of the tab to retrieve"),
     interface_id: Optional[str] = Query(
         None,
@@ -325,6 +343,9 @@ def get_tab(
     session: Session = Depends(get_db_session),
 ):
     """Get a specific tab by ID or by interface_id and name."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
@@ -337,6 +358,8 @@ def get_tab(
         checkpoint=checkpoint,
         interface_dao=interface_dao,
         tab_dao=tab_dao,
+        request_fastapi=request_fastapi,
+        project_dao=project_dao,
     )
 
     # Get all tiles for this tab

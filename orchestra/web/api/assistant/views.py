@@ -32,6 +32,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
@@ -134,6 +135,7 @@ def _build_assistant_read(
     phone_override: Optional[str] = None,
     email_override: Optional[str] = None,
     whatsapp_override: Optional[str] = None,
+    team_ids: Optional[List[int]] = None,
 ) -> AssistantRead:
     """Build an AssistantRead from an ORM Assistant, resolving desktop fields."""
     desktop_dao = DesktopDAO(session)
@@ -144,6 +146,14 @@ def _build_assistant_read(
         if desktop:
             user_desktop_url = desktop.url
             user_desktop_mode = desktop.os
+
+    if team_ids is None:
+        if a.organization_id is not None:
+            team_dao = TeamDAO(session)
+            teams = team_dao.get_user_teams(a.user_id, a.organization_id)
+            team_ids = [t.id for t in teams]
+        else:
+            team_ids = []
 
     return AssistantRead(
         agent_id=str(a.agent_id),
@@ -191,6 +201,7 @@ def _build_assistant_read(
         user_first_name=user_first_name,
         user_last_name=user_last_name,
         user_email=user_email,
+        team_ids=team_ids,
     )
 
 
@@ -4255,6 +4266,8 @@ def admin_list_all_assistants(
             else None
         )
 
+        skip_teams = requested_fields is not None and "team_ids" not in requested_fields
+
         # Build AssistantRead objects
         assistant_reads = [
             _build_assistant_read(
@@ -4265,6 +4278,7 @@ def admin_list_all_assistants(
                 user_last_name=users[i].last_name if users else None,
                 user_email=users[i].email if users else None,
                 secrets=secrets_list[i] if secrets_list else None,
+                team_ids=[] if skip_teams else None,
             )
             for i, a in enumerate(assistants)
         ]

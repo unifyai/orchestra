@@ -147,6 +147,9 @@ def _get_tile(
     tile_dao: TileDAO,
     for_update: bool = False,
     only_tile: bool = False,
+    request_fastapi: Optional["Request"] = None,
+    project_dao: Optional[ProjectDAO] = None,
+    interface_dao: Optional[InterfaceDAO] = None,
 ) -> Tuple[Tile, Tab]:
     """Helper function to retrieve a tile by ID or by tab_id and name."""
     tile = None
@@ -161,13 +164,34 @@ def _get_tile(
                 detail=f"Tile with ID {tile_id} not found.",
             )
         if not only_tile:
-            # Get tab to verify access
             tab = tab_dao.get(tile.tab_id)
             if not tab:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Tab with ID {tile.tab_id} not found.",
+                    detail=f"Tile with ID {tile_id} not found.",
                 )
+            if request_fastapi and project_dao and interface_dao:
+                interface = interface_dao.get(tab.interface_id)
+                if not interface:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Tile with ID {tile_id} not found.",
+                    )
+                organization_id = getattr(
+                    request_fastapi.state,
+                    "organization_id",
+                    None,
+                )
+                projects = project_dao.filter_by_user_access(
+                    user_id=request_fastapi.state.user_id,
+                    organization_id=organization_id,
+                    id=interface.project_id,
+                )
+                if not projects:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Tile with ID {tile_id} not found.",
+                    )
     # Get by tab_id and name
     elif tab_id and name:
         # Get tab
@@ -480,6 +504,7 @@ def create_tile(
     },
 )
 def get_tile(
+    request_fastapi: Request,
     tile_id: Optional[str] = Query(None, description="The ID of the tile to retrieve"),
     tab_id: Optional[str] = Query(None, description="The tab ID the tile belongs to"),
     name: Optional[str] = Query(None, description="The name of the tile to retrieve"),
@@ -489,10 +514,14 @@ def get_tile(
     ),
     session: Session = Depends(get_db_session),
 ):
+    """Get a specific tile by ID or by tab_id and name."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao_inst = InterfaceDAO(session)
     tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
 
-    """Get a specific tile by ID or by tab_id and name."""
     # Use helper function to get tile
     tile, _ = _get_tile(
         tile_id=tile_id,
@@ -501,6 +530,9 @@ def get_tile(
         checkpoint=checkpoint,
         tab_dao=tab_dao,
         tile_dao=tile_dao,
+        request_fastapi=request_fastapi,
+        project_dao=project_dao,
+        interface_dao=interface_dao_inst,
     )
 
     return _create_tile_response(tile)
