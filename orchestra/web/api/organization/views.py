@@ -1351,6 +1351,7 @@ async def _send_invite_email(
             email_subject,
             email_body,
             from_email="hello@unify.ai",
+            impersonate_email="hello@unify.ai",
         )
         if sent:
             logger.info(f"Invite email sent to {invite.invitee_email}")
