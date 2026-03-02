@@ -62,7 +62,13 @@ def _get_fernet() -> Fernet:
         raw = MFA_ENCRYPTION_KEY.encode()
     else:
         # Deterministic but unique-per-project seed for dev convenience.
-        raw = os.environ.get("ORCHESTRA_ADMIN_KEY")
+        admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+        if not admin_key:
+            raise RuntimeError(
+                "MFA_ENCRYPTION_KEY or ORCHESTRA_ADMIN_KEY must be set "
+                "for MFA credential encryption",
+            )
+        raw = admin_key.encode()
 
     # Fernet requires a 32-byte url-safe-base64 key.
     derived = hashlib.sha256(raw).digest()
