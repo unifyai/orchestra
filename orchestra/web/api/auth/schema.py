@@ -314,3 +314,10 @@ class MFAStatusByEmailResponse(BaseModel):
 
     user_found: bool
     mfa_enabled: bool = False
+
+
+class OnboardingStatusByEmailResponse(BaseModel):
+    """Response for checking onboarding status by email (admin endpoint)."""
+
+    user_found: bool
+    onboarding_step: str = "completed"
