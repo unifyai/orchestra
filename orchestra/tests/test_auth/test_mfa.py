@@ -281,8 +281,8 @@ class TestMFARecoveryDAO:
         session.execute.side_effect = [
             MagicMock(
                 scalars=MagicMock(
-                    return_value=MagicMock(first=MagicMock(return_value=mock_entry))
-                )
+                    return_value=MagicMock(first=MagicMock(return_value=mock_entry)),
+                ),
             ),
             remaining_execute,
         ]
