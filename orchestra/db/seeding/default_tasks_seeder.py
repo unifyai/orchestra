@@ -55,8 +55,8 @@ class DefaultTasksSeeder:
         # Step 4: Fetch or create Tasks table tile
         tile = DefaultTasksSeeder._get_or_create_table_tile(tile_dao, tab.id)
 
-        # Commit all changes
-        session.commit()
+        # Flush to persist within the current transaction (caller manages commit)
+        session.flush()
 
         # Return the IDs of all created/fetched entities
         return {

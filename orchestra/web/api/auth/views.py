@@ -335,7 +335,7 @@ def create_user_after_verification(
 
         nested = session.begin_nested()
         try:
-            DefaultTasksSeeder.seed(session, user_id=user.id)
+            DefaultTasksSeeder.seed(session, user_id=str(user.id))
             nested.commit()
         except Exception:
             nested.rollback()
