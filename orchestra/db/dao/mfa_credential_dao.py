@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import secrets
 import string
 from datetime import datetime, timezone
@@ -61,7 +62,8 @@ def _get_fernet() -> Fernet:
         raw = MFA_ENCRYPTION_KEY.encode()
     else:
         # Deterministic but unique-per-project seed for dev convenience.
-        raw = b"orchestra-mfa-dev-key-do-not-use-in-prod"
+        raw = os.environ.get("ORCHESTRA_ADMIN_KEY")
+
     # Fernet requires a 32-byte url-safe-base64 key.
     derived = hashlib.sha256(raw).digest()
     key = base64.urlsafe_b64encode(derived)
