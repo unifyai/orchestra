@@ -332,19 +332,12 @@ def create_user_after_verification(
     api_key_dao.create(key=new_api_key, name="", user_id=user.id)
 
     # Seed default project for the new user.
+    # DefaultTasksSeeder.seed() uses session.flush() (not commit), so it's safe
+    # to call within the current transaction — no savepoint needed.
     try:
         from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 
-        nested = session.begin_nested()
-        try:
-            DefaultTasksSeeder.seed(session, user_id=str(user.id))
-            nested.commit()
-        except Exception:
-            nested.rollback()
-            logger.warning(
-                f"Failed to seed default tasks for user {user.id} (rolled back savepoint)",
-                exc_info=True,
-            )
+        DefaultTasksSeeder.seed(session, user_id=str(user.id))
     except Exception as e:
         logger.warning(f"Failed to seed default tasks for user {user.id}: {e}")
 
