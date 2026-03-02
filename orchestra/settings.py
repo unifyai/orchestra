@@ -174,7 +174,7 @@ class Settings(BaseSettings):
     # Production Traffic Project (for internal monitoring)
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
-        "Orchestra Admin Organization",
+        "Unify",
     )
     orchestra_owner_id: str = os.environ.get(
         "ORCHESTRA_OWNER_ID",

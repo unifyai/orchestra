@@ -35,6 +35,15 @@ def get_app() -> FastAPI:
             "This flag disables authentication and is only for self-hosted instances.",
         )
 
+    if (
+        os.environ.get("SKIP_STRIPE_SIGNATURE_VERIFICATION", "").lower() == "true"
+        and os.environ.get("GCP_PROJECT_ID") == "saas-368716"
+    ):
+        raise RuntimeError(
+            "SKIP_STRIPE_SIGNATURE_VERIFICATION must not be set in cloud deployments. "
+            "This flag disables Stripe webhook security.",
+        )
+
     if settings.sentry_dsn:
         # Enables sentry integration.
         sentry_sdk.init(
@@ -53,8 +62,9 @@ def get_app() -> FastAPI:
     app = FastAPI(
         title="UnifyAI HTTP API Reference",
         version=metadata.version("orchestra"),
-        redoc_url="/v0/redoc",
-        openapi_url="/v0/openapi.json",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
         swagger_ui_parameters={"defaultModelsExpandDepth": -1},
         default_response_class=UJSONResponse,
     )
@@ -125,10 +135,18 @@ def get_app() -> FastAPI:
                 "max-age=31536000; includeSubDomains"
             )
             response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-            response.headers["X-XSS-Protection"] = "1; mode=block"
             response.headers["Permissions-Policy"] = (
                 "camera=(), microphone=(), geolocation=()"
             )
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'"
+            )
+            # X-XSS-Protection deliberately omitted: the browser XSS Auditor
+            # it controlled was removed from Chrome 78+ (2019) and was never
+            # implemented in Firefox. Setting "1; mode=block" on legacy
+            # browsers is itself exploitable (auditor can be abused to
+            # selectively disable page scripts). CSP above is the modern
+            # replacement. See https://owasp.org/www-project-secure-headers/
             return response
 
     app.add_middleware(SecurityHeadersMiddleware)

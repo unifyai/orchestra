@@ -1226,3 +1226,217 @@ async def test_admin_list_assistants_fields_case_sensitivity_returns_422(
     assert (
         "Email" in error_detail or "Agent_Id" in error_detail
     ), f"Error should mention the invalid field names. Got: {error_detail}"
+
+
+# =============================================================================
+# team_ids in AssistantRead
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistant_team_ids_personal(client: AsyncClient):
+    """Personal assistants (no org) return empty team_ids."""
+    owner = await create_test_user(client, "team_ids_personal@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "PersonalTeam",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"agent_id": agent_id},
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    assistants = admin_resp.json()["info"]
+    assert len(assistants) >= 1
+    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    assert our["team_ids"] == []
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistant_team_ids_org_no_teams(client: AsyncClient):
+    """Org assistant where user has no team memberships returns empty team_ids."""
+    owner = await create_test_user(client, "team_ids_org_no_teams@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "TeamIdsNoTeamsOrg"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code in [200, 201]
+    org_data = org_resp.json()
+    org_id = org_data["id"]
+    org_api_key = org_data.get("api_key")
+    assert org_api_key, "Org should return an API key"
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+        "Content-Type": "application/json",
+    }
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "OrgNoTeam",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=org_headers,
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"agent_id": agent_id},
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    assistants = admin_resp.json()["info"]
+    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    assert our["organization_id"] == org_id
+    assert our["team_ids"] == []
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistant_team_ids_with_membership(client: AsyncClient):
+    """Org assistant where user belongs to teams returns those team_ids."""
+    owner = await create_test_user(client, "team_ids_member@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "TeamIdsMemberOrg"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code in [200, 201]
+    org_data = org_resp.json()
+    org_id = org_data["id"]
+    org_api_key = org_data.get("api_key")
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    team1_resp = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Alpha"},
+        headers=owner["headers"],
+    )
+    assert team1_resp.status_code == 201
+    team1_id = team1_resp.json()["id"]
+
+    team2_resp = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Beta"},
+        headers=owner["headers"],
+    )
+    assert team2_resp.status_code == 201
+    team2_id = team2_resp.json()["id"]
+
+    add_resp = await client.post(
+        f"/v0/organizations/{org_id}/teams/{team1_id}/members",
+        json={"user_ids": [owner["id"]]},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == 200
+
+    add_resp2 = await client.post(
+        f"/v0/organizations/{org_id}/teams/{team2_id}/members",
+        json={"user_ids": [owner["id"]]},
+        headers=owner["headers"],
+    )
+    assert add_resp2.status_code == 200
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "OrgWithTeams",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=org_headers,
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"agent_id": agent_id},
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    assistants = admin_resp.json()["info"]
+    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    assert sorted(our["team_ids"]) == sorted([team1_id, team2_id])
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistant_team_ids_skipped_by_from_fields(
+    client: AsyncClient,
+):
+    """When from_fields does not include team_ids, the field is still present but empty."""
+    owner = await create_test_user(client, "team_ids_skip@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SkipTeamIds",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"agent_id": agent_id, "from_fields": "agent_id,email"},
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    assistants = admin_resp.json()["info"]
+    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    assert "team_ids" not in our
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistant_team_ids_requested_via_from_fields(
+    client: AsyncClient,
+):
+    """When from_fields includes team_ids, it is resolved and returned."""
+    owner = await create_test_user(client, "team_ids_requested@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "RequestTeamIds",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"agent_id": agent_id, "from_fields": "agent_id,team_ids"},
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    assistants = admin_resp.json()["info"]
+    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    assert "team_ids" in our
+    assert our["team_ids"] == []
