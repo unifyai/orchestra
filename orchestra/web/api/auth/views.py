@@ -10,6 +10,7 @@ Admin-key endpoints (called by the Next.js server on behalf of users):
   - POST /admin/auth/reset-password
   - POST /admin/auth/resend-verification
   - GET  /admin/auth/providers-for-email
+  - GET  /admin/auth/onboarding-status-by-email → check onboarding status for OAuth sign-in
   - POST /admin/auth/mfa/verify          → validate TOTP code during login
   - POST /admin/auth/mfa/verify-recovery → validate recovery code during login
   - GET  /admin/auth/mfa/status-by-email → check MFA status for OAuth sign-in
@@ -69,6 +70,7 @@ from orchestra.web.api.auth.schema import (
     MFAVerifyRecoveryResponse,
     MFAVerifyRequest,
     MFAVerifyResponse,
+    OnboardingStatusByEmailResponse,
     ProvidersForEmailResponse,
     ResendVerificationRequest,
     ResetPasswordWithTokenRequest,
@@ -1271,3 +1273,38 @@ def mfa_status_by_email(
     has_mfa = mfa_dao.has_enabled_mfa(user.id)
 
     return MFAStatusByEmailResponse(user_found=True, mfa_enabled=has_mfa)
+
+
+@admin_router.get(
+    "/auth/onboarding-status-by-email",
+    response_model=OnboardingStatusByEmailResponse,
+    status_code=status.HTTP_200_OK,
+)
+def onboarding_status_by_email(
+    email: str,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check a user's onboarding status, given their email address.
+
+    Called by the Next.js server during OAuth sign-in (jwt callback)
+    to determine whether the user needs onboarding, instead of relying
+    on the ``trigger === 'signUp'`` heuristic which fires even when an
+    existing email user links a new OAuth provider.
+    """
+    email = email.lower().strip()
+
+    user_dao = UserDAO(session)
+    existing = user_dao.filter(email=email)
+    if not existing:
+        return OnboardingStatusByEmailResponse(
+            user_found=False,
+            onboarding_step="workspace_setup",
+        )
+
+    user = existing[0][0]
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user.id)
+    step = onboarding_status.current_step if onboarding_status else "completed"
+
+    return OnboardingStatusByEmailResponse(user_found=True, onboarding_step=step)
