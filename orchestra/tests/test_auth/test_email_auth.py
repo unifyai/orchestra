@@ -27,10 +27,8 @@ from orchestra.db.models.orchestra_models import EmailVerification
 
 # Patch target for the email sending function (imported lazily inside views)
 _EMAIL_PATCH_TARGET = "orchestra.web.api.utils.email.send_email_async"
-# Patch target for Turnstile token verification
-_TURNSTILE_PATCH_TARGET = (
-    "orchestra.db.dao.email_verification_dao.verify_turnstile_token"
-)
+# Patch target for Turnstile token verification (patched in views where it's imported)
+_TURNSTILE_PATCH_TARGET = "orchestra.web.api.auth.views.verify_turnstile_token"
 
 ADMIN_HEADERS = {
     "accept": "application/json",
@@ -65,7 +63,10 @@ async def _register(
 
 
 async def _verify_code(
-    client: AsyncClient, email: str, code: str, purpose: str = "signup"
+    client: AsyncClient,
+    email: str,
+    code: str,
+    purpose: str = "signup",
 ):
     """Helper to verify a code and get a token."""
     return await client.post(
@@ -109,14 +110,19 @@ async def _register_and_verify(
     name: str = "Test",
     last_name: str = "User",
 ):
-    """Helper to register, extract code from DB, and verify in one step."""
-    await _register(client, email, password, name, last_name)
+    """Helper to register, extract code from DB, and verify in one step.
 
-    # Extract code from DB by finding the verification entry and reversing the hash
-    # We can't reverse the hash, so we need to intercept the code
-    # Instead, read the verification row and use validate_code with a brute-force-style approach
-    # Actually, let's just patch the email sending and capture the code
-    # For tests, it's simpler to read the DB directly and create our own code
+    Automatically mocks email sending and Turnstile CAPTCHA verification
+    so that the helper works regardless of environment configuration.
+    """
+    with (
+        patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send,
+        patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_captcha,
+    ):
+        mock_send.return_value = True
+        mock_captcha.return_value = True
+        resp = await _register(client, email, password, name, last_name)
+        assert resp.status_code == 200, resp.json()
 
     # Read the verification entry from the DB
     dao = EmailVerificationDAO(dbsession)
@@ -1221,3 +1227,341 @@ async def test_register_captcha_failure_prevents_side_effects(
     dao = EmailVerificationDAO(dbsession)
     entry = dao.get_pending(email, "signup")
     assert entry is None
+
+
+# =============================================================================
+# Set Password Tests (OAuth-only user adds email/password — 7.4, 7.7–7.10)
+# =============================================================================
+
+
+async def _create_oauth_only_user(client: AsyncClient, dbsession: Session, email: str):
+    """Create an OAuth-only user and return their API key and user id."""
+    from orchestra.db.dao.api_key_dao import ApiKeyDAO
+    from orchestra.db.dao.user_dao import UserDAO
+
+    resp = await client.post(
+        "/v0/admin/user",
+        json={"email": email},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == 200
+    user_id = resp.json()["id"]
+
+    # Link an OAuth account
+    await client.post(
+        "/v0/admin/account",
+        json={
+            "provider": "google",
+            "type": "oauth",
+            "provider_account_id": f"google-{email}",
+            "access_token": "token",
+            "expires_at": 9999999999,
+            "scope": "openid",
+            "token_type": "Bearer",
+            "id_token": "id_token",
+            "user_id": user_id,
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    user_dao = UserDAO(dbsession)
+    user = user_dao.filter(email=email)[0][0]
+    api_key_dao = ApiKeyDAO(dbsession)
+    keys = api_key_dao.filter(user_id=user.id)
+    api_key = keys[0][0].key
+
+    user_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    return {"id": user_id, "headers": user_headers}
+
+
+@pytest.mark.anyio
+async def test_set_password_happy_path(client: AsyncClient, dbsession: Session):
+    """OAuth-only user can set a password (7.4, 7.7)."""
+    email = "setpw_happy@example.com"
+    user = await _create_oauth_only_user(client, dbsession, email)
+
+    resp = await client.post(
+        "/v0/auth/set-password",
+        json={"new_password": "newSecureP@ss1"},
+        headers=user["headers"],
+    )
+    assert resp.status_code == 200
+    assert "Password set successfully" in resp.json()["message"]
+
+
+@pytest.mark.anyio
+async def test_set_password_too_short(client: AsyncClient, dbsession: Session):
+    """Set password rejects passwords < 8 chars (7.8)."""
+    email = "setpw_short@example.com"
+    user = await _create_oauth_only_user(client, dbsession, email)
+
+    resp = await client.post(
+        "/v0/auth/set-password",
+        json={"new_password": "short"},
+        headers=user["headers"],
+    )
+    assert resp.status_code == 422  # Pydantic validation
+
+
+@pytest.mark.anyio
+async def test_set_password_already_has_password(
+    client: AsyncClient, dbsession: Session
+):
+    """Set password fails for user who already has email/password (7.4 inverse)."""
+    email = "setpw_exists@example.com"
+    await _register_and_verify(client, dbsession, email)
+
+    # Get API key for existing email/password user
+    from orchestra.db.dao.api_key_dao import ApiKeyDAO
+    from orchestra.db.dao.user_dao import UserDAO
+
+    user_dao = UserDAO(dbsession)
+    user = user_dao.filter(email=email)[0][0]
+    api_key_dao = ApiKeyDAO(dbsession)
+    keys = api_key_dao.filter(user_id=user.id)
+    api_key = keys[0][0].key
+
+    user_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    resp = await client.post(
+        "/v0/auth/set-password",
+        json={"new_password": "anotherSecureP@ss1"},
+        headers=user_headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "password_already_set"
+
+
+@pytest.mark.anyio
+async def test_set_password_then_login(client: AsyncClient, dbsession: Session):
+    """After setting a password, the OAuth user can authenticate via email/password (7.9)."""
+    email = "setpw_login@example.com"
+    password = "brandNewP@ss1"
+    user = await _create_oauth_only_user(client, dbsession, email)
+
+    # Set password
+    resp = await client.post(
+        "/v0/auth/set-password",
+        json={"new_password": password},
+        headers=user["headers"],
+    )
+    assert resp.status_code == 200
+
+    # Now authenticate with email/password
+    resp = await _authenticate(client, email, password)
+    assert resp.status_code == 200
+    assert resp.json()["email"] == email
+
+
+# =============================================================================
+# Resend Cooldown Tests (1.11)
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_resend_verification_cooldown(client: AsyncClient, dbsession: Session):
+    """Resend within 60 seconds is rate-limited (1.11)."""
+    email = "resend_cooldown@example.com"
+
+    with (
+        patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send,
+        patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_captcha,
+    ):
+        mock_send.return_value = True
+        mock_captcha.return_value = True
+        await _register(client, email)
+
+    # First resend should succeed (created_at is recent but not within immediate cooldown)
+    # Since the entry was just created, the resend should be within cooldown
+    with patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = True
+        resp = await client.post(
+            "/v0/admin/auth/resend-verification",
+            json={"email": email, "purpose": "signup"},
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 429
+    assert resp.json()["detail"]["error"] == "cooldown"
+    assert "retry_after" in resp.json()["detail"]
+
+
+# =============================================================================
+# Change / Reset Password Validation Tests (7.3, 6.6)
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_change_password_new_password_too_short(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Change password rejects new password < 8 chars (7.3)."""
+    email = "change_pw_short@example.com"
+    old_password = "oldPassword@1"
+    await _register_and_verify(client, dbsession, email, password=old_password)
+
+    from orchestra.db.dao.api_key_dao import ApiKeyDAO
+    from orchestra.db.dao.user_dao import UserDAO
+
+    user_dao = UserDAO(dbsession)
+    user = user_dao.filter(email=email)[0][0]
+    api_key_dao = ApiKeyDAO(dbsession)
+    keys = api_key_dao.filter(user_id=user.id)
+    api_key = keys[0][0].key
+
+    user_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    resp = await client.post(
+        "/v0/auth/change-password",
+        json={"current_password": old_password, "new_password": "short"},
+        headers=user_headers,
+    )
+    # Pydantic min_length validation should catch this before the view
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_reset_password_max_attempts(client: AsyncClient, dbsession: Session):
+    """After 5 wrong password-reset code attempts, the code is invalidated (6.6)."""
+    email = "reset_maxattempts@example.com"
+    await _register_and_verify(client, dbsession, email)
+
+    with patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = True
+        await client.post(
+            "/v0/admin/auth/forgot-password",
+            json={"email": email},
+            headers=ADMIN_HEADERS,
+        )
+
+    # Exhaust all 5 attempts with wrong codes
+    for _ in range(5):
+        resp = await _verify_code(client, email, "000000", purpose="password_reset")
+        assert resp.status_code == 400
+
+    # Now even the correct code should fail
+    entry = (
+        dbsession.query(EmailVerification)
+        .filter(
+            EmailVerification.email == email,
+            EmailVerification.purpose == "password_reset",
+        )
+        .first()
+    )
+    assert entry is not None
+    assert entry.attempts >= 5
+
+    correct_code = "654321"
+    entry.code_hash = hash_code(correct_code)
+    dbsession.flush()
+
+    resp = await _verify_code(client, email, correct_code, purpose="password_reset")
+    assert resp.status_code == 400
+
+
+# =============================================================================
+# Email Credentials Endpoint Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_email_credentials_with_account(client: AsyncClient, dbsession: Session):
+    """Email credentials returns has_email_account=True for email/password user."""
+    email = "cred_email@example.com"
+    result = await _register_and_verify(client, dbsession, email)
+    user_id = result["id"]
+
+    resp = await client.get(
+        f"/v0/admin/auth/email-credentials?user_id={user_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["has_email_account"] is True
+    assert data["email_verified"] is True
+
+
+@pytest.mark.anyio
+async def test_email_credentials_oauth_only(client: AsyncClient, dbsession: Session):
+    """Email credentials returns has_email_account=False for OAuth-only user."""
+    email = "cred_oauth@example.com"
+    resp = await client.post(
+        "/v0/admin/user",
+        json={"email": email},
+        headers=ADMIN_HEADERS,
+    )
+    user_id = resp.json()["id"]
+
+    resp = await client.get(
+        f"/v0/admin/auth/email-credentials?user_id={user_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["has_email_account"] is False
+
+
+@pytest.mark.anyio
+async def test_email_credentials_shows_password_changed_at(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Email credentials shows password_changed_at after a password change (7.5)."""
+    email = "cred_changed@example.com"
+    old_password = "oldPassword@1"
+    result = await _register_and_verify(
+        client,
+        dbsession,
+        email,
+        password=old_password,
+    )
+    user_id = result["id"]
+
+    # Verify password_changed_at is initially None
+    resp = await client.get(
+        f"/v0/admin/auth/email-credentials?user_id={user_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.json()["password_changed_at"] is None
+
+    # Change password
+    from orchestra.db.dao.api_key_dao import ApiKeyDAO
+    from orchestra.db.dao.user_dao import UserDAO
+
+    user_dao = UserDAO(dbsession)
+    user = user_dao.filter(email=email)[0][0]
+    api_key_dao = ApiKeyDAO(dbsession)
+    keys = api_key_dao.filter(user_id=user.id)
+    api_key = keys[0][0].key
+
+    user_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    await client.post(
+        "/v0/auth/change-password",
+        json={"current_password": old_password, "new_password": "newPassword@1"},
+        headers=user_headers,
+    )
+
+    # Verify password_changed_at is now set
+    resp = await client.get(
+        f"/v0/admin/auth/email-credentials?user_id={user_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.json()["password_changed_at"] is not None
