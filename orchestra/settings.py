@@ -172,12 +172,6 @@ class Settings(BaseSettings):
     ]
 
     # Production Traffic Project (for internal monitoring)
-    orchestra_organization_id: int = int(
-        os.environ.get(
-            "ORCHESTRA_ORGANIZATION_ID",
-            "5",
-        ),
-    )
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
         "Unify",
