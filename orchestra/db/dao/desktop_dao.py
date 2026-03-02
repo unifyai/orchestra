@@ -68,3 +68,11 @@ class DesktopDAO:
             Assistant.user_desktop_id == desktop_id,
         )
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def unlink_from_assistant(self, desktop_id: int) -> None:
+        """Clear user_desktop_id on any assistant linked to this desktop."""
+        stmt = select(Assistant).where(Assistant.user_desktop_id == desktop_id)
+        assistant = self.session.execute(stmt).scalar_one_or_none()
+        if assistant:
+            assistant.user_desktop_id = None
+            self.session.flush()

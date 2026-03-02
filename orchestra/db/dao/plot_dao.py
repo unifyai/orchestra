@@ -1,14 +1,11 @@
 """DAO for Plot model operations."""
 
-import logging
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, joinedload
 
 from orchestra.db.models.orchestra_models import Plot
-
-logger = logging.getLogger(__name__)
 
 
 class TokenGenerationError(Exception):
@@ -73,8 +70,6 @@ class PlotDAO:
 
         self.session.add(plot)
         self.session.flush()
-
-        logger.info(f"Created plot with token {token} for project {project_id}")
         return plot
 
     def get_by_token(self, token: str) -> Optional[Plot]:
@@ -248,7 +243,6 @@ class PlotDAO:
             plot.organization_id = organization_id
 
         self.session.flush()
-        logger.info(f"Updated plot {plot_id}")
         return plot
 
     def delete(self, plot_id: int) -> bool:
@@ -267,7 +261,6 @@ class PlotDAO:
 
         self.session.delete(plot)
         self.session.flush()
-        logger.info(f"Deleted plot {plot_id}")
         return True
 
     def delete_by_token(self, token: str) -> bool:
@@ -286,7 +279,6 @@ class PlotDAO:
 
         self.session.delete(plot)
         self.session.flush()
-        logger.info(f"Deleted plot with token {token}")
         return True
 
     def delete_by_project(
@@ -312,10 +304,6 @@ class PlotDAO:
         count = query.delete(synchronize_session="fetch")
         self.session.flush()
 
-        logger.info(
-            f"Deleted {count} plots for project {project_id}"
-            + (f" with context '{context}'" if context else ""),
-        )
         return count
 
     def update_organization_id(
@@ -344,8 +332,4 @@ class PlotDAO:
             )
         )
         self.session.flush()
-        logger.info(
-            f"Updated organization_id to {organization_id} for {result} plots "
-            f"in project {project_id}",
-        )
         return result

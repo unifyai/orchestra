@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Callable
 
+import starlette.routing
 from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -296,14 +297,20 @@ def setup_opentelemetry(app: FastAPI) -> None:
 
     # Instrument per-app components (FastAPI and SQLAlchemy)
     # These are safe to call multiple times for different app/engine instances
-    excluded_endpoints = [
-        app.url_path_for("health_check"),
-        app.url_path_for("openapi"),
-        app.url_path_for("swagger_ui_html"),
-        app.url_path_for("swagger_ui_redirect"),
-        app.url_path_for("redoc_html"),
-        app.url_path_for("metrics"),
+    _exclude_names = [
+        "health_check",
+        "openapi",
+        "swagger_ui_html",
+        "swagger_ui_redirect",
+        "redoc_html",
+        "metrics",
     ]
+    excluded_endpoints = []
+    for name in _exclude_names:
+        try:
+            excluded_endpoints.append(str(app.url_path_for(name)))
+        except starlette.routing.NoMatchFound:
+            pass
 
     FastAPIInstrumentor().instrument_app(
         app,
