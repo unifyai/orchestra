@@ -382,8 +382,7 @@ async def test_create_infra_pubsub_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that pubsub failure triggers full rollback of all prior infra."""
-    # Configure pubsub to fail
+    """PubSub runs in the background — failure doesn't block assistant creation."""
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub quota exceeded",
     }
@@ -397,22 +396,16 @@ async def test_create_infra_pubsub_fails(
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert resp.status_code == status.HTTP_200_OK
 
-    error_detail = resp.json()["detail"]
-    assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
-
-    # All prior infra should be rolled back
-    mock_all_infra["delete_email"].assert_called_once()
-    mock_all_infra["delete_phone_number"].assert_called_once()
-    # Pubsub wasn't created, shouldn't try to delete
-    mock_all_infra["delete_pubsub_topic"].assert_not_called()
-
-    # Verify assistant was deleted from DB
+    # Assistant should exist despite PubSub failure
     list_resp = await client.get("/v0/assistant", headers=HEADERS)
     assistants = list_resp.json()["info"]
-    assert all(a["first_name"] != "PubsubFail" for a in assistants)
+    assert any(a["first_name"] == "PubsubFail" for a in assistants)
+
+    # Email and phone should NOT be rolled back — they were provisioned successfully
+    mock_all_infra["delete_email"].assert_not_called()
+    mock_all_infra["delete_phone_number"].assert_not_called()
 
 
 # =============================================================================
@@ -421,17 +414,14 @@ async def test_create_infra_pubsub_fails(
 
 
 @pytest.mark.anyio
-async def test_create_infra_rollback_also_fails(
+async def test_create_infra_pubsub_fails_preserves_other_infra(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test error message includes both primary failure and rollback failures."""
-    # Configure pubsub to fail
+    """PubSub failure in background doesn't roll back successfully provisioned infra."""
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub creation failed",
     }
-    # Configure email rollback to also fail
-    mock_all_infra["delete_email"].side_effect = Exception("Delete email timeout")
 
     payload = {
         "first_name": "RollbackFail",
@@ -441,29 +431,21 @@ async def test_create_infra_rollback_also_fails(
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert resp.status_code == status.HTTP_200_OK
 
-    error_detail = resp.json()["detail"]
-    # Should contain both the primary failure and rollback issues
-    assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
-    assert "Rollback issues" in error_detail
-    assert "Delete email timeout" in error_detail
+    # Email was provisioned successfully and should be preserved
+    mock_all_infra["delete_email"].assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_create_infra_multiple_rollback_failures(
+async def test_create_infra_pubsub_fails_preserves_all_infra(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test error message includes multiple rollback failures."""
-    # Configure pubsub to fail
+    """PubSub failure in background preserves all successfully provisioned resources."""
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub error",
     }
-    # Configure multiple rollback failures
-    mock_all_infra["delete_email"].side_effect = Exception("Email delete failed")
-    mock_all_infra["delete_phone_number"].side_effect = Exception("Phone delete failed")
 
     payload = {
         "first_name": "MultiRollbackFail",
@@ -474,14 +456,11 @@ async def test_create_infra_multiple_rollback_failures(
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert resp.status_code == status.HTTP_200_OK
 
-    error_detail = resp.json()["detail"]
-    assert "Rollback issues" in error_detail
-    # Both rollback errors should be in the message
-    assert (
-        "Email delete failed" in error_detail or "Phone delete failed" in error_detail
-    )
+    # Both email and phone were provisioned successfully and should be preserved
+    mock_all_infra["delete_email"].assert_not_called()
+    mock_all_infra["delete_phone_number"].assert_not_called()
 
 
 # =============================================================================
@@ -699,14 +678,13 @@ async def test_org_assistant_with_infra_email_only(
 
 
 @pytest.mark.anyio
-async def test_org_assistant_infra_pubsub_fails_rollback(
+async def test_org_assistant_infra_pubsub_fails_preserves_infra(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that org assistant pubsub failure triggers full rollback."""
+    """Org assistant PubSub failure in background doesn't roll back provisioned infra."""
     org_ctx = await _create_org_with_approved_owner(client)
 
-    # Configure pubsub to fail
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub quota exceeded for org",
     }
@@ -724,17 +702,11 @@ async def test_org_assistant_infra_pubsub_fails_rollback(
         json=payload,
         headers=org_ctx["org_headers"],
     )
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert resp.status_code == status.HTTP_200_OK
 
-    error_detail = resp.json()["detail"]
-    assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
-
-    # All prior infra should be rolled back
-    mock_all_infra["delete_email"].assert_called_once()
-    mock_all_infra["delete_phone_number"].assert_called_once()
-    # Note: DB state check removed - session mocking makes this unreliable,
-    # but the mock assertions confirm rollback logic executed correctly
+    # Email and phone were provisioned successfully and should be preserved
+    mock_all_infra["delete_email"].assert_not_called()
+    mock_all_infra["delete_phone_number"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -807,19 +779,16 @@ async def test_org_assistant_with_infra_creates_org_assistants_project(
 
 
 @pytest.mark.anyio
-async def test_org_assistant_infra_rollback_also_fails(
+async def test_org_assistant_infra_pubsub_fails_still_creates(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test org assistant error message includes both primary and rollback failures."""
+    """Org assistant created successfully even when PubSub fails in background."""
     org_ctx = await _create_org_with_approved_owner(client)
 
-    # Configure pubsub to fail
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub org error",
     }
-    # Configure email rollback to also fail
-    mock_all_infra["delete_email"].side_effect = Exception("Org email delete timeout")
 
     payload = {
         "first_name": "OrgRollbackFail",
@@ -833,12 +802,10 @@ async def test_org_assistant_infra_rollback_also_fails(
         json=payload,
         headers=org_ctx["org_headers"],
     )
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert resp.status_code == status.HTTP_200_OK
 
-    error_detail = resp.json()["detail"]
-    assert "Infrastructure setup failed" in error_detail
-    assert "Rollback issues" in error_detail
-    assert "Org email delete timeout" in error_detail
+    # Email was provisioned successfully and should be preserved
+    mock_all_infra["delete_email"].assert_not_called()
 
 
 @pytest.mark.anyio
