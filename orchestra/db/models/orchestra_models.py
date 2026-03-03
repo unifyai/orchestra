@@ -1398,9 +1398,15 @@ class OneTimeCreditGrantLink(Base):
     """
     One-time links that grant credits when claimed.
 
-    Each link can only be claimed once. When claimed, the user receives
-    the specified credit_amount. Users can only benefit from one link
-    ever (checked via query on this table's user_id column).
+    Each link can only be claimed once.  Credits are applied to the billing
+    account that corresponds to the claimer's active workspace:
+    - Personal API key → user's BillingAccount
+    - Organization API key → organization's BillingAccount
+
+    Guards:
+    - Per-link: a link can only be claimed once (user_id / claimed_at).
+    - Per-user: a user can only benefit from one link ever.
+    - Per-org: an organization can only benefit from one link ever.
     """
 
     __tablename__ = "one_time_credit_grant_link"
@@ -1409,6 +1415,13 @@ class OneTimeCreditGrantLink(Base):
     token = Column(String, unique=True, index=True, nullable=False)
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     user_id = Column(String, ForeignKey("user.id"), nullable=True, index=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id"),
+        nullable=True,
+        index=True,
+        comment="Organization that received the credits (NULL = personal claim)",
+    )
     claimed_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     credit_amount = Column(

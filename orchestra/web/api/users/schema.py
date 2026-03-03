@@ -86,6 +86,7 @@ class CreditGrantClaimResponse(BaseModel):
 
     message: str
     credits_granted: Optional[float] = None
+    credited_to: Optional[str] = None  # "personal" | org name
 
 
 class CreditGrantLinkClaimRequest(BaseModel):
@@ -109,7 +110,9 @@ class CreditGrantLinkResponse(BaseModel):
     expires_at: datetime
     claimed_at: Optional[datetime] = None
     user_id: Optional[str] = None
+    organization_id: Optional[int] = None
     claimed_by_email: Optional[str] = None
+    claimed_for_org: Optional[str] = None  # org name, if claimed for an org
     credit_amount: float  # Amount of credits granted when claimed
 
 
