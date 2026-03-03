@@ -7,7 +7,6 @@ encryption (GCP Cloud KMS with local Fernet fallback).
 """
 
 import base64
-import hashlib
 import json
 import logging
 import os
@@ -18,6 +17,8 @@ from typing import List, Optional, Tuple
 
 import pyotp
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -57,11 +58,10 @@ def _kms_available() -> bool:
 
 
 def _get_fernet() -> Fernet:
-    """Return a Fernet instance for local encryption."""
+    """Return a Fernet instance for local encryption using HKDF key derivation."""
     if MFA_ENCRYPTION_KEY:
         raw = MFA_ENCRYPTION_KEY.encode()
     else:
-        # Deterministic but unique-per-project seed for dev convenience.
         admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
         if not admin_key:
             raise RuntimeError(
@@ -70,8 +70,12 @@ def _get_fernet() -> Fernet:
             )
         raw = admin_key.encode()
 
-    # Fernet requires a 32-byte url-safe-base64 key.
-    derived = hashlib.sha256(raw).digest()
+    derived = HKDF(
+        algorithm=SHA256(),
+        length=32,
+        salt=b"mfa-local-fernet",
+        info=b"encryption-key",
+    ).derive(raw)
     key = base64.urlsafe_b64encode(derived)
     return Fernet(key)
 
@@ -101,7 +105,9 @@ def encrypt_secret(plaintext: str) -> bytes:
             )
             return response.ciphertext
         except Exception:
-            logger.exception("KMS encrypt failed — falling back to local key")
+            logger.exception("KMS encrypt failed")
+            if settings.environment != "dev":
+                raise
 
     return _get_fernet().encrypt(payload)
 
@@ -127,7 +133,9 @@ def decrypt_secret(ciphertext: bytes) -> str:
             data = json.loads(response.plaintext.decode())
             return data["secret"]
         except Exception:
-            logger.exception("KMS decrypt failed — falling back to local key")
+            logger.exception("KMS decrypt failed")
+            if settings.environment != "dev":
+                raise
 
     data = json.loads(_get_fernet().decrypt(ciphertext).decode())
     return data["secret"]

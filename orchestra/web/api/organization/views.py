@@ -59,6 +59,7 @@ from orchestra.web.api.organization.schema import (
 )
 from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.email import send_email_async
+from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +312,7 @@ async def update_organization(
     organization_id: int,
     organization: OrganizationUpdate,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> OrganizationResponse:
     """
     Update an organization.
@@ -379,6 +381,7 @@ async def delete_organization(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> None:
     """
     Delete an organization.
@@ -533,6 +536,7 @@ async def add_organization_member(
     organization_id: int,
     member_data: OrganizationMemberAdd,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> dict:
     """
     Add a member to an organization.
@@ -658,6 +662,7 @@ async def remove_organization_member(
     organization_id: int,
     user_id: str,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> None:
     """
     Remove a member from an organization.
@@ -822,6 +827,7 @@ async def list_organization_members(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> List[OrganizationMemberResponse]:
     """
     List all members of an organization with their roles.
@@ -921,6 +927,7 @@ async def update_member_role(
     member_user_id: str,
     role_update: OrganizationMemberRoleUpdate,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> OrganizationMemberResponse:
     """
     Update an organization member's RBAC role.
@@ -1055,6 +1062,7 @@ async def transfer_organization_ownership(
     organization_id: int,
     transfer: OrganizationOwnershipTransfer,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> OrganizationResponse:
     """
     Transfer organization ownership to another member.
@@ -1194,6 +1202,7 @@ async def invite_user_to_organization(
     organization_id: int,
     invite_request: InviteUserRequest,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> InviteResponse:
     """
     Invite a user to join an organization via email.
@@ -1376,6 +1385,7 @@ async def list_organization_invites(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> InviteListResponse:
     """
     List pending invites for an organization.
@@ -1429,6 +1439,7 @@ async def cancel_organization_invite(
     organization_id: int,
     invite_id: str,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> None:
     """
     Cancel a pending invite.
