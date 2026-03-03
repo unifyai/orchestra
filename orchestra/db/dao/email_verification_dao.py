@@ -7,15 +7,19 @@ Also contains:
 """
 
 import hashlib
+import hmac
 import logging
 import os
 import re
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 import jwt
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from disposable_email_domains import blocklist as disposable_blocklist
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -33,7 +37,31 @@ MAX_ATTEMPTS = 5
 
 # Verification constants
 VERIFY_TOKEN_TTL_MINUTES = 5
-VERIFY_TOKEN_SECRET = os.environ.get("ORCHESTRA_ADMIN_KEY")
+
+
+def _get_verify_token_secret() -> str:
+    """
+    Get the JWT signing secret for verification tokens.
+
+    Uses a dedicated secret if configured, otherwise derives one from
+    the admin key via HKDF to ensure key separation.
+    """
+    if settings.email_verify_token_secret:
+        return settings.email_verify_token_secret
+
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+    if not admin_key:
+        raise RuntimeError(
+            "EMAIL_VERIFY_TOKEN_SECRET or ORCHESTRA_ADMIN_KEY must be set",
+        )
+    derived = HKDF(
+        algorithm=SHA256(),
+        length=32,
+        salt=None,
+        info=b"email-verify-token",
+    ).derive(admin_key.encode())
+    return derived.hex()
+
 
 # Turnstile constants
 TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
@@ -45,35 +73,38 @@ TURNSTILE_TIMEOUT_SECONDS = 5
 # ---------------------------------------------------------------------------
 
 
-def sign_verification_token(email: str, purpose: str) -> str:
+def sign_verification_token(email: str, purpose: str) -> tuple[str, str]:
     """
     Create a short-lived JWT proving the email code was verified.
 
     :param email: The verified email address.
     :param purpose: ``"signup"`` or ``"password_reset"``.
-    :return: Encoded JWT string.
+    :return: ``(encoded_jwt, jti)`` — the token string and its unique ID.
     """
+    jti = str(uuid.uuid4())
     payload = {
         "sub": email,
         "purpose": purpose,
+        "jti": jti,
         "exp": datetime.now(tz=timezone.utc)
         + timedelta(minutes=VERIFY_TOKEN_TTL_MINUTES),
         "iat": datetime.now(tz=timezone.utc),
     }
-    return jwt.encode(payload, VERIFY_TOKEN_SECRET, algorithm="HS256")
+    token = jwt.encode(payload, _get_verify_token_secret(), algorithm="HS256")
+    return token, jti
 
 
-def decode_verification_token(token: str, expected_purpose: str) -> str:
+def decode_verification_token(token: str, expected_purpose: str) -> tuple[str, str]:
     """
     Decode and validate a verification token.
 
     :param token: The JWT string.
     :param expected_purpose: Required purpose (``"signup"`` or ``"password_reset"``).
-    :return: The email address from the token.
+    :return: ``(email, jti)`` — the email and the token's unique ID.
     :raises HTTPException: On expired, invalid, or wrong-purpose tokens.
     """
     try:
-        payload = jwt.decode(token, VERIFY_TOKEN_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(token, _get_verify_token_secret(), algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -100,7 +131,7 @@ def decode_verification_token(token: str, expected_purpose: str) -> str:
             },
         )
 
-    return payload["sub"]
+    return payload["sub"], payload.get("jti", "")
 
 
 # ---------------------------------------------------------------------------
@@ -342,8 +373,7 @@ class EmailVerificationDAO:
         # Increment attempts regardless of success
         verification.attempts += 1
 
-        # Check if code matches
-        if verification.code_hash != hash_code(code):
+        if not hmac.compare_digest(verification.code_hash, hash_code(code)):
             return None
 
         return verification

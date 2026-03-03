@@ -77,6 +77,7 @@ from orchestra.web.api.auth.schema import (
     SetPasswordRequest,
     VerifyCodeResponse,
 )
+from orchestra.web.api.utils.auth_rate_limiting import enforce_auth_rate_limit
 
 admin_router = APIRouter()
 router = APIRouter()
@@ -108,6 +109,14 @@ async def register(
     """
     email = body.email.lower().strip()
 
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_register",
+        max_attempts=5,
+        identifier=email,
+    )
+
     # 0a. User-Agent heuristic check
     user_agent = request.headers.get("user-agent")
     if not check_user_agent(user_agent):
@@ -133,32 +142,11 @@ async def register(
     user_dao = UserDAO(session)
     existing = user_dao.filter(email=email)
     if existing:
-        user = existing[0][0]
-        providers = UserDAO(session).get_linked_providers(user.id)
-
-        # If the user already has an email/password account, give a simple message
-        if "email" in providers:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": "email_exists",
-                    "message": "This email is already registered. Please sign in instead.",
-                    "providers": providers,
-                },
-            )
-
-        # User exists via OAuth only — tell them which provider to use
-        provider_str = ", ".join(providers) if providers else "another method"
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "error": "email_exists",
-                "message": (
-                    f"This email is registered with {provider_str}. "
-                    f"Please sign in with {provider_str}, then link "
-                    f"email/password from your profile settings."
-                ),
-                "providers": providers,
+                "message": "An account with this email already exists. Please sign in.",
             },
         )
 
@@ -209,12 +197,12 @@ async def register(
             from_email="hello@unify.ai",
             impersonate_email="hello@unify.ai",
         )
-        if not sent:
-            print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
+        if not sent and settings.environment == "dev":
+            logger.debug("Verification code for %s: %s", email, code)
     except Exception:
         logger.exception(f"Failed to send verification email to {email}")
-        print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
-        # Don't fail the registration — the user can resend
+        if settings.environment == "dev":
+            logger.debug("Verification code for %s: %s", email, code)
 
     session.commit()
     return AuthRegisterResponse(email=email)
@@ -227,6 +215,7 @@ async def register(
 )
 def verify_code(
     body: EmailVerifyRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -241,6 +230,14 @@ def verify_code(
       - password_reset: POST /auth/reset-password { token, new_password }
     """
     email = body.email.lower().strip()
+
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_verify",
+        max_attempts=5,
+        identifier=email,
+    )
     purpose = body.purpose
 
     if purpose not in ("signup", "password_reset"):
@@ -268,9 +265,11 @@ def verify_code(
     # Code is valid — invalidate it so it can't be re-used, but keep the
     # row intact (signup entries store name/password_hash needed by create-user).
     verification.code_hash = ""
+
+    token, jti = sign_verification_token(email, purpose)
+    verification.token_jti = jti
     session.commit()
 
-    token = sign_verification_token(email, purpose)
     return VerifyCodeResponse(token=token)
 
 
@@ -290,7 +289,7 @@ def create_user_after_verification(
     Reads stored name, last_name, and password_hash from the verification
     entry, creates the user, and deletes the entry.
     """
-    email = decode_verification_token(body.token, expected_purpose="signup")
+    email, jti = decode_verification_token(body.token, expected_purpose="signup")
 
     # Check if user was created concurrently
     user_dao = UserDAO(session)
@@ -316,6 +315,17 @@ def create_user_after_verification(
                 "message": "No pending signup found. Please register again.",
             },
         )
+
+    # Enforce single-use: the token's jti must match the stored one
+    if verification.token_jti != jti:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "token_already_used",
+                "message": "This verification token has already been used.",
+            },
+        )
+    verification.token_jti = None
 
     # Create User + EmailAccount in a single transaction
     user = user_dao.create(
@@ -370,6 +380,7 @@ def create_user_after_verification(
 )
 def authenticate(
     body: EmailAuthenticateRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -379,6 +390,14 @@ def authenticate(
     specific error messages. Returns user info on success.
     """
     email = body.email.lower().strip()
+
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_login",
+        max_attempts=10,
+        identifier=email,
+    )
 
     user_dao = UserDAO(session)
     existing = user_dao.filter(email=email)
@@ -466,6 +485,7 @@ def authenticate(
 )
 async def forgot_password(
     body: ForgotPasswordRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -474,6 +494,14 @@ async def forgot_password(
     Always returns 200 to prevent email enumeration.
     """
     email = body.email.lower().strip()
+
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_reset",
+        max_attempts=3,
+        identifier=email,
+    )
 
     # Look up user + email account silently
     user_dao = UserDAO(session)
@@ -514,11 +542,12 @@ async def forgot_password(
             from_email="hello@unify.ai",
             impersonate_email="hello@unify.ai",
         )
-        if not sent:
-            print(f"[LOCAL DEV] Password reset code for {email}: {code}", flush=True)
+        if not sent and settings.environment == "dev":
+            logger.debug("Password reset code for %s: %s", email, code)
     except Exception:
         logger.exception(f"Failed to send password reset email to {email}")
-        print(f"[LOCAL DEV] Password reset code for {email}: {code}", flush=True)
+        if settings.environment == "dev":
+            logger.debug("Password reset code for %s: %s", email, code)
 
     session.commit()
     return {"message": "If an account exists, a reset code has been sent."}
@@ -538,7 +567,10 @@ def reset_password(
     Validates the token, updates the password hash, sets password_changed_at
     for session invalidation, and cleans up any leftover verification entries.
     """
-    email = decode_verification_token(body.token, expected_purpose="password_reset")
+    email, jti = decode_verification_token(
+        body.token,
+        expected_purpose="password_reset",
+    )
 
     # Find user + email account
     user_dao = UserDAO(session)
@@ -552,6 +584,19 @@ def reset_password(
                 "message": "No account found for this email.",
             },
         )
+
+    # Enforce single-use token via jti check
+    verification_dao = EmailVerificationDAO(session)
+    verification = verification_dao.get_pending(email, "password_reset")
+    if verification is None or verification.token_jti != jti:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "token_already_used",
+                "message": "This verification token has already been used.",
+            },
+        )
+    verification.token_jti = None
 
     user = existing[0][0]
     email_account_dao = EmailAccountDAO(session)
@@ -570,7 +615,6 @@ def reset_password(
         )
 
     # Clean up any leftover verification entries for this email
-    verification_dao = EmailVerificationDAO(session)
     verification_dao.delete_by_email_and_purpose(email, "password_reset")
     session.commit()
 
@@ -583,6 +627,7 @@ def reset_password(
 )
 async def resend_verification(
     body: ResendVerificationRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -593,6 +638,14 @@ async def resend_verification(
     between resends for the same email+purpose to prevent abuse.
     """
     email = body.email.lower().strip()
+
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_resend",
+        max_attempts=3,
+        identifier=email,
+    )
 
     verification_dao = EmailVerificationDAO(session)
 
@@ -694,11 +747,12 @@ async def resend_verification(
             from_email="hello@unify.ai",
             impersonate_email="hello@unify.ai",
         )
-        if not sent:
-            print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
+        if not sent and settings.environment == "dev":
+            logger.debug("Verification code for %s: %s", email, code)
     except Exception:
         logger.exception(f"Failed to resend verification email to {email}")
-        print(f"[LOCAL DEV] Verification code for {email}: {code}", flush=True)
+        if settings.environment == "dev":
+            logger.debug("Verification code for %s: %s", email, code)
 
     session.commit()
     return {"message": "If a pending verification exists, a new code has been sent."}
@@ -1081,14 +1135,15 @@ def mfa_disable(
     status_code=status.HTTP_200_OK,
 )
 def mfa_regenerate_recovery_codes(
+    body: MFAConfirmRequest,
     request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
     Regenerate recovery codes.
 
-    Deletes existing codes and generates a fresh set. The user must
-    have MFA enabled.
+    Requires a valid TOTP code to prevent misuse with a compromised
+    API key. Deletes existing codes and generates a fresh set.
     """
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
@@ -1098,12 +1153,22 @@ def mfa_regenerate_recovery_codes(
         )
 
     mfa_dao = MFACredentialDAO(session)
-    if not mfa_dao.has_enabled_mfa(user_id):
+    credential = mfa_dao.get_enabled_totp(user_id)
+    if credential is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "error": "mfa_not_enabled",
                 "message": "Two-factor authentication is not enabled.",
+            },
+        )
+
+    if not mfa_dao.verify_totp_code(credential, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_code",
+                "message": "Invalid or expired TOTP code.",
             },
         )
 
@@ -1164,6 +1229,7 @@ def mfa_status(
 )
 def mfa_verify(
     body: MFAVerifyRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -1172,6 +1238,14 @@ def mfa_verify(
     Called by the Next.js server after the user enters their 2FA code
     on the /login/mfa page.
     """
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_mfa",
+        max_attempts=5,
+        identifier=body.user_id,
+    )
+
     mfa_dao = MFACredentialDAO(session)
     credential = mfa_dao.get_enabled_totp(body.user_id)
 
@@ -1204,6 +1278,7 @@ def mfa_verify(
 )
 def mfa_verify_recovery(
     body: MFAVerifyRecoveryRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -1212,6 +1287,14 @@ def mfa_verify_recovery(
     Called by the Next.js server when the user uses a recovery code
     instead of a TOTP code.
     """
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_mfa_recovery",
+        max_attempts=5,
+        identifier=body.user_id,
+    )
+
     mfa_dao = MFACredentialDAO(session)
     if not mfa_dao.has_enabled_mfa(body.user_id):
         raise HTTPException(

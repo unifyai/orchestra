@@ -381,6 +381,7 @@ class EmailVerification(Base):
         default=0,
         server_default="0",
     )  # Max 5 attempts before invalidation
+    token_jti = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
@@ -2221,6 +2222,61 @@ class RateLimitCounter(Base):
         # Index for cleanup queries
         Index(
             "ix_rate_limit_counter_time_bucket",
+            "time_bucket",
+        ),
+    )
+
+
+class AuthRateLimitEntry(Base):
+    """
+    IP-based rate limiting for unauthenticated auth endpoints.
+
+    Unlike RateLimitCounter (which keys on user_id), this table keys on
+    a composite string of IP + identifier (email, user_id, or just IP)
+    to throttle login attempts, MFA brute-force, registration spam, etc.
+    """
+
+    __tablename__ = "auth_rate_limit_entry"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    key = Column(
+        String(500),
+        nullable=False,
+        index=True,
+        comment="Composite key: 'ip:identifier' or just 'ip'",
+    )
+    endpoint_category = Column(
+        String(50),
+        nullable=False,
+        comment="Auth rate limit category (auth_login, auth_mfa, auth_register, ...)",
+    )
+    time_bucket = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        comment="Start of the 5-minute time bucket",
+    )
+    attempt_count = Column(
+        Integer,
+        nullable=False,
+        server_default="1",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "key",
+            "endpoint_category",
+            "time_bucket",
+            name="uq_auth_rate_limit_entry",
+        ),
+        Index(
+            "ix_auth_rate_limit_key_category",
+            "key",
+            "endpoint_category",
+            "time_bucket",
+        ),
+        Index(
+            "ix_auth_rate_limit_time_bucket",
             "time_bucket",
         ),
     )
