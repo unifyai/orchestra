@@ -205,6 +205,53 @@ def _build_assistant_read(
     )
 
 
+async def _post_create_setup(
+    assistant_id: str,
+    pre_hire_chat: list | None,
+    is_staging: bool,
+    create_infra: bool = True,
+):
+    """Background task: PubSub topic creation -> wakeup -> pre-hire chat logging."""
+    pubsub_ok = not create_infra
+    if create_infra:
+        try:
+            pubsub_response = await create_pubsub_topic(
+                assistant_id,
+                is_staging=is_staging,
+            )
+            if "detail" in pubsub_response:
+                logging.error(
+                    f"Background PubSub creation failed for {assistant_id}: {pubsub_response['detail']}",
+                )
+            else:
+                print(f"PUBSUB CREATED: {assistant_id}")
+                pubsub_ok = True
+        except Exception as e:
+            logging.error(f"Background PubSub creation failed for {assistant_id}: {e}")
+
+    if pubsub_ok:
+        try:
+            response = await wake_up_assistant(assistant_id, is_staging=is_staging)
+            if response.status_code != 200:
+                logging.error(
+                    f"Background wakeup failed for {assistant_id}: {response.text}",
+                )
+            else:
+                print(f"ASSISTANT AWAKENED: {assistant_id}")
+        except Exception as e:
+            logging.error(f"Background wakeup failed for {assistant_id}: {e}")
+
+    if pre_hire_chat:
+        try:
+            await log_pre_hire_chat(
+                assistant_id=assistant_id,
+                messages=pre_hire_chat,
+                is_staging=is_staging,
+            )
+        except Exception as e:
+            logging.warning(f"Background pre-hire log failed for {assistant_id}: {e}")
+
+
 @router.post(
     "/assistant",
     response_model=InfoResponse[AssistantRead],
@@ -508,7 +555,6 @@ async def create_assistant(
         # Infrastructure creation with rollback on failure
         created_email = None
         created_phone = None
-        created_pubsub = None
         assigned_whatsapp = None
         created_vm = None
 
@@ -577,20 +623,7 @@ async def create_assistant(
                         )
                     )["whatsapp_number"]
 
-                # Step 5: create pubsub topic
-                current_infra_step = "create_pubsub_topic"
-                pubsub_response = await create_pubsub_topic(
-                    str(assistant_id),
-                    is_staging=settings.is_staging,
-                )
-                if "detail" in pubsub_response:
-                    raise Exception(
-                        f"Pubsub topic creation failed: {pubsub_response['detail']}",
-                    )
-                created_pubsub = True
-                print(f"PUBSUB CREATED: {assistant_id}")
-
-                # Step 6: Create VM if desktop_mode is windows/ubuntu
+                # Step 5: Create VM if desktop_mode is windows/ubuntu
                 if assistant_in.desktop_mode in ("windows", "ubuntu"):
                     current_infra_step = "create_vm"
                     vm_response = await create_vm(
@@ -606,40 +639,36 @@ async def create_assistant(
                     created_vm = vm_response
                     print(f"VM CREATED ({assistant_in.desktop_mode}): {assistant_id}")
 
-                # Refresh database session after long infrastructure operations
-                logging.info(
-                    f"Refreshing database session after infrastructure setup for assistant {assistant_id}",
+                has_infra_updates = any(
+                    [created_email, created_phone, assigned_whatsapp, created_vm],
                 )
-                session.close()
-                session = next(get_db_session(request))
-                assistant_dao = AssistantDAO(session)
+                if has_infra_updates:
+                    session.close()
+                    session = next(get_db_session(request))
+                    assistant_dao = AssistantDAO(session)
 
-                # Update assistant with created infrastructure details
-                update_data = {
-                    "email": created_email,
-                    "phone": created_phone,
-                    "user_phone": assistant_in.user_phone,
-                    "user_whatsapp_number": assistant_in.user_whatsapp_number,
-                    "assistant_whatsapp_number": assigned_whatsapp,
-                }
-                # Add desktop_url from VM creation if applicable
-                if created_vm and created_vm.get("desktop_url"):
-                    update_data["desktop_url"] = created_vm["desktop_url"]
-                assistant_dao.update_assistant(
-                    user_id=user_id,
-                    agent_id=assistant_id,
-                    update_data=update_data,
-                )
-                # Commit the infrastructure updates
-                session.commit()
-                print(f"ASSISTANT UPDATED: {assistant_id}")
+                    update_data = {
+                        "email": created_email,
+                        "phone": created_phone,
+                        "user_phone": assistant_in.user_phone,
+                        "user_whatsapp_number": assistant_in.user_whatsapp_number,
+                        "assistant_whatsapp_number": assigned_whatsapp,
+                    }
+                    if created_vm and created_vm.get("desktop_url"):
+                        update_data["desktop_url"] = created_vm["desktop_url"]
+                    assistant_dao.update_assistant(
+                        user_id=user_id,
+                        agent_id=assistant_id,
+                        update_data=update_data,
+                    )
+                    session.commit()
+                    print(f"ASSISTANT UPDATED: {assistant_id}")
 
-                # Retrieve the updated assistant for the final response
-                assistant = assistant_dao.get_assistant_by_id(
-                    user_id=user_id,
-                    agent_id=assistant_id,
-                    organization_id=organization_id,
-                )
+                    assistant = assistant_dao.get_assistant_by_id(
+                        user_id=user_id,
+                        agent_id=assistant_id,
+                        organization_id=organization_id,
+                    )
 
             except Exception as infra_error:
                 # Use repr() to always show exception type, even if str() is empty
@@ -678,18 +707,6 @@ async def create_assistant(
                     except Exception as e:
                         rollback_errors.append(f"Failed to delete VM: {str(e)}")
                     print(f"VM DELETED ({assistant_in.desktop_mode}): {assistant_id}")
-
-                if created_pubsub:
-                    try:
-                        await delete_pubsub_topic(
-                            str(assistant_id),
-                            is_staging=settings.is_staging,
-                        )
-                    except Exception as e:
-                        rollback_errors.append(
-                            f"Failed to delete pubsub topic: {str(e)}",
-                        )
-                print(f"PUBSUB DELETED: {assistant_id}")
 
                 if created_phone:
                     try:
@@ -789,39 +806,25 @@ async def create_assistant(
             detail="Failed to create assistant.",
         )
 
-    # Phase 3: Wake up assistant (skip for local assistants -- unity runs locally)
+    # Phase 3: Background PubSub + wakeup + pre-hire chat logging.
+    # None of these need to block the response — PubSub topic must exist before
+    # wakeup, but wakeup is just an acknowledgment and the real job start is async.
     if not assistant_in.is_local:
-        response = await wake_up_assistant(
-            assistant.agent_id,
-            is_staging=settings.is_staging,
+        pre_hire_messages = (
+            jsonable_encoder(assistant_in.pre_hire_chat)
+            if assistant_in.pre_hire_chat
+            else None
         )
-        if response.status_code != 200:
-            logging.error(f"Failed to wake up assistant: {response.text}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to wake up assistant.",
-            )
-        else:
-            print(f"ASSISTANT AWAKENED: {assistant.agent_id}")
+        asyncio.create_task(
+            _post_create_setup(
+                assistant_id=str(assistant.agent_id),
+                pre_hire_chat=pre_hire_messages,
+                is_staging=settings.is_staging,
+                create_infra=bool(assistant_in.create_infra),
+            ),
+        )
     else:
         print(f"SKIPPED WAKEUP (local assistant): {assistant.agent_id}")
-
-    # (Optional) Log pre-hire chat if provided
-    if assistant_in.pre_hire_chat:
-        try:
-            # Convert Pydantic models to dictionaries for the webhook payload
-            chat_messages = jsonable_encoder(assistant_in.pre_hire_chat)
-            await log_pre_hire_chat(
-                assistant_id=str(assistant.agent_id),
-                messages=chat_messages,
-                is_staging=settings.is_staging,
-            )
-        except Exception as e_log:
-            # We don't rollback the whole assistant creation for a logging failure,
-            # but we should log it as a warning.
-            logging.warning(
-                f"Failed to log pre-hire chat for assistant {assistant.agent_id} via webhook. Error: {str(e_log)}",
-            )
 
     # Phase 4: Prepare and return response
     return InfoResponse(
