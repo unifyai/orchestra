@@ -35,6 +35,7 @@ class TeamResponse(BaseModel):
     organization_id: int
     created_at: datetime
     member_count: Optional[int] = None  # Populated when needed
+    members: Optional[List[str]] = None  # User IDs, included when listing teams
 
 
 class TeamWithMembersResponse(BaseModel):
