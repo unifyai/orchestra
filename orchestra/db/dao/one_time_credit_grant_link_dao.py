@@ -72,13 +72,15 @@ class OneTimeCreditGrantLinkDAO:
         self,
         token: str,
         user_id: str,
+        organization_id: Optional[int] = None,
     ) -> Optional[OneTimeCreditGrantLink]:
         """
-        Claim a link for a user.
+        Claim a link for a user (personal) or an organization.
 
         Args:
             token: The link token
             user_id: ID of the user claiming the link
+            organization_id: If claiming on behalf of an org, the org ID
 
         Returns:
             The claimed link, or None if invalid/expired/already claimed
@@ -93,6 +95,7 @@ class OneTimeCreditGrantLinkDAO:
                 return None
 
             link.user_id = user_id
+            link.organization_id = organization_id
             link.claimed_at = datetime.datetime.now(datetime.timezone.utc)
             return link
         return None
@@ -125,6 +128,17 @@ class OneTimeCreditGrantLinkDAO:
             select(OneTimeCreditGrantLink.id)
             .where(
                 OneTimeCreditGrantLink.user_id == user_id,
+            )
+            .limit(1)
+        )
+        return self.session.execute(query).scalar_one_or_none() is not None
+
+    def has_org_claimed_any_link(self, organization_id: int) -> bool:
+        """Check if an organization has already received credits from any link."""
+        query = (
+            select(OneTimeCreditGrantLink.id)
+            .where(
+                OneTimeCreditGrantLink.organization_id == organization_id,
             )
             .limit(1)
         )
