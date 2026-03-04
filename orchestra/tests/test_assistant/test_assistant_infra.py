@@ -41,7 +41,6 @@ def mock_all_infra():
     """
     patches = {
         "_post_create_setup": AsyncMock(),
-        "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
         "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
@@ -203,7 +202,7 @@ async def test_create_infra_with_pre_hire_chat(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Pre-hire chat is logged synchronously alongside background infra dispatch."""
+    """Pre-hire chat is forwarded to _post_create_setup for logging after PubSub."""
     payload = {
         "first_name": "ChatInfra",
         "surname": "Test",
@@ -218,8 +217,10 @@ async def test_create_infra_with_pre_hire_chat(
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    mock_all_infra["log_pre_hire_chat"].assert_called_once()
     mock_all_infra["_post_create_setup"].assert_called_once()
+    setup_kwargs = mock_all_infra["_post_create_setup"].call_args.kwargs
+    assert setup_kwargs["assistant_in"].pre_hire_chat is not None
+    assert len(setup_kwargs["assistant_in"].pre_hire_chat) == 2
 
 
 @pytest.mark.anyio
@@ -400,7 +401,7 @@ async def test_org_assistant_with_pre_hire_chat_and_infra(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Org assistant pre-hire chat is logged synchronously."""
+    """Org assistant pre-hire chat is forwarded to _post_create_setup."""
     org_ctx = await _create_org_with_approved_owner(client)
 
     payload = {
@@ -422,7 +423,10 @@ async def test_org_assistant_with_pre_hire_chat_and_infra(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
     assert resp.json()["info"]["organization_id"] == org_ctx["org_id"]
 
-    mock_all_infra["log_pre_hire_chat"].assert_called_once()
+    mock_all_infra["_post_create_setup"].assert_called_once()
+    setup_kwargs = mock_all_infra["_post_create_setup"].call_args.kwargs
+    assert setup_kwargs["assistant_in"].pre_hire_chat is not None
+    assert len(setup_kwargs["assistant_in"].pre_hire_chat) == 2
 
 
 # =============================================================================

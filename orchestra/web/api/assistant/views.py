@@ -364,6 +364,21 @@ async def _post_create_setup(
         except Exception as e:
             logging.error(f"Background wakeup failed for {assistant_id}: {e}")
 
+    # --- Log pre-hire chat (must run after PubSub + wakeup) ---
+    # The adapter publishes to the assistant's PubSub topic, so the topic must
+    # exist and Unity must be subscribed before this call can succeed.
+    if assistant_in.pre_hire_chat:
+        try:
+            await log_pre_hire_chat(
+                assistant_id=assistant_id,
+                messages=jsonable_encoder(assistant_in.pre_hire_chat),
+                is_staging=is_staging,
+            )
+        except Exception as e:
+            logging.warning(
+                f"Background log_pre_hire_chat failed for {assistant_id}: {e}",
+            )
+
 
 @router.post(
     "/assistant",
@@ -720,21 +735,9 @@ async def create_assistant(
     else:
         print(f"SKIPPED WAKEUP (local assistant): {assistant.agent_id}")
 
-    # Phase 4: Log pre-hire chat synchronously so it's persisted before the
-    # client can refresh and fetch transcripts.
-    if assistant_in.pre_hire_chat:
-        try:
-            await log_pre_hire_chat(
-                assistant_id=str(assistant.agent_id),
-                messages=jsonable_encoder(assistant_in.pre_hire_chat),
-                is_staging=settings.is_staging,
-            )
-        except Exception as e:
-            logging.warning(
-                f"Failed to log pre-hire chat for {assistant.agent_id}: {e}",
-            )
-
-    # Phase 5: Prepare and return response
+    # Phase 4: Prepare and return response.
+    # Pre-hire chat logging happens inside _post_create_setup (after PubSub +
+    # wakeup) so the adapter can publish to the assistant's topic.
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
     )
