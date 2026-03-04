@@ -96,6 +96,11 @@ def create_user(
         DefaultTasksSeeder.seed(session, user_id=new_user.id)
     except Exception as e:
         print(e)
+
+    # Initialize onboarding status for the new user
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+
     return {
         "id": new_user.id,
         "name": new_user.name,
@@ -149,6 +154,14 @@ def get_user(
     has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
         user_instance.id,
     )
+
+    # Derive onboarding step from OnboardingStatus table
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user_instance.id)
+    onboarding_step = (
+        onboarding_status.current_step if onboarding_status else "completed"
+    )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -164,7 +177,7 @@ def get_user(
         # backward-compat aliases (approval flow removed; always approved)
         "assistant_hiring_approval": "approved",
         "has_claimed_approval_link": has_claimed,
-        "onboarded": user_instance.onboarded,
+        "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
@@ -213,6 +226,14 @@ def get_user_by_email(
     has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
         user_instance.id,
     )
+
+    # Derive onboarding step from OnboardingStatus table
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user_instance.id)
+    onboarding_step = (
+        onboarding_status.current_step if onboarding_status else "completed"
+    )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -228,7 +249,7 @@ def get_user_by_email(
         # backward-compat aliases (approval flow removed; always approved)
         "assistant_hiring_approval": "approved",
         "has_claimed_approval_link": has_claimed,
-        "onboarded": user_instance.onboarded,
+        "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
@@ -284,6 +305,14 @@ def get_user_by_account(
     has_claimed = OneTimeCreditGrantLinkDAO(session).has_user_claimed_any_link(
         user_instance.id,
     )
+
+    # Derive onboarding step from OnboardingStatus table
+    onboarding_dao = OnboardingStatusDAO(session)
+    onboarding_status = onboarding_dao.get_by_user_id(user_instance.id)
+    onboarding_step = (
+        onboarding_status.current_step if onboarding_status else "completed"
+    )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -299,7 +328,7 @@ def get_user_by_account(
         # backward-compat aliases (approval flow removed; always approved)
         "assistant_hiring_approval": "approved",
         "has_claimed_approval_link": has_claimed,
-        "onboarded": user_instance.onboarded,
+        "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
     }
@@ -329,6 +358,7 @@ def update_user(
 @admin_router.delete("/user", response_model=AccountDeletionResponse)
 def delete_user(
     user_id: str,
+    request: Request,
     force: bool = Query(
         False,
         description="Skip organization ownership check (use with caution)",
@@ -346,7 +376,61 @@ def delete_user(
 
     Blocked if user has pending bills unless resolved first.
     Use force=True to skip organization ownership check.
+
+    If the user has MFA enabled, an ``x-mfa-code`` header with a valid
+    TOTP code is required.  When the header is missing or invalid the
+    endpoint returns ``403 { error: "mfa_required" }``.
     """
+    from orchestra.db.dao.mfa_credential_dao import (
+        MFACredentialDAO,
+        MFARecoveryDAO,
+        decrypt_secret,
+    )
+
+    # --- MFA gate for sensitive action ---
+    mfa_dao = MFACredentialDAO(session)
+    credential = mfa_dao.get_enabled_totp(user_id)
+    if credential:
+        mfa_code = request.headers.get("x-mfa-code")
+        mfa_recovery = request.headers.get("x-mfa-recovery-code")
+
+        if not mfa_code and not mfa_recovery:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "mfa_required",
+                    "message": "This action requires MFA verification.",
+                },
+            )
+
+        verified = False
+
+        if mfa_code:
+            # Verify TOTP directly (without updating last_used_at)
+            # to avoid a StaleDataError when the CASCADE delete removes
+            # the credential row during account deletion.
+            import pyotp
+
+            secret = decrypt_secret(credential.credential_data)
+            totp = pyotp.TOTP(secret)
+            verified = totp.verify(mfa_code, valid_window=1)
+        elif mfa_recovery:
+            recovery_dao = MFARecoveryDAO(session)
+            remaining = recovery_dao.verify_and_consume(user_id, mfa_recovery)
+            verified = remaining is not None
+
+        if not verified:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "mfa_required",
+                    "message": "Invalid MFA code. Please try again.",
+                },
+            )
+        # Remove the credential from the session so it doesn't interfere
+        # with the CASCADE delete triggered by delete_user_account.
+        session.expunge(credential)
+
     cleanup_service = UserAccountCleanupService(session)
     result = cleanup_service.delete_user_account(user_id, force_org_check=force)
 
@@ -838,14 +922,23 @@ def claim_credit_grant_link(
     """
     Claim a one-time credit grant link.
 
-    When a user claims a valid link, they receive the credits specified in the link.
-    Each user can only benefit from one link ever (checked via OneTimeCreditGrantLink table).
+    Credits are applied to the billing account that corresponds to the
+    caller's active workspace:
+    - Personal API key → user's BillingAccount
+    - Organization API key → organization's BillingAccount
 
-    Note: The approval-granting behavior has been removed. Access to assistant
-    endpoints is now controlled by rate limits instead of approval status.
+    Guards:
+    - Per-link: each link can only be claimed once.
+    - Per-user: each user can only benefit from one link ever.
+    - Per-org: each organization can only benefit from one link ever.
     """
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
     user_dao = UserDAO(session)
     user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+
     user_row_proxy = user_dao.get_by_id(user_id)
     if not user_row_proxy:
         raise not_found("User")
@@ -857,7 +950,7 @@ def claim_credit_grant_link(
     if not link:
         raise not_found("Credit grant link token")
 
-    # Check if user has already claimed any link before
+    # --- Per-user guard: user can only benefit from one link ever ---
     if token_dao.has_user_claimed_any_link(user_id):
         return CreditGrantClaimResponse(
             message="You have already benefited from a one-time credit grant link. "
@@ -865,7 +958,23 @@ def claim_credit_grant_link(
             credits_granted=None,
         )
 
-    # Check if link was already claimed by another user
+    # --- Per-org guard: org can only benefit from one link ever ---
+    org_instance = None
+    if organization_id:
+        org_dao = OrganizationDAO(session)
+        org_instance = org_dao.get(organization_id)
+        if not org_instance:
+            raise not_found("Organization")
+
+        if token_dao.has_org_claimed_any_link(organization_id):
+            return CreditGrantClaimResponse(
+                message=f"The organization '{org_instance.name}' has already benefited "
+                "from a one-time credit grant link. "
+                "This link was not consumed, and no new credits were awarded.",
+                credits_granted=None,
+            )
+
+    # --- Per-link guard: link can only be claimed once ---
     if link.user_id is not None:
         if link.user_id != user_instance.id:
             raise HTTPException(
@@ -884,7 +993,11 @@ def claim_credit_grant_link(
 
     try:
         # Claim the link
-        claimed_link = token_dao.claim_link(payload.token, user_instance.id)
+        claimed_link = token_dao.claim_link(
+            payload.token,
+            user_instance.id,
+            organization_id=organization_id,
+        )
         if not claimed_link:
             session.rollback()
             raise HTTPException(
@@ -893,23 +1006,37 @@ def claim_credit_grant_link(
                 "already claimed by another user.",
             )
 
-        # Grant credits to the user's billing account
+        # Determine which billing account receives the credits
         credit_amount = float(link.credit_amount)
-        ba = user_instance.billing_account
-        if ba:
-            ba.credits += Decimal(str(credit_amount))
-        else:
-            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+        credited_to = "personal"
 
-            ba_dao = BillingAccountDAO(session)
-            new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
-            user_instance.billing_account_id = new_ba.id
-            session.flush()
+        if org_instance:
+            # Organization claim — credit the org's billing account
+            ba = org_instance.billing_account
+            if ba:
+                ba.credits += Decimal(str(credit_amount))
+            else:
+                ba_dao = BillingAccountDAO(session)
+                new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
+                org_instance.billing_account_id = new_ba.id
+                session.flush()
+            credited_to = org_instance.name
+        else:
+            # Personal claim — credit the user's billing account
+            ba = user_instance.billing_account
+            if ba:
+                ba.credits += Decimal(str(credit_amount))
+            else:
+                ba_dao = BillingAccountDAO(session)
+                new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
+                user_instance.billing_account_id = new_ba.id
+                session.flush()
 
         session.commit()
         return CreditGrantClaimResponse(
             message=f"Link successfully claimed! {credit_amount:.2f} credits awarded.",
             credits_granted=credit_amount,
+            credited_to=credited_to,
         )
     except HTTPException:
         session.rollback()
@@ -961,6 +1088,7 @@ def create_credit_grant_link(
         expires_at=link.expires_at,
         claimed_at=link.claimed_at,
         user_id=link.user_id,
+        organization_id=link.organization_id,
         credit_amount=link.credit_amount,
     )
 
@@ -979,6 +1107,8 @@ def list_credit_grant_links(
     session: Session = Depends(get_db_session),
 ):
     """List all one-time credit grant links."""
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
     token_dao = OneTimeCreditGrantLinkDAO(session)
     links = token_dao.list_links(limit=limit, offset=offset)
 
@@ -992,6 +1122,16 @@ def list_credit_grant_links(
             if row:
                 email_map[uid] = row[0].email
 
+    # Batch-resolve org names for org claims
+    org_ids = {link.organization_id for link in links if link.organization_id}
+    org_name_map: dict = {}
+    if org_ids:
+        org_dao = OrganizationDAO(session)
+        for oid in org_ids:
+            org = org_dao.get(oid)
+            if org:
+                org_name_map[oid] = org.name
+
     return [
         CreditGrantLinkResponse(
             id=link.id,
@@ -999,7 +1139,11 @@ def list_credit_grant_links(
             expires_at=link.expires_at,
             claimed_at=link.claimed_at,
             user_id=link.user_id,
+            organization_id=link.organization_id,
             claimed_by_email=email_map.get(link.user_id) if link.user_id else None,
+            claimed_for_org=(
+                org_name_map.get(link.organization_id) if link.organization_id else None
+            ),
             credit_amount=link.credit_amount,
         )
         for link in links
@@ -1062,14 +1206,17 @@ def get_onboarding_status(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
-    """Get the current user's onboarding status."""
+    """Get the current user's onboarding status (derived from OnboardingStatus table)."""
     user_dao = UserDAO(session)
     user_row = user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
-    user = user_row[0]
-    return OnboardingStatusResponse(onboarded=user.onboarded)
+    onboarding_dao = OnboardingStatusDAO(session)
+    status = onboarding_dao.get_by_user_id(request.state.user_id)
+    onboarded = status.current_step == "completed" if status else True
+
+    return OnboardingStatusResponse(onboarded=onboarded)
 
 
 @router.put("/user/onboarding-status")
@@ -1078,13 +1225,18 @@ def update_onboarding_status(
     body: UpdateOnboardingStatusRequest,
     session: Session = Depends(get_db_session),
 ):
-    """Update the current user's onboarding status."""
+    """Update the current user's onboarding status (syncs to OnboardingStatus table)."""
     user_dao = UserDAO(session)
     user_row = user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
-    user_dao.update(id=request.state.user_id, onboarded=body.onboarded)
+    onboarding_dao = OnboardingStatusDAO(session)
+    if body.onboarded:
+        onboarding_dao.mark_completed(request.state.user_id)
+    else:
+        onboarding_dao.reset(request.state.user_id)
+
     session.commit()
 
     return {"message": "Onboarding status updated successfully"}
@@ -1151,10 +1303,6 @@ def update_onboarding_progress(
         step_data=body.step_data,
     )
 
-    # If step is "completed", also set the legacy onboarded flag
-    if body.current_step == "completed":
-        user_dao.update(id=request.state.user_id, onboarded=True)
-
     session.commit()
 
     return OnboardingStatusDetailedResponse(
@@ -1184,9 +1332,6 @@ def reset_onboarding_progress(
         raise not_found("User")
 
     status = onboarding_dao.reset(request.state.user_id)
-
-    # Also reset the legacy onboarded flag
-    user_dao.update(id=request.state.user_id, onboarded=False)
 
     session.commit()
 

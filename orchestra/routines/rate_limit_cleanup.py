@@ -26,6 +26,7 @@ from typing import Optional
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.rate_limit_counter_dao import RateLimitCounterDAO
+from orchestra.web.api.utils.auth_rate_limiting import cleanup_auth_rate_limit_entries
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,10 @@ def _cleanup_in_session(session: Session) -> int:
     try:
         dao = RateLimitCounterDAO(session)
         deleted_count = dao.cleanup_old_buckets()
+
+        auth_deleted = cleanup_auth_rate_limit_entries(session)
+        deleted_count += auth_deleted
+
         session.commit()
 
         if deleted_count > 0:

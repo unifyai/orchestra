@@ -159,7 +159,8 @@ def list_teams(
             description=team.description,
             organization_id=team.organization_id,
             created_at=team.created_at,
-            member_count=len(team_dao.get_team_members(team.id)),
+            members=(members := team_dao.get_team_members(team.id)),
+            member_count=len(members),
         )
         for team in teams
     ]

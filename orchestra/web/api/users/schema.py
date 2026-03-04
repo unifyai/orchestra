@@ -86,6 +86,7 @@ class CreditGrantClaimResponse(BaseModel):
 
     message: str
     credits_granted: Optional[float] = None
+    credited_to: Optional[str] = None  # "personal" | org name
 
 
 class CreditGrantLinkClaimRequest(BaseModel):
@@ -109,7 +110,9 @@ class CreditGrantLinkResponse(BaseModel):
     expires_at: datetime
     claimed_at: Optional[datetime] = None
     user_id: Optional[str] = None
+    organization_id: Optional[int] = None
     claimed_by_email: Optional[str] = None
+    claimed_for_org: Optional[str] = None  # org name, if claimed for an org
     credit_amount: float  # Amount of credits granted when claimed
 
 
@@ -230,12 +233,10 @@ class BusinessAddress(BaseModel):
 
 # Valid onboarding steps (enforced in schema, freeform in DB)
 # The step represents WHERE TO RESUME, not where the user currently is.
-# - account_setup: User needs to complete account setup (initial state)
-# - billing_setup: Account setup done, user needs to complete billing
+# - workspace_setup: Initial state – user needs to choose personal / organization workspace
 # - completed: All onboarding steps done
 OnboardingStep = Literal[
-    "account_setup",  # Initial state - user needs to set up account (personal/business choice)
-    "billing_setup",  # Account done - user needs to add payment method
+    "workspace_setup",  # Initial state – choose personal vs. organization workspace
     "completed",  # All done
 ]
 
@@ -250,19 +251,12 @@ class OnboardingStepDataResponse(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    # Account setup data (filled when account_setup is completed)
-    selected_type: Optional[Literal["personal", "business"]] = None
+    # Workspace setup data (filled when workspace_setup is completed)
+    selected_type: Optional[Literal["personal", "organization"]] = None
 
-    # Organization data (filled if selected_type is "business")
+    # Organization data (filled if selected_type is "organization")
     organization_id: Optional[str] = None
     organization_name: Optional[str] = None
-    business_name: Optional[str] = None
-    tax_id: Optional[str] = None
-    billing_address: Optional[BusinessAddress] = None
-
-    # Billing setup data (filled when billing_setup is completed)
-    billing_skipped: Optional[bool] = None
-    payment_method_added: Optional[bool] = None
 
     # Completion data
     completed_at: Optional[str] = None  # ISO datetime string
@@ -283,8 +277,8 @@ class OnboardingStatusUpdateRequest(BaseModel):
     Request to update user's onboarding status.
 
     The current_step indicates WHERE TO RESUME next time:
-    - After completing account setup, set to "billing_setup"
-    - After completing billing setup, set to "completed"
+    - After registration, set to "workspace_setup"
+    - After completing workspace setup, set to "completed"
 
     The step_data accumulates information from all completed steps.
     """
@@ -308,7 +302,7 @@ class OnboardingStatusCreateRequest(BaseModel):
     """Request to create onboarding status (internal/admin use)."""
 
     user_id: str
-    current_step: OnboardingStep = "account_setup"
+    current_step: OnboardingStep = "workspace_setup"
     step_data: Optional[Dict[str, Any]] = None
 
 

@@ -2,6 +2,8 @@
 Tests for one-time credit grant links.
 
 Credit grant links provide a way to give users initial credits.
+Links can be claimed for personal accounts (personal API key) or
+for organization accounts (org API key).
 """
 
 import pytest
@@ -10,6 +12,33 @@ from httpx import AsyncClient
 
 from orchestra.settings import settings
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user, get_credits
+
+
+# ---------------------------------------------------------------------------
+# Helper: create an org and return org headers + org_id
+# ---------------------------------------------------------------------------
+async def _create_org(
+    client: AsyncClient,
+    owner_headers: dict,
+    org_name: str,
+) -> dict:
+    """Create an org and return { org_id, org_api_key, org_headers }."""
+    resp = await client.post(
+        "/v0/organizations",
+        json={"name": org_name},
+        headers=owner_headers,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED, resp.json()
+    data = resp.json()
+    org_api_key = data["api_key"]
+    return {
+        "org_id": data["id"],
+        "org_api_key": org_api_key,
+        "org_headers": {
+            "accept": "application/json",
+            "Authorization": f"Bearer {org_api_key}",
+        },
+    }
 
 
 @pytest.mark.anyio
@@ -295,3 +324,227 @@ async def test_claim_invalid_one_time_link(client: AsyncClient):
         user_headers=user_B["headers"],
     )
     assert user_B_credits_after_failed_attempt == user_B_initial_credits
+
+
+# ===========================================================================
+# Organization Credit Grant Tests
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_claim_link_with_org_api_key_credits_org(client: AsyncClient, dbsession):
+    """
+    When a user claims a link using an org API key, credits go to the
+    organization's billing account (not the user's personal account).
+    """
+
+    from orchestra.db.models.orchestra_models import Organization
+
+    owner = await create_test_user(client, "org_claim_owner@example.com")
+    org = await _create_org(client, owner["headers"], "CreditTestOrg")
+
+    # Read org billing account credits directly from DB
+    org_row = dbsession.query(Organization).filter_by(id=org["org_id"]).first()
+    org_credits_before = float(org_row.billing_account.credits)
+
+    # Get personal credits before
+    personal_credits_before = await get_credits(client, user_headers=owner["headers"])
+
+    # Admin creates link
+    link_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 50.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert link_resp.status_code == status.HTTP_201_CREATED
+    token = link_resp.json()["token"]
+
+    # Claim using ORG API key
+    claim_resp = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": token},
+        headers=org["org_headers"],
+    )
+    assert claim_resp.status_code == 200
+    claim_data = claim_resp.json()
+    assert claim_data["credits_granted"] == 50.0
+    assert claim_data["credited_to"] == "CreditTestOrg"
+
+    # Org credits should have increased (re-read from DB)
+    dbsession.expire_all()
+    org_row = dbsession.query(Organization).filter_by(id=org["org_id"]).first()
+    org_credits_after = float(org_row.billing_account.credits)
+    assert org_credits_after == org_credits_before + 50.0
+
+    # Personal credits should be unchanged
+    personal_credits_after = await get_credits(client, user_headers=owner["headers"])
+    assert personal_credits_after == personal_credits_before
+
+
+@pytest.mark.anyio
+async def test_claim_link_personal_credits_personal(client: AsyncClient):
+    """
+    When a user claims a link using a personal API key, credits go to
+    their personal billing account and credited_to is 'personal'.
+    """
+    user = await create_test_user(client, "personal_claim_user@example.com")
+    credits_before = await get_credits(client, user_headers=user["headers"])
+
+    link_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 30.0},
+        headers=ADMIN_HEADERS,
+    )
+    token = link_resp.json()["token"]
+
+    claim_resp = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": token},
+        headers=user["headers"],
+    )
+    assert claim_resp.status_code == 200
+    claim_data = claim_resp.json()
+    assert claim_data["credits_granted"] == 30.0
+    assert claim_data["credited_to"] == "personal"
+
+    credits_after = await get_credits(client, user_headers=user["headers"])
+    assert credits_after == credits_before + 30.0
+
+
+@pytest.mark.anyio
+async def test_per_user_guard_blocks_org_claim_after_personal(client: AsyncClient):
+    """
+    A user who already claimed a link (personal) cannot claim another
+    link for their org — the per-user guard fires first.
+    """
+    owner = await create_test_user(client, "guard_user_then_org@example.com")
+    org = await _create_org(client, owner["headers"], "GuardTestOrg")
+
+    # Create two links
+    link1_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 10.0},
+        headers=ADMIN_HEADERS,
+    )
+    link2_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 10.0},
+        headers=ADMIN_HEADERS,
+    )
+
+    # Claim link1 personally
+    claim1 = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link1_resp.json()["token"]},
+        headers=owner["headers"],
+    )
+    assert claim1.status_code == 200
+    assert claim1.json()["credits_granted"] == 10.0
+
+    # Try to claim link2 with org key — blocked by per-user guard
+    claim2 = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link2_resp.json()["token"]},
+        headers=org["org_headers"],
+    )
+    assert claim2.status_code == 200
+    assert "already benefited" in claim2.json()["message"]
+    assert claim2.json()["credits_granted"] is None
+
+
+@pytest.mark.anyio
+async def test_per_org_guard_blocks_second_org_claim(client: AsyncClient):
+    """
+    If an org already benefited from a link (claimed by member A),
+    member B cannot claim another link for the same org.
+
+    We use two separate owners — each creates their own org with the same
+    name to simplify the test — but really what matters is: once owner
+    claims for org, the *same* org cannot benefit twice, even via a
+    different user.
+
+    Since inviting a second member and getting their org key requires email
+    infrastructure, we simplify: the same owner tries claiming a second link
+    for the same org.
+    """
+    owner = await create_test_user(client, "org_guard_owner@example.com")
+    org = await _create_org(client, owner["headers"], "OrgGuardTest")
+
+    # Create two links
+    link1_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 20.0},
+        headers=ADMIN_HEADERS,
+    )
+    link2_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 20.0},
+        headers=ADMIN_HEADERS,
+    )
+
+    # Owner claims link1 for org
+    claim1 = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link1_resp.json()["token"]},
+        headers=org["org_headers"],
+    )
+    assert claim1.status_code == 200
+    assert claim1.json()["credits_granted"] == 20.0
+
+    # Same owner tries to claim link2 for the same org — blocked by both
+    # per-user and per-org guards (per-user fires first)
+    claim2 = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link2_resp.json()["token"]},
+        headers=org["org_headers"],
+    )
+    assert claim2.status_code == 200
+    assert "already benefited" in claim2.json()["message"]
+    assert claim2.json()["credits_granted"] is None
+
+    # Also verify that a DIFFERENT user/owner trying to claim for a
+    # NEW org works (the per-org guard should NOT block them)
+    owner2 = await create_test_user(client, "org_guard_owner2@example.com")
+    org2 = await _create_org(client, owner2["headers"], "OrgGuardTest2")
+    claim3 = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link2_resp.json()["token"]},
+        headers=org2["org_headers"],
+    )
+    assert claim3.status_code == 200
+    assert claim3.json()["credits_granted"] == 20.0
+    assert claim3.json()["credited_to"] == "OrgGuardTest2"
+
+
+@pytest.mark.anyio
+async def test_list_links_shows_org_info(client: AsyncClient):
+    """
+    Admin list endpoint shows organization_id and claimed_for_org for
+    links claimed with an org API key.
+    """
+    owner = await create_test_user(client, "list_org_owner@example.com")
+    org = await _create_org(client, owner["headers"], "ListOrgInfo")
+
+    link_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 5.0},
+        headers=ADMIN_HEADERS,
+    )
+    token = link_resp.json()["token"]
+    link_id = link_resp.json()["id"]
+
+    # Claim with org key
+    await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": token},
+        headers=org["org_headers"],
+    )
+
+    # List and find our link
+    list_resp = await client.get("/v0/admin/credit-grant-link", headers=ADMIN_HEADERS)
+    assert list_resp.status_code == 200
+    found = next((l for l in list_resp.json() if l["id"] == link_id), None)
+    assert found is not None
+    assert found["organization_id"] == org["org_id"]
+    assert found["claimed_for_org"] == "ListOrgInfo"
+    assert found["user_id"] is not None  # user who claimed it is always recorded
