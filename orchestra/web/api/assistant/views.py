@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import logging
-import time
 from decimal import Decimal
 from typing import List, Optional
 
@@ -207,12 +206,136 @@ def _build_assistant_read(
 
 async def _post_create_setup(
     assistant_id: str,
+    user_id: str,
+    organization_id: str | None,
+    assistant_in: "AssistantCreate",
+    api_key: str,
     is_staging: bool,
-    create_infra: bool = True,
+    session_factory,
 ):
-    """Background task: PubSub topic creation -> wakeup."""
-    pubsub_ok = not create_infra
-    if create_infra:
+    """Background task: infra provisioning -> DB update -> PubSub -> wakeup."""
+
+    # --- Infrastructure provisioning ---
+    update_data: dict = {}
+    if assistant_in.create_infra:
+        if assistant_in.email:
+            try:
+                email_local = (
+                    assistant_in.email.split("@")[0]
+                    if "@" in assistant_in.email
+                    else assistant_in.email
+                )
+                email_response = await create_email(
+                    email_local,
+                    assistant_in.first_name,
+                    assistant_in.surname,
+                )
+                if "detail" in email_response:
+                    logging.error(
+                        f"Background email creation failed for {assistant_id}: "
+                        f"{email_response['detail']}",
+                    )
+                else:
+                    created_email = email_response.get("user").get("primaryEmail")
+                    print(f"EMAIL CREATED: {created_email}")
+                    update_data["email"] = created_email
+                    await asyncio.sleep(10)
+                    watch_response = await watch_email(
+                        created_email,
+                        is_staging=is_staging,
+                    )
+                    if "detail" in watch_response:
+                        logging.error(
+                            f"Background email watch failed for {assistant_id}: "
+                            f"{watch_response['detail']}",
+                        )
+                    else:
+                        print(f"EMAIL WATCHED: {created_email}")
+            except Exception as e:
+                logging.error(f"Background email setup failed for {assistant_id}: {e}")
+
+        if assistant_in.user_phone:
+            try:
+                phone_country = assistant_in.phone_country or "US"
+                phone_response = await create_phone_number(
+                    phone_country=phone_country,
+                    is_staging=is_staging,
+                )
+                if "detail" in phone_response:
+                    logging.error(
+                        f"Background phone creation failed for {assistant_id}: "
+                        f"{phone_response['detail']}",
+                    )
+                else:
+                    created_phone = phone_response.get("phoneNumber")
+                    print(f"PHONE CREATED: {created_phone}")
+                    update_data["phone"] = created_phone
+            except Exception as e:
+                logging.error(
+                    f"Background phone creation failed for {assistant_id}: {e}",
+                )
+
+        if assistant_in.user_whatsapp_number:
+            try:
+                result = await assign_whatsapp_sender(
+                    assistant_in.user_whatsapp_number,
+                    is_staging=is_staging,
+                )
+                update_data["assistant_whatsapp_number"] = result["whatsapp_number"]
+            except Exception as e:
+                logging.error(
+                    f"Background WhatsApp assignment failed for {assistant_id}: {e}",
+                )
+
+        if assistant_in.desktop_mode in ("windows", "ubuntu"):
+            try:
+                vm_response = await create_vm(
+                    assistant_id=assistant_id,
+                    unify_apikey=api_key,
+                    assistant_name=assistant_id,
+                    vm_type=assistant_in.desktop_mode,
+                )
+                if "detail" in vm_response or "error" in vm_response:
+                    logging.error(
+                        f"Background VM creation failed for {assistant_id}: "
+                        f"{vm_response.get('detail') or vm_response.get('error')}",
+                    )
+                else:
+                    print(f"VM CREATED ({assistant_in.desktop_mode}): {assistant_id}")
+                    if vm_response.get("desktop_url"):
+                        update_data["desktop_url"] = vm_response["desktop_url"]
+            except Exception as e:
+                logging.error(f"Background VM creation failed for {assistant_id}: {e}")
+
+    if assistant_in.user_phone:
+        update_data.setdefault("user_phone", assistant_in.user_phone)
+    if assistant_in.user_whatsapp_number:
+        update_data.setdefault(
+            "user_whatsapp_number",
+            assistant_in.user_whatsapp_number,
+        )
+
+    # --- Persist infra results to DB ---
+    if update_data:
+        session = session_factory()
+        try:
+            assistant_dao = AssistantDAO(session)
+            assistant_dao.update_assistant(
+                user_id=user_id,
+                agent_id=assistant_id,
+                update_data=update_data,
+            )
+            session.commit()
+            print(f"ASSISTANT UPDATED: {assistant_id}")
+        except Exception as e:
+            session.rollback()
+            logging.error(f"Background DB update failed for {assistant_id}: {e}")
+        finally:
+            session.close()
+
+    # --- PubSub + wakeup ---
+    pubsub_ok = not assistant_in.create_infra
+    if assistant_in.create_infra:
         try:
             pubsub_response = await create_pubsub_topic(
                 assistant_id,
@@ -220,7 +343,8 @@ async def _post_create_setup(
             )
             if "detail" in pubsub_response:
                 logging.error(
-                    f"Background PubSub creation failed for {assistant_id}: {pubsub_response['detail']}",
+                    f"Background PubSub creation failed for {assistant_id}: "
+                    f"{pubsub_response['detail']}",
                 )
             else:
                 print(f"PUBSUB CREATED: {assistant_id}")
@@ -536,223 +660,8 @@ async def create_assistant(
                     is_versioned=False,
                 )
 
-        # Commit the assistant creation before infrastructure setup
-        # This ensures the assistant persists even if we refresh the session later
         session.commit()
-
         assistant_id = assistant.agent_id
-        # Infrastructure creation with rollback on failure
-        created_email = None
-        created_phone = None
-        assigned_whatsapp = None
-        created_vm = None
-
-        if assistant_in.create_infra:
-            current_infra_step = "initializing"
-            try:
-                # Step 1 & 2: create and watch email
-                if assistant_in.email:
-                    email_local = (
-                        assistant_in.email.split("@")[0]
-                        if "@" in assistant_in.email
-                        else assistant_in.email
-                    )
-                    current_infra_step = "create_email"
-                    email_response = await create_email(
-                        email_local,
-                        assistant_in.first_name,
-                        assistant_in.surname,
-                    )
-                    if "detail" in email_response:
-                        raise Exception(
-                            f"Email creation failed: {email_response['detail']}",
-                        )
-                    created_email = email_response.get("user").get("primaryEmail")
-                    print(f"EMAIL CREATED: {created_email}")
-
-                    await asyncio.sleep(10)
-                    current_infra_step = "watch_email"
-                    watch_response = await watch_email(
-                        created_email,
-                        is_staging=settings.is_staging,
-                    )
-                    print(watch_response)
-                    if "detail" in watch_response:
-                        raise Exception(
-                            f"Email watch setup failed: {watch_response['detail']}",
-                        )
-                    print(f"EMAIL WATCHED: {created_email}")
-
-                # Step 3: create phone number if user_phone is provided
-                if assistant_in.user_phone:
-                    phone_country = (
-                        assistant_in.phone_country
-                        if assistant_in.phone_country
-                        else "US"
-                    )
-                    current_infra_step = "create_phone_number"
-                    phone_response = await create_phone_number(
-                        phone_country=phone_country,
-                        is_staging=settings.is_staging,
-                    )
-                    if "detail" in phone_response:
-                        raise Exception(
-                            f"Phone number creation failed: {phone_response['detail']}",
-                        )
-                    created_phone = phone_response.get("phoneNumber")
-                    print(f"PHONE CREATED: {created_phone}")
-
-                # Step 4: assign whatsapp sender if whatsapp number is provided
-                if assistant_in.user_whatsapp_number:
-                    current_infra_step = "assign_whatsapp_sender"
-                    assigned_whatsapp = (
-                        await assign_whatsapp_sender(
-                            assistant_in.user_whatsapp_number,
-                            is_staging=settings.is_staging,
-                        )
-                    )["whatsapp_number"]
-
-                # Step 5: Create VM if desktop_mode is windows/ubuntu
-                if assistant_in.desktop_mode in ("windows", "ubuntu"):
-                    current_infra_step = "create_vm"
-                    vm_response = await create_vm(
-                        assistant_id=str(assistant_id),
-                        unify_apikey=request.state.api_key,
-                        assistant_name=str(assistant_id),
-                        vm_type=assistant_in.desktop_mode,
-                    )
-                    if "detail" in vm_response or "error" in vm_response:
-                        raise Exception(
-                            f"VM creation failed: {vm_response.get('detail') or vm_response.get('error')}",
-                        )
-                    created_vm = vm_response
-                    print(f"VM CREATED ({assistant_in.desktop_mode}): {assistant_id}")
-
-                has_infra_updates = any(
-                    [created_email, created_phone, assigned_whatsapp, created_vm],
-                )
-                if has_infra_updates:
-                    session.close()
-                    session = next(get_db_session(request))
-                    assistant_dao = AssistantDAO(session)
-
-                    update_data = {
-                        "email": created_email,
-                        "phone": created_phone,
-                        "user_phone": assistant_in.user_phone,
-                        "user_whatsapp_number": assistant_in.user_whatsapp_number,
-                        "assistant_whatsapp_number": assigned_whatsapp,
-                    }
-                    if created_vm and created_vm.get("desktop_url"):
-                        update_data["desktop_url"] = created_vm["desktop_url"]
-                    assistant_dao.update_assistant(
-                        user_id=user_id,
-                        agent_id=assistant_id,
-                        update_data=update_data,
-                    )
-                    session.commit()
-                    print(f"ASSISTANT UPDATED: {assistant_id}")
-
-                    assistant = assistant_dao.get_assistant_by_id(
-                        user_id=user_id,
-                        agent_id=assistant_id,
-                        organization_id=organization_id,
-                    )
-
-            except Exception as infra_error:
-                # Use repr() to always show exception type, even if str() is empty
-                print(
-                    f"INFRA ERROR at step '{current_infra_step}': "
-                    f"{type(infra_error).__name__}: {infra_error!r}",
-                )
-
-                # can't rollback infra if the setup isn't complete so need to wait
-                time.sleep(10)
-
-                # Refresh database session to avoid stale connections during rollback
-                logging.warning(
-                    f"Infrastructure setup failed for assistant {assistant_id}, refreshing session for rollback",
-                )
-                session.close()
-                session = next(get_db_session(request))
-                assistant_dao = AssistantDAO(session)
-                context_dao = ContextDAO(session)
-                project_dao = ProjectDAO(
-                    session,
-                    organization_member_dao,
-                    context_dao,
-                )
-
-                # Rollback infrastructure in reverse order
-                rollback_errors = []
-
-                # Delete VM first (created last)
-                if created_vm:
-                    try:
-                        await delete_vm(
-                            str(assistant_id),
-                            vm_type=assistant_in.desktop_mode,
-                        )
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete VM: {str(e)}")
-                    print(f"VM DELETED ({assistant_in.desktop_mode}): {assistant_id}")
-
-                if created_phone:
-                    try:
-                        await delete_phone_number(created_phone)
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete phone: {str(e)}")
-                print(f"PHONE DELETED: {created_phone}")
-
-                if created_email:
-                    try:
-                        await delete_email(created_email)
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete email: {str(e)}")
-                print(f"EMAIL DELETED: {created_email}")
-
-                # Delete the assistant record since infrastructure failed
-                try:
-                    # First, delete the chat context if it was created
-                    if assistant_in.pre_hire_chat:
-                        try:
-                            context_name = f"{user_id}/{assistant_id}/Transcripts"
-                            assistants_project = project_dao.get_by_user_and_name(
-                                user_id=user_id,
-                                name="Assistants",
-                                organization_id=None,
-                            )
-                            if assistants_project:
-                                context_to_delete = context_dao.filter(
-                                    project_id=assistants_project.id,
-                                    name=context_name,
-                                )
-                                if context_to_delete:
-                                    context_dao.delete(context_to_delete[0][0].id)
-                                    logging.info(
-                                        f"Deleted chat transcript context for failed assistant {assistant_id}",
-                                    )
-                        except Exception as e_ctx_del:
-                            rollback_errors.append(
-                                f"Failed to delete chat context: {str(e_ctx_del)}",
-                            )
-                    assistant_dao.delete_assistant(
-                        user_id=user_id,
-                        agent_id=assistant_id,
-                    )
-                    # Commit the assistant deletion
-                    session.commit()
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete assistant: {str(e)}")
-                print(f"ASSISTANT DELETED: {assistant_id}")
-
-                error_msg = f"Infrastructure setup failed: {str(infra_error)}"
-                if rollback_errors:
-                    error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=error_msg,
-                )
 
     except IntegrityError as e:
         session.rollback()
@@ -795,13 +704,17 @@ async def create_assistant(
             detail="Failed to create assistant.",
         )
 
-    # Phase 3: Background PubSub + wakeup (expensive, non-critical for response).
+    # Phase 3: Background infra provisioning + PubSub + wakeup.
     if not assistant_in.is_local:
         asyncio.create_task(
             _post_create_setup(
                 assistant_id=str(assistant.agent_id),
+                user_id=user_id,
+                organization_id=organization_id,
+                assistant_in=assistant_in,
+                api_key=request.state.api_key,
                 is_staging=settings.is_staging,
-                create_infra=bool(assistant_in.create_infra),
+                session_factory=request.app.state.db_session_factory,
             ),
         )
     else:
