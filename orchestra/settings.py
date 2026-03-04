@@ -230,6 +230,17 @@ class Settings(BaseSettings):
     deepgram_api_key: Optional[str] = os.environ.get("DEEPGRAM_API_KEY")
     openai_api_key: Optional[str] = None  # Populated by model_config below
 
+    # Cloudflare Turnstile CAPTCHA
+    turnstile_secret_key: Optional[str] = os.environ.get("TURNSTILE_SECRET_KEY")
+
+    # Email-auth & MFA secrets
+    email_verify_token_secret: Optional[str] = os.environ.get(
+        "EMAIL_VERIFY_TOKEN_SECRET",
+    )
+    mfa_encryption_key: Optional[str] = os.environ.get("MFA_ENCRYPTION_KEY")
+    mfa_kms_keyring: str = os.environ.get("MFA_KMS_KEYRING", "mfa")
+    mfa_kms_key: str = os.environ.get("MFA_KMS_KEY", "mfa-secrets")
+
     # Stripe configuration
     stripe_secret_key: Optional[str] = os.environ.get("STRIPE_SECRET_KEY")
     stripe_webhook_secret: Optional[str] = os.environ.get("STRIPE_WEBHOOK_SECRET")

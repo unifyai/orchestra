@@ -1,6 +1,5 @@
 """Organization management endpoints."""
 
-import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -37,6 +36,7 @@ from orchestra.web.api.organization.schema import (
     MemberSpendingLimitRequest,
     MemberSpendingLimitResponse,
     MemberSpendResponse,
+    MFAEnforcementStatusResponse,
     OrganizationBillingResponse,
     OrganizationBillingUpdate,
     OrganizationBusinessProfileResponse,
@@ -51,12 +51,15 @@ from orchestra.web.api.organization.schema import (
     OrganizationResponse,
     OrganizationStripeCustomerCreateRequest,
     OrganizationUpdate,
+    OrgMFASettingsRequest,
+    OrgMFASettingsResponse,
     OrgSpendingLimitRequest,
     OrgSpendingLimitResponse,
     OrgSpendResponse,
 )
 from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.email import send_email_async
+from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +312,7 @@ async def update_organization(
     organization_id: int,
     organization: OrganizationUpdate,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> OrganizationResponse:
     """
     Update an organization.
@@ -377,6 +381,7 @@ async def delete_organization(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> None:
     """
     Delete an organization.
@@ -531,6 +536,7 @@ async def add_organization_member(
     organization_id: int,
     member_data: OrganizationMemberAdd,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> dict:
     """
     Add a member to an organization.
@@ -656,6 +662,7 @@ async def remove_organization_member(
     organization_id: int,
     user_id: str,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> None:
     """
     Remove a member from an organization.
@@ -820,6 +827,7 @@ async def list_organization_members(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> List[OrganizationMemberResponse]:
     """
     List all members of an organization with their roles.
@@ -919,6 +927,7 @@ async def update_member_role(
     member_user_id: str,
     role_update: OrganizationMemberRoleUpdate,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> OrganizationMemberResponse:
     """
     Update an organization member's RBAC role.
@@ -1053,6 +1062,7 @@ async def transfer_organization_ownership(
     organization_id: int,
     transfer: OrganizationOwnershipTransfer,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> OrganizationResponse:
     """
     Transfer organization ownership to another member.
@@ -1192,6 +1202,7 @@ async def invite_user_to_organization(
     organization_id: int,
     invite_request: InviteUserRequest,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> InviteResponse:
     """
     Invite a user to join an organization via email.
@@ -1325,7 +1336,7 @@ async def _send_invite_email(
         "UNIFY_CONSOLE_FRONTEND_URL",
         "https://console.unify.ai",
     ).rstrip("/")
-    invite_link = f"{frontend_url}/invite?token={invite.token}"
+    invite_link = f"{frontend_url}/login/invite?token={invite.token}"
 
     email_subject = f"You've been invited to join {org.name}"
     email_body = f"""
@@ -1344,27 +1355,26 @@ async def _send_invite_email(
     """
 
     try:
-        email_task = asyncio.create_task(
-            send_email_async(
-                invite.invitee_email,
-                email_subject,
-                email_body,
-                from_email="hello@unify.ai",
-            ),
+        sent = await send_email_async(
+            invite.invitee_email,
+            email_subject,
+            email_body,
+            from_email="hello@unify.ai",
+            impersonate_email="hello@unify.ai",
         )
-
-        def _log_email_result(task: asyncio.Task) -> None:
-            try:
-                task.result()
-                logger.info(f"Invite email sent to {invite.invitee_email}")
-            except Exception as e:
-                logger.error(
-                    f"Failed to send invite email to {invite.invitee_email}: {e}",
-                )
-
-        email_task.add_done_callback(_log_email_result)
+        if sent:
+            logger.info(f"Invite email sent to {invite.invitee_email}")
+        else:
+            print(
+                f"[LOCAL DEV] Invite link for {invite.invitee_email}: {invite_link}",
+                flush=True,
+            )
     except Exception as e:
-        logger.error(f"Failed to schedule invite email: {e}")
+        logger.error(f"Failed to send invite email to {invite.invitee_email}: {e}")
+        print(
+            f"[LOCAL DEV] Invite link for {invite.invitee_email}: {invite_link}",
+            flush=True,
+        )
 
 
 @router.get(
@@ -1375,6 +1385,7 @@ async def list_organization_invites(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> InviteListResponse:
     """
     List pending invites for an organization.
@@ -1428,6 +1439,7 @@ async def cancel_organization_invite(
     organization_id: int,
     invite_id: str,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
 ) -> None:
     """
     Cancel a pending invite.
@@ -1650,11 +1662,29 @@ async def accept_invite(
                     f"{assistant.agent_id}: {e_sync}",
                 )
 
+        # Mark user as onboarded (they're joining via invite, no workspace selection needed)
+        from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
+
+        onboarding_dao = OnboardingStatusDAO(session)
+        onboarding_status = onboarding_dao.get_by_user_id(user_id)
+        if onboarding_status and onboarding_status.current_step != "completed":
+            onboarding_dao.mark_completed(user_id)
+
+        # Check if org requires MFA and user hasn't set it up
+        mfa_setup_required = False
+        if org.require_mfa:
+            from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
+
+            mfa_cred_dao = MFACredentialDAO(session)
+            if not mfa_cred_dao.has_enabled_mfa(user_id):
+                mfa_setup_required = True
+
         return AcceptInviteResponse(
             message="Successfully joined organization",
             organization_id=org.id,
             organization_name=org.name,
             api_key=new_api_key,
+            mfa_setup_required=mfa_setup_required,
         )
 
     except Exception as e:
@@ -3067,3 +3097,140 @@ def admin_get_organization_verification(
         "verified": org.verified,
         "verified_at": org.verified_at.isoformat() if org.verified_at else None,
     }
+
+
+# =============================================================================
+# Organization MFA Enforcement
+# =============================================================================
+
+
+@router.get(
+    "/organizations/{organization_id}/mfa-settings",
+    response_model=OrgMFASettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_org_mfa_settings(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Get MFA enforcement settings for an organization.
+
+    Requires org:read permission.
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this organization",
+        )
+
+    settings = org_dao.get_mfa_settings(organization_id)
+    return OrgMFASettingsResponse(**settings)
+
+
+@router.put(
+    "/organizations/{organization_id}/mfa-settings",
+    response_model=OrgMFASettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+def update_org_mfa_settings(
+    request_fastapi: Request,
+    organization_id: int,
+    body: OrgMFASettingsRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Update MFA enforcement settings for an organization.
+
+    Requires org:write permission (Owner, Admin roles).
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this organization",
+        )
+
+    result = org_dao.update_mfa_settings(
+        org_id=organization_id,
+        require_mfa=body.require_mfa,
+    )
+    session.commit()
+
+    return OrgMFASettingsResponse(**result)
+
+
+@admin_router.get(
+    "/auth/mfa-enforcement-status",
+    response_model=MFAEnforcementStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_enforcement_status(
+    user_id: str,
+    org_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check whether a user must set up MFA to access a given organization.
+
+    Called by the Next.js server (admin-key auth) during workspace
+    resolution to decide if the user should be redirected to MFA setup.
+
+    MFA enforcement applies to all members regardless of auth provider
+    (email/password, Google, GitHub). If the org requires MFA and the
+    user hasn't set it up, ``setup_required`` is True.
+    """
+    from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
+
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(org_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {org_id} not found",
+        )
+
+    enforced = org.require_mfa
+
+    mfa_dao = MFACredentialDAO(session)
+    has_mfa = mfa_dao.has_enabled_mfa(user_id)
+
+    setup_required = enforced and not has_mfa
+
+    return MFAEnforcementStatusResponse(
+        enforced=enforced,
+        has_mfa=has_mfa,
+        setup_required=setup_required,
+    )

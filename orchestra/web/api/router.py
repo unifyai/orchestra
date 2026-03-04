@@ -7,6 +7,7 @@ from fastapi.routing import APIRouter
 from orchestra.web.api import (  # noqa: WPS235
     admin,
     api_keys,
+    auth,
     context,
     credits,
     interface,
@@ -64,6 +65,18 @@ api_router.include_router(
 api_router.include_router(
     users.router,
     tags=["Query Logging"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    auth.admin_router,
+    prefix="/admin",
+    tags=["Auth"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    auth.router,
+    tags=["Auth"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
