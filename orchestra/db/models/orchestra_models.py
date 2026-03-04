@@ -1338,14 +1338,16 @@ class Assistant(Base):
             ["voices.user_id", "voices.voice_id", "voices.provider"],
             name="fk_assistants_voices",
         ),
-        # Personal assistants: unique per user
-        UniqueConstraint(
+        # Personal assistants: unique name per user (only when not in an org)
+        Index(
+            "uq_user_assistant_name",
             "user_id",
             "first_name",
             "surname",
-            name="uq_user_assistant_name",
+            unique=True,
+            postgresql_where=text("organization_id IS NULL"),
         ),
-        # Org assistants: unique per organization
+        # Org assistants: unique name per organization
         UniqueConstraint(
             "organization_id",
             "first_name",
