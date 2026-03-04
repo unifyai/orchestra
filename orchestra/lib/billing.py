@@ -181,23 +181,15 @@ def get_billing_entity(
             f"Billing operations not allowed for non-active organizations.",
         )
 
-    # Check if org has direct billing
-    if ba.stripe_customer_id is not None:
-        return BillingEntity(
-            entity_type=BillingEntityType.ORGANIZATION,
-            entity_id=org.id,
-            billing_account_id=ba.id,
-            credits=ba.credits,
-            stripe_customer_id=ba.stripe_customer_id,
-            autorecharge=ba.autorecharge,
-            autorecharge_threshold=ba.autorecharge_threshold,
-            autorecharge_qty=ba.autorecharge_qty,
-        )
-
-    # Billing not set up for organization
-    raise ValueError(
-        f"Organization {organization_id} has no billing set up. "
-        f"Please set up billing in the organization settings.",
+    return BillingEntity(
+        entity_type=BillingEntityType.ORGANIZATION,
+        entity_id=org.id,
+        billing_account_id=ba.id,
+        credits=ba.credits,
+        stripe_customer_id=ba.stripe_customer_id,
+        autorecharge=ba.autorecharge,
+        autorecharge_threshold=ba.autorecharge_threshold,
+        autorecharge_qty=ba.autorecharge_qty,
     )
 
 
