@@ -72,6 +72,11 @@ phonenumbers = "^9.0.21"
 opentelemetry-instrumentation-openai = "^0.50.1"
 opentelemetry-instrumentation-httpx = "^0.60b1"
 cloud-sql-python-connector = {extras = ["pg8000"], version = "^1.20.0"}
+disposable-email-domains = "^0.0.163"
+argon2-cffi = "^25.1.0"
+email-validator = "^2.3.0"
+pyotp = "^2.9.0"
+google-cloud-kms = "^3.11.0"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "*"

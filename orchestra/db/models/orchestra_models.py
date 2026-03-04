@@ -267,7 +267,6 @@ class User(Base):
     # Toggles managed by usage quotas
     queries_enabled = Column(Boolean, nullable=False, server_default="true")
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
-    onboarded = Column(Boolean, nullable=False, server_default="false")
     store_prompts = Column(
         Boolean,
         nullable=False,
@@ -312,6 +311,149 @@ class Account(Base):
     expires_at = Column(TIMESTAMP)
 
 
+class EmailAccount(Base):
+    """
+    Email/password credentials for a user.
+
+    Users who only use OAuth will have no row here. One row per user maximum.
+    The email address itself is not duplicated — it is always read from User.email.
+    """
+
+    __tablename__ = "email_account"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    password_hash = Column(String, nullable=False)  # argon2id hash
+    email_verified = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )  # Safety-net default; set to True at creation after verification
+    password_changed_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+    )  # Set on every password change; used for session invalidation
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    # ORM relationship
+    user = relationship("User", backref=backref("email_account", uselist=False))
+
+
+class EmailVerification(Base):
+    """
+    Short-lived verification codes for signup and password reset.
+
+    During signup, this table also serves as temporary storage for the user's
+    credentials until their email is verified — no User or EmailAccount row is
+    created until verification succeeds.
+
+    Row lifecycle: rows are always deleted on success (both signup and password
+    reset). Expired rows are cleaned up by a periodic job.
+    """
+
+    __tablename__ = "email_verification"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(
+        String,
+        nullable=False,
+        index=True,
+    )  # Not a FK — user may not exist yet (signup)
+    code_hash = Column(String, nullable=False)  # SHA-256 hash of the 6-digit code
+    purpose = Column(String, nullable=False)  # "signup" | "password_reset"
+    password_hash = Column(
+        String,
+        nullable=True,
+    )  # argon2id hash — only for purpose="signup"
+    name = Column(String, nullable=True)  # User's first name — only for signup
+    last_name = Column(String, nullable=True)  # User's last name — only for signup
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    attempts = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )  # Max 5 attempts before invalidation
+    token_jti = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class MFACredential(Base):
+    """
+    Polymorphic MFA credential.
+
+    For TOTP, one row per user (the same secret can be scanned into multiple
+    authenticator apps). For WebAuthn (future), one row per registered device.
+
+    ``credential_data`` is an encrypted JSON blob whose structure depends on
+    ``method_type`` (e.g. ``{"secret": "BASE32..."}`` for TOTP).
+    """
+
+    __tablename__ = "mfa_credential"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    method_type = Column(String, nullable=False)  # "totp", "webauthn", "sms"
+    credential_data = Column(sa.LargeBinary, nullable=False)  # Encrypted JSON blob
+    enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    confirmed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    last_used_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_mfa_credential_user_type", "user_id", "method_type"),)
+
+    # ORM relationship
+    user = relationship("User", backref=backref("mfa_credentials", lazy="dynamic"))
+
+
+class MFARecovery(Base):
+    """
+    Recovery codes for MFA.
+
+    Tied to the user (not to a specific MFA method). 10 codes generated
+    per setup, each 8 alphanumeric characters. Stored as SHA-256 hashes.
+    Each code is single-use.
+    """
+
+    __tablename__ = "mfa_recovery"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    code_hash = Column(String, nullable=False)  # SHA-256 hash
+    used = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    used_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # ORM relationship
+    user = relationship("User", backref=backref("mfa_recovery_codes", lazy="dynamic"))
+
+
 class Organization(Base):
     """
     Organization model.
@@ -346,6 +488,15 @@ class Organization(Base):
     # Monthly spending limit for all users/assistants in the org (NULL = no limit)
     monthly_spending_cap = Column(Numeric, nullable=True)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # === MFA ENFORCEMENT ===
+    # When True, all email/password members must enable MFA to access this org
+    require_mfa = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # === VERIFICATION FIELDS ===
     # Verified orgs get higher rate limits
@@ -1248,9 +1399,15 @@ class OneTimeCreditGrantLink(Base):
     """
     One-time links that grant credits when claimed.
 
-    Each link can only be claimed once. When claimed, the user receives
-    the specified credit_amount. Users can only benefit from one link
-    ever (checked via query on this table's user_id column).
+    Each link can only be claimed once.  Credits are applied to the billing
+    account that corresponds to the claimer's active workspace:
+    - Personal API key → user's BillingAccount
+    - Organization API key → organization's BillingAccount
+
+    Guards:
+    - Per-link: a link can only be claimed once (user_id / claimed_at).
+    - Per-user: a user can only benefit from one link ever.
+    - Per-org: an organization can only benefit from one link ever.
     """
 
     __tablename__ = "one_time_credit_grant_link"
@@ -1259,6 +1416,13 @@ class OneTimeCreditGrantLink(Base):
     token = Column(String, unique=True, index=True, nullable=False)
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     user_id = Column(String, ForeignKey("user.id"), nullable=True, index=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id"),
+        nullable=True,
+        index=True,
+        comment="Organization that received the credits (NULL = personal claim)",
+    )
     claimed_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     credit_amount = Column(
@@ -1274,14 +1438,12 @@ class OnboardingStatus(Base):
     Tracks user onboarding progress.
 
     The current_step represents WHERE TO RESUME next time:
-    - account_setup: User needs to complete account setup (initial state)
-    - billing_setup: Account done, user needs to add payment method
+    - workspace_setup: Initial state – user needs to choose personal vs. organization workspace
     - completed: All onboarding steps done
 
     step_data accumulates information from completed steps:
-    - selected_type: "personal" | "business"
-    - organization_id, organization_name (if business)
-    - billing_skipped, payment_method_added (after billing step)
+    - selected_type: "personal" | "organization"
+    - organization_id, organization_name (if organization)
     - completed_at (when completed)
     """
 
@@ -2060,6 +2222,61 @@ class RateLimitCounter(Base):
         # Index for cleanup queries
         Index(
             "ix_rate_limit_counter_time_bucket",
+            "time_bucket",
+        ),
+    )
+
+
+class AuthRateLimitEntry(Base):
+    """
+    IP-based rate limiting for unauthenticated auth endpoints.
+
+    Unlike RateLimitCounter (which keys on user_id), this table keys on
+    a composite string of IP + identifier (email, user_id, or just IP)
+    to throttle login attempts, MFA brute-force, registration spam, etc.
+    """
+
+    __tablename__ = "auth_rate_limit_entry"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    key = Column(
+        String(500),
+        nullable=False,
+        index=True,
+        comment="Composite key: 'ip:identifier' or just 'ip'",
+    )
+    endpoint_category = Column(
+        String(50),
+        nullable=False,
+        comment="Auth rate limit category (auth_login, auth_mfa, auth_register, ...)",
+    )
+    time_bucket = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        comment="Start of the 5-minute time bucket",
+    )
+    attempt_count = Column(
+        Integer,
+        nullable=False,
+        server_default="1",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "key",
+            "endpoint_category",
+            "time_bucket",
+            name="uq_auth_rate_limit_entry",
+        ),
+        Index(
+            "ix_auth_rate_limit_key_category",
+            "key",
+            "endpoint_category",
+            "time_bucket",
+        ),
+        Index(
+            "ix_auth_rate_limit_time_bucket",
             "time_bucket",
         ),
     )
