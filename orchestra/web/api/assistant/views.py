@@ -207,11 +207,10 @@ def _build_assistant_read(
 
 async def _post_create_setup(
     assistant_id: str,
-    pre_hire_chat: list | None,
     is_staging: bool,
     create_infra: bool = True,
 ):
-    """Background task: PubSub topic creation -> wakeup -> pre-hire chat logging."""
+    """Background task: PubSub topic creation -> wakeup."""
     pubsub_ok = not create_infra
     if create_infra:
         try:
@@ -240,16 +239,6 @@ async def _post_create_setup(
                 print(f"ASSISTANT AWAKENED: {assistant_id}")
         except Exception as e:
             logging.error(f"Background wakeup failed for {assistant_id}: {e}")
-
-    if pre_hire_chat:
-        try:
-            await log_pre_hire_chat(
-                assistant_id=assistant_id,
-                messages=pre_hire_chat,
-                is_staging=is_staging,
-            )
-        except Exception as e:
-            logging.warning(f"Background pre-hire log failed for {assistant_id}: {e}")
 
 
 @router.post(
@@ -806,19 +795,11 @@ async def create_assistant(
             detail="Failed to create assistant.",
         )
 
-    # Phase 3: Background PubSub + wakeup + pre-hire chat logging.
-    # None of these need to block the response — PubSub topic must exist before
-    # wakeup, but wakeup is just an acknowledgment and the real job start is async.
+    # Phase 3: Background PubSub + wakeup (expensive, non-critical for response).
     if not assistant_in.is_local:
-        pre_hire_messages = (
-            jsonable_encoder(assistant_in.pre_hire_chat)
-            if assistant_in.pre_hire_chat
-            else None
-        )
         asyncio.create_task(
             _post_create_setup(
                 assistant_id=str(assistant.agent_id),
-                pre_hire_chat=pre_hire_messages,
                 is_staging=settings.is_staging,
                 create_infra=bool(assistant_in.create_infra),
             ),
@@ -826,7 +807,21 @@ async def create_assistant(
     else:
         print(f"SKIPPED WAKEUP (local assistant): {assistant.agent_id}")
 
-    # Phase 4: Prepare and return response
+    # Phase 4: Log pre-hire chat synchronously so it's persisted before the
+    # client can refresh and fetch transcripts.
+    if assistant_in.pre_hire_chat:
+        try:
+            await log_pre_hire_chat(
+                assistant_id=str(assistant.agent_id),
+                messages=jsonable_encoder(assistant_in.pre_hire_chat),
+                is_staging=settings.is_staging,
+            )
+        except Exception as e:
+            logging.warning(
+                f"Failed to log pre-hire chat for {assistant.agent_id}: {e}",
+            )
+
+    # Phase 5: Prepare and return response
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
     )
