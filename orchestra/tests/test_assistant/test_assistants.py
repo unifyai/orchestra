@@ -1125,11 +1125,9 @@ async def test_create_assistant_creates_assistants_project(
 
 
 @pytest.mark.anyio
-@patch("orchestra.web.api.assistant.views._post_create_setup", new_callable=AsyncMock)
 @patch("orchestra.web.api.assistant.views.log_pre_hire_chat", new_callable=AsyncMock)
 async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     mock_log_pre_hire_chat,
-    mock_post_create_setup,
     client: AsyncClient,
     pre_hire_chat_payload,
 ):
