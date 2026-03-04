@@ -3796,29 +3796,11 @@ async def animate_video_endpoint(
             detail=f"Could not animate video: {str(e)}",
         )
     finally:
-        # Cleanup temporary files from GCS
-        if temp_image_gcs_url:
-            try:
-                bucket_service.delete_assistant_file(temp_image_gcs_url)
-                logging.info(
-                    f"Successfully deleted temporary image file {temp_image_gcs_url} for video animation.",
-                )
-            except Exception as e_cleanup:
-                logging.error(
-                    f"Failed to clean up temporary image file {temp_image_gcs_url}: {e_cleanup}",
-                )
-        if temp_audio_gcs_url:
-            try:
-                bucket_service.delete_assistant_file(
-                    temp_audio_gcs_url,
-                )  # Reusing delete_assistant_file
-                logging.info(
-                    f"Successfully deleted temporary audio file {temp_audio_gcs_url} for video animation.",
-                )
-            except Exception as e_cleanup:
-                logging.error(
-                    f"Failed to clean up temporary audio file {temp_audio_gcs_url}: {e_cleanup}",
-                )
+        # NOTE: Do NOT delete temp files here. The prediction runs
+        # asynchronously on Replicate and needs to download these files
+        # after the endpoint returns. Temp files in the ``tmp/`` folder
+        # are cleaned up by a scheduled job (see temp_file_cleanup routine).
+        pass
 
 
 @router.get(
