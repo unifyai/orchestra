@@ -11,6 +11,7 @@ from google.api_core import exceptions
 from google.cloud import storage
 from google.oauth2 import service_account
 
+from orchestra.settings import settings
 from orchestra.web.api.utils.gcp import parse_gcs_url
 
 
@@ -57,7 +58,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
-                "assistant-media",
+                f"assistant-media-{'staging' if settings.is_staging else 'production'}",
             ),
         )
         if not self.assistant_media_bucket_name:
@@ -78,7 +79,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
-                "assistant-message-attachments",
+                f"assistant-message-attachments-{'staging' if settings.is_staging else 'production'}",
             ),
         )
         self.message_attachments_bucket = self.storage_client.bucket(
@@ -94,7 +95,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME",
-                "assistant-call-recordings",
+                f"assistant-call-recordings-{'staging' if settings.is_staging else 'production'}",
             ),
         )
         self.call_recordings_bucket = self.storage_client.bucket(

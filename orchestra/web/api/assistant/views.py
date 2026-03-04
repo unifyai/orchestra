@@ -3203,6 +3203,7 @@ def delete_secret(
 async def upload_assistant_photo(
     request: Request,
     file: UploadFile = File(..., example="assistant_photo.jpg"),
+    assistant_id: Optional[int] = Form(None),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3240,6 +3241,7 @@ async def upload_assistant_photo(
             file_content=file_content,
             user_id=user_id,
             content_type=file.content_type,
+            assistant_id=assistant_id,
         )
         return InfoResponse(info=AssistantPhotoUploadResponse(gcs_url=gcs_url))
     except HTTPException as e:
@@ -3263,6 +3265,7 @@ async def upload_assistant_photo(
 async def upload_assistant_video(
     request: Request,
     file: UploadFile = File(..., example="assistant_video.mp4"),
+    assistant_id: Optional[int] = Form(None),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3300,6 +3303,7 @@ async def upload_assistant_video(
             file_content=file_content,
             user_id=user_id,
             content_type=file.content_type,
+            assistant_id=assistant_id,
         )
         return InfoResponse(info=AssistantVideoUploadResponse(gcs_url=gcs_url))
     except HTTPException as e:
