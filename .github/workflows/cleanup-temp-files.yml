@@ -1,0 +1,52 @@
+name: Cleanup Temporary Files
+
+on:
+  schedule:
+    # Every 6 hours
+  - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  cleanup_temp_files_production:
+    name: Cleanup Old Temporary Files (Production)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Call cleanup endpoint
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/temp-files/cleanup?max_age_hours=2" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Cleanup failed with status $http_code"
+          exit 1
+        fi
+
+  cleanup_temp_files_staging:
+    name: Cleanup Old Temporary Files (Staging)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Call cleanup endpoint
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0/admin/temp-files/cleanup?max_age_hours=2" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Cleanup failed with status $http_code"
+          exit 1
+        fi
