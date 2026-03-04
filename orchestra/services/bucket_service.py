@@ -378,7 +378,8 @@ class BucketService:
         Upload a temporary file to the root-level ``tmp/`` folder in the
         assistant media bucket and return a signed URL + GCS URI.
 
-        Temp files are ephemeral and subject to lifecycle auto-cleanup.
+        Temp files are ephemeral and cleaned up by a scheduled job
+        (see :mod:`orchestra.routines.temp_file_cleanup`).
 
         Args:
             file_content: Raw bytes of the file.

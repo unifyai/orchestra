@@ -108,7 +108,7 @@ class ReplicateService:
         duration: Optional[int] = None,
     ) -> Prediction:
         """
-        Creates a video animation prediction using zsxkib/sonic model.
+        Creates a video animation prediction using wan-video/wan-2.5-i2v-fast model.
         """
         try:
             model_identifier = "wan-video/wan-2.5-i2v-fast"
