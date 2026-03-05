@@ -37,7 +37,7 @@ Related repositories:
 This repo includes the code for Orchestra, the core API server and database layer used by Unity, Communication, Unify, and Console.
 
 - Orchestra Production API URL: https://api.unify.ai/v0
-- Orchestra Staging API URL: https://service.a.run.app/v0
+- Orchestra Staging API URL: https://internal.example.com/v0
 
 ## Security
 
