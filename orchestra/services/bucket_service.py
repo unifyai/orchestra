@@ -11,7 +11,6 @@ from google.api_core import exceptions
 from google.cloud import storage
 from google.oauth2 import service_account
 
-from orchestra.settings import settings
 from orchestra.web.api.utils.gcp import parse_gcs_url
 
 
@@ -58,7 +57,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
-                f"assistant-media-{'staging' if settings.is_staging else 'production'}",
+                "assistant-media",
             ),
         )
         if not self.assistant_media_bucket_name:
@@ -79,7 +78,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
-                f"assistant-message-attachments-{'staging' if settings.is_staging else 'production'}",
+                "assistant-message-attachments",
             ),
         )
         self.message_attachments_bucket = self.storage_client.bucket(
@@ -95,7 +94,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME",
-                f"assistant-call-recordings-{'staging' if settings.is_staging else 'production'}",
+                "assistant-call-recordings",
             ),
         )
         self.call_recordings_bucket = self.storage_client.bucket(
@@ -400,6 +399,29 @@ class BucketService:
         blob.upload_from_string(file_content, content_type=content_type)
         return f"gs://{self.assistant_media_bucket_name}/{object_path}"
 
+    def upload_org_photo_file(
+        self,
+        file_content: bytes,
+        org_id: int,
+        content_type: str = "image/jpeg",
+    ) -> str:
+        """
+        Upload an organization's profile photo to the assistant media bucket.
+
+        Stored under ``orgs/{org_id}/profile/{filename}``.
+        """
+        extension = (
+            content_type.split("/")[-1]
+            if content_type and "/" in content_type
+            else "jpg"
+        )
+        file_name = self._generate_unique_filename(file_content)
+        object_path = f"orgs/{org_id}/profile/{file_name}.{extension}"
+
+        blob = self.assistant_media_bucket.blob(object_path)
+        blob.upload_from_string(file_content, content_type=content_type)
+        return f"gs://{self.assistant_media_bucket_name}/{object_path}"
+
     # -----------------------------------------------------------------
     #                   Temporary file operations
     # -----------------------------------------------------------------
@@ -413,8 +435,7 @@ class BucketService:
         Upload a temporary file to the root-level ``tmp/`` folder in the
         assistant media bucket and return a signed URL + GCS URI.
 
-        Temp files are ephemeral and cleaned up by a scheduled job
-        (see :mod:`orchestra.routines.temp_file_cleanup`).
+        Temp files are ephemeral and subject to lifecycle auto-cleanup.
 
         Args:
             file_content: Raw bytes of the file.

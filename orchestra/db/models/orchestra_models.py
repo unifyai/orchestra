@@ -481,6 +481,8 @@ class Organization(Base):
         index=True,
     )
 
+    image = Column(String, nullable=True)
+
     # Timezone for org-level billing (IANA format, e.g., "America/New_York")
     # Initialized from owner's timezone on creation, defaults to UTC if not set
     timezone = Column(String, nullable=True)
