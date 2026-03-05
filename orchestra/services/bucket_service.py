@@ -365,6 +365,64 @@ class BucketService:
         )
 
     # -----------------------------------------------------------------
+    #                 User profile photo operations
+    # -----------------------------------------------------------------
+
+    def upload_user_photo_file(
+        self,
+        file_content: bytes,
+        user_id: str,
+        content_type: str = "image/jpeg",
+    ) -> str:
+        """
+        Upload a user's profile photo to the assistant media bucket.
+
+        Stored under ``users/{user_id}/profile/{filename}``.
+
+        Args:
+            file_content: Raw bytes of the image file.
+            user_id: The user's ID.
+            content_type: MIME type of the file (default ``image/jpeg``).
+
+        Returns:
+            The ``gs://`` URL of the uploaded object.
+        """
+        extension = (
+            content_type.split("/")[-1]
+            if content_type and "/" in content_type
+            else "jpg"
+        )
+        file_name = self._generate_unique_filename(file_content)
+        object_path = f"users/{user_id}/profile/{file_name}.{extension}"
+
+        blob = self.assistant_media_bucket.blob(object_path)
+        blob.upload_from_string(file_content, content_type=content_type)
+        return f"gs://{self.assistant_media_bucket_name}/{object_path}"
+
+    def upload_org_photo_file(
+        self,
+        file_content: bytes,
+        org_id: int,
+        content_type: str = "image/jpeg",
+    ) -> str:
+        """
+        Upload an organization's profile photo to the assistant media bucket.
+
+        Stored under ``orgs/{org_id}/profile/{filename}``.
+        """
+        extension = (
+            content_type.split("/")[-1]
+            if content_type and "/" in content_type
+            else "jpg"
+        )
+        file_name = self._generate_unique_filename(file_content)
+        object_path = f"orgs/{org_id}/profile/{file_name}.{extension}"
+
+        blob = self.assistant_media_bucket.blob(object_path)
+        blob.upload_from_string(file_content, content_type=content_type)
+        return f"gs://{self.assistant_media_bucket_name}/{object_path}"
+
+    # -----------------------------------------------------------------
     #                   Temporary file operations
     # -----------------------------------------------------------------
 

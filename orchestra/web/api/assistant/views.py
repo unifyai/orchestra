@@ -753,7 +753,12 @@ async def create_assistant(
         if "uq_user_assistant_name" in str(e).lower():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"An assistant with the name '{assistant_in.first_name} {assistant_in.surname}' already exists for this user.",
+                detail=f"An assistant with the name '{assistant_in.first_name} {assistant_in.surname}' already exists.",
+            )
+        if "uq_org_assistant_name" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"An assistant with the name '{assistant_in.first_name} {assistant_in.surname}' already exists in this organization.",
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -3203,6 +3208,7 @@ def delete_secret(
 async def upload_assistant_photo(
     request: Request,
     file: UploadFile = File(..., example="assistant_photo.jpg"),
+    assistant_id: Optional[int] = Form(None),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3240,6 +3246,7 @@ async def upload_assistant_photo(
             file_content=file_content,
             user_id=user_id,
             content_type=file.content_type,
+            assistant_id=assistant_id,
         )
         return InfoResponse(info=AssistantPhotoUploadResponse(gcs_url=gcs_url))
     except HTTPException as e:
@@ -3263,6 +3270,7 @@ async def upload_assistant_photo(
 async def upload_assistant_video(
     request: Request,
     file: UploadFile = File(..., example="assistant_video.mp4"),
+    assistant_id: Optional[int] = Form(None),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3300,6 +3308,7 @@ async def upload_assistant_video(
             file_content=file_content,
             user_id=user_id,
             content_type=file.content_type,
+            assistant_id=assistant_id,
         )
         return InfoResponse(info=AssistantVideoUploadResponse(gcs_url=gcs_url))
     except HTTPException as e:
@@ -3792,29 +3801,11 @@ async def animate_video_endpoint(
             detail=f"Could not animate video: {str(e)}",
         )
     finally:
-        # Cleanup temporary files from GCS
-        if temp_image_gcs_url:
-            try:
-                bucket_service.delete_assistant_file(temp_image_gcs_url)
-                logging.info(
-                    f"Successfully deleted temporary image file {temp_image_gcs_url} for video animation.",
-                )
-            except Exception as e_cleanup:
-                logging.error(
-                    f"Failed to clean up temporary image file {temp_image_gcs_url}: {e_cleanup}",
-                )
-        if temp_audio_gcs_url:
-            try:
-                bucket_service.delete_assistant_file(
-                    temp_audio_gcs_url,
-                )  # Reusing delete_assistant_file
-                logging.info(
-                    f"Successfully deleted temporary audio file {temp_audio_gcs_url} for video animation.",
-                )
-            except Exception as e_cleanup:
-                logging.error(
-                    f"Failed to clean up temporary audio file {temp_audio_gcs_url}: {e_cleanup}",
-                )
+        # NOTE: Do NOT delete temp files here. The prediction runs
+        # asynchronously on Replicate and needs to download these files
+        # after the endpoint returns. Temp files in the ``tmp/`` folder
+        # are cleaned up by a scheduled job (see temp_file_cleanup routine).
+        pass
 
 
 @router.get(

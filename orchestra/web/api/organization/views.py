@@ -5,7 +5,17 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -371,6 +381,108 @@ async def update_organization(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update organization: {str(e)}",
         )
+
+
+@router.post(
+    "/organizations/{organization_id}/photo/upload",
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload organization photo",
+    tags=["Organizations"],
+)
+async def upload_org_photo(
+    request_fastapi: Request,
+    organization_id: int,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
+):
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this organization",
+        )
+
+    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_IMAGE_TYPES)}",
+        )
+
+    MAX_SIZE_BYTES = 5 * 1024 * 1024
+    file_content = await file.read()
+    if len(file_content) > MAX_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds {MAX_SIZE_BYTES // (1024 * 1024)}MB limit.",
+        )
+
+    bucket_service = BucketService()
+    gcs_url = bucket_service.upload_org_photo_file(
+        file_content=file_content,
+        org_id=organization_id,
+        content_type=file.content_type,
+    )
+
+    org.image = gcs_url
+    session.commit()
+
+    return {"gcs_url": gcs_url}
+
+
+@router.delete(
+    "/organizations/{organization_id}/photo",
+    summary="Remove organization photo",
+    tags=["Organizations"],
+)
+async def remove_org_photo(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_org_mfa_enforcement()),
+):
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this organization",
+        )
+
+    org.image = None
+    session.commit()
+
+    return {"message": "Organization photo removed."}
 
 
 @router.delete(
