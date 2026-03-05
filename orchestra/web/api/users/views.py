@@ -5,7 +5,16 @@ import secrets
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
@@ -841,6 +850,76 @@ def update_organization_member_role(
         role_id=role_id,
     )
     return f"Member role updated to {role.name}!"
+
+
+@router.post(
+    "/user/photo/upload",
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload user profile photo",
+    tags=["Users"],
+)
+async def upload_user_photo(
+    request: Request,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db_session),
+):
+    from orchestra.services.bucket_service import BucketService
+
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not authenticated.",
+        )
+
+    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_IMAGE_TYPES)}",
+        )
+
+    MAX_SIZE_BYTES = 5 * 1024 * 1024
+    file_content = await file.read()
+    if len(file_content) > MAX_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds {MAX_SIZE_BYTES // (1024 * 1024)}MB limit.",
+        )
+
+    bucket_service = BucketService()
+    gcs_url = bucket_service.upload_user_photo_file(
+        file_content=file_content,
+        user_id=user_id,
+        content_type=file.content_type,
+    )
+
+    user_dao = UserDAO(session)
+    user_dao.update(id=user_id, image=gcs_url)
+
+    return {"gcs_url": gcs_url}
+
+
+@router.delete(
+    "/user/photo",
+    summary="Remove user profile photo",
+    tags=["Users"],
+)
+def remove_user_photo(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not authenticated.",
+        )
+
+    user_dao = UserDAO(session)
+    user_dao.update(id=user_id, image=None)
+
+    return {"message": "Profile photo removed."}
 
 
 @router.get("/user/query-logging")
