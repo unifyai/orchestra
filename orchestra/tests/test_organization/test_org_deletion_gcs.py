@@ -1,7 +1,10 @@
 """Tests for GCS cleanup during organization deletion.
 
-When an organization is deleted, all GCS data for its assistants should be cleaned up
-via BucketService.delete_all_assistant_data().
+When an organization is deleted:
+- All GCS data for its assistants is cleaned up via
+  BucketService.delete_all_assistant_data().
+- The organization's account photos are cleaned up via
+  BucketService.delete_org_account_photos().
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -46,6 +49,7 @@ def mock_infra_and_bucket(request):
             "call_recordings": 0,
             "message_attachments": 0,
         }
+        mock_bucket_instance.delete_org_account_photos.return_value = 0
         mock_bucket_cls.return_value = mock_bucket_instance
 
         yield {
@@ -106,15 +110,19 @@ async def test_org_deletion_cleans_gcs_for_all_assistants(
     )
     assert called_ids == sorted(agent_ids)
 
+    # Verify account photos were also cleaned up
+    mock_bucket.delete_org_account_photos.assert_called_once_with(org_id)
+
 
 @pytest.mark.anyio
-async def test_org_deletion_no_gcs_calls_when_no_assistants(
+async def test_org_deletion_no_assistant_gcs_calls_when_no_assistants(
     client: AsyncClient,
     dbsession,
     mock_infra_and_bucket,
 ):
-    """Deleting an org with no assistants should not call BucketService at all."""
-    mock_bucket_cls = mock_infra_and_bucket["bucket_cls"]
+    """Deleting an org with no assistants should not call delete_all_assistant_data,
+    but should still clean up account photos."""
+    mock_bucket = mock_infra_and_bucket["bucket_instance"]
 
     owner = await create_test_user(client, "org_del_empty_owner@test.com")
 
@@ -133,8 +141,11 @@ async def test_org_deletion_no_gcs_calls_when_no_assistants(
     )
     assert del_resp.status_code == status.HTTP_204_NO_CONTENT
 
-    # BucketService should not have been instantiated
-    mock_bucket_cls.assert_not_called()
+    # No assistant data cleanup calls
+    mock_bucket.delete_all_assistant_data.assert_not_called()
+
+    # Account photos should still be cleaned up
+    mock_bucket.delete_org_account_photos.assert_called_once_with(org_id)
 
 
 @pytest.mark.anyio

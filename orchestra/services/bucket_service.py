@@ -11,6 +11,7 @@ from google.api_core import exceptions
 from google.cloud import storage
 from google.oauth2 import service_account
 
+from orchestra.settings import settings
 from orchestra.web.api.utils.gcp import parse_gcs_url
 
 
@@ -57,7 +58,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
-                "assistant-media",
+                f"assistant-media-{"staging" if settings.is_staging else "production"}",
             ),
         )
         if not self.assistant_media_bucket_name:
@@ -78,7 +79,7 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
-                "assistant-message-attachments",
+                f"assistant-message-attachments-{"staging" if settings.is_staging else "production"}",
             ),
         )
         self.message_attachments_bucket = self.storage_client.bucket(
@@ -94,11 +95,24 @@ class BucketService:
             "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
             os.getenv(
                 "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME",
-                "assistant-call-recordings",
+                f"assistant-call-recordings-{"staging" if settings.is_staging else "production"}",
             ),
         )
         self.call_recordings_bucket = self.storage_client.bucket(
             self.call_recordings_bucket_name,
+        )
+
+        # -----------------------------------------------------------------
+        # Account photo bucket (user + org profile photos)
+        # Env var: ORCHESTRA_GCP_ACCOUNT_PHOTO_BUCKET_NAME
+        # Defaults: account-photo-staging / account-photo-production
+        # -----------------------------------------------------------------
+        self.account_photo_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_ACCOUNT_PHOTO_BUCKET_NAME",
+            f"account-photo-{"staging" if settings.is_staging else "production"}",
+        )
+        self.account_photo_bucket = self.storage_client.bucket(
+            self.account_photo_bucket_name,
         )
 
         # -----------------------------------------------------------------
@@ -375,9 +389,9 @@ class BucketService:
         content_type: str = "image/jpeg",
     ) -> str:
         """
-        Upload a user's profile photo to the assistant media bucket.
+        Upload a user's profile photo to the account photo bucket.
 
-        Stored under ``users/{user_id}/profile/{filename}``.
+        Stored under ``user/{user_id}/{filename}``.
 
         Args:
             file_content: Raw bytes of the image file.
@@ -393,11 +407,11 @@ class BucketService:
             else "jpg"
         )
         file_name = self._generate_unique_filename(file_content)
-        object_path = f"users/{user_id}/profile/{file_name}.{extension}"
+        object_path = f"user/{user_id}/{file_name}.{extension}"
 
-        blob = self.assistant_media_bucket.blob(object_path)
+        blob = self.account_photo_bucket.blob(object_path)
         blob.upload_from_string(file_content, content_type=content_type)
-        return f"gs://{self.assistant_media_bucket_name}/{object_path}"
+        return f"gs://{self.account_photo_bucket_name}/{object_path}"
 
     def upload_org_photo_file(
         self,
@@ -406,9 +420,9 @@ class BucketService:
         content_type: str = "image/jpeg",
     ) -> str:
         """
-        Upload an organization's profile photo to the assistant media bucket.
+        Upload an organization's profile photo to the account photo bucket.
 
-        Stored under ``orgs/{org_id}/profile/{filename}``.
+        Stored under ``organization/{org_id}/{filename}``.
         """
         extension = (
             content_type.split("/")[-1]
@@ -416,11 +430,11 @@ class BucketService:
             else "jpg"
         )
         file_name = self._generate_unique_filename(file_content)
-        object_path = f"orgs/{org_id}/profile/{file_name}.{extension}"
+        object_path = f"organization/{org_id}/{file_name}.{extension}"
 
-        blob = self.assistant_media_bucket.blob(object_path)
+        blob = self.account_photo_bucket.blob(object_path)
         blob.upload_from_string(file_content, content_type=content_type)
-        return f"gs://{self.assistant_media_bucket_name}/{object_path}"
+        return f"gs://{self.account_photo_bucket_name}/{object_path}"
 
     # -----------------------------------------------------------------
     #                   Temporary file operations
@@ -765,3 +779,61 @@ class BucketService:
             "recordings": recordings_count,
             "attachments": attachments_count,
         }
+
+    # -----------------------------------------------------------------
+    #          Account photo cleanup (user / organization)
+    # -----------------------------------------------------------------
+
+    def delete_user_account_photos(self, user_id: str) -> int:
+        """
+        Delete **all** account photos for a user from the account photo bucket.
+
+        Removes every object under ``user/{user_id}/``.
+
+        Args:
+            user_id: The user's ID.
+
+        Returns:
+            The number of files deleted.
+        """
+        return self._delete_account_photo_prefix(f"user/{user_id}/")
+
+    def delete_org_account_photos(self, org_id: int) -> int:
+        """
+        Delete **all** account photos for an organization from the account
+        photo bucket.
+
+        Removes every object under ``organization/{org_id}/``.
+
+        Args:
+            org_id: The organization's ID.
+
+        Returns:
+            The number of files deleted.
+        """
+        return self._delete_account_photo_prefix(f"organization/{org_id}/")
+
+    def _delete_account_photo_prefix(self, prefix: str) -> int:
+        """Delete all objects under *prefix* in the account photo bucket."""
+        deleted = 0
+        try:
+            blobs = self.account_photo_bucket.list_blobs(prefix=prefix)
+            for blob in blobs:
+                try:
+                    blob.delete()
+                    deleted += 1
+                    logging.debug(f"Deleted account photo: {blob.name}")
+                except exceptions.GoogleAPIError as e:
+                    logging.error(
+                        f"Failed to delete account photo {blob.name}: {e}",
+                    )
+            if deleted > 0:
+                logging.info(
+                    f"Deleted {deleted} account photo(s) under "
+                    f"{self.account_photo_bucket_name}/{prefix}",
+                )
+        except exceptions.GoogleAPIError as e:
+            logging.error(
+                f"Failed to list account photos under {prefix}: {e}",
+            )
+        return deleted
