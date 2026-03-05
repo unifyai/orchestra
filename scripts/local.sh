@@ -62,7 +62,7 @@ ORCHESTRA_SERVER_CONFIGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.config"
 
 # URLs
 LOCAL_ORCHESTRA_URL="http://127.0.0.1:${ORCHESTRA_PORT}/v0"
-STAGING_URL="https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0"
+STAGING_URL="https://api.staging.internal.saas.unify.ai/v0"
 
 # Colors for output
 RED='\033[0;31m'

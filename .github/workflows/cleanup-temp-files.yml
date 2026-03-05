@@ -37,7 +37,7 @@ jobs:
     - name: Call cleanup endpoint
       run: |
         response=$(curl -s -w "\n%{http_code}" -X POST \
-          "https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0/admin/temp-files/cleanup?max_age_hours=2" \
+          "https://api.staging.internal.saas.unify.ai/v0/admin/temp-files/cleanup?max_age_hours=2" \
           -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
 
         http_code=$(echo "$response" | tail -1)
