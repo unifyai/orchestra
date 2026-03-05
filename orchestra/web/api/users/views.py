@@ -909,12 +909,21 @@ def remove_user_photo(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
+    from orchestra.services.bucket_service import BucketService
+
     user_id = request.state.user_id
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User not authenticated.",
         )
+
+    # Delete all photos for this user from the account photo bucket
+    try:
+        bucket_service = BucketService()
+        bucket_service.delete_user_account_photos(user_id)
+    except Exception as e:
+        logger.error(f"Failed to delete GCS photos for user {user_id}: {e}")
 
     user_dao = UserDAO(session)
     user_dao.update(id=user_id, image=None)
