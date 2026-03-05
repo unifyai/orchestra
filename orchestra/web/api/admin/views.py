@@ -1485,3 +1485,37 @@ def admin_rate_limit_user_usage(
         "user_id": user_id,
         "usage_24h": usage,
     }
+
+
+# =============================================================================
+# Temp File Cleanup
+# =============================================================================
+
+
+@router.post(
+    "/temp-files/cleanup",
+    summary="Clean up old temporary files",
+    description=(
+        "Remove temporary files (animation inputs, etc.) older than the "
+        "specified age from the assistant media GCS bucket."
+    ),
+    tags=["Storage"],
+)
+def admin_temp_file_cleanup(
+    max_age_hours: int = 2,
+) -> dict:
+    """
+    Manually trigger cleanup of old temporary files in the ``tmp/``
+    folder of the assistant media bucket.
+
+    Args:
+        max_age_hours: Delete files older than this many hours.
+            Defaults to 2.
+    """
+    from orchestra.routines.temp_file_cleanup import cleanup_temp_files
+
+    deleted_count = cleanup_temp_files(max_age_hours=max_age_hours)
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+    }
