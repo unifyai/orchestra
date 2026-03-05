@@ -57,6 +57,7 @@ class OrganizationResponse(BaseModel):
     id: int
     name: str
     owner_id: str
+    image: Optional[str] = None
     timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
     created_at: datetime
 
