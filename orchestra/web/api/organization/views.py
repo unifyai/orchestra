@@ -479,6 +479,15 @@ async def remove_org_photo(
             detail="You do not have permission to update this organization",
         )
 
+    # Delete all photos for this org from the account photo bucket
+    try:
+        bucket_service = BucketService()
+        bucket_service.delete_org_account_photos(organization_id)
+    except Exception as e:
+        logger.error(
+            f"Failed to delete GCS photos for org {organization_id}: {e}",
+        )
+
     org.image = None
     session.commit()
 
@@ -596,9 +605,10 @@ async def delete_organization(
         )
 
     # Post-commit: clean up GCS data for every assistant that was in this org
-    if org_assistant_ids:
-        try:
-            bucket_service = BucketService()
+    try:
+        bucket_service = BucketService()
+
+        if org_assistant_ids:
             for aid in org_assistant_ids:
                 try:
                     bucket_service.delete_all_assistant_data(aid)
@@ -611,11 +621,24 @@ async def delete_organization(
                 f"Cleaned up GCS data for {len(org_assistant_ids)} assistant(s) "
                 f"in deleted org {organization_id}",
             )
+
+        # Clean up org account photos from the dedicated account photo bucket
+        try:
+            photo_count = bucket_service.delete_org_account_photos(organization_id)
+            if photo_count > 0:
+                logger.info(
+                    f"Cleaned up {photo_count} account photo(s) for "
+                    f"org {organization_id}",
+                )
         except Exception as e:
             logger.error(
-                f"Failed to initialize BucketService for org {organization_id} "
-                f"GCS cleanup: {e}",
+                f"Failed to clean up account photos for org {organization_id}: {e}",
             )
+    except Exception as e:
+        logger.error(
+            f"Failed to initialize BucketService for org {organization_id} "
+            f"GCS cleanup: {e}",
+        )
 
     # Archive Stripe customer (best-effort, don't fail if this errors)
     if stripe_customer_id:
