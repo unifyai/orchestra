@@ -292,7 +292,8 @@ class UserAccountCleanupService:
         assistant_ids: list[int],
     ) -> None:
         """
-        Delete all GCS data for every assistant owned by a user.
+        Delete all GCS data for every assistant owned by a user, plus the
+        user's account photos.
 
         *assistant_ids* is pre-fetched before the DB commit (since CASCADE
         deletes the rows).  If the list is empty we fall back to the legacy
@@ -333,5 +334,17 @@ class UserAccountCleanupService:
                     logger.info(
                         f"Cleaned up {deleted_count} legacy attachment(s) for user {user_id}",
                     )
+
+            # Clean up account photos from the dedicated account photo bucket
+            try:
+                photo_count = bucket_service.delete_user_account_photos(user_id)
+                if photo_count > 0:
+                    logger.info(
+                        f"Cleaned up {photo_count} account photo(s) for user {user_id}",
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Failed to cleanup account photos for user {user_id}: {e}",
+                )
         except Exception as e:
             logger.error(f"Failed to cleanup GCS data for user {user_id}: {e}")
