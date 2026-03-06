@@ -132,6 +132,7 @@ def _build_assistant_read(
     user_first_name: Optional[str] = None,
     user_last_name: Optional[str] = None,
     user_email: Optional[str] = None,
+    user_image: Optional[str] = None,
     phone_override: Optional[str] = None,
     email_override: Optional[str] = None,
     whatsapp_override: Optional[str] = None,
@@ -201,6 +202,7 @@ def _build_assistant_read(
         user_first_name=user_first_name,
         user_last_name=user_last_name,
         user_email=user_email,
+        user_image=user_image,
         team_ids=team_ids,
     )
 
@@ -969,8 +971,21 @@ def list_assistants(
             )
         voice_dao = VoiceDAO(session)
 
+        user_dao = UserDAO(session)
+        users = [user_dao.get_by_id(a.user_id)[0] for a in assistants]
+
         return InfoResponse(
-            info=[_build_assistant_read(a, session) for a in assistants],
+            info=[
+                _build_assistant_read(
+                    a,
+                    session,
+                    user_first_name=users[i].name if users[i] else None,
+                    user_last_name=users[i].last_name if users[i] else None,
+                    user_email=users[i].email if users[i] else None,
+                    user_image=users[i].image if users[i] else None,
+                )
+                for i, a in enumerate(assistants)
+            ],
         )
     except HTTPException:
         raise
@@ -4251,7 +4266,7 @@ def admin_list_all_assistants(
                 requested_fields is None
                 or bool(
                     requested_fields
-                    & {"user_email", "user_first_name", "user_last_name"},
+                    & {"user_email", "user_first_name", "user_last_name", "user_image"},
                 )
             )
             else None
@@ -4268,6 +4283,7 @@ def admin_list_all_assistants(
                 user_first_name=users[i].name if users else None,
                 user_last_name=users[i].last_name if users else None,
                 user_email=users[i].email if users else None,
+                user_image=users[i].image if users else None,
                 secrets=secrets_list[i] if secrets_list else None,
                 team_ids=[] if skip_teams else None,
             )
