@@ -58,7 +58,6 @@ def mock_all_infra(dbsession):
             return_value={"whatsapp_number": "+15559876543"},
         ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
-        "release_pool_vm": AsyncMock(return_value={"success": True}),
         "delete_assistant_disk": AsyncMock(return_value={"success": True}),
         "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
@@ -71,12 +70,14 @@ def mock_all_infra(dbsession):
         ),
     }
 
+    release_pool_vm_mock = AsyncMock(return_value={"success": True})
+
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
-        # Also patch release_pool_vm at the infra module level so
+        # Patch release_pool_vm at the infra module level so
         # stop_jobs()'s internal call is intercepted.
         with patch(
             "orchestra.web.api.utils.assistant_infra.release_pool_vm",
-            patches["release_pool_vm"],
+            release_pool_vm_mock,
         ):
             with patch(
                 "orchestra.web.api.assistant.views.settings",
@@ -90,6 +91,7 @@ def mock_all_infra(dbsession):
                         "orchestra.web.api.assistant.views.asyncio.sleep",
                         new_callable=AsyncMock,
                     ), patch("orchestra.web.api.assistant.views.time.sleep"):
+                        patches["release_pool_vm"] = release_pool_vm_mock
                         yield patches
 
 
