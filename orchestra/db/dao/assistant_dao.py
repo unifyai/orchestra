@@ -4,10 +4,10 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import available_timezones
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import and_, exists, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant
+from orchestra.db.models.orchestra_models import Assistant, AssistantContact
 
 
 @dataclass
@@ -236,16 +236,59 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if phone is not None:
-            stmt = stmt.where(Assistant.phone == phone)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "phone",
+                        AssistantContact.contact_value == phone,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if user_phone is not None:
-            stmt = stmt.where(Assistant.user_phone == user_phone)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "phone",
+                        AssistantContact.user_value == user_phone,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if email is not None:
-            stmt = stmt.where(Assistant.email == email)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "email",
+                        AssistantContact.contact_value == email,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if user_whatsapp_number is not None:
-            stmt = stmt.where(Assistant.user_whatsapp_number == user_whatsapp_number)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "whatsapp",
+                        AssistantContact.user_value == user_whatsapp_number,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if assistant_whatsapp_number is not None:
             stmt = stmt.where(
-                Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "whatsapp",
+                        AssistantContact.contact_value == assistant_whatsapp_number,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
             )
         result = self.session.execute(stmt).scalars().all()
         return result
@@ -283,16 +326,59 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if phone is not None:
-            stmt = stmt.where(Assistant.phone == phone)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "phone",
+                        AssistantContact.contact_value == phone,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if user_phone is not None:
-            stmt = stmt.where(Assistant.user_phone == user_phone)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "phone",
+                        AssistantContact.user_value == user_phone,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if email is not None:
-            stmt = stmt.where(Assistant.email == email)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "email",
+                        AssistantContact.contact_value == email,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if user_whatsapp_number is not None:
-            stmt = stmt.where(Assistant.user_whatsapp_number == user_whatsapp_number)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "whatsapp",
+                        AssistantContact.user_value == user_whatsapp_number,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if assistant_whatsapp_number is not None:
             stmt = stmt.where(
-                Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "whatsapp",
+                        AssistantContact.contact_value == assistant_whatsapp_number,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
             )
         result = self.session.execute(stmt).scalars().all()
         return result
@@ -464,21 +550,68 @@ class AssistantDAO:
         """
         List all Assistants across all users with optional filtering.
 
+        Contact filters (phone, email, whatsapp) are resolved via the
+        ``assistant_contacts`` table rather than the legacy columns on
+        the ``assistants`` table.
+
         This is an admin-level function that returns all assistants.
         """
         stmt = select(Assistant)
         if phone is not None:
-            stmt = stmt.where(Assistant.phone == phone)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "phone",
+                        AssistantContact.contact_value == phone,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if user_phone is not None:
-            stmt = stmt.where(Assistant.user_phone == user_phone)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "phone",
+                        AssistantContact.user_value == user_phone,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if user_whatsapp_number is not None:
-            stmt = stmt.where(Assistant.user_whatsapp_number == user_whatsapp_number)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "whatsapp",
+                        AssistantContact.user_value == user_whatsapp_number,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if assistant_whatsapp_number is not None:
             stmt = stmt.where(
-                Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "whatsapp",
+                        AssistantContact.contact_value == assistant_whatsapp_number,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
             )
         if email is not None:
-            stmt = stmt.where(Assistant.email == email)
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantContact.assistant_id == Assistant.agent_id,
+                        AssistantContact.contact_type == "email",
+                        AssistantContact.contact_value == email,
+                        AssistantContact.status != "deleted",
+                    ),
+                ),
+            )
         if agent_id is not None:
             stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
@@ -701,10 +834,14 @@ class AssistantDAO:
 
         base_local = f"{normalize(first_name)}.{normalize(surname)}"
 
-        # Query existing emails to check for collisions
+        # Query existing emails from AssistantContact to check for collisions
         existing_emails = (
-            self.session.query(Assistant.email)
-            .filter(Assistant.email.isnot(None))
+            self.session.query(AssistantContact.contact_value)
+            .filter(
+                AssistantContact.contact_type == "email",
+                AssistantContact.status != "deleted",
+                AssistantContact.contact_value.isnot(None),
+            )
             .all()
         )
         existing_locals = {
