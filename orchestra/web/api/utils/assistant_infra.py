@@ -1,5 +1,6 @@
+import logging
 import os
-from typing import List, Literal
+from typing import List
 
 import httpx
 from sqlalchemy import and_
@@ -220,62 +221,38 @@ async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
         return response.json()
 
 
-async def create_vm(
-    assistant_id: str,
-    unify_apikey: str,
-    assistant_name: str,
-    vm_type: Literal["windows", "ubuntu"],
-):
+async def release_pool_vm(assistant_id: str):
+    """Release any pool VM assigned to this assistant back to idle.
+    Idempotent — no-ops if no VM is assigned.
     """
-    Create a VM for the assistant via the infra service.
-
-    Args:
-        assistant_id: Numeric assistant ID (e.g., "12345")
-        unify_apikey: API key used for VNC password
-        assistant_name: Used for VM username
-        vm_type: "windows" or "ubuntu"
-
-    Returns:
-        JSON response with vm_name, ip_address, hostname, desktop_url, status
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{COMMS_URL}/infra/vm/create",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "assistant_id": assistant_id,
-                "unify_apikey": unify_apikey,
-                "assistant_name": assistant_name,
-                "vm_type": vm_type,
-            },
-            timeout=120,
-        )
-        return response.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{COMMS_URL}/infra/vm/pool/release",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                json={"assistant_id": assistant_id},
+                timeout=30,
+            )
+            return response.json()
+    except httpx.TimeoutException:
+        logging.warning(f"release_pool_vm timed out for assistant {assistant_id}")
+        return {"success": True, "timed_out": True}
 
 
-async def delete_vm(
-    assistant_id: str,
-    vm_type: Literal["windows", "ubuntu"],
-):
-    """
-    Delete a VM and associated resources (DNS, static IP).
-
-    Args:
-        assistant_id: Numeric assistant ID (e.g., "12345")
-        vm_type: "windows" or "ubuntu"
-
-    Returns:
-        JSON response with vm_deleted, dns_deleted, ip_released flags
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.request(
-            "DELETE",
-            f"{COMMS_URL}/infra/vm/delete",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={"assistant_id": assistant_id, "vm_type": vm_type},
-            timeout=120,
-        )
-        return response.json()
+async def delete_assistant_disk(assistant_id: str):
+    """Delete an assistant's persistent disk (permanent unhire cleanup)."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                "DELETE",
+                f"{COMMS_URL}/infra/vm/pool/disk/{assistant_id}",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=30,
+            )
+            return response.json()
+    except httpx.TimeoutException:
+        logging.warning(f"delete_assistant_disk timed out for assistant {assistant_id}")
+        return {"success": True, "timed_out": True}
 
 
 async def get_social_platforms_costs():
@@ -344,14 +321,13 @@ def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
 
 async def stop_jobs(assistant_id: str, session: Session):
     """
-    Stop a job by making a POST request to the comms endpoint.
+    Stop a job and release any assigned pool VM.
 
     Args:
         assistant_id: The assistant ID to stop jobs for
         session: SQLAlchemy database session
     """
     job_names = get_running_jobs(assistant_id, session)
-    # if running job found, stop it
     if len(job_names) > 0:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -361,6 +337,8 @@ async def stop_jobs(assistant_id: str, session: Session):
                 timeout=20,
             )
             response.raise_for_status()
+
+    await release_pool_vm(str(assistant_id))
 
     return {"success": True, "job_names": job_names}
 
