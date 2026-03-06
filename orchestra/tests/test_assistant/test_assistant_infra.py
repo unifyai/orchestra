@@ -58,27 +58,11 @@ def mock_all_infra(dbsession):
             return_value={"whatsapp_number": "+15559876543"},
         ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
-        "create_vm": AsyncMock(
-            return_value={
-                "vm_name": "unity-win-123",
-                "assistant_id": "123",
-                "ip_address": "34.123.45.67",
-                "hostname": "unity-assistant-123.vm.unify.ai",
-                "desktop_url": "https://unity-assistant-123.vm.unify.ai/desktop/",
-                "status": "RUNNING",
-            },
-        ),
+        "release_pool_vm": AsyncMock(return_value={"success": True}),
+        "delete_assistant_disk": AsyncMock(return_value={"success": True}),
         "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
-        "delete_vm": AsyncMock(
-            return_value={
-                "assistant_id": "123",
-                "vm_deleted": True,
-                "dns_deleted": True,
-                "ip_released": True,
-            },
-        ),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
         "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
         # Mock social platforms costs - called when user_phone/user_whatsapp is provided
@@ -88,22 +72,25 @@ def mock_all_infra(dbsession):
     }
 
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
-        # Patch settings.is_staging to skip credit checks
+        # Also patch release_pool_vm at the infra module level so
+        # stop_jobs()'s internal call is intercepted.
         with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings:
-            mock_settings.is_staging = True
-            # Mock get_db_session to return a valid session for session refresh
+            "orchestra.web.api.utils.assistant_infra.release_pool_vm",
+            patches["release_pool_vm"],
+        ):
             with patch(
-                "orchestra.web.api.assistant.views.get_db_session",
-                side_effect=_mock_get_db_session_generator(dbsession),
-            ):
-                # Also patch sleep functions to speed up tests
+                "orchestra.web.api.assistant.views.settings",
+            ) as mock_settings:
+                mock_settings.is_staging = True
                 with patch(
-                    "orchestra.web.api.assistant.views.asyncio.sleep",
-                    new_callable=AsyncMock,
-                ), patch("orchestra.web.api.assistant.views.time.sleep"):
-                    yield patches
+                    "orchestra.web.api.assistant.views.get_db_session",
+                    side_effect=_mock_get_db_session_generator(dbsession),
+                ):
+                    with patch(
+                        "orchestra.web.api.assistant.views.asyncio.sleep",
+                        new_callable=AsyncMock,
+                    ), patch("orchestra.web.api.assistant.views.time.sleep"):
+                        yield patches
 
 
 # =============================================================================
@@ -920,13 +907,13 @@ async def test_org_assistant_with_pre_hire_chat_and_infra(
 
 
 @pytest.mark.anyio
-async def test_create_assistant_with_windows_vm(
+async def test_create_assistant_with_windows_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test creating assistant with Windows VM (desktop_mode=windows)."""
+    """Test creating assistant with desktop_mode=windows stores the mode but does not provision a VM."""
     payload = {
-        "first_name": "WindowsVM",
+        "first_name": "WindowsPool",
         "surname": "Test",
         "desktop_mode": "windows",
         "create_infra": True,
@@ -936,29 +923,20 @@ async def test_create_assistant_with_windows_vm(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     data = resp.json()["info"]
-
-    # Verify desktop_url was populated from VM creation response
-    assert data["desktop_url"] == "https://unity-assistant-123.vm.unify.ai/desktop/"
     assert data["desktop_mode"] == "windows"
+    assert "desktop_url" not in data
 
-    # Verify VM was created with correct vm_type
-    mock_all_infra["create_vm"].assert_called_once()
-    call_kwargs = mock_all_infra["create_vm"].call_args.kwargs
-    assert call_kwargs["vm_type"] == "windows"
     mock_all_infra["create_pubsub_topic"].assert_called_once()
-
-    # Verify no rollback functions were called
-    mock_all_infra["delete_vm"].assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_create_assistant_with_ubuntu_vm(
+async def test_create_assistant_with_ubuntu_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test creating assistant with Ubuntu VM (desktop_mode=ubuntu)."""
+    """Test creating assistant with desktop_mode=ubuntu stores the mode but does not provision a VM."""
     payload = {
-        "first_name": "UbuntuVM",
+        "first_name": "UbuntuPool",
         "surname": "Test",
         "desktop_mode": "ubuntu",
         "create_infra": True,
@@ -968,30 +946,20 @@ async def test_create_assistant_with_ubuntu_vm(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     data = resp.json()["info"]
-
-    # Verify desktop_url was populated from VM creation response
-    assert data["desktop_url"] == "https://unity-assistant-123.vm.unify.ai/desktop/"
     assert data["desktop_mode"] == "ubuntu"
+    assert "desktop_url" not in data
 
-    # Verify VM was created with correct vm_type
-    mock_all_infra["create_vm"].assert_called_once()
-    call_kwargs = mock_all_infra["create_vm"].call_args.kwargs
-    assert call_kwargs["vm_type"] == "ubuntu"
     mock_all_infra["create_pubsub_topic"].assert_called_once()
-
-    # Verify no rollback functions were called
-    mock_all_infra["delete_vm"].assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_with_windows_vm(
+async def test_delete_assistant_with_windows_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test deleting assistant with Windows VM calls delete_vm with vm_type=windows."""
-    # Create assistant with Windows VM
+    """Test deleting assistant with desktop_mode=windows calls release_pool_vm and delete_assistant_disk."""
     payload = {
-        "first_name": "DeleteWindowsVM",
+        "first_name": "DeleteWindowsPool",
         "surname": "Test",
         "desktop_mode": "windows",
         "create_infra": True,
@@ -1001,30 +969,26 @@ async def test_delete_assistant_with_windows_vm(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    # Reset mocks to verify delete calls
-    mock_all_infra["delete_vm"].reset_mock()
+    mock_all_infra["release_pool_vm"].reset_mock()
+    mock_all_infra["delete_assistant_disk"].reset_mock()
     mock_all_infra["delete_pubsub_topic"].reset_mock()
 
-    # Delete assistant
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    # Verify VM was deleted with correct vm_type
-    mock_all_infra["delete_vm"].assert_called_once()
-    call_kwargs = mock_all_infra["delete_vm"].call_args.kwargs
-    assert call_kwargs["vm_type"] == "windows"
+    mock_all_infra["release_pool_vm"].assert_called()
+    mock_all_infra["delete_assistant_disk"].assert_called_once_with(agent_id)
     mock_all_infra["delete_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_with_ubuntu_vm(
+async def test_delete_assistant_with_ubuntu_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test deleting assistant with Ubuntu VM calls delete_vm with vm_type=ubuntu."""
-    # Create assistant with Ubuntu VM
+    """Test deleting assistant with desktop_mode=ubuntu calls release_pool_vm and delete_assistant_disk."""
     payload = {
-        "first_name": "DeleteUbuntuVM",
+        "first_name": "DeleteUbuntuPool",
         "surname": "Test",
         "desktop_mode": "ubuntu",
         "create_infra": True,
@@ -1034,16 +998,13 @@ async def test_delete_assistant_with_ubuntu_vm(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    # Reset mocks to verify delete calls
-    mock_all_infra["delete_vm"].reset_mock()
+    mock_all_infra["release_pool_vm"].reset_mock()
+    mock_all_infra["delete_assistant_disk"].reset_mock()
     mock_all_infra["delete_pubsub_topic"].reset_mock()
 
-    # Delete assistant
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    # Verify VM was deleted with correct vm_type
-    mock_all_infra["delete_vm"].assert_called_once()
-    call_kwargs = mock_all_infra["delete_vm"].call_args.kwargs
-    assert call_kwargs["vm_type"] == "ubuntu"
+    mock_all_infra["release_pool_vm"].assert_called()
+    mock_all_infra["delete_assistant_disk"].assert_called_once_with(agent_id)
     mock_all_infra["delete_pubsub_topic"].assert_called_once()
