@@ -284,6 +284,10 @@ class AssistantRead(AssistantCreate):
         description="Email of the user",
         example="ada.lovelace@unify.ai",
     )
+    user_image: Optional[str] = Field(
+        None,
+        description="Profile image URL of the user (owner/supervisor)",
+    )
     secrets: Optional[Dict[str, str]] = Field(
         None,
         description="Dictionary of secret names to values. Only returned via admin endpoints.",
@@ -344,6 +348,7 @@ class AssistantRead(AssistantCreate):
                 "user_first_name": "Ada",
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
+                "user_image": "https://example.com/photo.jpg",
                 "secrets": {"openai_api_key": "sk-..."},
                 "is_local": False,
             },
