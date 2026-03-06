@@ -87,14 +87,9 @@ class AssistantCreate(BaseModel):
         description="URL to the assistant's profile video",
         example="https://example.com/videos/ada.mp4",
     )
-    desktop_url: Optional[str] = Field(
-        None,
-        description="URL to the assistant's desktop profile/page",
-        example="https://app.example.com/assistants/ada",
-    )
     desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Desktop operating system mode for assistant's VM creation",
+        description="Desktop operating system mode for assistant's VM type",
         example="windows",
     )
     user_desktop_id: Optional[int] = Field(
@@ -198,7 +193,6 @@ class AssistantCreate(BaseModel):
                 "nationality": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
-                "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
                 "user_desktop_id": 1,
                 "user_desktop_filesys_sync": False,
@@ -325,7 +319,6 @@ class AssistantRead(AssistantCreate):
                 "nationality": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
-                "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "windows",
                 "user_desktop_id": 1,
                 "user_desktop_filesys_sync": False,
@@ -542,14 +535,9 @@ class AssistantUpdate(BaseModel):
         description="URL to the assistant's profile video",
         example="https://example.com/videos/ada_new.mp4",
     )
-    desktop_url: Optional[str] = Field(
-        None,
-        description="URL to the assistant's desktop profile/page",
-        example="https://app.example.com/assistants/ada",
-    )
     desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
         None,
-        description="Desktop operating system mode for VM creation",
+        description="Desktop operating system mode for VM type",
         example="macos",
     )
     user_desktop_id: Optional[int] = Field(
@@ -670,7 +658,6 @@ class AssistantUpdate(BaseModel):
                 "max_parallel": 3,
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada_new.mp4",
-                "desktop_url": "https://app.example.com/assistants/ada",
                 "desktop_mode": "macos",
                 "user_desktop_id": 1,
                 "user_desktop_filesys_sync": True,
