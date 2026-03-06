@@ -107,11 +107,9 @@ class AssistantCreate(BaseModel):
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
     )
-    email: Optional[str] = Field(
-        None,
-        description="Email of the assistant",
-        example="ada.lovelace@unify.ai",
-    )
+    # NOTE: Contact fields (email, user_phone, user_whatsapp_number, phone_country)
+    # have been removed from AssistantCreate.  Contact provisioning is now handled
+    # exclusively through the dedicated POST /assistant/{id}/contact endpoint.
     voice_id: Optional[str] = Field(
         None,
         description="Id of the provider voice to use for the assistant",
@@ -122,19 +120,9 @@ class AssistantCreate(BaseModel):
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
-    user_phone: Optional[str] = Field(
-        None,
-        description="Contact phone number of the user",
-        example="+15551234567",
-    )
-    user_whatsapp_number: Optional[str] = Field(
-        None,
-        description="WhatsApp number of the user",
-        example="+15551234567",
-    )
     create_infra: Optional[bool] = Field(
         True,
-        description="Whether to create the infrastructure for the assistant",
+        description="Whether to create the infrastructure for the assistant (pubsub, VM, etc.)",
         exclude=True,
     )
     is_local: Optional[bool] = Field(
@@ -143,11 +131,6 @@ class AssistantCreate(BaseModel):
             "Whether this is a local assistant (runs unity locally instead of on GKE). "
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
-    )
-    phone_country: Optional[str] = Field(
-        "US",
-        description="Country code for phone number provisioning (e.g., US, GB)",
-        example="US",
     )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
@@ -197,13 +180,9 @@ class AssistantCreate(BaseModel):
                 "user_desktop_id": 1,
                 "user_desktop_filesys_sync": False,
                 "about": "Mathematician and writer known for work on Analytical Engine",
-                "phone_country": "US",
                 "timezone": "America/New_York",
-                "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
-                "user_phone": "+15551234567",
-                "user_whatsapp_number": "+15551234567",
             },
         }
 
@@ -248,10 +227,34 @@ class AssistantRead(AssistantCreate):
         description="Timestamp when the assistant was last updated",
         example="2025-04-26T14:15:00Z",
     )
+    # Contact fields populated from the assistant_contacts table via
+    # ``_build_assistant_read``.  These were removed from ``AssistantCreate``
+    # (contacts are provisioned through the dedicated POST endpoint) but
+    # must remain on the read schema so the API response includes them.
     phone: Optional[str] = Field(
         None,
         description="Phone number of the assistant",
         example="+15551234567",
+    )
+    phone_country: Optional[str] = Field(
+        None,
+        description="Country code for the provisioned phone number",
+        example="US",
+    )
+    email: Optional[str] = Field(
+        None,
+        description="Email address of the assistant",
+        example="ada.lovelace@unify.ai",
+    )
+    user_phone: Optional[str] = Field(
+        None,
+        description="User's personal phone number (for call forwarding)",
+        example="+15559876543",
+    )
+    user_whatsapp_number: Optional[str] = Field(
+        None,
+        description="User's WhatsApp number associated with the assistant",
+        example="+15559876543",
     )
     assistant_whatsapp_number: Optional[str] = Field(
         None,
@@ -555,30 +558,40 @@ class AssistantUpdate(BaseModel):
         description="Brief description about the assistant",
         example="Award-winning mathematician specializing in algorithm development",
     )
+    # --- DEPRECATED contact fields ---------------------------------------------------
+    # Contact provisioning is now handled via the dedicated
+    # POST/PUT/DELETE /assistant/{id}/contact endpoints.
+    # These fields are retained for backward compatibility but are **ignored**
+    # during assistant updates.  They will be removed in a future API version.
     user_phone: Optional[str] = Field(
         None,
-        description="Contact phone number of the user",
+        description="DEPRECATED – use POST /assistant/{id}/contact instead.",
         example="+15551234567",
+        json_schema_extra={"deprecated": True},
     )
     phone: Optional[str] = Field(
         None,
-        description="Contact phone number for the assistant",
+        description="DEPRECATED – use POST /assistant/{id}/contact instead.",
         example="+15559876543",
+        json_schema_extra={"deprecated": True},
     )
     phone_country: Optional[str] = Field(
         None,
-        description="Country code for phone number provisioning (e.g., US, GB)",
+        description="DEPRECATED – use POST /assistant/{id}/contact instead.",
         example="GB",
+        json_schema_extra={"deprecated": True},
     )
     email: Optional[str] = Field(
         None,
-        description="Email address for the assistant",
+        description="DEPRECATED – use POST /assistant/{id}/contact instead.",
         example="ada.lovelace@newdomain.com",
+        json_schema_extra={"deprecated": True},
     )
     user_whatsapp_number: Optional[str] = Field(
         None,
-        description="WhatsApp number of the user",
+        description="DEPRECATED – use POST /assistant/{id}/contact instead.",
         example="+15559876543",
+        json_schema_extra={"deprecated": True},
     )
     voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
         None,
@@ -1133,6 +1146,152 @@ class AssistantContactRemoval(BaseModel):
         description="The type of contact information to remove.",
         example="email",
     )
+
+
+class AssistantContactCreate(BaseModel):
+    """
+    Schema for creating a new contact detail for an assistant.
+
+    This provisions the external infrastructure (Twilio phone, Google Workspace
+    email, WhatsApp sender) and creates the corresponding AssistantContact row.
+    """
+
+    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+        ...,
+        description="The type of contact detail to create.",
+        example="phone",
+    )
+    # Phone-specific fields
+    phone_country: Optional[str] = Field(
+        "US",
+        description="Country code for phone number provisioning (e.g., 'US', 'GB'). Only used for phone contacts.",
+        example="US",
+    )
+    user_phone: Optional[str] = Field(
+        None,
+        description="User's personal phone number (for forwarding). Only used for phone contacts.",
+        example="+15551234567",
+    )
+    # Email-specific fields
+    email_local: Optional[str] = Field(
+        None,
+        description="Local part of the email address (before @). Only used for email contacts.",
+        example="ada.lovelace",
+    )
+    first_name: Optional[str] = Field(
+        None,
+        description="First name for Google Workspace account. Only used for email contacts.",
+        example="Ada",
+    )
+    last_name: Optional[str] = Field(
+        None,
+        description="Last name for Google Workspace account. Only used for email contacts.",
+        example="Lovelace",
+    )
+    # WhatsApp-specific fields
+    user_whatsapp_number: Optional[str] = Field(
+        None,
+        description="User's WhatsApp number to associate with the sender. Only used for WhatsApp contacts.",
+        example="+15551234567",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "contact_type": "phone",
+                "phone_country": "US",
+                "user_phone": "+15551234567",
+            },
+        }
+
+
+class AssistantContactRead(BaseModel):
+    """
+    Schema for reading an AssistantContact record with billing metadata.
+    """
+
+    id: int = Field(..., description="Unique identifier for the contact record.")
+    assistant_id: int = Field(
+        ...,
+        description="ID of the assistant this contact belongs to.",
+    )
+    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+        ...,
+        description="The type of contact detail.",
+    )
+    contact_value: str = Field(
+        ...,
+        description="The provisioned value (phone number, email address, etc.).",
+    )
+    provider: Optional[str] = Field(
+        None,
+        description="Provider used for provisioning (e.g., 'twilio', 'google_workspace').",
+    )
+    provisioned_by: str = Field(
+        ...,
+        description="Who provisioned this contact: 'platform' or 'user'.",
+    )
+    country_code: Optional[str] = Field(
+        None,
+        description="Country code for phone numbers.",
+    )
+    user_value: Optional[str] = Field(
+        None,
+        description="Linked user-side value (personal phone/WhatsApp for forwarding).",
+    )
+    status: str = Field(
+        ...,
+        description="Lifecycle status: 'active', 'grace_period', or 'deleted'.",
+    )
+    monthly_cost: Optional[float] = Field(
+        None,
+        description="Monthly cost in dollars at time of last levy.",
+    )
+    created_at: datetime = Field(..., description="When this contact was created.")
+    updated_at: Optional[datetime] = Field(
+        None,
+        description="When this contact was last updated.",
+    )
+    grace_period_started_at: Optional[datetime] = Field(
+        None,
+        description="When the grace period started (NULL if not in grace period).",
+    )
+
+    class Config:
+        orm_mode = True
+        from_attributes = True
+
+
+class AssistantContactUpdate(BaseModel):
+    """
+    Schema for updating non-provisioned fields on an existing contact.
+
+    Only ``user_value`` and ``metadata`` can be changed. Changing the actual
+    provisioned resource (phone number, email address) requires delete + create.
+    """
+
+    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+        ...,
+        description="The type of contact to update.",
+        example="phone",
+    )
+    user_value: Optional[str] = Field(
+        None,
+        description="Updated user-side value (e.g., personal phone for forwarding).",
+        example="+15559876543",
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Updated type-specific metadata (merged with existing).",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "contact_type": "phone",
+                "user_value": "+15559876543",
+            },
+        }
 
 
 class AssistantTransferToOrgRequest(BaseModel):
