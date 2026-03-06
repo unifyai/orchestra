@@ -210,6 +210,10 @@ class UserAccountCleanupService:
         # remove the assistants rows).  This list is used for GCS cleanup.
         assistant_ids = self._get_user_assistant_ids(user_id)
 
+        # Soft-delete and deprovision all contacts for this user's personal
+        # assistants *before* the CASCADE deletes the rows.
+        self._deprovision_user_contacts(user_id)
+
         self._delete_user_table_dependencies(user_id, billing_account_id)
 
         self.session.execute(
@@ -251,6 +255,68 @@ class UserAccountCleanupService:
         """
         # Currently no non-cascading tables reference user.id directly.
         # credit_card_fingerprint is cascade-deleted via billing_account.
+
+    def _deprovision_user_contacts(self, user_id: str) -> None:
+        """Soft-delete and deprovision all contacts for the user's personal assistants.
+
+        Must be called *before* the user row is deleted (CASCADE would
+        hard-delete the contact rows otherwise).
+
+        Deprovisioning (Twilio / Google Workspace API calls) is best-effort
+        – failures are logged but do not block user deletion.
+        """
+        try:
+            from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+            contact_dao = AssistantContactDAO(self.session)
+
+            # Collect personal assistant IDs
+            assistant_ids = [
+                row[0]
+                for row in self.session.execute(
+                    text(
+                        "SELECT agent_id FROM assistants "
+                        "WHERE user_id = :uid AND organization_id IS NULL",
+                    ),
+                    {"uid": user_id},
+                ).fetchall()
+            ]
+            if not assistant_ids:
+                return
+
+            # Fetch active contacts before soft-deleting
+            active_contacts = contact_dao.get_active_contacts_for_assistants(
+                assistant_ids,
+            )
+
+            # Deprovision external resources (best-effort)
+            import asyncio
+
+            from orchestra.routines.assistant_contact_suspension import (
+                _deprovision_contact,
+            )
+
+            for contact in active_contacts:
+                try:
+                    asyncio.get_event_loop().run_until_complete(
+                        _deprovision_contact(contact),
+                    )
+                except RuntimeError:
+                    # No event loop – create one
+                    asyncio.run(_deprovision_contact(contact))
+                except Exception as e:
+                    logger.error(
+                        f"Failed to deprovision {contact.contact_type} "
+                        f"({contact.contact_value}) for user {user_id}: {e}",
+                    )
+
+            # Soft-delete all contact rows
+            contact_dao.soft_delete_contacts_for_user(user_id)
+
+        except Exception as e:
+            logger.error(
+                f"Failed to deprovision contacts for user {user_id}: {e}",
+            )
 
     def _archive_stripe_customer(self, stripe_customer_id: str) -> None:
         """

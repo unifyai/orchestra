@@ -34,6 +34,8 @@ from orchestra.services.spending_limit_notification_service import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
+    AssistantContactCostRead,
+    AssistantContactCostWrite,
     CreditCardFingerprintModelResponse,
     OrganizationListItem,
     OrganizationListResponse,
@@ -712,6 +714,164 @@ def trigger_billing_guard(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Billing guard failed: {str(e)}")
+
+
+@router.post("/billing/resource-levy")
+def trigger_assistant_contact_levy(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger the monthly resource levy for provisioned contact details.
+
+    Charges each billing account for its active platform-provisioned contacts
+    (phone numbers, email addresses, WhatsApp senders).
+
+    Defaults to the current month if year/month are not specified.
+
+    This endpoint is designed to be called by Cloud Scheduler on the 1st of
+    each month (``0 0 1 * *``).
+
+    Skipped in staging environments where billing infrastructure is not
+    fully configured.
+    """
+    if settings.is_staging:
+        return {
+            "status": "skipped",
+            "message": "Resource levy is disabled in staging environments.",
+        }
+
+    try:
+        from orchestra.routines.assistant_contact_levy import levy_provisioned_resources
+
+        result = levy_provisioned_resources(year, month, session=session)
+
+        period = f"{year}-{month:02d}" if year and month else result.billing_month
+        return {
+            "status": "success",
+            "message": f"Resource levy completed for {period}",
+            "billing_month": result.billing_month,
+            "total_contacts_billed": result.total_contacts_billed,
+            "total_amount": float(result.total_amount),
+            "accounts_processed": result.accounts_processed,
+            "accounts_marked_past_due": result.accounts_marked_past_due,
+            "auto_recharges_triggered": result.auto_recharges_triggered,
+            "notifications_sent": result.notifications_sent,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Resource levy failed: {str(e)}",
+        )
+
+
+@router.post("/billing/resource-suspension")
+async def trigger_assistant_contact_suspension(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger daily grace-period enforcement for provisioned contact details.
+
+    Checks all contacts in ``grace_period`` status:
+    - If the billing account has been topped up (credits ≥ 0): restores
+      contacts to ``active`` and reawakens affected assistants.
+    - If the grace period has lasted ≥ 14 days: deprovisions the external
+      resource (Twilio number, Google Workspace seat, etc.), soft-deletes
+      the contact, clears backward-compat columns, reawakens the assistant,
+      and sends a deletion notification email.
+    - Sends scheduled reminder/warning emails on Days 7 and 13.
+
+    This endpoint is designed to be called by Cloud Scheduler daily at
+    01:00 UTC (``0 1 * * *``).
+    """
+    try:
+        from orchestra.routines.assistant_contact_suspension import (
+            suspend_overdue_contacts,
+        )
+
+        result = await suspend_overdue_contacts(session=session)
+
+        return {
+            "status": "success",
+            "message": "Resource suspension check completed",
+            "total_grace_contacts_found": result.total_grace_contacts_found,
+            "accounts_processed": result.accounts_processed,
+            "contacts_restored": result.contacts_restored,
+            "contacts_deleted": result.contacts_deleted,
+            "reminders_sent": result.reminders_sent,
+            "deletion_emails_sent": result.deletion_emails_sent,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Resource suspension failed: {str(e)}",
+        )
+
+
+# ============================================================================
+# Contact-type cost management
+# ============================================================================
+
+
+@router.get("/billing/contact-costs")
+def list_contact_costs(
+    session=Depends(get_db_session),
+) -> list[AssistantContactCostRead]:
+    """
+    Return every row from the ``contact_type_costs`` table.
+
+    The frontend uses this to display accurate monthly/one-time costs in the
+    contact-creation UI instead of relying on hardcoded constants.
+    """
+    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+    dao = AssistantContactDAO(session)
+    return [AssistantContactCostRead.model_validate(r) for r in dao.list_all_costs()]
+
+
+@router.put("/billing/contact-costs")
+def upsert_contact_cost(
+    body: AssistantContactCostWrite,
+    session=Depends(get_db_session),
+) -> AssistantContactCostRead:
+    """
+    Create or update a pricing row in ``contact_type_costs``.
+
+    If a row with the same ``(contact_type, provider, country_code)`` already
+    exists, its costs are updated in place.  Otherwise a new row is created.
+    """
+    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+    dao = AssistantContactDAO(session)
+    row = dao.upsert_cost(
+        body.contact_type,
+        provider=body.provider,
+        country_code=body.country_code,
+        monthly_cost=Decimal(str(body.monthly_cost)),
+        one_time_cost=Decimal(str(body.one_time_cost)),
+    )
+    return AssistantContactCostRead.model_validate(row)
+
+
+@router.delete("/billing/contact-costs/{cost_id}")
+def delete_contact_cost(
+    cost_id: int,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Delete a single pricing row from ``contact_type_costs`` by its primary key.
+
+    Returns 404 if the row does not exist.
+    """
+    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+    dao = AssistantContactDAO(session)
+    if not dao.delete_cost(cost_id):
+        raise HTTPException(status_code=404, detail="Cost row not found")
+    return {"status": "deleted", "id": cost_id}
 
 
 # ============================================================================

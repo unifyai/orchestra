@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -59,7 +60,10 @@ from orchestra.web.api.assistant.schema import (
     AdminUpdateAssistantResponse,
     AdminUpdateUserByAssistant,
     AdminUpdateUserByAssistantResponse,
+    AssistantContactCreate,
+    AssistantContactRead,
     AssistantContactRemoval,
+    AssistantContactUpdate,
     AssistantCreate,
     AssistantPhotoUploadResponse,
     AssistantRead,
@@ -98,7 +102,6 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_phone_number,
     delete_pubsub_topic,
     get_running_jobs,
-    get_social_platforms_costs,
     log_pre_hire_chat,
     reawaken_assistant,
     stop_jobs,
@@ -132,12 +135,23 @@ def _build_assistant_read(
     user_last_name: Optional[str] = None,
     user_email: Optional[str] = None,
     user_image: Optional[str] = None,
-    phone_override: Optional[str] = None,
-    email_override: Optional[str] = None,
-    whatsapp_override: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
+    contacts: Optional[list] = None,
 ) -> AssistantRead:
-    """Build an AssistantRead from an ORM Assistant, resolving desktop fields."""
+    """Build an ``AssistantRead`` from an ORM ``Assistant``.
+
+    Contact fields (phone, email, whatsapp, etc.) are populated from the
+    ``AssistantContact`` table rather than the legacy columns on the
+    ``Assistant`` model.
+
+    Args:
+        contacts: Pre-fetched list of active ``AssistantContact`` rows for
+            this assistant.  When ``None`` the contacts are fetched from
+            the database.  Callers that build many ``AssistantRead``
+            objects at once should batch-fetch contacts via
+            ``AssistantContactDAO.get_active_contacts_for_assistants()`` and pass them in to
+            avoid N+1 queries.
+    """
     desktop_dao = DesktopDAO(session)
     user_desktop_url = None
     user_desktop_mode = None
@@ -155,6 +169,19 @@ def _build_assistant_read(
         else:
             team_ids = []
 
+    # Resolve contact fields from AssistantContact rows
+    if contacts is None:
+        contact_dao = AssistantContactDAO(session)
+        contacts = contact_dao.get_active_contacts_for_assistant(a.agent_id)
+
+    contact_map: dict[str, object] = {}
+    for c in contacts:
+        contact_map[c.contact_type] = c
+
+    phone_contact = contact_map.get("phone")
+    email_contact = contact_map.get("email")
+    whatsapp_contact = contact_map.get("whatsapp")
+
     return AssistantRead(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
@@ -171,19 +198,19 @@ def _build_assistant_read(
         user_desktop_url=user_desktop_url,
         user_desktop_mode=user_desktop_mode,
         about=a.about,
-        phone_country=a.phone_country,
+        phone_country=(phone_contact.country_code if phone_contact else None),
         weekly_limit=(float(a.weekly_limit) if a.weekly_limit is not None else None),
         max_parallel=a.max_parallel,
         created_at=a.created_at,
         updated_at=a.updated_at,
-        phone=phone_override if phone_override is not None else a.phone,
-        email=email_override if email_override is not None else a.email,
-        user_phone=a.user_phone,
-        user_whatsapp_number=a.user_whatsapp_number,
+        phone=(phone_contact.contact_value if phone_contact else None),
+        email=(email_contact.contact_value if email_contact else None),
+        user_phone=(phone_contact.user_value if phone_contact else None),
+        user_whatsapp_number=(
+            whatsapp_contact.user_value if whatsapp_contact else None
+        ),
         assistant_whatsapp_number=(
-            whatsapp_override
-            if whatsapp_override is not None
-            else a.assistant_whatsapp_number
+            whatsapp_contact.contact_value if whatsapp_contact else None
         ),
         voice_id=a.voice_id,
         voice_provider=a.voice_provider,
@@ -302,32 +329,9 @@ async def create_assistant(
         )
     assistant = None
 
-    # Determine total cost as base creation cost
-    # plus premium for each social account added
+    # Base creation cost (contact provisioning costs are handled separately
+    # via the dedicated POST /assistant/{id}/contact endpoint).
     total_creation_cost = settings.assistant_creation_cost
-    if assistant_in.user_whatsapp_number:
-        try:
-            platforms_response = await get_social_platforms_costs()
-            platforms = platforms_response.get("platforms")
-
-            if not isinstance(platforms, dict):
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
-                )
-            whatsapp_cost = platforms.get("whatsapp")
-            if whatsapp_cost is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="WhatsApp cost not found in social platform costs response.",
-                )
-            total_creation_cost += Decimal(whatsapp_cost)
-        except Exception as e_costs:
-
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
-            )
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
@@ -385,10 +389,6 @@ async def create_assistant(
             max_parallel=assistant_in.max_parallel,
             voice_id=assistant_in.voice_id,
             voice_provider=assistant_in.voice_provider,
-            phone=None,
-            email=assistant_in.email,
-            phone_country=assistant_in.phone_country,
-            user_whatsapp_number=assistant_in.user_whatsapp_number,
             timezone=assistant_in.timezone,
             organization_id=organization_id,
             is_local=assistant_in.is_local or False,
@@ -505,77 +505,14 @@ async def create_assistant(
 
         assistant_id = assistant.agent_id
         # Infrastructure creation with rollback on failure
-        created_email = None
-        created_phone = None
+        # NOTE: Contact provisioning (phone, email, WhatsApp) is now handled
+        # exclusively via the dedicated POST /assistant/{id}/contact endpoint.
         created_pubsub = None
-        assigned_whatsapp = None
 
         if assistant_in.create_infra:
             current_infra_step = "initializing"
             try:
-                # Step 1 & 2: create and watch email
-                if assistant_in.email:
-                    email_local = (
-                        assistant_in.email.split("@")[0]
-                        if "@" in assistant_in.email
-                        else assistant_in.email
-                    )
-                    current_infra_step = "create_email"
-                    email_response = await create_email(
-                        email_local,
-                        assistant_in.first_name,
-                        assistant_in.surname,
-                    )
-                    if "detail" in email_response:
-                        raise Exception(
-                            f"Email creation failed: {email_response['detail']}",
-                        )
-                    created_email = email_response.get("user").get("primaryEmail")
-                    print(f"EMAIL CREATED: {created_email}")
-
-                    await asyncio.sleep(10)
-                    current_infra_step = "watch_email"
-                    watch_response = await watch_email(
-                        created_email,
-                        is_staging=settings.is_staging,
-                    )
-                    print(watch_response)
-                    if "detail" in watch_response:
-                        raise Exception(
-                            f"Email watch setup failed: {watch_response['detail']}",
-                        )
-                    print(f"EMAIL WATCHED: {created_email}")
-
-                # Step 3: create phone number if user_phone is provided
-                if assistant_in.user_phone:
-                    phone_country = (
-                        assistant_in.phone_country
-                        if assistant_in.phone_country
-                        else "US"
-                    )
-                    current_infra_step = "create_phone_number"
-                    phone_response = await create_phone_number(
-                        phone_country=phone_country,
-                        is_staging=settings.is_staging,
-                    )
-                    if "detail" in phone_response:
-                        raise Exception(
-                            f"Phone number creation failed: {phone_response['detail']}",
-                        )
-                    created_phone = phone_response.get("phoneNumber")
-                    print(f"PHONE CREATED: {created_phone}")
-
-                # Step 4: assign whatsapp sender if whatsapp number is provided
-                if assistant_in.user_whatsapp_number:
-                    current_infra_step = "assign_whatsapp_sender"
-                    assigned_whatsapp = (
-                        await assign_whatsapp_sender(
-                            assistant_in.user_whatsapp_number,
-                            is_staging=settings.is_staging,
-                        )
-                    )["whatsapp_number"]
-
-                # Step 5: create pubsub topic
+                # Step 1: create pubsub topic
                 current_infra_step = "create_pubsub_topic"
                 pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
@@ -596,19 +533,6 @@ async def create_assistant(
                 session = next(get_db_session(request))
                 assistant_dao = AssistantDAO(session)
 
-                # Update assistant with created infrastructure details
-                update_data = {
-                    "email": created_email,
-                    "phone": created_phone,
-                    "user_phone": assistant_in.user_phone,
-                    "user_whatsapp_number": assistant_in.user_whatsapp_number,
-                    "assistant_whatsapp_number": assigned_whatsapp,
-                }
-                assistant_dao.update_assistant(
-                    user_id=user_id,
-                    agent_id=assistant_id,
-                    update_data=update_data,
-                )
                 # Commit the infrastructure updates
                 session.commit()
                 print(f"ASSISTANT UPDATED: {assistant_id}")
@@ -658,20 +582,6 @@ async def create_assistant(
                             f"Failed to delete pubsub topic: {str(e)}",
                         )
                 print(f"PUBSUB DELETED: {assistant_id}")
-
-                if created_phone:
-                    try:
-                        await delete_phone_number(created_phone)
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete phone: {str(e)}")
-                print(f"PHONE DELETED: {created_phone}")
-
-                if created_email:
-                    try:
-                        await delete_email(created_email)
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete email: {str(e)}")
-                print(f"EMAIL DELETED: {created_email}")
 
                 # Delete the assistant record since infrastructure failed
                 try:
@@ -938,19 +848,33 @@ def list_assistants(
         voice_dao = VoiceDAO(session)
 
         user_dao = UserDAO(session)
-        users = [user_dao.get_by_id(a.user_id)[0] for a in assistants]
+        users = {a.user_id: user_dao.get_by_id(a.user_id)[0] for a in assistants}
+
+        # Batch-fetch contacts for all assistants (avoids N+1 queries)
+        contact_dao = AssistantContactDAO(session)
+        all_contacts = contact_dao.get_active_contacts_for_assistants(
+            [a.agent_id for a in assistants],
+        )
+        contacts_by_assistant: dict[int, list] = {}
+        for c in all_contacts:
+            contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
         return InfoResponse(
             info=[
                 _build_assistant_read(
                     a,
                     session,
-                    user_first_name=users[i].name if users[i] else None,
-                    user_last_name=users[i].last_name if users[i] else None,
-                    user_email=users[i].email if users[i] else None,
-                    user_image=users[i].image if users[i] else None,
+                    user_first_name=(
+                        users[a.user_id].name if users.get(a.user_id) else None
+                    ),
+                    user_last_name=(
+                        users[a.user_id].last_name if users.get(a.user_id) else None
+                    ),
+                    user_email=users[a.user_id].email if users.get(a.user_id) else None,
+                    user_image=users[a.user_id].image if users.get(a.user_id) else None,
+                    contacts=contacts_by_assistant.get(a.agent_id, []),
                 )
-                for i, a in enumerate(assistants)
+                for a in assistants
             ],
         )
     except HTTPException:
@@ -1028,19 +952,26 @@ async def delete_assistant_contact(
     contact_type = removal_payload.contact_type
 
     try:
-        if contact_type == "phone":
-            if assistant.phone:
-                await delete_phone_number(assistant.phone)
-            assistant.phone = None
-            assistant.user_phone = None
-        elif contact_type == "email":
-            if assistant.email:
-                await delete_email(assistant.email)
-            assistant.email = None
-        elif contact_type == "whatsapp":
-            # No external infra deletion for WhatsApp based on existing delete_assistant logic
-            assistant.user_whatsapp_number = None
-            assistant.assistant_whatsapp_number = None
+        # Look up the contact from the AssistantContact table
+        contact_dao = AssistantContactDAO(session)
+        contact = contact_dao.get_contact_by_assistant_and_type(
+            assistant_id,
+            contact_type,
+        )
+
+        if contact:
+            # Deprovision external resource based on AssistantContact data
+            if contact_type == "phone" and contact.contact_value:
+                await delete_phone_number(contact.contact_value)
+            elif contact_type == "email" and contact.contact_value:
+                await delete_email(contact.contact_value)
+            # WhatsApp: no external infra deletion needed
+
+            # Soft-delete the AssistantContact row
+            contact_dao.soft_delete_assistant_contact(
+                assistant_id=assistant_id,
+                contact_type=contact_type,
+            )
 
         session.commit()
         session.refresh(assistant)
@@ -1071,6 +1002,441 @@ async def delete_assistant_contact(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to remove contact: {str(e)}",
         )
+
+
+@router.post(
+    "/assistant/{assistant_id}/contact",
+    response_model=InfoResponse[AssistantRead],
+    status_code=status.HTTP_200_OK,
+    summary="Create a contact detail for an assistant",
+    description=(
+        "Provisions external infrastructure (phone number, email, or WhatsApp sender) "
+        "for the given assistant and creates a billing-tracked AssistantContact record. "
+        "Deducts the one-time setup cost from credits."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Contact created successfully."},
+        402: {"description": "Insufficient credits."},
+        404: {"description": "Assistant not found."},
+        409: {"description": "Contact type already exists for this assistant."},
+    },
+)
+async def create_assistant_contact(
+    assistant_id: int,
+    contact_request: AssistantContactCreate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    """
+    Create a new contact detail for an assistant.
+
+    This endpoint:
+    1. Checks that the assistant exists and the user has permission.
+    2. Checks that no active contact of the same type already exists.
+    3. Looks up the one-time and monthly costs from the AssistantContactCost table.
+    4. Verifies the billing account has sufficient credits for the one-time cost.
+    5. Provisions the external resource (Twilio number, Google Workspace email,
+       WhatsApp sender).
+    6. Creates an AssistantContact row and updates the backward-compat columns
+       on the Assistant model.
+    7. Deducts the one-time cost from credits.
+    8. Triggers a reawaken so Unity picks up the new contact detail.
+
+    If the database commit fails after provisioning, the external resource is
+    rolled back (deprovisioned) to prevent resource leaks.
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+
+    # 1. Fetch and verify ownership
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    # Permission check for org assistants
+    if organization_id is not None:
+        resource_access_dao = ResourceAccessDAO(session)
+        has_permission = resource_access_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
+
+    contact_type = contact_request.contact_type
+    contact_dao = AssistantContactDAO(session)
+
+    # 2. Check for duplicate active contact
+    existing = contact_dao.get_contact_by_assistant_and_type(assistant_id, contact_type)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An active {contact_type} contact already exists for this assistant.",
+        )
+
+    # 3. Look up costs
+    provider = None
+    country_code = None
+    if contact_type == "phone":
+        provider = "twilio"
+        country_code = contact_request.phone_country or "US"
+    elif contact_type == "email":
+        provider = "google_workspace"
+    elif contact_type == "whatsapp":
+        provider = "twilio"
+
+    monthly_cost = contact_dao.get_contact_monthly_cost(
+        contact_type,
+        provider=provider,
+        country_code=country_code,
+    )
+    one_time_cost = contact_dao.get_contact_one_time_cost(
+        contact_type,
+        provider=provider,
+        country_code=country_code,
+    )
+
+    # 4. Credit check (skip in staging)
+    if not settings.is_staging:
+        try:
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Billing is not set up. Please add a payment method first.",
+            )
+        if one_time_cost > 0 and billing_entity.credits < one_time_cost:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=(
+                    f"Insufficient credits. Creating a {contact_type} contact "
+                    f"requires ${one_time_cost} (setup fee)."
+                ),
+            )
+
+    # 5. Provision external resource
+    created_value = None
+    user_value = None
+
+    try:
+        if contact_type == "phone":
+            phone_country = contact_request.phone_country or "US"
+            phone_response = await create_phone_number(
+                phone_country=phone_country,
+                is_staging=settings.is_staging,
+            )
+            if "detail" in phone_response:
+                raise Exception(
+                    f"Phone number creation failed: {phone_response['detail']}",
+                )
+            created_value = phone_response.get("phoneNumber")
+            user_value = contact_request.user_phone
+
+        elif contact_type == "email":
+            if not contact_request.email_local:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="email_local is required for email contacts.",
+                )
+            email_response = await create_email(
+                contact_request.email_local,
+                contact_request.first_name or "",
+                contact_request.last_name or "",
+            )
+            if "detail" in email_response:
+                raise Exception(
+                    f"Email creation failed: {email_response['detail']}",
+                )
+            created_value = email_response.get("user", {}).get("primaryEmail")
+
+            # Set up email watch
+            await asyncio.sleep(10)
+            watch_response = await watch_email(
+                created_value,
+                is_staging=settings.is_staging,
+            )
+            if "detail" in watch_response:
+                raise Exception(
+                    f"Email watch setup failed: {watch_response['detail']}",
+                )
+
+        elif contact_type == "whatsapp":
+            if not contact_request.user_whatsapp_number:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="user_whatsapp_number is required for WhatsApp contacts.",
+                )
+            whatsapp_response = await assign_whatsapp_sender(
+                contact_request.user_whatsapp_number,
+                is_staging=settings.is_staging,
+            )
+            created_value = whatsapp_response.get("whatsapp_number")
+            user_value = contact_request.user_whatsapp_number
+
+        if not created_value:
+            raise Exception(f"Failed to provision {contact_type}: no value returned.")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(
+            f"Failed to provision {contact_type} for assistant {assistant_id}: {e}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to provision {contact_type}: {str(e)}",
+        )
+
+    # 6. Create AssistantContact row + update Assistant columns + deduct cost
+    #    Wrap in try/except to rollback the external provisioning if DB fails.
+    try:
+        # Refresh session after potentially long infra operations
+        session.close()
+        session = next(get_db_session(request))
+        assistant_dao = AssistantDAO(session)
+
+        # Re-fetch assistant with fresh session
+        assistant = assistant_dao.get_assistant_by_id(
+            user_id=user_id,
+            agent_id=assistant_id,
+            organization_id=organization_id,
+        )
+        if not assistant:
+            raise Exception("Assistant no longer exists after provisioning.")
+
+        # Create AssistantContact row
+        contact = contact_dao.upsert_assistant_contact(
+            assistant_id=assistant_id,
+            contact_type=contact_type,
+            contact_value=created_value,
+            provider=provider,
+            country_code=country_code,
+            user_value=user_value,
+        )
+        contact.monthly_cost = monthly_cost
+
+        # 7. Deduct one-time cost
+        if not settings.is_staging and one_time_cost > 0:
+            from orchestra.lib.billing import deduct_credits
+
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            deduct_credits(session, billing_entity, one_time_cost)
+
+        session.commit()
+
+    except Exception as db_error:
+        session.rollback()
+        logging.error(
+            f"DB commit failed after provisioning {contact_type} for assistant "
+            f"{assistant_id}: {db_error}. Rolling back external resource.",
+        )
+        # Rollback the external resource
+        try:
+            if contact_type == "phone":
+                await delete_phone_number(created_value)
+            elif contact_type == "email":
+                await delete_email(created_value)
+            # WhatsApp: no explicit deprovisioning needed
+        except Exception as rollback_error:
+            logging.error(
+                f"RESOURCE LEAK: Failed to rollback {contact_type} "
+                f"'{created_value}' after DB failure: {rollback_error}",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save {contact_type} contact: {str(db_error)}",
+        )
+
+    # 8. Trigger reawaken so Unity picks up the new contact
+    try:
+        await reawaken_assistant(
+            str(assistant_id),
+            is_staging=settings.is_staging,
+        )
+    except Exception as e:
+        logging.warning(
+            f"Failed to reawaken assistant {assistant_id} after contact creation: {e}",
+        )
+
+    # Re-fetch for response
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    return InfoResponse(
+        info=_build_assistant_read(assistant, session),
+    )
+
+
+@router.get(
+    "/assistant/{assistant_id}/contacts",
+    response_model=InfoResponse[list[AssistantContactRead]],
+    status_code=status.HTTP_200_OK,
+    summary="List active contact details for an assistant",
+    description="Returns all active (non-deleted) contact details with billing metadata.",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Contact details returned successfully."},
+        404: {"description": "Assistant not found."},
+    },
+)
+async def list_assistant_contacts(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[list[AssistantContactRead]]:
+    """
+    List all active contact details for an assistant.
+
+    Returns each contact with its billing metadata (monthly cost,
+    status, grace period info, etc.).
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    contact_dao = AssistantContactDAO(session)
+    contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+    contact_reads = [
+        AssistantContactRead(
+            id=c.id,
+            assistant_id=c.assistant_id,
+            contact_type=c.contact_type,
+            contact_value=c.contact_value,
+            provider=c.provider,
+            provisioned_by=c.provisioned_by,
+            country_code=c.country_code,
+            user_value=c.user_value,
+            status=c.status,
+            monthly_cost=float(c.monthly_cost) if c.monthly_cost is not None else None,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+            grace_period_started_at=c.grace_period_started_at,
+        )
+        for c in contacts
+    ]
+    return InfoResponse(info=contact_reads)
+
+
+@router.put(
+    "/assistant/{assistant_id}/contact",
+    response_model=InfoResponse[AssistantRead],
+    status_code=status.HTTP_200_OK,
+    summary="Update contact metadata",
+    description=(
+        "Updates non-provisioned fields (user_value, metadata) on an existing contact. "
+        "Changing the actual provisioned resource requires delete + create."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Contact updated successfully."},
+        404: {"description": "Assistant or contact not found."},
+    },
+)
+async def update_assistant_contact(
+    assistant_id: int,
+    contact_update: AssistantContactUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    """
+    Update non-provisioned fields on an existing contact.
+
+    Only ``user_value`` and ``metadata`` can be changed via this endpoint.
+    Changing the actual provisioned resource (phone number, email address, etc.)
+    requires a delete + create flow.
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    # Permission check for org assistants
+    if organization_id is not None:
+        resource_access_dao = ResourceAccessDAO(session)
+        has_permission = resource_access_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
+
+    contact_type = contact_update.contact_type
+    contact_dao = AssistantContactDAO(session)
+    contact = contact_dao.get_contact_by_assistant_and_type(assistant_id, contact_type)
+    if not contact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active {contact_type} contact found for this assistant.",
+        )
+
+    # Update user_value
+    if contact_update.user_value is not None:
+        contact.user_value = contact_update.user_value
+
+    # Update metadata (merge with existing)
+    if contact_update.metadata is not None:
+        existing_meta = contact.metadata_ or {}
+        contact.metadata_ = {**existing_meta, **contact_update.metadata}
+
+    session.commit()
+    session.refresh(assistant)
+
+    # Trigger reawaken so Unity picks up the user_value change
+    try:
+        await reawaken_assistant(
+            str(assistant_id),
+            is_staging=settings.is_staging,
+        )
+    except Exception as e:
+        logging.warning(
+            f"Failed to reawaken assistant {assistant_id} after contact update: {e}",
+        )
+
+    return InfoResponse(
+        info=_build_assistant_read(assistant, session),
+    )
 
 
 @router.delete(
@@ -1276,21 +1642,28 @@ async def delete_assistant(
             cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
         print(f"PUBSUB DELETED: {assistant_id}")
 
-        # Delete phone number if exists
-        if assistant.phone:
-            try:
-                await delete_phone_number(assistant.phone)
-            except Exception as e:
-                cleanup_errors.append(f"Failed to delete phone: {str(e)}")
-        print(f"PHONE DELETED: {assistant.phone}")
-
-        # Delete email if exists (with debug print like rollback)
-        if assistant.email:
-            try:
-                await delete_email(assistant.email)
-            except Exception as e:
-                cleanup_errors.append(f"Failed to delete email: {str(e)}")
-        print(f"EMAIL DELETED: {assistant.email}")
+        # Deprovision and soft-delete all contacts from AssistantContact table
+        try:
+            contact_dao = AssistantContactDAO(session)
+            active_contacts = contact_dao.get_active_contacts_for_assistant(
+                assistant_id,
+            )
+            for ac in active_contacts:
+                try:
+                    if ac.contact_type == "phone" and ac.contact_value:
+                        await delete_phone_number(ac.contact_value)
+                        print(f"PHONE DELETED: {ac.contact_value}")
+                    elif ac.contact_type == "email" and ac.contact_value:
+                        await delete_email(ac.contact_value)
+                        print(f"EMAIL DELETED: {ac.contact_value}")
+                except Exception as e:
+                    cleanup_errors.append(
+                        f"Failed to deprovision {ac.contact_type} "
+                        f"({ac.contact_value}): {str(e)}",
+                    )
+            contact_dao.soft_delete_all_contacts_for_assistant(assistant_id)
+        except Exception as e:
+            cleanup_errors.append(f"Failed to clean up assistant contacts: {str(e)}")
 
         # Delete demo assistant metadata if this is a demo assistant
         if assistant.demo_id:
@@ -1434,13 +1807,6 @@ async def update_assistant_config(
     old_video_url = None
     is_video_changing = False
 
-    # Variables to track newly created resources for potential rollback
-    email_to_update: Optional[str] = None
-    phone_to_update: Optional[str] = None
-    contact_info_updated = (
-        update.phone or update.user_phone or update.email or update.user_whatsapp_number
-    )
-
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
         user_id=request.state.user_id,
@@ -1478,149 +1844,27 @@ async def update_assistant_config(
         update.profile_video is not None and update.profile_video != old_video_url
     )
 
-    # Initialize variables with values from the update payload or existing record
-    assistant_email = update.email
-    assistant_phone = update.phone
-    assistant_whatsapp_number = (
-        existing_assistant.assistant_whatsapp_number
-        if existing_assistant.assistant_whatsapp_number
-        else None
-    )
-
     try:
         weekly_limit: Optional[Decimal] = None
         if update.weekly_limit is not None:
             weekly_limit = Decimal(update.weekly_limit)
 
-        if update.create_infra:
-            # Create / update assistant email
-            # 1- Check if the assistant doesn't have an email address already and if an assistant email is provided
-            # 2- If so, create an assistant email
-            if update.email and not existing_assistant.email:
-                try:
-                    email_local = (
-                        update.email.split("@")[0]
-                        if "@" in update.email
-                        else update.email
-                    )
-                    email_response = await create_email(
-                        email_local,
-                        existing_assistant.first_name,
-                        existing_assistant.surname,
-                    )
-                    if "detail" in email_response:
-                        raise Exception(
-                            f"Email creation failed on assistant update: {email_response['detail']}",
-                        )
-                    email_to_update = email_response.get("user").get("primaryEmail")
-                    print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
-
-                    await asyncio.sleep(10)
-                    watch_response = await watch_email(
-                        email_to_update,
-                        is_staging=settings.is_staging,
-                    )
-                    print(watch_response)
-                    if "detail" in watch_response:
-                        raise Exception(
-                            f"Email watch setup failed: {watch_response['detail']}",
-                        )
-                    print(f"EMAIL WATCHED ON ASSISTANT UPDATE: {email_to_update}")
-
-                    assistant_email = email_to_update
-
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to create email during update: {str(e)}",
-                    )
-
-            # Create / update assistant phone
-            # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
-            # 2- If so, create an assistant phone number
-            if update.user_phone and not existing_assistant.phone:
-                try:
-                    phone_country = (
-                        update.phone_country if update.phone_country else "US"
-                    )
-                    phone_response = await create_phone_number(
-                        phone_country=phone_country,
-                        is_staging=settings.is_staging,
-                    )
-                    if "detail" in phone_response:
-                        raise Exception(
-                            f"Phone number creation failed: {phone_response['detail']}",
-                        )
-                    phone_to_update = phone_response.get("phoneNumber")
-                    assistant_phone = phone_to_update
-                    print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
-                except Exception as e:
-                    # If phone creation fails, we should not proceed with the update
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to create phone number during update: {str(e)}",
-                    )
-
-            # Create / update social account:
-            # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
-            # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
-            if (
-                update.user_whatsapp_number
-                and not existing_assistant.user_whatsapp_number
-            ):
-                if not settings.is_staging:
-                    # Cost to create a social account
-                    try:
-                        platforms_response = await get_social_platforms_costs()
-                        platforms = platforms_response.get("platforms")
-
-                        if not isinstance(platforms, dict):
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
-                            )
-                        cost = platforms.get("whatsapp")
-                        if cost is None:
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="WhatsApp cost not found in social platform costs response.",
-                            )
-                    except Exception as e_costs:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
-                        )
-                    decimal_cost = Decimal(cost)
-                    try:
-                        billing_entity = get_billing_entity(
-                            session,
-                            user_id,
-                            organization_id,
-                        )
-                    except ValueError:
-                        raise HTTPException(
-                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                            detail="Billing is not set up. Please add a payment method first.",
-                        )
-                    if billing_entity.credits < decimal_cost:
-                        raise HTTPException(
-                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                            detail="Insufficient credits to add a WhatsApp number.",
-                        )
-                    from orchestra.lib.billing import deduct_credits
-
-                    deduct_credits(session, billing_entity, decimal_cost)
-
-                assistant_whatsapp_number = (
-                    await assign_whatsapp_sender(
-                        update.user_whatsapp_number,
-                        is_staging=settings.is_staging,
-                    )
-                )["whatsapp_number"]
+        # NOTE: Contact provisioning (phone, email, WhatsApp) has been removed
+        # from this endpoint.  Use POST /assistant/{id}/contact instead.
+        # Deprecated contact fields in the request body are silently excluded.
+        _DEPRECATED_CONTACT_FIELDS = {
+            "email",
+            "phone",
+            "user_phone",
+            "phone_country",
+            "user_whatsapp_number",
+            "create_infra",
+        }
 
         update_data = update.model_dump(exclude_unset=True)
-        if "create_infra" in update_data:
-            del update_data["create_infra"]
+        # Remove deprecated contact fields
+        for field_name in _DEPRECATED_CONTACT_FIELDS:
+            update_data.pop(field_name, None)
         if "weekly_limit" in update_data and update.weekly_limit is not None:
             update_data["weekly_limit"] = Decimal(update.weekly_limit)
         if (
@@ -1630,12 +1874,6 @@ async def update_assistant_config(
             update_data["monthly_spending_cap"] = Decimal(
                 str(update.monthly_spending_cap),
             )
-        if assistant_email:
-            update_data["email"] = assistant_email
-        if assistant_phone:
-            update_data["phone"] = assistant_phone
-        if assistant_whatsapp_number:
-            update_data["assistant_whatsapp_number"] = assistant_whatsapp_number
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
@@ -1675,58 +1913,13 @@ async def update_assistant_config(
 
         session.commit()
 
-        # If contact info was updated and infra creation was enabled, reawaken the assistant
-        if contact_info_updated and update.create_infra:
-            try:
-                await reawaken_assistant(
-                    str(updated.agent_id),
-                    is_staging=settings.is_staging,
-                )
-                print(f"ASSISTANT REAWAKENED: {updated.agent_id}")
-            except Exception as e:
-                # Log the error but don't fail the request, as the main action succeeded
-                logging.warning(
-                    f"Failed to reawaken assistant {updated.agent_id} after config update: {e}",
-                )
-
         return InfoResponse(
-            info=_build_assistant_read(
-                updated,
-                session,
-                phone_override=assistant_phone,
-                email_override=assistant_email,
-                whatsapp_override=assistant_whatsapp_number,
-            ),
+            info=_build_assistant_read(updated, session),
         )
     except HTTPException:
         raise
     except Exception as e:
         session.rollback()
-
-        if email_to_update:
-            logging.warning(
-                f"Update failed. Rolling back created email: {email_to_update}",
-            )
-            try:
-                await delete_email(email_to_update)
-            except Exception as cleanup_err:
-                logging.error(
-                    f"Failed to clean up (delete) email '{email_to_update}' during rollback: {cleanup_err}",
-                )
-
-        if phone_to_update:
-            logging.warning(
-                f"Update failed. Rolling back created phone number: {phone_to_update}",
-            )
-            try:
-                await delete_phone_number(phone_to_update)
-            except Exception as cleanup_err:
-                logging.error(
-                    f"Failed to clean up (delete) phone number '{phone_to_update}' during rollback: {cleanup_err}",
-                )
-
-        if isinstance(e, HTTPException):
-            raise e
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1790,6 +1983,19 @@ def transfer_assistant_to_org(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Personal assistant not found.",
+        )
+
+    # Block transfer if the assistant has contacts in grace_period
+    # (unpaid billing must be resolved before transferring ownership)
+    contact_dao = AssistantContactDAO(session)
+    if contact_dao.has_grace_period_contacts(assistant_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot transfer assistant: it has contact details in a billing "
+                "grace period. Please add credits to resolve the outstanding "
+                "balance before transferring."
+            ),
         )
 
     # Check user has assistant:write permission in target org
@@ -2109,6 +2315,19 @@ def transfer_assistant_to_personal(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization assistant not found.",
+        )
+
+    # Block transfer if the assistant has contacts in grace_period
+    # (unpaid billing must be resolved before transferring ownership)
+    contact_dao = AssistantContactDAO(session)
+    if contact_dao.has_grace_period_contacts(assistant_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot transfer assistant: it has contact details in a billing "
+                "grace period. Please add credits to resolve the outstanding "
+                "balance before transferring."
+            ),
         )
 
     # Check user has assistant:delete permission on this assistant
@@ -4232,6 +4451,15 @@ def admin_list_all_assistants(
 
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
 
+        # Batch-fetch contacts for all assistants (avoids N+1 queries)
+        contact_dao = AssistantContactDAO(session)
+        all_contacts = contact_dao.get_active_contacts_for_assistants(
+            [a.agent_id for a in assistants],
+        )
+        contacts_by_assistant: dict[int, list] = {}
+        for c in all_contacts:
+            contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
+
         # Build AssistantRead objects
         assistant_reads = [
             _build_assistant_read(
@@ -4244,6 +4472,7 @@ def admin_list_all_assistants(
                 user_image=users[i].image if users else None,
                 secrets=secrets_list[i] if secrets_list else None,
                 team_ids=[] if skip_teams else None,
+                contacts=contacts_by_assistant.get(a.agent_id, []),
             )
             for i, a in enumerate(assistants)
         ]
@@ -4336,34 +4565,45 @@ def admin_update_assistant_by_filter(
         )
     a = assistants[0]
 
-    # Update only the assistant WhatsApp number
-    update_data = {}
-    if new_assistant_whatsapp_number:
-        update_data["assistant_whatsapp_number"] = new_assistant_whatsapp_number
-    if new_user_whatsapp_number:
-        update_data["user_whatsapp_number"] = new_user_whatsapp_number
-    updated = dao.update_assistant(
-        user_id=a.user_id,
-        agent_id=a.agent_id,
-        update_data=update_data,
+    # Update the whatsapp AssistantContact row (the canonical source of
+    # contact data) instead of the legacy columns on the Assistant model.
+    contact_dao = AssistantContactDAO(session)
+    whatsapp_contact = contact_dao.get_contact_by_assistant_and_type(
+        a.agent_id,
+        "whatsapp",
     )
+    if whatsapp_contact:
+        if new_assistant_whatsapp_number:
+            whatsapp_contact.contact_value = new_assistant_whatsapp_number
+        if new_user_whatsapp_number:
+            whatsapp_contact.user_value = new_user_whatsapp_number
+    else:
+        # No existing whatsapp contact – create one if a new number was provided
+        if new_assistant_whatsapp_number:
+            contact_dao.upsert_assistant_contact(
+                assistant_id=a.agent_id,
+                contact_type="whatsapp",
+                contact_value=new_assistant_whatsapp_number,
+                user_value=new_user_whatsapp_number,
+            )
+
     session.commit()
 
     # Get API key based on assistant type (personal vs organizational)
-    if updated.organization_id is None:
-        keys = api_key_dao.get_personal_keys(updated.user_id)
+    if a.organization_id is None:
+        keys = api_key_dao.get_personal_keys(a.user_id)
     else:
-        keys = api_key_dao.filter(organization_id=updated.organization_id)
+        keys = api_key_dao.filter(organization_id=a.organization_id)
     api_key = keys[0][0].key if keys else None
 
     # Get secrets for the assistant
-    secrets = secret_dao.list_secrets(updated.user_id, updated.agent_id)
+    secrets = secret_dao.list_secrets(a.user_id, a.agent_id)
     secrets_dict = {s.secret_name: s.secret_value for s in secrets}
 
     # Return updated assistant
     return InfoResponse(
         info=_build_assistant_read(
-            updated,
+            a,
             session,
             api_key=api_key,
             secrets=secrets_dict,
@@ -4439,6 +4679,15 @@ def admin_list_assistants_for_user(
         api_keys = [get_api_key_for_assistant(a) for a in assistants]
         secrets_list = [get_secrets_for_assistant(a) for a in assistants]
 
+        # Batch-fetch contacts for all assistants (avoids N+1 queries)
+        contact_dao = AssistantContactDAO(session)
+        all_contacts = contact_dao.get_active_contacts_for_assistants(
+            [a.agent_id for a in assistants],
+        )
+        contacts_by_assistant: dict[int, list] = {}
+        for c in all_contacts:
+            contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
+
         return InfoResponse(
             info=[
                 _build_assistant_read(
@@ -4446,6 +4695,7 @@ def admin_list_assistants_for_user(
                     session,
                     api_key=api_keys[i],
                     secrets=secrets_list[i],
+                    contacts=contacts_by_assistant.get(a.agent_id, []),
                 )
                 for i, a in enumerate(assistants)
             ],
@@ -4898,7 +5148,6 @@ async def create_demo_assistant(
             voice_id=source_assistant.voice_id,
             voice_provider=source_assistant.voice_provider,
             # Demo-specific settings
-            user_phone=demo_create.demoer_phone,
             timezone="UTC",  # Default timezone for demos
             monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),
             # Link to demo metadata
@@ -4910,6 +5159,7 @@ async def create_demo_assistant(
         # Provision phone infrastructure
         # Use provided phone_country, fallback to source assistant's country, then default to US
         phone_country = demo_create.phone_country or "US"
+        demo_phone_number = None
         try:
             phone_response = await create_phone_number(
                 phone_country=phone_country,
@@ -4917,8 +5167,7 @@ async def create_demo_assistant(
             )
             if "detail" in phone_response:
                 raise Exception(f"Phone creation failed: {phone_response['detail']}")
-            demo_assistant.phone = phone_response.get("phoneNumber")
-            demo_assistant.phone_country = phone_country
+            demo_phone_number = phone_response.get("phoneNumber")
         except Exception as e:
             logging.error(f"Failed to provision phone for demo assistant: {e}")
             raise HTTPException(
@@ -4927,6 +5176,7 @@ async def create_demo_assistant(
             )
 
         # Optionally provision email infrastructure
+        demo_email = None
         if demo_create.provision_email:
             try:
                 email_local = assistant_dao.generate_unique_email_local(
@@ -4942,14 +5192,13 @@ async def create_demo_assistant(
                     raise Exception(
                         f"Email creation failed: {email_response['detail']}",
                     )
-                created_email = email_response.get("user", {}).get("primaryEmail")
-                demo_assistant.email = created_email
-                logging.info(f"Email provisioned for demo assistant: {created_email}")
+                demo_email = email_response.get("user", {}).get("primaryEmail")
+                logging.info(f"Email provisioned for demo assistant: {demo_email}")
 
                 # Wait and set up email watch
                 await asyncio.sleep(10)
                 watch_response = await watch_email(
-                    created_email,
+                    demo_email,
                     is_staging=settings.is_staging,
                 )
                 if "detail" in watch_response:
@@ -4969,6 +5218,25 @@ async def create_demo_assistant(
             )
         except Exception as e:
             logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
+
+        # Create AssistantContact rows for demo assistant
+        contact_dao = AssistantContactDAO(session)
+        if demo_phone_number:
+            contact_dao.upsert_assistant_contact(
+                assistant_id=demo_assistant.agent_id,
+                contact_type="phone",
+                contact_value=demo_phone_number,
+                provider="twilio",
+                country_code=phone_country,
+                user_value=demo_create.demoer_phone,
+            )
+        if demo_email:
+            contact_dao.upsert_assistant_contact(
+                assistant_id=demo_assistant.agent_id,
+                contact_type="email",
+                contact_value=demo_email,
+                provider="google_workspace",
+            )
 
         # Commit the transaction BEFORE waking up the assistant
         # This ensures the assistant is visible to Adapters when it queries Orchestra
