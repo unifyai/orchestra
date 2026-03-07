@@ -11,18 +11,6 @@ class FieldTypeDAO:
     def __init__(self, session: Session):
         self.session = session
 
-    def _validate_description(self, description: Optional[str]) -> None:
-        """Validate description length does not exceed 256 characters.
-
-        Args:
-            description: The description to validate
-
-        Raises:
-            ValueError: If description exceeds 256 characters
-        """
-        if description is not None and len(description) > 256:
-            raise ValueError("Description cannot exceed 256 characters")
-
     def get_by_name_and_context(
         self,
         project_id: int,
@@ -65,8 +53,6 @@ class FieldTypeDAO:
             2. If field_type is None and infer_type=True → infer from value
             3. If field_type is None and infer_type=False → default to "Any"
         """
-        self._validate_description(description)
-
         # First check if a field with this name exists but with a different category
         existing = (
             self.session.query(FieldType)
@@ -205,8 +191,6 @@ class FieldTypeDAO:
         Args:
             field_type: If provided, use this as the field type. If None, defaults to DEFAULT_FIELD_TYPE ("Any").
         """
-        self._validate_description(description)
-
         # First check if a field with this name exists but with a different category
         existing = (
             self.session.query(FieldType)
@@ -593,9 +577,6 @@ class FieldTypeDAO:
         if not fields:
             return
 
-        # Validate the global description parameter
-        self._validate_description(description)
-
         # Prepare values for bulk insertion
         # Import field definition types for isinstance checks
         from orchestra.web.api.log.schema import (
@@ -630,8 +611,6 @@ class FieldTypeDAO:
                     field_info.restrict if field_info.restrict is not None else False
                 )
                 field_description = field_info.description
-                # Validate individual field description
-                self._validate_description(field_description)
             elif isinstance(field_info, StandardFieldDefinition):
                 # field_info.type may be str or JSON schema (dict/JSON string)
                 if is_pydantic_schema(field_info.type):
@@ -642,8 +621,6 @@ class FieldTypeDAO:
                 mutable = field_info.mutable
                 unique = field_info.unique
                 field_description = getattr(field_info, "description", None)
-                # Validate individual field description
-                self._validate_description(field_description)
                 if field_type.lower() == "enum":
                     enum_values = getattr(field_info, "values", None)
                     enum_restrict = getattr(field_info, "restrict", False)
@@ -655,8 +632,6 @@ class FieldTypeDAO:
                 field_type = pydantic_schema_to_string(schema)
                 # Extract description from schema if present
                 field_description = schema_dict.get("description")
-                # Validate individual field description
-                self._validate_description(field_description)
             elif isinstance(field_info, str):
                 field_type = field_info
             elif isinstance(field_info, dict) and is_pydantic_schema(field_info):
@@ -749,9 +724,6 @@ class FieldTypeDAO:
         if not field_types_data:
             return
 
-        # Validate the global description parameter
-        self._validate_description(description)
-
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
             is_pydantic_schema,
@@ -783,9 +755,6 @@ class FieldTypeDAO:
                     f"Invalid field_category '{field_category}' for field '{field_name}'. "
                     f"Valid values are: {', '.join(sorted(self.VALID_FIELD_CATEGORIES))}",
                 )
-
-            # Validate individual field description
-            self._validate_description(field_description)
 
             # Type precedence:
             # 1. Explicit type (from explicit_types) → Use it (strict typing)
