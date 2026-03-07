@@ -2466,3 +2466,35 @@ class AuthRateLimitEntry(Base):
             "time_bucket",
         ),
     )
+
+
+class ApiMessage(Base):
+    """
+    Tracks programmatic API messages sent to assistants.
+
+    Each row represents a single request-response exchange: a developer sends a
+    message via the REST API, and the assistant may (or may not) respond.
+    The polling endpoint reads from this table.
+    """
+
+    __tablename__ = "api_messages"
+
+    id = Column(String, primary_key=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(Integer, nullable=True)
+    message = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="processing")
+    response = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    completed_at = Column(TIMESTAMP, nullable=True)
