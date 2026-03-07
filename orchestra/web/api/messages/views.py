@@ -1,6 +1,7 @@
+import logging
 import os
-import time
 
+import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.routing import APIRouter
 from sqlalchemy.orm import Session
@@ -15,24 +16,39 @@ from orchestra.web.api.messages.schema import (
     MessageSend,
     MessageStatus,
 )
-from orchestra.web.api.utils.gcp import send_pubsub_msg
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 admin_router = APIRouter()
 
-ASSISTANT_PUBSUB_PROJECT_ID = os.environ.get(
-    "ASSISTANT_PUBSUB_PROJECT_ID",
-    "responsive-city-458413-a2",
-)
-IS_STAGING = os.environ.get("ORCHESTRA_ENVIRONMENT") in ("staging", "pytest")
+ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
+ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def _pubsub_topic(assistant_id: int) -> str:
-    suffix = "-staging" if IS_STAGING else ""
-    return (
-        f"projects/{ASSISTANT_PUBSUB_PROJECT_ID}"
-        f"/topics/unity-{assistant_id}{suffix}"
-    )
+async def _dispatch_to_adapters(
+    assistant_id: int,
+    api_message_id: str,
+    body: str,
+) -> None:
+    if not ADAPTERS_URL:
+        logger.warning("UNITY_ADAPTERS_URL not set, skipping adapter dispatch")
+        return
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{ADAPTERS_URL}/api/message",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "assistant_id": str(assistant_id),
+                "api_message_id": api_message_id,
+                "body": body,
+            },
+            timeout=30,
+        )
+        if response.status_code != 200:
+            logger.error(
+                f"Adapter dispatch failed: {response.status_code} {response.text}",
+            )
 
 
 def _to_status(msg) -> MessageStatus:
@@ -83,17 +99,10 @@ async def send_message(
         organization_id=getattr(request.state, "organization_id", None),
     )
 
-    send_pubsub_msg(
-        _pubsub_topic(body.assistant_id),
-        {
-            "thread": "api_message",
-            "publish_timestamp": time.time(),
-            "event": {
-                "api_message_id": api_message.id,
-                "content": body.message,
-                "contact_id": 1,
-            },
-        },
+    await _dispatch_to_adapters(
+        assistant_id=body.assistant_id,
+        api_message_id=api_message.id,
+        body=body.message,
     )
 
     return InfoResponse(info=_to_status(api_message))
