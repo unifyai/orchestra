@@ -1,0 +1,385 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import status
+from httpx import AsyncClient
+
+from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+
+
+@pytest.fixture(scope="function", autouse=True)
+async def approve_default_user(client: AsyncClient):
+    """Ensures the default test user is approved for hiring."""
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
+    approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
+    assert approve_resp.status_code == status.HTTP_200_OK
+
+
+@pytest.fixture(autouse=True)
+def mock_assistant_infra_calls(request):
+    """Mock assistant infrastructure to prevent real network calls."""
+    with patch(
+        "orchestra.web.api.assistant.views.wake_up_assistant",
+        new_callable=AsyncMock,
+    ) as mock_wake_up, patch(
+        "orchestra.web.api.assistant.views.reawaken_assistant",
+        new_callable=AsyncMock,
+    ) as mock_reawaken:
+        mock_wake_up.return_value = MagicMock(status_code=200)
+        mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+        yield
+
+
+@pytest.fixture
+async def assistant_id(client: AsyncClient) -> int:
+    """Create a test assistant and return its ID."""
+    payload = {
+        "first_name": "TestBot",
+        "surname": "API",
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == status.HTTP_200_OK
+    return int(resp.json()["info"]["agent_id"])
+
+
+# ─── POST /v0/messages ───
+
+
+@pytest.mark.anyio
+async def test_send_message_success(client: AsyncClient, assistant_id: int):
+    resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Hello assistant"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    body = resp.json()["info"]
+    assert len(body["message_id"]) == 36  # UUID
+    assert body["assistant_id"] == assistant_id
+    assert body["message"] == "Hello assistant"
+    assert body["status"] == "processing"
+    assert body["response"] is None
+    assert body["created_at"] is not None
+    assert body["completed_at"] is None
+
+
+@pytest.mark.anyio
+async def test_send_message_publishes_to_pubsub(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    with patch(
+        "orchestra.web.api.messages.views.send_pubsub_msg",
+    ) as mock_pubsub:
+        resp = await client.post(
+            "/v0/messages",
+            json={"assistant_id": assistant_id, "message": "Check PubSub"},
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED
+        mock_pubsub.assert_called_once()
+        topic, msg = mock_pubsub.call_args[0]
+        assert f"unity-{assistant_id}" in topic
+        assert msg["thread"] == "api_message"
+        assert msg["event"]["content"] == "Check PubSub"
+        assert msg["event"]["api_message_id"] == resp.json()["info"]["message_id"]
+
+
+@pytest.mark.anyio
+async def test_send_message_nonexistent_assistant(client: AsyncClient):
+    resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": 999999, "message": "Hello"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+    assert "Assistant not found" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_send_message_empty_message(client: AsyncClient, assistant_id: int):
+    resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": ""},
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_send_message_missing_fields(client: AsyncClient):
+    resp = await client.post(
+        "/v0/messages",
+        json={},
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_send_message_no_auth(client: AsyncClient, assistant_id: int):
+    resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Hello"},
+    )
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+# ─── GET /v0/messages/{message_id} ───
+
+
+@pytest.mark.anyio
+async def test_poll_message_processing(client: AsyncClient, assistant_id: int):
+    send_resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "What's up?"},
+        headers=HEADERS,
+    )
+    message_id = send_resp.json()["info"]["message_id"]
+
+    poll_resp = await client.get(
+        f"/v0/messages/{message_id}",
+        headers=HEADERS,
+    )
+    assert poll_resp.status_code == status.HTTP_200_OK
+    body = poll_resp.json()["info"]
+    assert body["message_id"] == message_id
+    assert body["assistant_id"] == assistant_id
+    assert body["message"] == "What's up?"
+    assert body["status"] == "processing"
+    assert body["response"] is None
+    assert body["created_at"] is not None
+    assert body["completed_at"] is None
+
+
+@pytest.mark.anyio
+async def test_poll_nonexistent_message(client: AsyncClient):
+    resp = await client.get(
+        "/v0/messages/00000000-0000-0000-0000-000000000000",
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_poll_message_no_auth(client: AsyncClient, assistant_id: int):
+    send_resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Hello"},
+        headers=HEADERS,
+    )
+    message_id = send_resp.json()["info"]["message_id"]
+
+    resp = await client.get(f"/v0/messages/{message_id}")
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_poll_message_wrong_user(client: AsyncClient, assistant_id: int):
+    """A different user cannot poll for another user's message."""
+    send_resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Secret msg"},
+        headers=HEADERS,
+    )
+    message_id = send_resp.json()["info"]["message_id"]
+
+    other_user = await create_test_user(client, "other_api_user@test.com")
+    poll_resp = await client.get(
+        f"/v0/messages/{message_id}",
+        headers=other_user["headers"],
+    )
+    assert poll_resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ─── PUT /v0/admin/messages/{message_id}/complete ───
+
+
+@pytest.mark.anyio
+async def test_complete_message_with_response(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    send_resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Add milk to shopping list"},
+        headers=HEADERS,
+    )
+    message_id = send_resp.json()["info"]["message_id"]
+
+    complete_resp = await client.put(
+        f"/v0/admin/messages/{message_id}/complete",
+        json={"response": "Done! I've added milk to your shopping list."},
+        headers=ADMIN_HEADERS,
+    )
+    assert complete_resp.status_code == status.HTTP_200_OK
+    body = complete_resp.json()["info"]
+    assert body["status"] == "completed"
+    assert body["response"] == "Done! I've added milk to your shopping list."
+    assert body["completed_at"] is not None
+
+    # Polling should now return the completed state
+    poll_resp = await client.get(
+        f"/v0/messages/{message_id}",
+        headers=HEADERS,
+    )
+    poll_body = poll_resp.json()["info"]
+    assert poll_body["status"] == "completed"
+    assert poll_body["response"] == "Done! I've added milk to your shopping list."
+
+
+@pytest.mark.anyio
+async def test_complete_message_without_response(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    """Assistant processes the message but chooses not to respond on this channel."""
+    send_resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Note this for later"},
+        headers=HEADERS,
+    )
+    message_id = send_resp.json()["info"]["message_id"]
+
+    complete_resp = await client.put(
+        f"/v0/admin/messages/{message_id}/complete",
+        json={"response": None},
+        headers=ADMIN_HEADERS,
+    )
+    assert complete_resp.status_code == status.HTTP_200_OK
+    body = complete_resp.json()["info"]
+    assert body["status"] == "completed"
+    assert body["response"] is None
+    assert body["completed_at"] is not None
+
+
+@pytest.mark.anyio
+async def test_complete_nonexistent_message(client: AsyncClient):
+    resp = await client.put(
+        "/v0/admin/messages/00000000-0000-0000-0000-000000000000/complete",
+        json={"response": "Hello"},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_complete_message_no_admin_auth(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    """Non-admin users cannot complete messages."""
+    send_resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Hello"},
+        headers=HEADERS,
+    )
+    message_id = send_resp.json()["info"]["message_id"]
+
+    resp = await client.put(
+        f"/v0/admin/messages/{message_id}/complete",
+        json={"response": "Hacked!"},
+        headers=HEADERS,
+    )
+    # Non-admin users should be rejected
+    assert resp.status_code in (
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+    )
+
+
+# ─── Full lifecycle ───
+
+
+@pytest.mark.anyio
+async def test_full_lifecycle(client: AsyncClient, assistant_id: int):
+    """Test the complete send → poll → complete → poll lifecycle."""
+    # 1. Send
+    send_resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "What is 2+2?"},
+        headers=HEADERS,
+    )
+    assert send_resp.status_code == status.HTTP_201_CREATED
+    message_id = send_resp.json()["info"]["message_id"]
+
+    # 2. Poll (processing)
+    poll_resp = await client.get(f"/v0/messages/{message_id}", headers=HEADERS)
+    assert poll_resp.json()["info"]["status"] == "processing"
+    assert poll_resp.json()["info"]["response"] is None
+
+    # 3. Complete (admin)
+    complete_resp = await client.put(
+        f"/v0/admin/messages/{message_id}/complete",
+        json={"response": "4"},
+        headers=ADMIN_HEADERS,
+    )
+    assert complete_resp.status_code == status.HTTP_200_OK
+
+    # 4. Poll (completed)
+    poll_resp = await client.get(f"/v0/messages/{message_id}", headers=HEADERS)
+    info = poll_resp.json()["info"]
+    assert info["status"] == "completed"
+    assert info["response"] == "4"
+    assert info["completed_at"] is not None
+    assert info["message"] == "What is 2+2?"
+    assert info["assistant_id"] == assistant_id
+
+
+@pytest.mark.anyio
+async def test_multiple_messages_independent(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    """Multiple messages to the same assistant are independent."""
+    ids = []
+    for msg in ["First", "Second", "Third"]:
+        resp = await client.post(
+            "/v0/messages",
+            json={"assistant_id": assistant_id, "message": msg},
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED
+        ids.append(resp.json()["info"]["message_id"])
+
+    # All unique
+    assert len(set(ids)) == 3
+
+    # Complete only the second one
+    await client.put(
+        f"/v0/admin/messages/{ids[1]}/complete",
+        json={"response": "Ack second"},
+        headers=ADMIN_HEADERS,
+    )
+
+    # First and third are still processing
+    for idx in [0, 2]:
+        resp = await client.get(f"/v0/messages/{ids[idx]}", headers=HEADERS)
+        assert resp.json()["info"]["status"] == "processing"
+
+    # Second is completed
+    resp = await client.get(f"/v0/messages/{ids[1]}", headers=HEADERS)
+    assert resp.json()["info"]["status"] == "completed"
+    assert resp.json()["info"]["response"] == "Ack second"
+
+
+@pytest.mark.anyio
+async def test_send_message_other_users_assistant(client: AsyncClient):
+    """A user cannot send a message to another user's assistant."""
+    # Create assistant with default user
+    payload = {"first_name": "Private", "surname": "Bot", "create_infra": False}
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == status.HTTP_200_OK
+    aid = int(resp.json()["info"]["agent_id"])
+
+    # Try to send from a different user
+    other_user = await create_test_user(client, "intruder@test.com")
+    resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": aid, "message": "Unauthorized"},
+        headers=other_user["headers"],
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND

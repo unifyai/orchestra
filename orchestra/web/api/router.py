@@ -30,6 +30,8 @@ from orchestra.web.api.dependencies import (
 )
 from orchestra.web.api.desktop import router as desktop_router
 from orchestra.web.api.log.views import admin_router as log_admin_router
+from orchestra.web.api.messages import admin_router as messages_admin_router
+from orchestra.web.api.messages import router as messages_router
 from orchestra.web.api.organization import admin_router as organization_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
 from orchestra.web.api.plot.views import router as plot_router
@@ -128,6 +130,13 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
+api_router.include_router(
+    messages_admin_router,
+    prefix="/admin",
+    tags=["Messages"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
 # API_KEY_AUTH endpoints
 
 api_router.include_router(
@@ -211,6 +220,14 @@ api_router.include_router(
 api_router.include_router(
     storage.router,
     tags=["Storage"],
+    dependencies=API_KEY_AUTH,
+)
+
+# Messages
+
+api_router.include_router(
+    messages_router,
+    tags=["Messages"],
     dependencies=API_KEY_AUTH,
 )
 
