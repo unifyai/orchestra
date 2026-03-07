@@ -32,6 +32,18 @@ def mock_assistant_infra_calls(request):
         yield
 
 
+@pytest.fixture(autouse=True)
+def mock_adapter_dispatch():
+    """Mock the adapter dispatch to prevent real HTTP calls to Communication."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    with patch(
+        "orchestra.web.api.messages.views._dispatch_to_adapters",
+        new_callable=AsyncMock,
+    ) as mock_dispatch:
+        yield mock_dispatch
+
+
 @pytest.fixture
 async def assistant_id(client: AsyncClient) -> int:
     """Create a test assistant and return its ID."""
@@ -67,25 +79,22 @@ async def test_send_message_success(client: AsyncClient, assistant_id: int):
 
 
 @pytest.mark.anyio
-async def test_send_message_publishes_to_pubsub(
+async def test_send_message_dispatches_to_adapter(
     client: AsyncClient,
     assistant_id: int,
+    mock_adapter_dispatch: AsyncMock,
 ):
-    with patch(
-        "orchestra.web.api.messages.views.send_pubsub_msg",
-    ) as mock_pubsub:
-        resp = await client.post(
-            "/v0/messages",
-            json={"assistant_id": assistant_id, "message": "Check PubSub"},
-            headers=HEADERS,
-        )
-        assert resp.status_code == status.HTTP_201_CREATED
-        mock_pubsub.assert_called_once()
-        topic, msg = mock_pubsub.call_args[0]
-        assert f"unity-{assistant_id}" in topic
-        assert msg["thread"] == "api_message"
-        assert msg["event"]["content"] == "Check PubSub"
-        assert msg["event"]["api_message_id"] == resp.json()["info"]["message_id"]
+    resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Check dispatch"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    mock_adapter_dispatch.assert_called_once_with(
+        assistant_id=assistant_id,
+        api_message_id=resp.json()["info"]["message_id"],
+        body="Check dispatch",
+    )
 
 
 @pytest.mark.anyio
