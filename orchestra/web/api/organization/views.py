@@ -594,6 +594,41 @@ async def delete_organization(
         .all()
     ]
 
+    # Deprovision and soft-delete all contacts for org assistants *before*
+    # CASCADE deletes the rows.  Best-effort – don't block org deletion.
+    if org_assistant_ids:
+        try:
+            from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+            from orchestra.routines.assistant_contact_suspension import (
+                _deprovision_contact,
+            )
+
+            contact_dao = AssistantContactDAO(session)
+            active_contacts = contact_dao.get_active_contacts_for_assistants(
+                org_assistant_ids,
+            )
+            for contact in active_contacts:
+                try:
+                    import asyncio
+
+                    asyncio.get_event_loop().run_until_complete(
+                        _deprovision_contact(contact),
+                    )
+                except RuntimeError:
+                    import asyncio
+
+                    asyncio.run(_deprovision_contact(contact))
+                except Exception as e:
+                    logger.error(
+                        f"Failed to deprovision {contact.contact_type} "
+                        f"({contact.contact_value}) for org {organization_id}: {e}",
+                    )
+            contact_dao.soft_delete_contacts_for_organization(organization_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to deprovision contacts for org {organization_id}: {e}",
+            )
+
     # Delete organization (cascades to related tables)
     try:
         org_dao.delete(organization_id)
