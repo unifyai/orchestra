@@ -94,6 +94,8 @@ async def test_send_message_dispatches_to_adapter(
         assistant_id=assistant_id,
         api_message_id=resp.json()["info"]["message_id"],
         body="Check dispatch",
+        attachments=[],
+        tags=[],
     )
 
 
@@ -373,6 +375,215 @@ async def test_multiple_messages_independent(
     resp = await client.get(f"/v0/messages/{ids[1]}", headers=HEADERS)
     assert resp.json()["info"]["status"] == "completed"
     assert resp.json()["info"]["response"] == "Ack second"
+
+
+# ─── Tags and Attachments ───
+
+
+SAMPLE_ATTACHMENT = {
+    "id": "att-uuid-001",
+    "filename": "report.pdf",
+    "gs_url": "gs://bucket/assistant/att-uuid-001_report.pdf",
+    "content_type": "application/pdf",
+    "size_bytes": 12345,
+}
+
+
+@pytest.mark.anyio
+async def test_send_message_with_tags(client: AsyncClient, assistant_id: int):
+    resp = await client.post(
+        "/v0/messages",
+        json={
+            "assistant_id": assistant_id,
+            "message": "Tagged message",
+            "tags": ["source:slack", "channel:#general"],
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    body = resp.json()["info"]
+    assert body["tags"] == ["source:slack", "channel:#general"]
+    assert body["attachments"] == []
+
+    poll_resp = await client.get(f"/v0/messages/{body['message_id']}", headers=HEADERS)
+    assert poll_resp.json()["info"]["tags"] == ["source:slack", "channel:#general"]
+
+
+@pytest.mark.anyio
+async def test_send_message_with_attachments(client: AsyncClient, assistant_id: int):
+    resp = await client.post(
+        "/v0/messages",
+        json={
+            "assistant_id": assistant_id,
+            "message": "See attached",
+            "attachments": [SAMPLE_ATTACHMENT],
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    body = resp.json()["info"]
+    assert len(body["attachments"]) == 1
+    assert body["attachments"][0]["filename"] == "report.pdf"
+    assert body["attachments"][0]["gs_url"] == SAMPLE_ATTACHMENT["gs_url"]
+
+
+@pytest.mark.anyio
+async def test_send_message_dispatches_tags_and_attachments(
+    client: AsyncClient,
+    assistant_id: int,
+    mock_adapter_dispatch: AsyncMock,
+):
+    resp = await client.post(
+        "/v0/messages",
+        json={
+            "assistant_id": assistant_id,
+            "message": "With extras",
+            "tags": ["env:prod"],
+            "attachments": [SAMPLE_ATTACHMENT],
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    call_kwargs = mock_adapter_dispatch.call_args.kwargs
+    assert call_kwargs["tags"] == ["env:prod"]
+    assert len(call_kwargs["attachments"]) == 1
+    assert call_kwargs["attachments"][0]["filename"] == "report.pdf"
+
+
+@pytest.mark.anyio
+async def test_send_message_too_many_attachments(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    attachments = [
+        {
+            "id": f"att-{i}",
+            "filename": f"file{i}.txt",
+            "gs_url": f"gs://bucket/path/{i}",
+        }
+        for i in range(11)
+    ]
+    resp = await client.post(
+        "/v0/messages",
+        json={
+            "assistant_id": assistant_id,
+            "message": "Too many",
+            "attachments": attachments,
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert "10" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_complete_message_with_tags_and_attachments(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    send_resp = await client.post(
+        "/v0/messages",
+        json={
+            "assistant_id": assistant_id,
+            "message": "Process this",
+            "tags": ["source:api"],
+        },
+        headers=HEADERS,
+    )
+    message_id = send_resp.json()["info"]["message_id"]
+
+    complete_resp = await client.put(
+        f"/v0/admin/messages/{message_id}/complete",
+        json={
+            "response": "Done!",
+            "tags": ["source:api"],
+            "attachments": [SAMPLE_ATTACHMENT],
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert complete_resp.status_code == status.HTTP_200_OK
+    body = complete_resp.json()["info"]
+    assert body["response_tags"] == ["source:api"]
+    assert len(body["response_attachments"]) == 1
+    assert body["response_attachments"][0]["filename"] == "report.pdf"
+
+    poll_resp = await client.get(f"/v0/messages/{message_id}", headers=HEADERS)
+    poll_body = poll_resp.json()["info"]
+    assert poll_body["tags"] == ["source:api"]
+    assert poll_body["response_tags"] == ["source:api"]
+    assert len(poll_body["response_attachments"]) == 1
+
+
+@pytest.mark.anyio
+async def test_lifecycle_with_tags_and_attachments(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    """Full lifecycle with tags and attachments on both inbound and outbound."""
+    send_resp = await client.post(
+        "/v0/messages",
+        json={
+            "assistant_id": assistant_id,
+            "message": "Analyze this file",
+            "tags": ["channel:webhook", "priority:high"],
+            "attachments": [SAMPLE_ATTACHMENT],
+        },
+        headers=HEADERS,
+    )
+    assert send_resp.status_code == status.HTTP_201_CREATED
+    message_id = send_resp.json()["info"]["message_id"]
+
+    poll1 = await client.get(f"/v0/messages/{message_id}", headers=HEADERS)
+    info1 = poll1.json()["info"]
+    assert info1["status"] == "processing"
+    assert info1["tags"] == ["channel:webhook", "priority:high"]
+    assert len(info1["attachments"]) == 1
+    assert info1["response_tags"] is None
+    assert info1["response_attachments"] is None
+
+    response_attachment = {
+        "id": "resp-att-001",
+        "filename": "analysis.xlsx",
+        "gs_url": "gs://bucket/assistant/resp-att-001_analysis.xlsx",
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "size_bytes": 54321,
+    }
+    await client.put(
+        f"/v0/admin/messages/{message_id}/complete",
+        json={
+            "response": "Analysis complete, see attached.",
+            "tags": ["channel:webhook", "priority:high"],
+            "attachments": [response_attachment],
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    poll2 = await client.get(f"/v0/messages/{message_id}", headers=HEADERS)
+    info2 = poll2.json()["info"]
+    assert info2["status"] == "completed"
+    assert info2["response"] == "Analysis complete, see attached."
+    assert info2["tags"] == ["channel:webhook", "priority:high"]
+    assert info2["response_tags"] == ["channel:webhook", "priority:high"]
+    assert len(info2["response_attachments"]) == 1
+    assert info2["response_attachments"][0]["filename"] == "analysis.xlsx"
+
+
+@pytest.mark.anyio
+async def test_default_tags_and_attachments_are_empty(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    """Messages sent without tags/attachments have sensible defaults."""
+    resp = await client.post(
+        "/v0/messages",
+        json={"assistant_id": assistant_id, "message": "Plain message"},
+        headers=HEADERS,
+    )
+    body = resp.json()["info"]
+    assert body["tags"] == []
+    assert body["attachments"] == []
+    assert body["response_tags"] is None
+    assert body["response_attachments"] is None
 
 
 @pytest.mark.anyio
