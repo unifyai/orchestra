@@ -3,7 +3,7 @@ import logging
 import os
 
 import httpx
-from fastapi import Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, File, Form, HTTPException, Path, UploadFile, status
 from fastapi.routing import APIRouter
 from sqlalchemy.orm import Session
 from starlette.requests import Request
@@ -134,8 +134,12 @@ def _to_status(msg) -> MessageStatus:
 )
 async def upload_attachment(
     request: Request,
-    file: UploadFile = File(...),
-    assistant_id: int = Form(...),
+    file: UploadFile = File(..., description="The file to upload as an attachment."),
+    assistant_id: int = Form(
+        ...,
+        description="The ID of the assistant this attachment is for.",
+        example=42,
+    ),
     session: Session = Depends(get_db_session),
 ):
     assistant_dao = AssistantDAO(session)
@@ -249,8 +253,12 @@ async def send_message(
     ),
 )
 async def get_message_status(
-    message_id: str,
-    request: Request,
+    message_id: str = Path(
+        ...,
+        description="The unique message ID returned by POST /messages.",
+        example="msg_abc123",
+    ),
+    request: Request = None,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[MessageStatus]:
     api_message_dao = ApiMessageDAO(session)
