@@ -111,3 +111,31 @@ class OrganizationListResponse(BaseModel):
     organizations: list[OrganizationListItem]
     limit: int
     offset: int
+
+
+# ---------------------------------------------------------------------------
+# Contact-type cost schemas
+# ---------------------------------------------------------------------------
+
+
+class AssistantContactCostRead(BaseModel):
+    """Response model for a single contact-type cost row."""
+
+    model_config = {"from_attributes": True}
+
+    id: int
+    contact_type: str
+    provider: Optional[str] = None
+    country_code: Optional[str] = None
+    monthly_cost: float
+    one_time_cost: float
+
+
+class AssistantContactCostWrite(BaseModel):
+    """Request model for creating or updating a contact-type cost row."""
+
+    contact_type: str
+    provider: Optional[str] = None
+    country_code: Optional[str] = None
+    monthly_cost: float
+    one_time_cost: float = 0.0
