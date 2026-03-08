@@ -18,6 +18,8 @@ class ApiMessageDAO:
         user_id: str,
         message: str,
         organization_id: Optional[int] = None,
+        tags: Optional[list] = None,
+        attachments: Optional[list] = None,
     ) -> ApiMessage:
         api_message = ApiMessage(
             id=str(uuid.uuid4()),
@@ -26,6 +28,8 @@ class ApiMessageDAO:
             organization_id=organization_id,
             message=message,
             status="processing",
+            tags=tags or [],
+            attachments=attachments or [],
         )
         self.session.add(api_message)
         self.session.flush()
@@ -54,6 +58,8 @@ class ApiMessageDAO:
         self,
         message_id: str,
         response: Optional[str] = None,
+        response_tags: Optional[list] = None,
+        response_attachments: Optional[list] = None,
     ) -> Optional[ApiMessage]:
         api_message = self.session.execute(
             select(ApiMessage).where(ApiMessage.id == message_id),
@@ -62,6 +68,10 @@ class ApiMessageDAO:
             return None
         api_message.status = "completed"
         api_message.response = response
+        if response_tags is not None:
+            api_message.response_tags = response_tags
+        if response_attachments is not None:
+            api_message.response_attachments = response_attachments
         api_message.completed_at = datetime.now(timezone.utc)
         self.session.flush()
         return api_message
