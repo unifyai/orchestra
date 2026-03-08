@@ -46,6 +46,12 @@ API_KEY_AUTH = [
 ]
 ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else None
 
+groupings = {
+    "Assistants": [
+        "Messages",
+    ],
+}
+
 api_router = APIRouter()
 
 # ADMIN_AUTH endpoints
@@ -79,6 +85,7 @@ api_router.include_router(
 api_router.include_router(
     auth.router,
     tags=["Auth"],
+    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -153,6 +160,7 @@ api_router.include_router(
 api_router.include_router(
     desktop_router,
     tags=["Desktops"],
+    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
@@ -173,16 +181,19 @@ api_router.include_router(
 api_router.include_router(
     plot_router,
     tags=["Plots"],
+    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     table_view_router,
     tags=["Table Views"],
+    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     interface.router,
     tags=["Configs"],
+    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 
