@@ -4815,6 +4815,9 @@ def admin_list_contacts(
 @router.get(
     "/assistant/{agent_id}/spending-limit",
     response_model=AssistantSpendingLimitResponse,
+    tags=["Assistant Management"],
+    summary="Get assistant spending limit",
+    description="Get the monthly spending limit for an assistant.",
     responses={
         200: {
             "description": "Spending limit retrieved successfully",
@@ -4896,6 +4899,9 @@ async def get_assistant_spending_limit(
 @router.put(
     "/assistant/{agent_id}/spending-limit",
     response_model=AssistantSpendingLimitResponse,
+    tags=["Assistant Management"],
+    summary="Set assistant spending limit",
+    description="Set or update the monthly spending limit for an assistant.",
     responses={
         200: {
             "description": "Spending limit set successfully",
