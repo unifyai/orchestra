@@ -1128,7 +1128,7 @@ class FieldType(Base):
     unique = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
     enum_values = Column(JSONB, nullable=False, server_default=text("'[]'"))
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")
-    description = Column(String(256), nullable=True)
+    description = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
@@ -1262,6 +1262,27 @@ class Assistant(Base):
 
     Assistants can be either personal (user_id set, organization_id NULL)
     or organizational (organization_id set, user_id is the creator).
+
+    Contact columns legacy note
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    The columns ``phone``, ``phone_country``, ``user_phone``, ``email``,
+    ``user_whatsapp_number``, and ``assistant_whatsapp_number`` are legacy
+    columns.  The single source of truth for contact details is now the
+    ``assistant_contacts`` table (see :class:`AssistantContact`).
+
+    These columns are **retained temporarily** for two reasons:
+
+    1. **Zero-downtime deployment** – during a rolling deploy, old application
+       instances still reference these columns.  Dropping them in the same
+       migration that adds ``assistant_contacts`` would cause column-not-found
+       errors on old instances that haven't been replaced yet.
+    2. **Rollback safety** – if the new code needs to be reverted, the old
+       columns still contain valid data and no reverse data migration is
+       required.
+
+    A follow-up migration should drop these columns once the new code has
+    been running stably in production and rollback to the previous version
+    is no longer a concern.
     """
 
     __tablename__ = "assistants"
@@ -1285,7 +1306,6 @@ class Assistant(Base):
     nationality = Column(String, nullable=True)
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
-    desktop_url = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
     user_desktop_id = Column(
         Integer,
@@ -1397,6 +1417,168 @@ class AssistantSecret(Base):
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (sa.PrimaryKeyConstraint("user_id", "agent_id", "secret_name"),)
+
+
+class AssistantContact(Base):
+    """Tracks provisioned contact details for assistants.
+
+    Each row represents a single provisioned resource (phone, email, or
+    WhatsApp sender) with metadata for billing and lifecycle management.
+
+    Lifecycle statuses:
+        active         – resource is provisioned and in use.
+        grace_period   – billing account has insufficient credits; resource
+                         stays active for up to 14 days while user tops up.
+        deleted        – resource has been deprovisioned (soft-delete).
+    """
+
+    __tablename__ = "assistant_contacts"
+
+    id = Column(Integer, primary_key=True)
+
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # "phone", "email", "whatsapp"
+    contact_type = Column(String, nullable=False)
+
+    # The actual provisioned value (E.164 phone, email address, WhatsApp number)
+    contact_value = Column(String, nullable=False)
+
+    # Provider used for provisioning: "twilio", "google_workspace", etc.
+    provider = Column(String, nullable=True)
+
+    # Who provisioned: "platform" (we manage it) vs "user" (BYOD – future)
+    provisioned_by = Column(
+        String,
+        nullable=False,
+        default="platform",
+        server_default="platform",
+    )
+
+    # Country code for phone numbers (affects pricing lookups)
+    country_code = Column(String, nullable=True)
+
+    # Linked user-side value (user's personal phone/whatsapp for forwarding)
+    user_value = Column(String, nullable=True)
+
+    # Lifecycle status
+    status = Column(
+        String,
+        nullable=False,
+        default="active",
+        server_default="active",
+    )
+
+    # Type-specific metadata (JSONB):
+    #   phone:    {"sid": "PNxxx", "capabilities": {"voice": true, "sms": true}}
+    #   email:    {"workspace_user_id": "...", "domain": "unify.ai"}
+    #   whatsapp: {"messaging_service_sid": "MGxxx"}
+    metadata_ = Column("metadata", JSONB, nullable=True, default=dict)
+
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    deleted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # When the grace period started (NULL if not in grace period)
+    grace_period_started_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Last month billed (e.g. "2026-03") – prevents double-billing
+    last_billed_month = Column(String, nullable=True)
+
+    # Monthly cost in $ at time of last levy (audit trail)
+    monthly_cost = Column(Numeric, nullable=True)
+
+    # Relationship
+    assistant = relationship(
+        "Assistant",
+        backref=backref("contacts", passive_deletes=True),
+    )
+
+    __table_args__ = (
+        # One active contact of each type per assistant
+        Index(
+            "uq_assistant_contact_type_active",
+            "assistant_id",
+            "contact_type",
+            unique=True,
+            postgresql_where=text("status != 'deleted'"),
+        ),
+        # Prevent duplicate active contact values across all assistants
+        Index(
+            "uq_active_contact_value",
+            "contact_value",
+            unique=True,
+            postgresql_where=text("status != 'deleted'"),
+        ),
+        sa.CheckConstraint(
+            "contact_type IN ('phone', 'email', 'whatsapp')",
+            name="ck_assistant_contact_type",
+        ),
+        sa.CheckConstraint(
+            "status IN ('active', 'grace_period', 'deleted')",
+            name="ck_assistant_contact_status",
+        ),
+        sa.CheckConstraint(
+            "provisioned_by IN ('platform', 'user')",
+            name="ck_assistant_contact_provisioned_by",
+        ),
+    )
+
+
+class AssistantContactCost(Base):
+    """Monthly and one-time costs for each contact type + provider combination.
+
+    Supports per-country pricing (phone numbers vary by country) and
+    per-provider pricing (multiple providers per contact type in the future).
+    """
+
+    __tablename__ = "contact_type_costs"
+
+    id = Column(Integer, primary_key=True)
+
+    # "phone", "email", "whatsapp"
+    contact_type = Column(String, nullable=False)
+
+    # "twilio", "google_workspace", etc.  NULL = default for that type.
+    provider = Column(String, nullable=True)
+
+    # NULL = default pricing, "US", "GB", etc. for country-specific pricing.
+    country_code = Column(String, nullable=True)
+
+    # Monthly maintenance cost in $
+    monthly_cost = Column(Numeric, nullable=False)
+
+    # One-time setup fee in $
+    one_time_cost = Column(
+        Numeric,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
+    effective_from = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "contact_type",
+            "provider",
+            "country_code",
+            name="uq_contact_cost",
+        ),
+        sa.CheckConstraint(
+            "contact_type IN ('phone', 'email', 'whatsapp')",
+            name="ck_contact_type_cost_type",
+        ),
+    )
 
 
 class OneTimeCreditGrantLink(Base):
@@ -2284,3 +2466,39 @@ class AuthRateLimitEntry(Base):
             "time_bucket",
         ),
     )
+
+
+class ApiMessage(Base):
+    """
+    Tracks programmatic API messages sent to assistants.
+
+    Each row represents a single request-response exchange: a developer sends a
+    message via the REST API, and the assistant may (or may not) respond.
+    The polling endpoint reads from this table.
+    """
+
+    __tablename__ = "api_messages"
+
+    id = Column(String, primary_key=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(Integer, nullable=True)
+    message = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="processing")
+    response = Column(String, nullable=True)
+    tags = Column(JSONB, nullable=True, server_default="[]")
+    attachments = Column(JSONB, nullable=True, server_default="[]")
+    response_tags = Column(JSONB, nullable=True)
+    response_attachments = Column(JSONB, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    completed_at = Column(TIMESTAMP, nullable=True)

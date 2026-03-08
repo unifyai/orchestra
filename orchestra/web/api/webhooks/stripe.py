@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
@@ -209,6 +210,9 @@ def process_checkout_session_event(
                     },
                 )
 
+                # Phase 4: clear grace period on contacts if credits restored
+                AssistantContactDAO(session).maybe_clear_grace_period(ba)
+
             # Handle user checkout (personal billing)
             elif user_id:
                 user_dao = UserDAO(session)
@@ -260,6 +264,9 @@ def process_checkout_session_event(
                         "credits": credits,
                     },
                 )
+
+                # Phase 4: clear grace period on contacts if credits restored
+                AssistantContactDAO(session).maybe_clear_grace_period(ba)
 
             else:
                 logger.error(
@@ -360,6 +367,12 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                 .filter(BillingAccount.id.in_(ba_ids_subq))
                 .update({"account_status": "ACTIVE"}, synchronize_session=False)
             )
+
+        # Phase 4: clear grace period on contacts for all affected billing accounts
+        for ba_id in billing_account_ids:
+            ba = session.query(BillingAccount).filter_by(id=ba_id).first()
+            if ba:
+                AssistantContactDAO(session).maybe_clear_grace_period(ba)
 
         session.commit()
         for ba_id in billing_account_ids:
