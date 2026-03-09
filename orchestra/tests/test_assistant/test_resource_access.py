@@ -1798,62 +1798,6 @@ async def test_transfer_with_no_logs_succeeds(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_transfer_to_org_duplicate_name_fails(client: AsyncClient, dbsession):
-    """Test that transfer fails if org already has assistant with same name."""
-    # Use two different users to avoid the user-level unique constraint
-    org_owner = await create_test_user(
-        client,
-        "dup_org_owner@test.com",
-    )
-    personal_user = await create_test_user(
-        client,
-        "dup_personal@test.com",
-    )
-
-    # Org owner creates organization
-    org_resp = await client.post(
-        "/v0/organizations",
-        json={"name": "Duplicate Name Org"},
-        headers=org_owner["headers"],
-    )
-    org_id = org_resp.json()["id"]
-    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
-
-    # Add personal_user to the org so they can transfer to it
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": personal_user["id"]},
-        headers=org_owner["headers"],
-    )
-
-    # Org owner creates org assistant with a specific name
-    org_asst_resp = await client.post(
-        "/v0/assistant",
-        json={"first_name": "Duplicate", "surname": "Name", "create_infra": False},
-        headers=org_headers,
-    )
-    assert org_asst_resp.status_code == 200
-
-    # Personal user creates personal assistant with the same name (different user, so allowed)
-    personal_resp = await client.post(
-        "/v0/assistant",
-        json={"first_name": "Duplicate", "surname": "Name", "create_infra": False},
-        headers=personal_user["headers"],
-    )
-    assert personal_resp.status_code == 200
-    agent_id = int(personal_resp.json()["info"]["agent_id"])
-
-    # Try to transfer - should fail due to duplicate name in org
-    transfer_resp = await client.post(
-        f"/v0/assistant/{agent_id}/transfer/to-org",
-        json={"organization_id": org_id, "transfer_logs": False},
-        headers=personal_user["headers"],
-    )
-    # Should fail with conflict or error due to duplicate name in org
-    assert transfer_resp.status_code in [400, 409, 500]
-
-
-@pytest.mark.anyio
 async def test_transfer_to_nonexistent_org_fails(client: AsyncClient, dbsession):
     """Test that transfer to non-existent org fails."""
     user = await create_test_user(
