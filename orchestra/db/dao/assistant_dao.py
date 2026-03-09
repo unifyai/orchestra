@@ -408,6 +408,8 @@ class AssistantDAO:
         # Track changes for contact sync
         should_sync_timezone = False
         should_sync_bio = False
+        should_sync_first_name = False
+        should_sync_surname = False
 
         if "timezone" in update_data:
             old_timezone = assistant.timezone
@@ -421,14 +423,30 @@ class AssistantDAO:
             if new_about != old_about:
                 should_sync_bio = True
 
+        if "first_name" in update_data:
+            if update_data["first_name"] != assistant.first_name:
+                should_sync_first_name = True
+
+        if "surname" in update_data:
+            if update_data["surname"] != assistant.surname:
+                should_sync_surname = True
+
         for key, value in update_data.items():
             setattr(assistant, key, value)
 
         self.session.add(assistant)
         self.session.flush()
 
-        # Sync timezone/bio changes to Contact logs in Assistants project
-        if should_sync_timezone or should_sync_bio:
+        # Sync changes to Contact logs in Assistants project
+        needs_sync = any(
+            [
+                should_sync_timezone,
+                should_sync_bio,
+                should_sync_first_name,
+                should_sync_surname,
+            ]
+        )
+        if needs_sync:
             from orchestra.services.contact_sync_service import ContactSyncService
 
             sync_service = ContactSyncService(self.session)
@@ -445,6 +463,20 @@ class AssistantDAO:
                     organization_id=organization_id,
                     agent_id=assistant.agent_id,
                     new_bio=assistant.about,
+                )
+            if should_sync_first_name:
+                sync_service.sync_assistant_first_name(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    agent_id=assistant.agent_id,
+                    new_first_name=assistant.first_name,
+                )
+            if should_sync_surname:
+                sync_service.sync_assistant_surname(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    agent_id=assistant.agent_id,
+                    new_surname=assistant.surname,
                 )
 
         return assistant
