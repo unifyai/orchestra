@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -81,9 +80,6 @@ from orchestra.web.api.assistant.schema import (
     InfoResponse,
     PhotoGenerateRequest,
     ReplicatePredictionResponse,
-    SecretCreate,
-    SecretRead,
-    SecretUpdate,
     SpendingLimitRequest,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
@@ -130,7 +126,6 @@ def _build_assistant_read(
     session: Session,
     *,
     api_key: Optional[str] = None,
-    secrets: Optional[dict] = None,
     user_first_name: Optional[str] = None,
     user_last_name: Optional[str] = None,
     user_email: Optional[str] = None,
@@ -223,7 +218,6 @@ def _build_assistant_read(
             else None
         ),
         api_key=api_key,
-        secrets=secrets,
         user_first_name=user_first_name,
         user_last_name=user_last_name,
         user_email=user_email,
@@ -3210,186 +3204,6 @@ async def design_voice_create_from_preview_endpoint(
 
 
 @router.post(
-    "/assistant/{assistant_id}/secret",
-    response_model=InfoResponse[SecretRead],
-    status_code=status.HTTP_201_CREATED,
-    summary="Create or update a secret",
-    description=(
-        "Creates a new secret for an assistant or updates an existing one. "
-        "Secrets are used to store API keys and tokens for external services."
-    ),
-    responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Assistant not found"},
-        status.HTTP_409_CONFLICT: {
-            "description": "Secret already exists (use PUT to update)",
-        },
-    },
-    tags=["Secrets"],
-)
-def create_secret(
-    assistant_id: int,
-    secret_in: SecretCreate,
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[SecretRead]:
-    user_id = request.state.user_id
-    organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
-    secret_dao = AssistantSecretDAO(session)
-
-    # Verify access to the assistant
-    assistant = assistant_dao.get_assistant_by_id(
-        user_id,
-        assistant_id,
-        organization_id,
-    )
-    if not assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Assistant not found.",
-        )
-
-    try:
-        secret = secret_dao.create_secret(
-            user_id=user_id,
-            agent_id=assistant_id,
-            secret_name=secret_in.secret_name,
-            secret_value=secret_in.secret_value,
-            description=secret_in.description,
-        )
-        session.commit()
-        return InfoResponse(
-            info=SecretRead(
-                secret_name=secret.secret_name,
-                description=secret.description,
-                created_at=secret.created_at,
-                updated_at=secret.updated_at,
-            ),
-        )
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Secret '{secret_in.secret_name}' already exists for this assistant. Use PUT to update.",
-        )
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error creating secret: {str(e)}",
-        )
-
-
-@router.put(
-    "/assistant/{assistant_id}/secret/{secret_name}",
-    response_model=InfoResponse[SecretRead],
-    status_code=status.HTTP_200_OK,
-    summary="Update secret",
-    description="Updates an existing secret's value and/or description.",
-    responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Assistant or secret not found"},
-    },
-    tags=["Secrets"],
-)
-def update_secret(
-    assistant_id: int,
-    secret_name: str,
-    secret_in: SecretUpdate,
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[SecretRead]:
-    user_id = request.state.user_id
-    organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
-    secret_dao = AssistantSecretDAO(session)
-
-    # Verify access to the assistant
-    assistant = assistant_dao.get_assistant_by_id(
-        user_id,
-        assistant_id,
-        organization_id,
-    )
-    if not assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Assistant not found.",
-        )
-
-    secret = secret_dao.update_secret(
-        user_id=user_id,
-        agent_id=assistant_id,
-        secret_name=secret_name,
-        secret_value=secret_in.secret_value,
-        description=secret_in.description,
-    )
-
-    if not secret:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Secret '{secret_name}' not found.",
-        )
-
-    session.commit()
-    return InfoResponse(
-        info=SecretRead(
-            secret_name=secret.secret_name,
-            description=secret.description,
-            created_at=secret.created_at,
-            updated_at=secret.updated_at,
-        ),
-    )
-
-
-@router.delete(
-    "/assistant/{assistant_id}/secret/{secret_name}",
-    status_code=status.HTTP_200_OK,
-    summary="Delete secret",
-    description="Deletes a specific secret from an assistant.",
-    responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Assistant or secret not found"},
-    },
-    tags=["Secrets"],
-)
-def delete_secret(
-    assistant_id: int,
-    secret_name: str,
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[dict]:
-    user_id = request.state.user_id
-    organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
-    secret_dao = AssistantSecretDAO(session)
-
-    # Verify access to the assistant
-    assistant = assistant_dao.get_assistant_by_id(
-        user_id,
-        assistant_id,
-        organization_id,
-    )
-    if not assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Assistant not found.",
-        )
-
-    try:
-        secret_dao.delete_secret(user_id, assistant_id, secret_name)
-        session.commit()
-        return InfoResponse(
-            info={"message": f"Secret '{secret_name}' deleted successfully."},
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error deleting secret: {str(e)}",
-        )
-
-
-@router.post(
     "/assistant/photo/upload",
     response_model=InfoResponse[AssistantPhotoUploadResponse],
     status_code=status.HTTP_201_CREATED,
@@ -4353,7 +4167,7 @@ def admin_list_all_assistants(
         None,
         description="Comma-separated list of fields to return (e.g., 'email,agent_id,phone'). "
         "If omitted, returns full AssistantRead objects. Using this parameter skips "
-        "expensive lookups (api_key, secrets, user info) when those fields aren't requested.",
+        "expensive lookups (api_key, user info) when those fields aren't requested.",
         example="email,agent_id,first_name",
     ),
     session: Session = Depends(get_db_session),
@@ -4362,7 +4176,7 @@ def admin_list_all_assistants(
     List all assistants in the system with optional filtering and field selection.
 
     When 'from_fields' is specified, returns only the requested fields, skipping expensive
-    database lookups for unrequested fields like api_key, secrets, and user details.
+    database lookups for unrequested fields like api_key and user details.
 
     When 'from_fields' is omitted, returns full AssistantRead objects.
     """
@@ -4374,7 +4188,6 @@ def admin_list_all_assistants(
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
     user_dao = UserDAO(session)
-    secret_dao = AssistantSecretDAO(session)
 
     # Dynamically get all valid field names from AssistantRead model
     VALID_FIELDS = set(AssistantRead.model_fields.keys())
@@ -4418,23 +4231,10 @@ def admin_list_all_assistants(
                 keys = api_key_dao.filter(organization_id=assistant.organization_id)
             return keys[0][0].key if keys else None
 
-        # Get secrets for each assistant
-        def get_secrets_for_assistant(assistant):
-            secrets = secret_dao.list_secrets(
-                assistant.user_id,
-                assistant.agent_id,
-            )
-            return {s.secret_name: s.secret_value for s in secrets}
-
         # Perform expensive lookups only if needed
         api_keys = (
             [get_api_key_for_assistant(a) for a in assistants]
             if (requested_fields is None or "api_key" in requested_fields)
-            else None
-        )
-        secrets_list = (
-            [get_secrets_for_assistant(a) for a in assistants]
-            if (requested_fields is None or "secrets" in requested_fields)
             else None
         )
         users = (
@@ -4470,7 +4270,6 @@ def admin_list_all_assistants(
                 user_last_name=users[i].last_name if users else None,
                 user_email=users[i].email if users else None,
                 user_image=users[i].image if users else None,
-                secrets=secrets_list[i] if secrets_list else None,
                 team_ids=[] if skip_teams else None,
                 contacts=contacts_by_assistant.get(a.agent_id, []),
             )
@@ -4548,7 +4347,6 @@ def admin_update_assistant_by_filter(
     # Find the assistant to update
     dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
-    secret_dao = AssistantSecretDAO(session)
     assistants = dao.list_all_assistants(
         phone=phone,
         user_phone=user_phone,
@@ -4596,17 +4394,12 @@ def admin_update_assistant_by_filter(
         keys = api_key_dao.filter(organization_id=a.organization_id)
     api_key = keys[0][0].key if keys else None
 
-    # Get secrets for the assistant
-    secrets = secret_dao.list_secrets(a.user_id, a.agent_id)
-    secrets_dict = {s.secret_name: s.secret_value for s in secrets}
-
     # Return updated assistant
     return InfoResponse(
         info=_build_assistant_read(
             a,
             session,
             api_key=api_key,
-            secrets=secrets_dict,
         ),
     )
 
@@ -4649,7 +4442,6 @@ def admin_list_assistants_for_user(
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
-    secret_dao = AssistantSecretDAO(session)
     try:
         assistants = dao.list_assistants_for_user(
             user_id=user_id,
@@ -4668,16 +4460,7 @@ def admin_list_assistants_for_user(
                 keys = api_key_dao.filter(organization_id=assistant.organization_id)
             return keys[0][0].key if keys else None
 
-        # Get secrets for each assistant
-        def get_secrets_for_assistant(assistant):
-            secrets = secret_dao.list_secrets(
-                assistant.user_id,
-                assistant.agent_id,
-            )
-            return {s.secret_name: s.secret_value for s in secrets}
-
         api_keys = [get_api_key_for_assistant(a) for a in assistants]
-        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
 
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
@@ -4694,7 +4477,6 @@ def admin_list_assistants_for_user(
                     a,
                     session,
                     api_key=api_keys[i],
-                    secrets=secrets_list[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
                 )
                 for i, a in enumerate(assistants)
