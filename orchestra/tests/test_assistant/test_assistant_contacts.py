@@ -86,7 +86,7 @@ def seed_contact_type_costs(dbsession: Session):
                 contact_type="phone",
                 provider="twilio",
                 country_code=None,
-                monthly_cost=Decimal("1.50"),
+                monthly_cost=Decimal("2.00"),
                 one_time_cost=Decimal("5.00"),
             ),
             AssistantContactCost(

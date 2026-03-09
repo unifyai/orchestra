@@ -35,6 +35,7 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 SKIP_REASON = "Live Stripe tests require STRIPE_SECRET_KEY env var (sk_test_xxx)"
 
 pytestmark = [
+    pytest.mark.integration,
     pytest.mark.skipif(
         not STRIPE_SECRET_KEY.startswith("sk_test_"),
         reason=SKIP_REASON,

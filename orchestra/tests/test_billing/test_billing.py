@@ -1033,6 +1033,7 @@ async def test_admin_billing_endpoints_require_auth(client: AsyncClient):
 # --------------------------------------------------------------------------- #
 # 7. Real Stripe API test (no mocking)                                        #
 # --------------------------------------------------------------------------- #
+@pytest.mark.integration
 def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
     """
     Test the monthly invoicer with REAL Stripe API calls (no mocking).
@@ -1718,15 +1719,19 @@ async def test_get_billing_entity_personal(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_get_billing_entity_org_no_billing_setup(client: AsyncClient, dbsession):
-    """Test get_billing_entity raises error for org without billing set up."""
-    import pytest
+async def test_get_billing_entity_org_no_stripe_customer(
+    client: AsyncClient, dbsession
+):
+    """Test get_billing_entity returns entity for org without stripe_customer_id.
 
-    from orchestra.lib.billing import get_billing_entity
+    Organization creation now always provisions a BillingAccount, so
+    get_billing_entity should succeed even without a Stripe customer ID.
+    """
+    from orchestra.lib.billing import BillingEntityType, get_billing_entity
 
     owner = await create_test_user(client, "entity_no_billing_owner@test.com")
 
-    # Create organization (no billing set up - no stripe_customer_id)
+    # Create organization (billing account created automatically, no stripe_customer_id)
     org_response = await client.post(
         "/v0/organizations",
         json={"name": "Entity No Billing Test"},
@@ -1734,9 +1739,10 @@ async def test_get_billing_entity_org_no_billing_setup(client: AsyncClient, dbse
     )
     org_id = org_response.json()["id"]
 
-    # Try to get billing entity - should raise since billing not set up
-    with pytest.raises(ValueError, match="has no billing set up"):
-        get_billing_entity(dbsession, owner["id"], organization_id=org_id)
+    # get_billing_entity should succeed — billing account exists
+    entity = get_billing_entity(dbsession, owner["id"], organization_id=org_id)
+    assert entity.entity_type == BillingEntityType.ORGANIZATION
+    assert entity.stripe_customer_id is None
 
 
 @pytest.mark.anyio
