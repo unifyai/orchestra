@@ -1,9 +1,10 @@
 """
 Service for syncing User/Assistant profile fields to Contact logs.
 
-When users or assistants update their timezone or bio, this service
-propagates those changes to the corresponding Contact log entries
-in the "Assistants" project's "All/Contacts" context.
+When users or assistants update their profile fields (timezone, bio,
+first_name, surname), this service propagates those changes to the
+corresponding Contact log entries in the "Assistants" project's
+"All/Contacts" context.
 """
 
 import logging
@@ -27,6 +28,8 @@ class ContactSyncService:
     - User bio → Contact logs (first_name + surname, is_system=True)
     - Assistant timezone → Contact logs (_assistant=str(agent_id), contact_id=0)
     - Assistant about → Contact logs (_assistant=str(agent_id), contact_id=0)
+    - Assistant first_name → Contact logs (_assistant=str(agent_id), contact_id=0)
+    - Assistant surname → Contact logs (_assistant=str(agent_id), contact_id=0)
     """
 
     ASSISTANTS_PROJECT_NAME = "Assistants"
@@ -408,6 +411,96 @@ class ContactSyncService:
         if updated > 0:
             logger.debug(
                 f"Synced assistant bio to {updated} logs in project {project.id}",
+            )
+        return updated
+
+    def sync_assistant_first_name(
+        self,
+        user_id: str,
+        organization_id: Optional[int],
+        agent_id: int,
+        new_first_name: Optional[str],
+    ) -> int:
+        """
+        Sync assistant first_name to All/Contacts logs.
+
+        Updates logs where:
+        - _assistant = str(agent_id)
+        - contact_id = 0
+
+        Args:
+            user_id: The user ID (owner for personal, creator for org)
+            organization_id: The organization ID (None for personal assistants)
+            agent_id: The assistant's agent_id
+            new_first_name: The new first_name value to set
+
+        Returns:
+            Number of logs updated
+        """
+        project = self._get_assistants_project_for_assistant(user_id, organization_id)
+        if not project:
+            logger.debug("Skipping assistant first_name sync: no Assistants project")
+            return 0
+
+        context = self._get_contacts_context(project.id)
+        if not context:
+            logger.debug("Skipping assistant first_name sync: no All/Contacts context")
+            return 0
+
+        updated = self._update_contact_logs_assistant(
+            context_id=context.id,
+            assistant_context_id=str(agent_id),
+            update_field="first_name",
+            new_value=new_first_name,
+        )
+        if updated > 0:
+            logger.debug(
+                f"Synced assistant first_name to {updated} logs in project {project.id}",
+            )
+        return updated
+
+    def sync_assistant_surname(
+        self,
+        user_id: str,
+        organization_id: Optional[int],
+        agent_id: int,
+        new_surname: Optional[str],
+    ) -> int:
+        """
+        Sync assistant surname to All/Contacts logs.
+
+        Updates logs where:
+        - _assistant = str(agent_id)
+        - contact_id = 0
+
+        Args:
+            user_id: The user ID (owner for personal, creator for org)
+            organization_id: The organization ID (None for personal assistants)
+            agent_id: The assistant's agent_id
+            new_surname: The new surname value to set
+
+        Returns:
+            Number of logs updated
+        """
+        project = self._get_assistants_project_for_assistant(user_id, organization_id)
+        if not project:
+            logger.debug("Skipping assistant surname sync: no Assistants project")
+            return 0
+
+        context = self._get_contacts_context(project.id)
+        if not context:
+            logger.debug("Skipping assistant surname sync: no All/Contacts context")
+            return 0
+
+        updated = self._update_contact_logs_assistant(
+            context_id=context.id,
+            assistant_context_id=str(agent_id),
+            update_field="surname",
+            new_value=new_surname,
+        )
+        if updated > 0:
+            logger.debug(
+                f"Synced assistant surname to {updated} logs in project {project.id}",
             )
         return updated
 
