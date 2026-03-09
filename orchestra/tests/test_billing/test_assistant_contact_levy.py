@@ -78,7 +78,7 @@ def seed_contact_type_costs(dbsession: Session):
                 contact_type="phone",
                 provider="twilio",
                 country_code=None,
-                monthly_cost=Decimal("1.50"),
+                monthly_cost=Decimal("2.00"),
                 one_time_cost=Decimal("5.00"),
             ),
             AssistantContactCost(
@@ -593,7 +593,7 @@ class TestLevyCoreLogic:
         assert len(ar1) == 1
         assert len(ar2) == 1
         assert ar1[0].email_cost == Decimal("14.00")
-        assert ar2[0].whatsapp_cost == Decimal("10.00")
+        assert ar2[0].whatsapp_cost == Decimal("5.00")
 
 
 # ============================================================================
