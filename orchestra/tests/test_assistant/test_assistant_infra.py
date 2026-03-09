@@ -64,10 +64,6 @@ def mock_all_infra(dbsession):
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
         "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
-        # Mock social platforms costs - called when user_phone/user_whatsapp is provided
-        "get_social_platforms_costs": AsyncMock(
-            return_value={"platforms": {"whatsapp": 0, "phone": 0}},
-        ),
     }
 
     release_pool_vm_mock = AsyncMock(return_value={"success": True})
@@ -121,20 +117,18 @@ async def test_create_assistant_with_infra_full(
 
     data = resp.json()["info"]
 
-    # Verify response has infrastructure details populated
-    assert data["email"] == "testassistant@assistant.unify.ai"
-    assert data["phone"] == "+15551234567"
-    assert data["assistant_whatsapp_number"] == "+15559876543"
-    assert data["user_phone"] == "+15550001111"
-    assert data["user_whatsapp_number"] == "+15550002222"
+    # Contact provisioning is now done via POST /assistant/{id}/contact
+    assert data["email"] is None
+    assert data["phone"] is None
 
-    # Verify all infra functions were called
-    mock_all_infra["create_email"].assert_called_once()
-    mock_all_infra["watch_email"].assert_called_once()
-    mock_all_infra["create_phone_number"].assert_called_once()
-    mock_all_infra["assign_whatsapp_sender"].assert_called_once()
+    # Only pubsub + wake_up should be called during create
     mock_all_infra["create_pubsub_topic"].assert_called_once()
     mock_all_infra["wake_up_assistant"].assert_called_once()
+
+    # Contact provisioning removed from create
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["create_phone_number"].assert_not_called()
+    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
 
     # Verify no rollback functions were called
     mock_all_infra["delete_email"].assert_not_called()
@@ -159,20 +153,15 @@ async def test_create_assistant_with_infra_email_only(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     data = resp.json()["info"]
-    assert data["email"] == "testassistant@assistant.unify.ai"
+    # Contact provisioning removed from create endpoint
+    assert data["email"] is None
     assert data["phone"] is None
 
-    # Verify email functions called
-    mock_all_infra["create_email"].assert_called_once()
-    call_args = mock_all_infra["create_email"].call_args
-    assert call_args[0][0] == "emailonly"  # local part
-    assert call_args[0][1] == "EmailOnly"  # first_name
-    assert call_args[0][2] == "Infra"  # surname
-
-    mock_all_infra["watch_email"].assert_called_once()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
-    # Phone not requested
+    # Contact provisioning removed from create
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["watch_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["assign_whatsapp_sender"].assert_not_called()
 
@@ -182,7 +171,10 @@ async def test_create_assistant_with_infra_phone_only(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test creating assistant with only phone infrastructure."""
+    """Test creating assistant with create_infra=True.
+    Contact provisioning (phone/email/whatsapp) is handled separately via
+    POST /assistant/{id}/contact, so create only sets up pubsub + wakeup.
+    """
     payload = {
         "first_name": "PhoneOnly",
         "surname": "Infra",
@@ -195,17 +187,14 @@ async def test_create_assistant_with_infra_phone_only(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     data = resp.json()["info"]
-    assert data["phone"] == "+15551234567"
+    # Contact provisioning is no longer part of create_assistant
+    assert data["phone"] is None
     assert data["email"] is None
-
-    # Verify phone function called with correct country
-    mock_all_infra["create_phone_number"].assert_called_once()
-    call_kwargs = mock_all_infra["create_phone_number"].call_args[1]
-    assert call_kwargs["phone_country"] == "GB"
 
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
-    # Email not requested
+    # Phone/email provisioning removed from create endpoint
+    mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["watch_email"].assert_not_called()
 
@@ -245,12 +234,10 @@ async def test_create_infra_email_creation_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that email creation failure returns error and cleans up."""
-    # Configure email creation to fail
-    mock_all_infra["create_email"].return_value = {
-        "detail": "Email address already exists",
-    }
-
+    """Contact provisioning is now done via POST /assistant/{id}/contact,
+    so 'email creation failure' during create_assistant doesn't happen.
+    The assistant should be created successfully (email field ignored).
+    """
     payload = {
         "first_name": "EmailFail",
         "surname": "Test",
@@ -259,22 +246,13 @@ async def test_create_infra_email_creation_fails(
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    # Create succeeds because email provisioning is no longer part of create
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    error_detail = resp.json()["detail"]
-    assert "Infrastructure setup failed" in error_detail
-    assert "Email creation failed" in error_detail
-
-    # No rollback needed since nothing was created successfully
-    mock_all_infra["delete_email"].assert_not_called()
-    mock_all_infra["delete_phone_number"].assert_not_called()
-    mock_all_infra["delete_pubsub_topic"].assert_not_called()
-
-    # Verify assistant was deleted from DB
-    list_resp = await client.get("/v0/assistant", headers=HEADERS)
-    assert list_resp.status_code == status.HTTP_200_OK
-    assistants = list_resp.json()["info"]
-    assert all(a["first_name"] != "EmailFail" for a in assistants)
+    # Email/phone provisioning functions should not be called during create
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["create_phone_number"].assert_not_called()
+    mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -282,12 +260,9 @@ async def test_create_infra_email_watch_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that email watch failure triggers email rollback."""
-    # Configure email watch to fail
-    mock_all_infra["watch_email"].return_value = {
-        "detail": "Failed to set up Gmail watch",
-    }
-
+    """Email watch is no longer part of create_assistant (moved to contact endpoint).
+    The assistant should be created successfully.
+    """
     payload = {
         "first_name": "WatchFail",
         "surname": "Test",
@@ -296,16 +271,13 @@ async def test_create_infra_email_watch_fails(
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    # Create succeeds because email/watch provisioning is no longer part of create
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    error_detail = resp.json()["detail"]
-    assert "Infrastructure setup failed" in error_detail
-    assert "Email watch setup failed" in error_detail
-
-    # Email was created, so it should be rolled back
-    mock_all_infra["delete_email"].assert_called_once_with(
-        "testassistant@assistant.unify.ai",
-    )
+    # Email provisioning functions should not be called during create
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["watch_email"].assert_not_called()
+    mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -313,12 +285,9 @@ async def test_create_infra_phone_creation_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that phone creation failure triggers rollback of email."""
-    # Configure phone creation to fail
-    mock_all_infra["create_phone_number"].return_value = {
-        "detail": "No phone numbers available",
-    }
-
+    """Phone provisioning is now done via POST /assistant/{id}/contact.
+    The assistant should be created successfully even with phone-related payload.
+    """
     payload = {
         "first_name": "PhoneFail",
         "surname": "Test",
@@ -328,16 +297,12 @@ async def test_create_infra_phone_creation_fails(
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    # Create succeeds because phone provisioning is no longer part of create
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    error_detail = resp.json()["detail"]
-    assert "Infrastructure setup failed" in error_detail
-    assert "Phone number creation failed" in error_detail
-
-    # Email was created successfully, should be rolled back
-    mock_all_infra["delete_email"].assert_called_once()
-    # Phone wasn't created, shouldn't try to delete
-    mock_all_infra["delete_phone_number"].assert_not_called()
+    mock_all_infra["create_phone_number"].assert_not_called()
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -345,10 +310,9 @@ async def test_create_infra_whatsapp_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that whatsapp assignment failure triggers rollback."""
-    # Configure whatsapp to raise an error (missing key in response)
-    mock_all_infra["assign_whatsapp_sender"].return_value = {}
-
+    """WhatsApp provisioning is now done via POST /assistant/{id}/contact.
+    The assistant should be created successfully.
+    """
     payload = {
         "first_name": "WhatsappFail",
         "surname": "Test",
@@ -359,11 +323,13 @@ async def test_create_infra_whatsapp_fails(
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    # Create succeeds because contact provisioning is no longer part of create
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    # Email and phone were created, should be rolled back
-    mock_all_infra["delete_email"].assert_called_once()
-    mock_all_infra["delete_phone_number"].assert_called_once()
+    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["create_phone_number"].assert_not_called()
+    mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -371,7 +337,7 @@ async def test_create_infra_pubsub_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that pubsub failure triggers full rollback of all prior infra."""
+    """Test that pubsub failure triggers rollback (assistant deletion)."""
     # Configure pubsub to fail
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub quota exceeded",
@@ -380,8 +346,6 @@ async def test_create_infra_pubsub_fails(
     payload = {
         "first_name": "PubsubFail",
         "surname": "Test",
-        "email": "pubsubfail",
-        "user_phone": "+15550007777",
         "create_infra": True,
     }
 
@@ -392,10 +356,9 @@ async def test_create_infra_pubsub_fails(
     assert "Infrastructure setup failed" in error_detail
     assert "Pubsub topic creation failed" in error_detail
 
-    # All prior infra should be rolled back
-    mock_all_infra["delete_email"].assert_called_once()
-    mock_all_infra["delete_phone_number"].assert_called_once()
-    # Pubsub wasn't created, shouldn't try to delete
+    # No contact infra to roll back (contact provisioning removed from create)
+    mock_all_infra["delete_email"].assert_not_called()
+    mock_all_infra["delete_phone_number"].assert_not_called()
     mock_all_infra["delete_pubsub_topic"].assert_not_called()
 
     # Verify assistant was deleted from DB
@@ -414,18 +377,17 @@ async def test_create_infra_rollback_also_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test error message includes both primary failure and rollback failures."""
+    """Test error message when pubsub fails.
+    Contact provisioning is no longer part of create, so only pubsub rollback applies.
+    """
     # Configure pubsub to fail
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub creation failed",
     }
-    # Configure email rollback to also fail
-    mock_all_infra["delete_email"].side_effect = Exception("Delete email timeout")
 
     payload = {
         "first_name": "RollbackFail",
         "surname": "Test",
-        "email": "rollbackfail",
         "create_infra": True,
     }
 
@@ -433,11 +395,8 @@ async def test_create_infra_rollback_also_fails(
     assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
     error_detail = resp.json()["detail"]
-    # Should contain both the primary failure and rollback issues
     assert "Infrastructure setup failed" in error_detail
     assert "Pubsub topic creation failed" in error_detail
-    assert "Rollback issues" in error_detail
-    assert "Delete email timeout" in error_detail
 
 
 @pytest.mark.anyio
@@ -445,20 +404,17 @@ async def test_create_infra_multiple_rollback_failures(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test error message includes multiple rollback failures."""
+    """Test pubsub failure with rollback.
+    Contact provisioning is no longer part of create, so no contact rollbacks.
+    """
     # Configure pubsub to fail
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub error",
     }
-    # Configure multiple rollback failures
-    mock_all_infra["delete_email"].side_effect = Exception("Email delete failed")
-    mock_all_infra["delete_phone_number"].side_effect = Exception("Phone delete failed")
 
     payload = {
         "first_name": "MultiRollbackFail",
         "surname": "Test",
-        "email": "multirollback",
-        "user_phone": "+15550008888",
         "create_infra": True,
     }
 
@@ -466,11 +422,8 @@ async def test_create_infra_multiple_rollback_failures(
     assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
     error_detail = resp.json()["detail"]
-    assert "Rollback issues" in error_detail
-    # Both rollback errors should be in the message
-    assert (
-        "Email delete failed" in error_detail or "Phone delete failed" in error_detail
-    )
+    assert "Infrastructure setup failed" in error_detail
+    assert "PubSub error" in error_detail
 
 
 # =============================================================================
@@ -487,7 +440,6 @@ async def test_create_infra_with_pre_hire_chat(
     payload = {
         "first_name": "ChatInfra",
         "surname": "Test",
-        "email": "chatinfra",
         "create_infra": True,
         "pre_hire_chat": [
             {"role": "user", "msg": "Hello"},
@@ -498,8 +450,8 @@ async def test_create_infra_with_pre_hire_chat(
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    # Verify both infra and chat logging happened
-    mock_all_infra["create_email"].assert_called_once()
+    # Verify pubsub and chat logging happened (email provisioning removed from create)
+    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
     mock_all_infra["log_pre_hire_chat"].assert_called_once()
 
@@ -509,7 +461,9 @@ async def test_create_infra_email_extracts_local_part(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that full email address is split to extract local part."""
+    """Email provisioning is now done via POST /assistant/{id}/contact.
+    The create endpoint should succeed and not call create_email.
+    """
     payload = {
         "first_name": "LocalPart",
         "surname": "Test",
@@ -520,9 +474,9 @@ async def test_create_infra_email_extracts_local_part(
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    # Verify local part was extracted
-    call_args = mock_all_infra["create_email"].call_args
-    assert call_args[0][0] == "myassistant"  # Should be just local part
+    # Email provisioning removed from create endpoint
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -530,21 +484,22 @@ async def test_create_infra_default_phone_country(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that phone_country defaults to US when not provided."""
+    """Phone provisioning is now done via POST /assistant/{id}/contact.
+    The create endpoint should succeed without calling create_phone_number.
+    """
     payload = {
         "first_name": "DefaultCountry",
         "surname": "Test",
         "user_phone": "+15550009999",
-        # phone_country not provided
         "create_infra": True,
     }
 
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    # Verify US was used as default
-    call_kwargs = mock_all_infra["create_phone_number"].call_args[1]
-    assert call_kwargs["phone_country"] == "US"
+    # Phone provisioning removed from create endpoint
+    mock_all_infra["create_phone_number"].assert_not_called()
+    mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -556,8 +511,6 @@ async def test_create_infra_assistant_retrievable_after_success(
     payload = {
         "first_name": "Retrievable",
         "surname": "Assistant",
-        "email": "retrievable",
-        "user_phone": "+15551010101",
         "create_infra": True,
     }
 
@@ -575,8 +528,9 @@ async def test_create_infra_assistant_retrievable_after_success(
 
     data = matching[0]
     assert data["first_name"] == "Retrievable"
-    assert data["email"]  # Email local part is set
-    assert data["phone"]  # Phone was created
+    # Contact fields are None (provisioned separately via contact endpoint)
+    assert data["email"] is None
+    assert data["phone"] is None
 
 
 # =============================================================================
@@ -616,16 +570,14 @@ async def test_org_assistant_with_infra_full(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test creating org assistant with full infrastructure: email + phone + whatsapp."""
+    """Test creating org assistant with create_infra=True.
+    Contact provisioning is handled separately via POST /assistant/{id}/contact.
+    """
     org_ctx = await _create_org_with_approved_owner(client)
 
     payload = {
         "first_name": "OrgInfraFull",
         "surname": "Test",
-        "email": "orginfrafull",
-        "user_phone": "+15551111111",
-        "user_whatsapp_number": "+15552222222",
-        "phone_country": "US",
         "create_infra": True,
     }
 
@@ -641,18 +593,18 @@ async def test_org_assistant_with_infra_full(
     # Verify it's an org assistant
     assert data["organization_id"] == org_ctx["org_id"]
 
-    # Verify response has email set
-    assert data["email"]  # Email local part is set
-    # Note: phone/whatsapp fields may not be populated in response for org assistants,
-    # but we verify infra was created via mock assertions below
+    # Contact fields are None (provisioned separately)
+    assert data["email"] is None
+    assert data["phone"] is None
 
-    # Verify all infra functions were called
-    mock_all_infra["create_email"].assert_called_once()
-    mock_all_infra["watch_email"].assert_called_once()
-    mock_all_infra["create_phone_number"].assert_called_once()
-    mock_all_infra["assign_whatsapp_sender"].assert_called_once()
+    # Only pubsub + wake_up should be called during create
     mock_all_infra["create_pubsub_topic"].assert_called_once()
     mock_all_infra["wake_up_assistant"].assert_called_once()
+
+    # Contact provisioning removed from create
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["create_phone_number"].assert_not_called()
+    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -660,13 +612,14 @@ async def test_org_assistant_with_infra_email_only(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test creating org assistant with only email infrastructure."""
+    """Test creating org assistant with create_infra=True.
+    Contact provisioning is handled via POST /assistant/{id}/contact.
+    """
     org_ctx = await _create_org_with_approved_owner(client)
 
     payload = {
         "first_name": "OrgEmailOnly",
         "surname": "Infra",
-        "email": "orgemailonly",
         "create_infra": True,
     }
 
@@ -679,11 +632,11 @@ async def test_org_assistant_with_infra_email_only(
 
     data = resp.json()["info"]
     assert data["organization_id"] == org_ctx["org_id"]
-    assert data["email"]  # Email local part is set
-    assert data["phone"] is None  # No phone requested
+    assert data["email"] is None  # Contact provisioning removed from create
+    assert data["phone"] is None
 
-    mock_all_infra["create_email"].assert_called_once()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
+    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
 
 
@@ -692,7 +645,7 @@ async def test_org_assistant_infra_pubsub_fails_rollback(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that org assistant pubsub failure triggers full rollback."""
+    """Test that org assistant pubsub failure triggers rollback."""
     org_ctx = await _create_org_with_approved_owner(client)
 
     # Configure pubsub to fail
@@ -703,8 +656,6 @@ async def test_org_assistant_infra_pubsub_fails_rollback(
     payload = {
         "first_name": "OrgPubsubFail",
         "surname": "Test",
-        "email": "orgpubsubfail",
-        "user_phone": "+15553333333",
         "create_infra": True,
     }
 
@@ -719,11 +670,9 @@ async def test_org_assistant_infra_pubsub_fails_rollback(
     assert "Infrastructure setup failed" in error_detail
     assert "Pubsub topic creation failed" in error_detail
 
-    # All prior infra should be rolled back
-    mock_all_infra["delete_email"].assert_called_once()
-    mock_all_infra["delete_phone_number"].assert_called_once()
-    # Note: DB state check removed - session mocking makes this unreliable,
-    # but the mock assertions confirm rollback logic executed correctly
+    # No contact infra to roll back (contact provisioning removed from create)
+    mock_all_infra["delete_email"].assert_not_called()
+    mock_all_infra["delete_phone_number"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -731,18 +680,14 @@ async def test_org_assistant_infra_email_fails_no_rollback_needed(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test that org assistant email failure returns error without rollback."""
+    """Email provisioning is now done via POST /assistant/{id}/contact.
+    The org assistant should be created successfully.
+    """
     org_ctx = await _create_org_with_approved_owner(client)
-
-    # Configure email creation to fail
-    mock_all_infra["create_email"].return_value = {
-        "detail": "Email quota exceeded",
-    }
 
     payload = {
         "first_name": "OrgEmailFail",
         "surname": "Test",
-        "email": "orgemailfail",
         "create_infra": True,
     }
 
@@ -751,15 +696,11 @@ async def test_org_assistant_infra_email_fails_no_rollback_needed(
         json=payload,
         headers=org_ctx["org_headers"],
     )
-    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    # Create succeeds because email provisioning is no longer part of create
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    error_detail = resp.json()["detail"]
-    assert "Infrastructure setup failed" in error_detail
-    assert "Email creation failed" in error_detail
-
-    # No rollback needed - nothing was created
-    mock_all_infra["delete_email"].assert_not_called()
-    mock_all_infra["delete_phone_number"].assert_not_called()
+    mock_all_infra["create_email"].assert_not_called()
+    mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -800,20 +741,19 @@ async def test_org_assistant_infra_rollback_also_fails(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test org assistant error message includes both primary and rollback failures."""
+    """Test org assistant pubsub failure.
+    Contact provisioning is no longer part of create, so no email rollback.
+    """
     org_ctx = await _create_org_with_approved_owner(client)
 
     # Configure pubsub to fail
     mock_all_infra["create_pubsub_topic"].return_value = {
         "detail": "PubSub org error",
     }
-    # Configure email rollback to also fail
-    mock_all_infra["delete_email"].side_effect = Exception("Org email delete timeout")
 
     payload = {
         "first_name": "OrgRollbackFail",
         "surname": "Test",
-        "email": "orgrollbackfail",
         "create_infra": True,
     }
 
@@ -826,8 +766,11 @@ async def test_org_assistant_infra_rollback_also_fails(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "Rollback issues" in error_detail
-    assert "Org email delete timeout" in error_detail
+    assert "PubSub org error" in error_detail
+
+    # No contact infra to roll back
+    mock_all_infra["delete_email"].assert_not_called()
+    mock_all_infra["delete_phone_number"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -865,8 +808,9 @@ async def test_org_assistant_retrievable_after_infra_success(
     data = matching[0]
     assert data["first_name"] == "OrgRetrievable"
     assert data["organization_id"] == org_ctx["org_id"]
-    assert data["email"]  # Email local part is set
-    # Note: phone field may not be populated in response for org assistants
+    # Contact fields are None (provisioned separately via contact endpoint)
+    assert data["email"] is None
+    assert data["phone"] is None
 
 
 @pytest.mark.anyio
@@ -898,9 +842,11 @@ async def test_org_assistant_with_pre_hire_chat_and_infra(
     assert resp.json()["info"]["organization_id"] == org_ctx["org_id"]
 
     # Verify both infra and chat logging happened
-    mock_all_infra["create_email"].assert_called_once()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
     mock_all_infra["log_pre_hire_chat"].assert_called_once()
+
+    # Contact provisioning removed from create
+    mock_all_infra["create_email"].assert_not_called()
 
 
 # =============================================================================

@@ -3,8 +3,33 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from sqlalchemy.orm import Session
 
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+
+
+def _insert_contact(
+    dbsession: Session,
+    assistant_id: int,
+    contact_type: str,
+    contact_value: str,
+    *,
+    user_value: str | None = None,
+    provider: str | None = None,
+    country_code: str | None = None,
+):
+    """Helper: insert an AssistantContact row directly in the DB."""
+    dao = AssistantContactDAO(dbsession)
+    dao.upsert_assistant_contact(
+        assistant_id=assistant_id,
+        contact_type=contact_type,
+        contact_value=contact_value,
+        provider=provider,
+        country_code=country_code,
+        user_value=user_value,
+    )
+    dbsession.flush()
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -354,8 +379,8 @@ async def test_update_about_only(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_phone_only(client: AsyncClient):
-    # Create assistant, then `PATCH /v0/assistant/{id}/config` phone only -> updated
+async def test_update_phone_only(client: AsyncClient, dbsession: Session):
+    # Create assistant, insert a phone contact via DB, verify it appears in the response
     payload = {
         "first_name": "Ian",
         "surname": "Chen",
@@ -370,14 +395,13 @@ async def test_update_phone_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_phone = "+1-555-123-4567"
-    update_payload = {"phone": new_phone, "create_infra": False}
-    patch = await client.patch(
-        f"/v0/assistant/{aid}/config",
-        json=update_payload,
-        headers=HEADERS,
-    )
-    assert patch.status_code == 200
-    updated = patch.json()["info"]
+    _insert_contact(dbsession, int(aid), "phone", new_phone, provider="twilio")
+    # GET the assistant to verify the phone appears
+    get_resp = await client.get(f"/v0/assistant", headers=HEADERS)
+    assert get_resp.status_code == 200
+    assistants = [a for a in get_resp.json()["info"] if a["agent_id"] == aid]
+    assert len(assistants) == 1
+    updated = assistants[0]
     assert updated["phone"] == new_phone
     assert updated["email"] is None
     assert updated["about"] == payload["about"]
@@ -385,8 +409,8 @@ async def test_update_phone_only(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_email_only(client: AsyncClient):
-    # Create assistant, then `PATCH /v0/assistant/{id}/config` email only -> updated
+async def test_update_email_only(client: AsyncClient, dbsession: Session):
+    # Create assistant, insert an email contact via DB, verify it appears in the response
     payload = {
         "first_name": "Julia",
         "surname": "Garcia",
@@ -401,14 +425,15 @@ async def test_update_email_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_email = "julia.garcia@example.com"
-    update_payload = {"email": new_email, "create_infra": False}
-    patch = await client.patch(
-        f"/v0/assistant/{aid}/config",
-        json=update_payload,
-        headers=HEADERS,
+    _insert_contact(
+        dbsession, int(aid), "email", new_email, provider="google_workspace"
     )
-    assert patch.status_code == 200
-    updated = patch.json()["info"]
+    # GET the assistant to verify the email appears
+    get_resp = await client.get(f"/v0/assistant", headers=HEADERS)
+    assert get_resp.status_code == 200
+    assistants = [a for a in get_resp.json()["info"] if a["agent_id"] == aid]
+    assert len(assistants) == 1
+    updated = assistants[0]
     assert updated["email"] == new_email
     assert updated["phone"] is None
     assert updated["about"] == payload["about"]
@@ -546,8 +571,8 @@ async def test_create_assistant_with_desktop_fields(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_multiple_fields(client: AsyncClient):
-    # Create assistant, then `PATCH /v0/assistant/{id}/config` with multiple fields -> all updated
+async def test_update_multiple_fields(client: AsyncClient, dbsession: Session):
+    # Create assistant, PATCH non-contact fields, insert contacts via DB -> all visible
     payload = {
         "first_name": "Kevin",
         "surname": "Brown",
@@ -562,10 +587,18 @@ async def test_update_multiple_fields(client: AsyncClient):
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
+
+    # Insert contacts directly via DB (contact fields are stripped from PATCH /config)
+    new_phone = "+1-555-987-6543"
+    new_email = "kevin.brown@example.com"
+    _insert_contact(dbsession, int(aid), "phone", new_phone, provider="twilio")
+    _insert_contact(
+        dbsession, int(aid), "email", new_email, provider="google_workspace"
+    )
+
+    # PATCH the non-contact fields
     update_payload = {
         "about": "Updated professional bio with new skills",
-        "phone": "+1-555-987-6543",
-        "email": "kevin.brown@example.com",
         "timezone": "UTC",
         "create_infra": False,
     }
@@ -577,16 +610,16 @@ async def test_update_multiple_fields(client: AsyncClient):
     assert patch.status_code == 200
     updated = patch.json()["info"]
     assert updated["about"] == update_payload["about"]
-    assert updated["phone"] == update_payload["phone"]
-    assert updated["email"] == update_payload["email"]
+    assert updated["phone"] == new_phone
+    assert updated["email"] == new_email
     assert updated["timezone"] == update_payload["timezone"]
     assert updated["first_name"] == payload["first_name"]
     assert updated["nationality"] == payload["nationality"]
 
 
 @pytest.mark.anyio
-async def test_search_assistants_by_phone(client: AsyncClient):
-    # Create two assistants, then update them with distinct phone values, search by phone
+async def test_search_assistants_by_phone(client: AsyncClient, dbsession: Session):
+    # Create two assistants, insert phone contacts via DB, search by phone
     phone1 = "+15551112222"
     phone2 = "+15553334444"
     payload1 = {
@@ -619,18 +652,9 @@ async def test_search_assistants_by_phone(client: AsyncClient):
     aid1 = resp1.json()["info"]["agent_id"]
     aid2 = resp2.json()["info"]["agent_id"]
 
-    # Update assistants with phone numbers (phone is set via PATCH, not create)
-    patch1 = await client.patch(
-        f"/v0/assistant/{aid1}/config",
-        json={"phone": phone1, "create_infra": False},
-        headers=HEADERS,
-    )
-    patch2 = await client.patch(
-        f"/v0/assistant/{aid2}/config",
-        json={"phone": phone2, "create_infra": False},
-        headers=HEADERS,
-    )
-    assert patch1.status_code == 200 and patch2.status_code == 200
+    # Insert phone contacts directly via DB
+    _insert_contact(dbsession, int(aid1), "phone", phone1, provider="twilio")
+    _insert_contact(dbsession, int(aid2), "phone", phone2, provider="twilio")
 
     # Search by first assistant's phone
     search_resp = await client.get(
@@ -645,8 +669,10 @@ async def test_search_assistants_by_phone(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_search_assistants_by_email(client: AsyncClient):
-    # Create two assistants with distinct email values, search by email
+async def test_search_assistants_by_email(client: AsyncClient, dbsession: Session):
+    # Create two assistants, insert email contacts via DB, search by email
+    email1 = "rachel.martinez@example.com"
+    email2 = "sam.johnson@example.com"
     payload1 = {
         "first_name": "Rachel",
         "surname": "Martinez",
@@ -656,7 +682,6 @@ async def test_search_assistants_by_email(client: AsyncClient):
         "nationality": "United States",
         "profile_photo": "https://example.com/photos/rachel.jpg",
         "about": "Backend developer",
-        "email": "rachel.martinez@example.com",
         "create_infra": False,
     }
     payload2 = {
@@ -668,7 +693,6 @@ async def test_search_assistants_by_email(client: AsyncClient):
         "nationality": "Australia",
         "profile_photo": "https://example.com/photos/sam.jpg",
         "about": "DevOps engineer",
-        "email": "sam.johnson@example.com",
         "create_infra": False,
     }
 
@@ -676,23 +700,30 @@ async def test_search_assistants_by_email(client: AsyncClient):
     resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
     assert resp1.status_code == 200 and resp2.status_code == 200
 
+    aid1 = resp1.json()["info"]["agent_id"]
     aid2 = resp2.json()["info"]["agent_id"]
+
+    # Insert email contacts directly via DB
+    _insert_contact(dbsession, int(aid1), "email", email1, provider="google_workspace")
+    _insert_contact(dbsession, int(aid2), "email", email2, provider="google_workspace")
 
     # Search by second assistant's email
     search_resp = await client.get(
-        f"/v0/assistant?email={payload2['email']}",
+        f"/v0/assistant?email={email2}",
         headers=HEADERS,
     )
     assert search_resp.status_code == 200
     results = search_resp.json()["info"]
     assert len(results) == 1
     assert results[0]["agent_id"] == aid2
-    assert results[0]["email"] == payload2["email"]
+    assert results[0]["email"] == email2
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistants_filter_phone(client: AsyncClient):
-    # Create assistants, then update them with different phone values, filter by phone
+async def test_admin_list_assistants_filter_phone(
+    client: AsyncClient, dbsession: Session
+):
+    # Create assistants, insert phone contacts via DB, filter by phone
     phone1 = "+15551111111"
     phone2 = "+15552222222"
     payload1 = {
@@ -725,18 +756,9 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
     aid1 = resp1.json()["info"]["agent_id"]
     aid2 = resp2.json()["info"]["agent_id"]
 
-    # Update assistants with phone numbers (phone is set via PATCH, not create)
-    patch1 = await client.patch(
-        f"/v0/assistant/{aid1}/config",
-        json={"phone": phone1, "create_infra": False},
-        headers=HEADERS,
-    )
-    patch2 = await client.patch(
-        f"/v0/assistant/{aid2}/config",
-        json={"phone": phone2, "create_infra": False},
-        headers=HEADERS,
-    )
-    assert patch1.status_code == 200 and patch2.status_code == 200
+    # Insert phone contacts directly via DB
+    _insert_contact(dbsession, int(aid1), "phone", phone1, provider="twilio")
+    _insert_contact(dbsession, int(aid2), "phone", phone2, provider="twilio")
 
     # Test admin endpoint with phone filter
     admin_resp = await client.get(
@@ -754,8 +776,12 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistants_filter_email(client: AsyncClient):
-    # Create assistants with different email values, filter by email
+async def test_admin_list_assistants_filter_email(
+    client: AsyncClient, dbsession: Session
+):
+    # Create assistants, insert email contacts via DB, filter by email
+    email1 = "email.test1@example.com"
+    email2 = "email.test2@example.com"
     payload1 = {
         "first_name": "Email",
         "surname": "Test1",
@@ -765,7 +791,6 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
         "nationality": "United States",
         "profile_photo": "https://example.com/photos/email1.jpg",
         "about": "Email test assistant 1",
-        "email": "email.test1@example.com",
         "create_infra": False,
     }
     payload2 = {
@@ -777,7 +802,6 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
         "nationality": "South Africa",
         "profile_photo": "https://example.com/photos/email2.jpg",
         "about": "Email test assistant 2",
-        "email": "email.test2@example.com",
         "create_infra": False,
     }
 
@@ -785,11 +809,16 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
     resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
     assert resp1.status_code == 200 and resp2.status_code == 200
 
+    aid1 = resp1.json()["info"]["agent_id"]
     aid2 = resp2.json()["info"]["agent_id"]
+
+    # Insert email contacts directly via DB
+    _insert_contact(dbsession, int(aid1), "email", email1, provider="google_workspace")
+    _insert_contact(dbsession, int(aid2), "email", email2, provider="google_workspace")
 
     # Test admin endpoint with email filter
     admin_resp = await client.get(
-        f"/v0/admin/assistant?email={payload2['email']}",
+        f"/v0/admin/assistant?email={email2}",
         headers=ADMIN_HEADERS,
     )
     assert admin_resp.status_code == 200
@@ -799,7 +828,7 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
     assert isinstance(results, list)
     assert len(results) == 1
     assert results[0]["agent_id"] == aid2
-    assert results[0]["email"] == payload2["email"]
+    assert results[0]["email"] == email2
 
 
 @pytest.mark.anyio
@@ -904,6 +933,7 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
 @pytest.mark.anyio
 async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     client: AsyncClient,
+    dbsession: Session,
 ):
     # Create two assistants, then set phone via PATCH (phone is no longer set on create)
     initial_phone1 = "+15550000001"
@@ -947,18 +977,23 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     assert resp2.status_code == 200
     aid2 = resp2.json()["info"]["agent_id"]
 
-    # Set phone numbers via PATCH (phone is set via update, not create)
-    patch1 = await client.patch(
-        f"/v0/assistant/{aid1}/config",
-        json={"phone": initial_phone1, "create_infra": False},
-        headers=HEADERS,
+    # Insert phone contacts directly via DB (PATCH /config no longer sets contact fields)
+    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO as _ACDAO
+
+    _acdao = _ACDAO(dbsession)
+    _acdao.upsert_assistant_contact(
+        assistant_id=int(aid1),
+        contact_type="phone",
+        contact_value=initial_phone1,
+        provider="twilio",
     )
-    patch2 = await client.patch(
-        f"/v0/assistant/{aid2}/config",
-        json={"phone": initial_phone2, "create_infra": False},
-        headers=HEADERS,
+    _acdao.upsert_assistant_contact(
+        assistant_id=int(aid2),
+        contact_type="phone",
+        contact_value=initial_phone2,
+        provider="twilio",
     )
-    assert patch1.status_code == 200 and patch2.status_code == 200
+    dbsession.flush()
 
     # Now test admin_update_assistant filtering
     new_assistant_whatsapp = "+15551234567"
@@ -1009,7 +1044,7 @@ async def test_create_assistant_duplicate_name_fails(
     assert resp2.status_code == 409
     body = resp2.json()
     assert "detail" in body
-    expected_error = f"An assistant with the name '{payload['first_name']} {payload['surname']}' already exists for this user."
+    expected_error = f"An assistant with the name '{payload['first_name']} {payload['surname']}' already exists."
     assert body["detail"] == expected_error
 
     # Verify that a different user CAN create an assistant with the same name
@@ -1250,7 +1285,7 @@ async def test_delete_assistant_deletes_contexts(
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_contact(client: AsyncClient):
+async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session):
     # Mock the infrastructure deletion calls to avoid external API calls during testing
     with patch(
         "orchestra.web.api.assistant.views.delete_phone_number",
@@ -1274,32 +1309,32 @@ async def test_delete_assistant_contact(client: AsyncClient):
         assert create_resp.status_code == 200
         assistant_id = create_resp.json()["info"]["agent_id"]
 
-        # 2. Update the assistant to have all contact details for the test
-        contact_payload = {
-            "email": "contact.remover@example.com",
-            "phone": "+15558675309",
-            "user_phone": "+15558675310",  # user_phone can be different
-            "user_whatsapp_number": "+15558675311",
-            "create_infra": False,
-        }
-        update_resp = await client.patch(
-            f"/v0/assistant/{assistant_id}/config",
-            json=contact_payload,
-            headers=HEADERS,
+        # 2. Insert contacts directly via DB (PATCH /config no longer sets contact fields)
+        _insert_contact(
+            dbsession,
+            int(assistant_id),
+            "email",
+            "contact.remover@example.com",
+            provider="google_workspace",
         )
-        assert update_resp.status_code == 200
+        _insert_contact(
+            dbsession,
+            int(assistant_id),
+            "phone",
+            "+15558675309",
+            provider="twilio",
+            user_value="+15558675310",
+        )
+        _insert_contact(
+            dbsession,
+            int(assistant_id),
+            "whatsapp",
+            "+15551112222",
+            provider="twilio",
+            user_value="+15558675311",
+        )
 
-        # 3. Use an admin endpoint to set the assistant_whatsapp_number for a complete test case
         assistant_whatsapp_number = "+15551112222"
-        admin_patch_resp = await client.patch(
-            f"/v0/admin/assistant?phone={contact_payload['phone']}&new_assistant_whatsapp_number={assistant_whatsapp_number}",
-            headers=ADMIN_HEADERS,
-        )
-        assert admin_patch_resp.status_code == 200
-        assert (
-            admin_patch_resp.json()["info"]["assistant_whatsapp_number"]
-            == assistant_whatsapp_number
-        )
 
         # 4. Delete Email contact
         delete_email_payload = {"contact_type": "email"}
@@ -1312,10 +1347,8 @@ async def test_delete_assistant_contact(client: AsyncClient):
         assert delete_email_resp.status_code == 200, delete_email_resp.text
         email_deleted_info = delete_email_resp.json()["info"]
         assert email_deleted_info["email"] is None
-        assert (
-            email_deleted_info["phone"] == contact_payload["phone"]
-        )  # Should be unchanged
-        mock_delete_email.assert_called_once_with(contact_payload["email"])
+        assert email_deleted_info["phone"] == "+15558675309"  # Should be unchanged
+        mock_delete_email.assert_called_once_with("contact.remover@example.com")
 
         # 5. Delete Phone contact
         delete_phone_payload = {"contact_type": "phone"}
@@ -1333,7 +1366,7 @@ async def test_delete_assistant_contact(client: AsyncClient):
         assert (
             phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
         )  # Unchanged
-        mock_delete_phone.assert_called_once_with(contact_payload["phone"])
+        mock_delete_phone.assert_called_once_with("+15558675309")
 
         # 6. Delete WhatsApp contact
         delete_whatsapp_payload = {"contact_type": "whatsapp"}
@@ -1370,39 +1403,40 @@ async def test_delete_assistant_contact(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.no_mock_infra
 @patch("orchestra.web.api.assistant.views.reawaken_assistant", new_callable=AsyncMock)
+@patch("orchestra.web.api.assistant.views.wake_up_assistant", new_callable=AsyncMock)
 async def test_update_assistant_contact_info_reawakens(
+    mock_wake_up,
     mock_reawaken,
     client: AsyncClient,
+    dbsession: Session,
 ):
+    mock_wake_up.return_value = MagicMock(status_code=200)
+    mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+
     # Create an assistant
     payload = {"first_name": "Reawaken", "surname": "Updater", "create_infra": False}
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     assistant_id = create_resp.json()["info"]["agent_id"]
 
-    # Update a contact field (phone) and expect reawaken to be called
-    update_contact_payload = {"phone": "+15550001111", "create_infra": True}
-    patch_contact_resp = await client.patch(
-        f"/v0/assistant/{assistant_id}/config",
+    # Insert a phone contact directly via DB so we can update it
+    _insert_contact(
+        dbsession, int(assistant_id), "phone", "+15550001111", provider="twilio"
+    )
+    mock_reawaken.reset_mock()
+
+    # Update the contact's user_value via PUT /assistant/{id}/contact and expect reawaken
+    update_contact_payload = {"contact_type": "phone", "user_value": "+15550009999"}
+    put_resp = await client.put(
+        f"/v0/assistant/{assistant_id}/contact",
         json=update_contact_payload,
         headers=HEADERS,
     )
-    assert patch_contact_resp.status_code == 200
+    assert put_resp.status_code == 200
     mock_reawaken.assert_called_once()
-    # Use ANY from unittest.mock for the is_staging flag
-    mock_reawaken.call_args[0][0] == str(assistant_id)
-
-    # Reset the mock and update a non-contact field
-    mock_reawaken.reset_mock()
-    update_non_contact_payload = {"about": "new bio", "create_infra": True}
-    patch_non_contact_resp = await client.patch(
-        f"/v0/assistant/{assistant_id}/config",
-        json=update_non_contact_payload,
-        headers=HEADERS,
-    )
-    assert patch_non_contact_resp.status_code == 200
-    mock_reawaken.assert_not_called()
+    assert mock_reawaken.call_args[0][0] == str(assistant_id)
 
 
 @pytest.mark.anyio
@@ -1434,29 +1468,31 @@ async def test_update_assistant_with_invalid_timezone(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.no_mock_infra
 @patch("orchestra.web.api.assistant.views.delete_phone_number", new_callable=AsyncMock)
 @patch("orchestra.web.api.assistant.views.reawaken_assistant", new_callable=AsyncMock)
+@patch("orchestra.web.api.assistant.views.wake_up_assistant", new_callable=AsyncMock)
 async def test_delete_assistant_contact_reawakens(
+    mock_wake_up,
     mock_reawaken,
     mock_delete_phone,
     client: AsyncClient,
+    dbsession: Session,
 ):
+    mock_wake_up.return_value = MagicMock(status_code=200)
+    mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+
     # 1. Create an assistant
     payload = {"first_name": "Reawaken", "surname": "Deleter", "create_infra": False}
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     assistant_id = create_resp.json()["info"]["agent_id"]
 
-    # 2. Add a phone number to it so we can delete it
-    # We set create_infra=False because we are mocking the reawaken call anyway
-    update_payload = {"phone": "+15552223333", "create_infra": False}
-    update_resp = await client.patch(
-        f"/v0/assistant/{assistant_id}/config",
-        json=update_payload,
-        headers=HEADERS,
+    # 2. Insert a phone contact directly via DB
+    _insert_contact(
+        dbsession, int(assistant_id), "phone", "+15552223333", provider="twilio"
     )
-    assert update_resp.status_code == 200
-    mock_reawaken.assert_not_called()  # Should not be called when create_infra is false
+    mock_reawaken.reset_mock()
 
     # 3. Delete the phone contact and verify reawaken is called
     delete_payload = {"contact_type": "phone"}

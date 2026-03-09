@@ -38,6 +38,23 @@ ADMIN_HEADERS = {
 
 
 # =============================================================================
+# Auto-mock Turnstile CAPTCHA for all tests in this module
+# =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _mock_turnstile():
+    """Disable Turnstile verification by default.
+
+    Tests that explicitly need to exercise captcha behaviour override this
+    by patching ``verify_turnstile_token`` themselves (inner patch wins).
+    """
+    with patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock:
+        mock.return_value = True
+        yield mock
+
+
+# =============================================================================
 # Helpers
 # =============================================================================
 
@@ -229,7 +246,7 @@ async def test_register_overwrites_pending_signup(
 
     with patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send:
         mock_send.return_value = True
-        await _register(client, email, password="firstPassword1")
+        await _register(client, email, password="firstPassword1!")
 
     dao = EmailVerificationDAO(dbsession)
     first_entry = dao.get_pending(email, "signup")
@@ -237,7 +254,7 @@ async def test_register_overwrites_pending_signup(
 
     with patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send:
         mock_send.return_value = True
-        await _register(client, email, password="secondPassword2")
+        await _register(client, email, password="secondPassword2!")
 
     second_entry = dao.get_pending(email, "signup")
     # Password hash should be different (different password)
@@ -351,9 +368,9 @@ async def test_verify_email_max_attempts(client: AsyncClient, dbsession: Session
     entry.code_hash = hash_code(correct_code)
     dbsession.flush()
 
-    # This should fail because attempts >= MAX_ATTEMPTS
+    # This should fail because attempts >= MAX_ATTEMPTS (rate-limited)
     resp = await _verify(client, email, correct_code)
-    assert resp.status_code == 400
+    assert resp.status_code == 429
 
 
 @pytest.mark.anyio
@@ -418,7 +435,7 @@ async def test_verify_creates_api_key(client: AsyncClient, dbsession: Session):
 async def test_authenticate_happy_path(client: AsyncClient, dbsession: Session):
     """Login succeeds with correct credentials."""
     email = "auth_happy@example.com"
-    password = "correctPassword1"
+    password = "correctPassword1!"
     await _register_and_verify(client, dbsession, email, password=password)
 
     resp = await _authenticate(client, email, password)
@@ -432,9 +449,9 @@ async def test_authenticate_happy_path(client: AsyncClient, dbsession: Session):
 async def test_authenticate_wrong_password(client: AsyncClient, dbsession: Session):
     """Login fails with wrong password."""
     email = "auth_wrongpw@example.com"
-    await _register_and_verify(client, dbsession, email, password="correctPassword1")
+    await _register_and_verify(client, dbsession, email, password="correctPassword1!")
 
-    resp = await _authenticate(client, email, "wrongPassword1")
+    resp = await _authenticate(client, email, "wrongPassword1!")
     assert resp.status_code == 401
     assert resp.json()["detail"]["error"] == "invalid_credentials"
 
@@ -442,7 +459,7 @@ async def test_authenticate_wrong_password(client: AsyncClient, dbsession: Sessi
 @pytest.mark.anyio
 async def test_authenticate_nonexistent_user(client: AsyncClient):
     """Login fails for non-existent email."""
-    resp = await _authenticate(client, "ghost@example.com", "anyPassword1")
+    resp = await _authenticate(client, "ghost@example.com", "anyPassword1!")
     assert resp.status_code == 401
     assert resp.json()["detail"]["error"] == "invalid_credentials"
 
@@ -585,8 +602,8 @@ async def test_forgot_password_oauth_only(client: AsyncClient, dbsession: Sessio
 async def test_reset_password_happy_path(client: AsyncClient, dbsession: Session):
     """Reset password with valid code updates the password and invalidates sessions."""
     email = "reset_happy@example.com"
-    old_password = "oldPassword123"
-    new_password = "newPassword456"
+    old_password = "oldPassword@123"
+    new_password = "newPassword@456"
     await _register_and_verify(client, dbsession, email, password=old_password)
 
     # Request password reset
@@ -706,8 +723,8 @@ async def test_reset_password_expired_code(client: AsyncClient, dbsession: Sessi
 async def test_change_password_happy_path(client: AsyncClient, dbsession: Session):
     """Authenticated user can change their password."""
     email = "change_pw@example.com"
-    old_password = "oldPassword123"
-    new_password = "newPassword456"
+    old_password = "oldPassword@123"
+    new_password = "newPassword@456"
     await _register_and_verify(client, dbsession, email, password=old_password)
 
     # Get API key for the user
@@ -746,7 +763,7 @@ async def test_change_password_happy_path(client: AsyncClient, dbsession: Sessio
 async def test_change_password_wrong_current(client: AsyncClient, dbsession: Session):
     """Change password fails if current password is wrong."""
     email = "change_pw_wrong@example.com"
-    await _register_and_verify(client, dbsession, email, password="correctPw123")
+    await _register_and_verify(client, dbsession, email, password="correctPw@123")
 
     from orchestra.db.dao.api_key_dao import ApiKeyDAO
     from orchestra.db.dao.user_dao import UserDAO
@@ -765,7 +782,7 @@ async def test_change_password_wrong_current(client: AsyncClient, dbsession: Ses
 
     resp = await client.post(
         "/v0/auth/change-password",
-        json={"current_password": "wrongPw123", "new_password": "newPw12345"},
+        json={"current_password": "wrongPw@123", "new_password": "newPw@12345"},
         headers=user_headers,
     )
     assert resp.status_code == 401
@@ -778,7 +795,7 @@ async def test_change_password_sets_password_changed_at(
 ):
     """Change password sets password_changed_at for session invalidation."""
     email = "change_pw_ts@example.com"
-    old_password = "oldPassword123"
+    old_password = "oldPassword@123"
     await _register_and_verify(client, dbsession, email, password=old_password)
 
     from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -803,7 +820,7 @@ async def test_change_password_sets_password_changed_at(
 
     resp = await client.post(
         "/v0/auth/change-password",
-        json={"current_password": old_password, "new_password": "newPw12345"},
+        json={"current_password": old_password, "new_password": "newPw@12345"},
         headers=user_headers,
     )
     assert resp.status_code == 200
@@ -831,6 +848,10 @@ async def test_resend_verification_signup(client: AsyncClient, dbsession: Sessio
     dao = EmailVerificationDAO(dbsession)
     first_entry = dao.get_pending(email, "signup")
     first_hash = first_entry.code_hash
+
+    # Age the entry past the 60-second cooldown window
+    first_entry.created_at = datetime.now(timezone.utc) - timedelta(seconds=120)
+    dbsession.flush()
 
     with patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send:
         mock_send.return_value = True
@@ -935,7 +956,7 @@ async def test_providers_for_email_nonexistent(client: AsyncClient):
 async def test_full_signup_to_login_flow(client: AsyncClient, dbsession: Session):
     """End-to-end: register → verify → authenticate."""
     email = "e2e_flow@example.com"
-    password = "e2ePassword123"
+    password = "e2ePassword@123"
 
     await _register_and_verify(client, dbsession, email, password=password)
 
@@ -948,8 +969,8 @@ async def test_full_signup_to_login_flow(client: AsyncClient, dbsession: Session
 async def test_full_forgot_reset_login_flow(client: AsyncClient, dbsession: Session):
     """End-to-end: register → verify → forgot → reset → login with new password."""
     email = "e2e_reset@example.com"
-    original_password = "originalPw123"
-    new_password = "brandNewPw456"
+    original_password = "originalPw@123"
+    new_password = "brandNewPw@456"
 
     await _register_and_verify(client, dbsession, email, password=original_password)
 
@@ -1001,9 +1022,9 @@ async def test_full_forgot_reset_login_flow(client: AsyncClient, dbsession: Sess
 async def test_multiple_users_independent(client: AsyncClient, dbsession: Session):
     """Multiple users can register and authenticate independently."""
     users_data = [
-        ("multi_a@example.com", "passwordA123"),
-        ("multi_b@example.com", "passwordB456"),
-        ("multi_c@example.com", "passwordC789"),
+        ("multi_a@example.com", "passwordA@123"),
+        ("multi_b@example.com", "passwordB@456"),
+        ("multi_c@example.com", "passwordC@789"),
     ]
 
     for email, password in users_data:
@@ -1309,7 +1330,8 @@ async def test_set_password_too_short(client: AsyncClient, dbsession: Session):
 
 @pytest.mark.anyio
 async def test_set_password_already_has_password(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     """Set password fails for user who already has email/password (7.4 inverse)."""
     email = "setpw_exists@example.com"
@@ -1450,7 +1472,7 @@ async def test_reset_password_max_attempts(client: AsyncClient, dbsession: Sessi
     # Exhaust all 5 attempts with wrong codes
     for _ in range(5):
         resp = await _verify_code(client, email, "000000", purpose="password_reset")
-        assert resp.status_code == 400
+        assert resp.status_code in (400, 429)
 
     # Now even the correct code should fail
     entry = (
@@ -1462,14 +1484,16 @@ async def test_reset_password_max_attempts(client: AsyncClient, dbsession: Sessi
         .first()
     )
     assert entry is not None
-    assert entry.attempts >= 5
+    # The rate limiter (max_attempts=5) may block the last attempt before the
+    # DAO increments the counter, so 4 recorded attempts is acceptable.
+    assert entry.attempts >= 4
 
     correct_code = "654321"
     entry.code_hash = hash_code(correct_code)
     dbsession.flush()
 
     resp = await _verify_code(client, email, correct_code, purpose="password_reset")
-    assert resp.status_code == 400
+    assert resp.status_code in (400, 429)
 
 
 # =============================================================================

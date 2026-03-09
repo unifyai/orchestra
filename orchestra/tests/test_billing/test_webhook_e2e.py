@@ -87,6 +87,7 @@ SKIP_REASON = (
 )
 
 pytestmark = [
+    pytest.mark.integration,
     pytest.mark.e2e_webhook,
     pytest.mark.skipif(
         not STRIPE_SECRET_KEY.startswith("sk_test_") or not STRIPE_CLI_AVAILABLE,
