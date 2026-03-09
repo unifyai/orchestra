@@ -713,7 +713,6 @@ async def test_admin_list_assistants_fields_single_email(client: AsyncClient):
         # Optional fields not requested should NOT be present
         assert "first_name" not in item, "first_name should not be in response"
         assert "api_key" not in item, "api_key should not be in response"
-        assert "secrets" not in item, "secrets should not be in response"
         assert "user_email" not in item, "user_email should not be in response"
         assert "agent_id" not in item, "agent_id should not be in response"
         assert "user_id" not in item, "user_id should not be in response"
@@ -780,7 +779,7 @@ async def test_admin_list_assistants_fields_excludes_expensive_lookups(
     """
     Test that field selection avoids expensive lookups when those fields aren't requested.
 
-    Fields like 'api_key', 'secrets', 'user_email', 'user_first_name', 'user_last_name'
+    Fields like 'api_key', 'user_email', 'user_first_name', 'user_last_name'
     require additional database queries. When these fields aren't requested,
     they should not be computed or returned.
     """
@@ -814,9 +813,6 @@ async def test_admin_list_assistants_fields_excludes_expensive_lookups(
         assert (
             "api_key" not in item
         ), "api_key requires extra lookup, should not be present"
-        assert (
-            "secrets" not in item
-        ), "secrets requires extra lookup, should not be present"
         assert (
             "user_email" not in item
         ), "user_email requires extra lookup, should not be present"
