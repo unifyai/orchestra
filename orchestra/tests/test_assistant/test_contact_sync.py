@@ -2,7 +2,8 @@
 Tests for Contact sync service.
 
 Tests the automatic synchronization of User/Assistant profile fields
-(timezone, bio) to Contact logs in the Assistants project.
+(timezone, bio, first_name, surname, age, nationality) to Contact logs
+in the Assistants project.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1157,6 +1158,158 @@ async def test_sync_only_affects_is_system_true_logs(
             assert log["entries"].get("timezone") == "Europe/Rome"
         else:
             assert log["entries"].get("timezone") == "UTC"  # Unchanged
+
+
+@pytest.mark.anyio
+async def test_assistant_name_sync_updates_contact_log(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test that updating assistant first_name and surname syncs to Contact logs."""
+    user = await create_test_user(
+        client,
+        "asst_name_sync@test.com",
+    )
+
+    # Create assistant
+    assistant_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "OriginalFirst",
+            "surname": "OriginalLast",
+            "create_infra": False,
+        },
+        headers=user["headers"],
+    )
+    assert assistant_resp.status_code == 200
+    agent_id = assistant_resp.json()["info"]["agent_id"]
+
+    # Create Contact log for the assistant (contact_id=0)
+    await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Assistants",
+            "context": "All/Contacts",
+            "entries": [
+                {
+                    "_assistant": str(agent_id),
+                    "contact_id": 0,
+                    "first_name": "OriginalFirst",
+                    "surname": "OriginalLast",
+                },
+            ],
+        },
+        headers=user["headers"],
+    )
+
+    # Update assistant name via API
+    update_resp = await client.patch(
+        f"/v0/assistant/{agent_id}/config",
+        json={
+            "first_name": "NewFirst",
+            "surname": "NewLast",
+            "create_infra": False,
+        },
+        headers=user["headers"],
+    )
+    assert update_resp.status_code == 200
+
+    # Verify Contact log was updated
+    logs_resp = await client.get(
+        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        headers=user["headers"],
+    )
+    assert logs_resp.status_code == 200
+    logs = logs_resp.json()["logs"]
+    asst_log = next(
+        (log for log in logs if log["entries"].get("contact_id") == 0),
+        None,
+    )
+    assert asst_log is not None
+    assert asst_log["entries"]["first_name"] == "NewFirst"
+    assert asst_log["entries"]["surname"] == "NewLast"
+
+
+@pytest.mark.anyio
+async def test_assistant_all_contact_fields_sync_together(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test that updating all syncable profile fields syncs them to Contact logs.
+
+    Only fields that exist in the Contact model (first_name, surname, bio,
+    timezone) are synced. Age and nationality are not part of the Contact
+    schema and are not synced.
+    """
+    user = await create_test_user(
+        client,
+        "asst_all_sync@test.com",
+    )
+
+    # Create assistant
+    assistant_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Old",
+            "surname": "Name",
+            "about": "Old bio",
+            "timezone": "UTC",
+            "create_infra": False,
+        },
+        headers=user["headers"],
+    )
+    assert assistant_resp.status_code == 200
+    agent_id = assistant_resp.json()["info"]["agent_id"]
+
+    # Create Contact log
+    await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Assistants",
+            "context": "All/Contacts",
+            "entries": [
+                {
+                    "_assistant": str(agent_id),
+                    "contact_id": 0,
+                    "first_name": "Old",
+                    "surname": "Name",
+                    "bio": "Old bio",
+                    "timezone": "UTC",
+                },
+            ],
+        },
+        headers=user["headers"],
+    )
+
+    # Update all syncable profile fields
+    update_resp = await client.patch(
+        f"/v0/assistant/{agent_id}/config",
+        json={
+            "first_name": "New",
+            "surname": "Person",
+            "about": "New bio",
+            "timezone": "Europe/Berlin",
+            "create_infra": False,
+        },
+        headers=user["headers"],
+    )
+    assert update_resp.status_code == 200
+
+    # Verify all synced fields updated
+    logs_resp = await client.get(
+        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        headers=user["headers"],
+    )
+    logs = logs_resp.json()["logs"]
+    asst_log = next(
+        (log for log in logs if log["entries"].get("contact_id") == 0),
+        None,
+    )
+    assert asst_log is not None
+    assert asst_log["entries"]["first_name"] == "New"
+    assert asst_log["entries"]["surname"] == "Person"
+    assert asst_log["entries"]["bio"] == "New bio"
+    assert asst_log["entries"]["timezone"] == "Europe/Berlin"
 
 
 @pytest.mark.anyio

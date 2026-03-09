@@ -512,6 +512,26 @@ class AssistantUpdate(BaseModel):
     Only includes fields that can be updated.
     """
 
+    first_name: Optional[str] = Field(
+        None,
+        description="First name of the assistant",
+        example="Ada",
+    )
+    surname: Optional[str] = Field(
+        None,
+        description="Surname of the assistant",
+        example="Lovelace",
+    )
+    age: Optional[int] = Field(
+        None,
+        description="Age of the assistant",
+        example=28,
+    )
+    nationality: Optional[str] = Field(
+        None,
+        description="Assistant's nationality",
+        example="North America",
+    )
     weekly_limit: Optional[float] = Field(
         None,
         description="Weekly time limit for the assistant in hours",
