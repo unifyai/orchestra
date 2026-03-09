@@ -1383,42 +1383,6 @@ class Assistant(Base):
     )
 
 
-class AssistantSecret(Base):
-    """Model class for storing secrets associated with assistants.
-
-    Secrets are external service credentials (API keys, tokens, etc.) that
-    an assistant needs to access external services on behalf of the user.
-    """
-
-    __tablename__ = "assistant_secrets"
-
-    user_id = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        primary_key=True,
-        nullable=False,
-        index=True,
-    )
-    agent_id = Column(
-        Integer,
-        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
-        primary_key=True,
-        nullable=False,
-        index=True,
-    )
-    secret_name = Column(
-        String,
-        primary_key=True,
-        nullable=False,
-    )
-    secret_value = Column(String, nullable=False)
-    description = Column(String, nullable=True)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (sa.PrimaryKeyConstraint("user_id", "agent_id", "secret_name"),)
-
-
 class AssistantContact(Base):
     """Tracks provisioned contact details for assistants.
 

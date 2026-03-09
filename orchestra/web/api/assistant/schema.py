@@ -285,11 +285,6 @@ class AssistantRead(AssistantCreate):
         None,
         description="Profile image URL of the user (owner/supervisor)",
     )
-    secrets: Optional[Dict[str, str]] = Field(
-        None,
-        description="Dictionary of secret names to values. Only returned via admin endpoints.",
-        example={"openai_api_key": "sk-..."},
-    )
     monthly_spending_cap: Optional[float] = Field(
         None,
         description="Monthly spending limit in dollars for this assistant.",
@@ -345,7 +340,6 @@ class AssistantRead(AssistantCreate):
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
-                "secrets": {"openai_api_key": "sk-..."},
                 "is_local": False,
             },
         }
@@ -1365,105 +1359,6 @@ class AssistantTransferResponse(BaseModel):
         None,
         description="Whether logs were deleted (only for org->personal transfers).",
     )
-
-
-# Assistant Secrets
-
-
-class SecretCreate(BaseModel):
-    """
-    Schema for creating or updating an assistant secret.
-    """
-
-    secret_name: str = Field(
-        ...,
-        description="Unique name/key for the secret (e.g., 'openai_api_key', 'github_token').",
-        example="openai_api_key",
-        min_length=1,
-        max_length=255,
-    )
-    secret_value: str = Field(
-        ...,
-        description="The secret value (API key, token, etc.).",
-        example="sk-...",
-        min_length=1,
-    )
-    description: Optional[str] = Field(
-        None,
-        description="Optional description of what this secret is used for.",
-        example="OpenAI API key for GPT-4 access",
-    )
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "secret_name": "openai_api_key",
-                "secret_value": "sk-...",
-                "description": "OpenAI API key for GPT-4 access",
-            },
-        }
-
-
-class SecretUpdate(BaseModel):
-    """
-    Schema for updating an existing secret.
-    """
-
-    secret_value: Optional[str] = Field(
-        None,
-        description="New secret value.",
-        example="sk-new-...",
-        min_length=1,
-    )
-    description: Optional[str] = Field(
-        None,
-        description="New description for the secret.",
-        example="Updated OpenAI API key",
-    )
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "secret_value": "sk-new-...",
-                "description": "Updated OpenAI API key",
-            },
-        }
-
-
-class SecretRead(BaseModel):
-    """
-    Schema for reading secret metadata (value is masked).
-    """
-
-    secret_name: str = Field(
-        ...,
-        description="The name/key of the secret.",
-        example="openai_api_key",
-    )
-    description: Optional[str] = Field(
-        None,
-        description="Description of what this secret is used for.",
-        example="OpenAI API key for GPT-4 access",
-    )
-    created_at: Optional[datetime] = Field(
-        None,
-        description="When the secret was created.",
-    )
-    updated_at: Optional[datetime] = Field(
-        None,
-        description="When the secret was last updated.",
-    )
-
-    class Config:
-        orm_mode = True
-        schema_extra = {
-            "example": {
-                "secret_name": "openai_api_key",
-                "description": "OpenAI API key for GPT-4 access",
-                "created_at": "2025-01-15T10:30:00Z",
-                "updated_at": "2025-01-15T10:30:00Z",
-            },
-        }
 
 
 # Admin schemas
