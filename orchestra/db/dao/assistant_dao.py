@@ -153,40 +153,6 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
 
-    def get_assistant_by_name(
-        self,
-        user_id: str,
-        first_name: str,
-        surname: str,
-        organization_id: Optional[int] = None,
-    ) -> Optional[Assistant]:
-        """
-        Retrieve an Assistant by name within a user/org context.
-
-        Used to check for name uniqueness when creating assistants.
-
-        :param user_id: User ID.
-        :param first_name: Assistant first name.
-        :param surname: Assistant surname.
-        :param organization_id: Organization ID (None for personal assistants).
-        :return: Assistant if found, None otherwise.
-        """
-        if organization_id is not None:
-            stmt = select(Assistant).where(
-                Assistant.organization_id == organization_id,
-                Assistant.first_name == first_name,
-                Assistant.surname == surname,
-            )
-        else:
-            stmt = select(Assistant).where(
-                Assistant.user_id == user_id,
-                Assistant.organization_id.is_(None),
-                Assistant.first_name == first_name,
-                Assistant.surname == surname,
-            )
-        result = self.session.execute(stmt).scalar_one_or_none()
-        return result
-
     def list_assistants_for_user(
         self,
         user_id: str,

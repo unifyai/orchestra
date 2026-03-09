@@ -426,7 +426,11 @@ async def test_update_email_only(client: AsyncClient, dbsession: Session):
     aid = create.json()["info"]["agent_id"]
     new_email = "julia.garcia@example.com"
     _insert_contact(
-        dbsession, int(aid), "email", new_email, provider="google_workspace"
+        dbsession,
+        int(aid),
+        "email",
+        new_email,
+        provider="google_workspace",
     )
     # GET the assistant to verify the email appears
     get_resp = await client.get(f"/v0/assistant", headers=HEADERS)
@@ -593,7 +597,11 @@ async def test_update_multiple_fields(client: AsyncClient, dbsession: Session):
     new_email = "kevin.brown@example.com"
     _insert_contact(dbsession, int(aid), "phone", new_phone, provider="twilio")
     _insert_contact(
-        dbsession, int(aid), "email", new_email, provider="google_workspace"
+        dbsession,
+        int(aid),
+        "email",
+        new_email,
+        provider="google_workspace",
     )
 
     # PATCH the non-contact fields
@@ -721,7 +729,8 @@ async def test_search_assistants_by_email(client: AsyncClient, dbsession: Sessio
 
 @pytest.mark.anyio
 async def test_admin_list_assistants_filter_phone(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     # Create assistants, insert phone contacts via DB, filter by phone
     phone1 = "+15551111111"
@@ -777,7 +786,8 @@ async def test_admin_list_assistants_filter_phone(
 
 @pytest.mark.anyio
 async def test_admin_list_assistants_filter_email(
-    client: AsyncClient, dbsession: Session
+    client: AsyncClient,
+    dbsession: Session,
 ):
     # Create assistants, insert email contacts via DB, filter by email
     email1 = "email.test1@example.com"
@@ -1016,62 +1026,6 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     assert len(infos) == 1
     assert infos[0]["agent_id"] == aid1
     assert all(i["agent_id"] != aid2 for i in infos)
-
-
-@pytest.mark.anyio
-async def test_create_assistant_duplicate_name_fails(
-    client: AsyncClient,
-    dbsession,
-):
-    # `POST /v0/assistant` with a duplicate name for the same user should fail.
-    payload = {
-        "first_name": "David",
-        "surname": "Miller",
-        "age": 35,
-        "weekly_limit": 20.0,
-        "max_parallel": 2,
-        "nationality": "United States",
-        "about": "A test assistant.",
-        "create_infra": False,
-    }
-
-    # First creation should succeed
-    resp1 = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp1.status_code == 200, f"First assistant creation failed: {resp1.text}"
-
-    # Second creation with the same name for the same user should fail
-    resp2 = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp2.status_code == 409
-    body = resp2.json()
-    assert "detail" in body
-    expected_error = f"An assistant with the name '{payload['first_name']} {payload['surname']}' already exists."
-    assert body["detail"] == expected_error
-
-    # Verify that a different user CAN create an assistant with the same name
-    user2 = await create_test_user(
-        client,
-        "user2-for-duplicate-test@example.com",
-    )
-    user2_headers = user2["headers"]
-
-    # Add credits to user2 so they can create an assistant
-    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-    from orchestra.db.dao.user_dao import UserDAO
-    from orchestra.settings import settings
-
-    user_dao = UserDAO(dbsession)
-    ba_dao = BillingAccountDAO(dbsession)
-    user_obj = user_dao.get_user_with_id(user2["id"])
-    ba_dao.add_credits(user_obj.billing_account_id, settings.assistant_creation_cost)
-    dbsession.commit()
-
-    resp3 = await client.post("/v0/assistant", json=payload, headers=user2_headers)
-    assert (
-        resp3.status_code == 200
-    ), f"Second user failed to create assistant with same name: {resp3.text}"
-    data3 = resp3.json()["info"]
-    assert data3["first_name"] == payload["first_name"]
-    assert data3["surname"] == payload["surname"]
 
 
 @pytest.mark.anyio
@@ -1423,7 +1377,11 @@ async def test_update_assistant_contact_info_reawakens(
 
     # Insert a phone contact directly via DB so we can update it
     _insert_contact(
-        dbsession, int(assistant_id), "phone", "+15550001111", provider="twilio"
+        dbsession,
+        int(assistant_id),
+        "phone",
+        "+15550001111",
+        provider="twilio",
     )
     mock_reawaken.reset_mock()
 
@@ -1490,7 +1448,11 @@ async def test_delete_assistant_contact_reawakens(
 
     # 2. Insert a phone contact directly via DB
     _insert_contact(
-        dbsession, int(assistant_id), "phone", "+15552223333", provider="twilio"
+        dbsession,
+        int(assistant_id),
+        "phone",
+        "+15552223333",
+        provider="twilio",
     )
     mock_reawaken.reset_mock()
 
