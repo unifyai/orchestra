@@ -59,6 +59,7 @@ def _resolve_billing_account(
     Resolve a BillingAccount from either a user_id or an organization_id.
 
     Exactly one of the two parameters must be provided.
+    Delegates to :class:`BillingAccountDAO` for the actual lookup.
 
     :param session: Database session.
     :param user_id: User ID (for personal billing accounts).
@@ -77,29 +78,22 @@ def _resolve_billing_account(
             detail="Provide either user_id or organization_id.",
         )
 
+    ba_dao = BillingAccountDAO(session)
+
     if user_id:
-        user_dao = UserDAO(session)
-        user = user_dao.get_user_with_id(user_id)
-        ba = user.billing_account
+        ba = ba_dao.resolve_for_user(user_id)
         if ba is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"User {user_id} has no billing account.",
+                detail=f"User {user_id} not found or has no billing account.",
             )
         return ba
 
-    # organization_id path
-    org = session.query(Organization).filter_by(id=organization_id).first()
-    if org is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Organization {organization_id} not found.",
-        )
-    ba = org.billing_account
+    ba = ba_dao.resolve_for_org(organization_id)
     if ba is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Organization {organization_id} has no billing account.",
+            detail=f"Organization {organization_id} not found or has no billing account.",
         )
     return ba
 

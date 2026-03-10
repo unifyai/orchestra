@@ -22,17 +22,12 @@ from orchestra.db.dao.billing_account_dao import (
     BillingAccountDAO,
 )
 from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import (
-    BillingAccount,
-    Recharge,
-    RechargeStatus,
-)
 from orchestra.lib.billing import (
     configure_stripe,
-    get_billing_entity,
     is_stripe_mode_conflict,
     prefill_customer_fields,
     sync_tax_id_to_customer,
@@ -129,29 +124,14 @@ def get_account_info(
         "billing:read",
     )
 
-    try:
-        billing_entity = get_billing_entity(session, user_id, organization_id)
-    except ValueError:
+    ba_dao = BillingAccountDAO(session)
+    ba = ba_dao.resolve(user_id, organization_id)
+    if not ba:
         raise HTTPException(status_code=400, detail="Billing is not set up")
 
-    ba = (
-        session.query(BillingAccount)
-        .filter_by(id=billing_entity.billing_account_id)
-        .first()
-    )
-    if not ba:
-        raise HTTPException(status_code=400, detail="Billing account not found")
-
     # Find the most recent paid recharge for this billing account
-    last_recharge = (
-        session.query(Recharge)
-        .filter(
-            Recharge.billing_account_id == ba.id,
-            Recharge.status == RechargeStatus.PAID,
-        )
-        .order_by(Recharge.at.desc())
-        .first()
-    )
+    recharge_dao = RechargeDAO(session)
+    last_recharge = recharge_dao.get_last_paid(ba.id)
     last_recharge_at: Optional[str] = None
     if last_recharge and last_recharge.at:
         ts = last_recharge.at
@@ -406,16 +386,8 @@ def create_portal_session(
 
     _check_org_billing_permission(session, user_id, organization_id, "billing:write")
 
-    try:
-        billing_entity = get_billing_entity(session, user_id, organization_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Billing is not set up")
-
-    ba = (
-        session.query(BillingAccount)
-        .filter_by(id=billing_entity.billing_account_id)
-        .first()
-    )
+    ba_dao = BillingAccountDAO(session)
+    ba = ba_dao.resolve(user_id, organization_id)
     if not ba or not ba.stripe_customer_id:
         raise HTTPException(
             status_code=404,
@@ -487,17 +459,11 @@ def get_checkout_status(
     _check_org_billing_permission(session, user_id, organization_id, "billing:read")
 
     # Get billing account to find stripe customer
-    try:
-        billing_entity = get_billing_entity(session, user_id, organization_id)
-    except ValueError:
+    ba_dao = BillingAccountDAO(session)
+    ba = ba_dao.resolve(user_id, organization_id)
+    if not ba:
         raise HTTPException(status_code=400, detail="Billing is not set up")
-
-    ba = (
-        session.query(BillingAccount)
-        .filter_by(id=billing_entity.billing_account_id)
-        .first()
-    )
-    customer_id: Optional[str] = ba.stripe_customer_id if ba else None
+    customer_id: Optional[str] = ba.stripe_customer_id
 
     try:
         checkout_session = stripe.checkout.Session.retrieve(session_id)
@@ -558,20 +524,11 @@ def get_auto_recharge(
 
     _check_org_billing_permission(session, user_id, organization_id, "billing:read")
 
-    try:
-        billing_entity = get_billing_entity(session, user_id, organization_id)
-    except ValueError:
+    ba_dao = BillingAccountDAO(session)
+    ba = ba_dao.resolve(user_id, organization_id)
+    if not ba:
         raise HTTPException(status_code=400, detail="Billing is not set up")
 
-    ba = (
-        session.query(BillingAccount)
-        .filter_by(id=billing_entity.billing_account_id)
-        .first()
-    )
-    if not ba:
-        raise HTTPException(status_code=400, detail="Billing account not found")
-
-    ba_dao = BillingAccountDAO(session)
     total_spending = float(ba_dao.get_total_spending(ba.id))
     can_enable = ba_dao.can_enable_auto_recharge(ba.id)
     min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
@@ -622,20 +579,10 @@ def update_auto_recharge(
 
     _check_org_billing_permission(session, user_id, organization_id, "billing:write")
 
-    try:
-        billing_entity = get_billing_entity(session, user_id, organization_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Billing is not set up")
-
-    ba = (
-        session.query(BillingAccount)
-        .filter_by(id=billing_entity.billing_account_id)
-        .first()
-    )
-    if not ba:
-        raise HTTPException(status_code=400, detail="Billing account not found")
-
     ba_dao = BillingAccountDAO(session)
+    ba = ba_dao.resolve(user_id, organization_id)
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
 
     # --- Eligibility check when enabling ---------------------------------
     if body.enabled and not ba.autorecharge:

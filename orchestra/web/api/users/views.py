@@ -2,7 +2,6 @@ import base64
 import datetime
 import logging
 import secrets
-from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import (
@@ -32,7 +31,6 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
-from orchestra.settings import settings
 from orchestra.web.api.users.schema import (
     AccountDeletionConfirmation,
     AccountDeletionResponse,
@@ -1093,48 +1091,27 @@ def claim_credit_grant_link(
             )
 
         # Determine which billing account receives the credits
-        from orchestra.db.models.orchestra_models import (
-            RECHARGE_TYPE_PROMO,
-            Recharge,
-            RechargeStatus,
-        )
-
         credit_amount = float(link.credit_amount)
         credited_to = "personal"
+        ba_dao = BillingAccountDAO(session)
 
         if org_instance:
             # Organization claim — credit the org's billing account
             ba = org_instance.billing_account
-            if ba:
-                ba.credits += Decimal(str(credit_amount))
-            else:
-                ba_dao = BillingAccountDAO(session)
-                new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
-                org_instance.billing_account_id = new_ba.id
+            if ba is None:
+                ba = ba_dao.create()
+                org_instance.billing_account_id = ba.id
                 session.flush()
+            ba_dao.apply_credit_grant(ba.id, credit_amount)
             credited_to = org_instance.name
         else:
             # Personal claim — credit the user's billing account
             ba = user_instance.billing_account
-            if ba:
-                ba.credits += Decimal(str(credit_amount))
-            else:
-                ba_dao = BillingAccountDAO(session)
-                new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
-                user_instance.billing_account_id = new_ba.id
+            if ba is None:
+                ba = ba_dao.create()
+                user_instance.billing_account_id = ba.id
                 session.flush()
-
-        # Record a promo Recharge so the account has billing history.
-        # This allows the frontend to detect "has prior billing activity"
-        # via last_recharge_at without relying on Stripe-specific state.
-        recharge = Recharge(
-            billing_account_id=ba.id,
-            type=RECHARGE_TYPE_PROMO,
-            quantity=Decimal(str(credit_amount)),
-            amount_usd=Decimal("0"),
-            status=RechargeStatus.PAID,
-        )
-        session.add(recharge)
+            ba_dao.apply_credit_grant(ba.id, credit_amount)
 
         session.commit()
         return CreditGrantClaimResponse(
@@ -1685,72 +1662,28 @@ def update_user_billing_profile(
 
     # Sync to Stripe if customer exists
     if ba.stripe_customer_id:
-        try:
-            import stripe
+        from orchestra.lib.billing import sync_billing_profile_to_stripe
 
-            from orchestra.web.api.utils.business_validation import (
-                build_stripe_customer_name,
-                sync_tax_id_to_stripe,
+        billing_address_dict = (
+            (
+                profile_update.billing_address
+                if isinstance(profile_update.billing_address, dict)
+                else None
             )
+            if profile_update.billing_address is not None
+            else None
+        )
 
-            stripe.api_key = settings.stripe_secret_key
-
-            update_params: dict = {}
-            if profile_update.billing_email is not None:
-                update_params["email"] = profile_update.billing_email
-            if resolved_name is not None:
-                # Users are individuals; pass is_business=False so Stripe
-                # gets individual_name.  If the user supplied a tax_id
-                # they're treated as a business for tax purposes, but
-                # the *name* is still their individual name.
-                update_params.update(
-                    build_stripe_customer_name(
-                        is_business=False,
-                        name=resolved_name,
-                    ),
-                )
-
-            # Sync billing address to Stripe
-            billing_address_dict = None
-            if profile_update.billing_address is not None:
-                billing_address_dict = (
-                    profile_update.billing_address
-                    if isinstance(profile_update.billing_address, dict)
-                    else profile_update.billing_address
-                )
-            if billing_address_dict and billing_address_dict.get("line1"):
-                update_params["address"] = {
-                    "line1": billing_address_dict.get("line1", ""),
-                    "line2": billing_address_dict.get("line2", ""),
-                    "city": billing_address_dict.get("city", ""),
-                    "state": billing_address_dict.get("state", ""),
-                    "postal_code": billing_address_dict.get("postal_code", ""),
-                    "country": billing_address_dict.get("country", ""),
-                }
-                # Validate location immediately when address changes
-                update_params["tax"] = {"validate_location": "immediately"}
-
-            if update_params:
-                stripe.Customer.modify(ba.stripe_customer_id, **update_params)
-
-            # Sync tax ID if provided (requires separate API calls)
-            if profile_update.tax_id is not None:
-                country_code = None
-                if billing_address_dict and billing_address_dict.get("country"):
-                    country_code = billing_address_dict["country"]
-                elif ba.billing_address and ba.billing_address.get("country"):
-                    country_code = ba.billing_address["country"]
-
-                sync_tax_id_to_stripe(
-                    ba.stripe_customer_id,
-                    profile_update.tax_id,
-                    country_code,
-                    logger=logger,
-                )
-        except Exception as e:
-            logging.warning(
-                f"Failed to sync business profile to Stripe for user {user_id}: {e}",
-            )
+        sync_billing_profile_to_stripe(
+            ba.stripe_customer_id,
+            is_business=False,
+            billing_email=profile_update.billing_email,
+            name=resolved_name,
+            tax_id=profile_update.tax_id,
+            billing_address=billing_address_dict,
+            existing_billing_address=ba.billing_address,
+            logger_instance=logger,
+        )
 
     session.commit()
 
