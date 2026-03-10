@@ -232,21 +232,6 @@ class OrganizationCreditsResponse(BaseModel):
     credits: float
 
 
-class OrganizationCheckoutRequest(BaseModel):
-    """Schema for creating a checkout session."""
-
-    amount: int  # Amount in credits (1 credit = $1)
-    success_url: str
-    cancel_url: str
-
-
-class OrganizationCheckoutResponse(BaseModel):
-    """Schema for checkout session response."""
-
-    checkout_url: str
-    session_id: str
-
-
 class OrganizationStripeCustomerResponse(BaseModel):
     """Schema for organization Stripe customer info."""
 
