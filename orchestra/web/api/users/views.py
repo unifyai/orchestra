@@ -48,18 +48,12 @@ from orchestra.web.api.users.schema import (
     QueryLoggingStatus,
     UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
-    UserBillingProfileResponse,
-    UserBillingProfileUpdate,
     UserRequest,
     UserSpendingLimitRequest,
     UserSpendingLimitResponse,
     UserSpendResponse,
 )
 from orchestra.web.api.utils.http_responses import not_found
-from orchestra.web.api.utils.tax_id_validator import (
-    TaxIDValidator,
-    validate_tax_id_for_country,
-)
 
 admin_router = APIRouter()
 router = APIRouter()
@@ -1247,41 +1241,6 @@ def delete_credit_grant_link(
     return None
 
 
-@router.post("/billing/validate-tax-id")
-@router.post("/user/validate-tax-id")  # backward-compat alias
-def validate_tax_id(
-    request: Request,
-    tax_id: str = Query(..., description="Tax ID to validate"),
-    country: str = Query(..., description="Two-letter country code"),
-    session: Session = Depends(get_db_session),
-):
-    """Validate a tax ID format for a specific country."""
-    try:
-        validation_result = validate_tax_id_for_country(tax_id, country)
-
-        return {
-            "tax_id": tax_id,
-            "country": country.upper(),
-            "is_valid": validation_result["is_valid"],
-            "formatted_tax_id": validation_result["formatted_tax_id"],
-            "error": validation_result["error"],
-            "supported_countries": TaxIDValidator.get_supported_countries(),
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
-
-
-@router.get("/billing/supported-tax-countries")
-@router.get("/user/supported-tax-countries")  # backward-compat alias
-def get_supported_tax_countries():
-    """Get list of countries supported for tax ID validation."""
-    return {
-        "supported_countries": TaxIDValidator.get_supported_countries(),
-        "total_countries": len(TaxIDValidator.get_supported_countries()),
-    }
-
-
 @router.get("/user/onboarding-status", response_model=OnboardingStatusResponse)
 def get_onboarding_status(
     request: Request,
@@ -1550,148 +1509,6 @@ async def get_user_spending_limit(
         monthly_spending_cap=spending_cap,
         assistants_capped=0,
     )
-
-
-# ============================================================================
-# User Business Profile Endpoints
-# ============================================================================
-
-
-@router.get(
-    "/user/billing/billing-profile",
-    response_model=UserBillingProfileResponse,
-    summary="Get user business profile",
-    description="Get the current user's billing/business profile information.",
-)
-def get_user_billing_profile(
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> UserBillingProfileResponse:
-    """
-    Get the current user's billing profile.
-
-    Returns billing_email, individual_name (+ business_name alias),
-    tax_id, tax_id_type, billing_address from the user's BillingAccount.
-    """
-    user_id = request.state.user_id
-    user_dao = UserDAO(session)
-    user = user_dao.get_user_with_id(user_id)
-
-    ba = user.billing_account
-    if not ba:
-        return UserBillingProfileResponse()
-
-    billing_account_dao = BillingAccountDAO(session)
-    profile = billing_account_dao.get_billing_profile(ba.id)
-    if not profile:
-        return UserBillingProfileResponse()
-
-    # Map DAO's generic "name" to individual_name + backward-compat alias
-    name = profile.pop("name", None)
-    profile["individual_name"] = name
-    profile["business_name"] = name  # backward-compat alias
-    return UserBillingProfileResponse(**profile)
-
-
-@router.patch(
-    "/user/billing/billing-profile",
-    response_model=UserBillingProfileResponse,
-    summary="Update user business profile",
-    description="Update the current user's billing/business profile information.",
-)
-def update_user_billing_profile(
-    request: Request,
-    profile_update: UserBillingProfileUpdate,
-    session: Session = Depends(get_db_session),
-) -> UserBillingProfileResponse:
-    """
-    Update the current user's business profile (billing details).
-
-    Only provided fields are updated. Billing address is merged with existing data.
-    Also syncs changes to Stripe customer if one exists.
-    """
-    user_id = request.state.user_id
-    user_dao = UserDAO(session)
-    user = user_dao.get_user_with_id(user_id)
-
-    ba = user.billing_account
-    if not ba:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User has no billing account",
-        )
-
-    resolved_name = profile_update.resolved_name
-
-    # Validate billing address if provided
-    if profile_update.billing_address is not None:
-        from orchestra.web.api.utils.business_validation import (
-            validate_billing_address_data,
-        )
-
-        addr = (
-            profile_update.billing_address
-            if isinstance(profile_update.billing_address, dict)
-            else {}
-        )
-        if addr.get("line1") or addr.get("city") or addr.get("country"):
-            is_valid, error_msg = validate_billing_address_data(
-                line1=addr.get("line1"),
-                city=addr.get("city"),
-                country=addr.get("country"),
-                line2=addr.get("line2"),
-                state=addr.get("state"),
-                postal_code=addr.get("postal_code"),
-            )
-            if not is_valid:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid billing address: {error_msg}",
-                )
-
-    billing_account_dao = BillingAccountDAO(session)
-    billing_account_dao.update_billing_profile(
-        billing_account_id=ba.id,
-        billing_email=profile_update.billing_email,
-        name=resolved_name,
-        tax_id=profile_update.tax_id,
-        tax_id_type=profile_update.tax_id_type,
-        billing_address=profile_update.billing_address,
-    )
-    session.flush()
-
-    # Sync to Stripe if customer exists
-    if ba.stripe_customer_id:
-        from orchestra.lib.billing import sync_billing_profile_to_stripe
-
-        billing_address_dict = (
-            (
-                profile_update.billing_address
-                if isinstance(profile_update.billing_address, dict)
-                else None
-            )
-            if profile_update.billing_address is not None
-            else None
-        )
-
-        sync_billing_profile_to_stripe(
-            ba.stripe_customer_id,
-            is_business=False,
-            billing_email=profile_update.billing_email,
-            name=resolved_name,
-            tax_id=profile_update.tax_id,
-            billing_address=billing_address_dict,
-            existing_billing_address=ba.billing_address,
-            logger_instance=logger,
-        )
-
-    session.commit()
-
-    profile = billing_account_dao.get_billing_profile(ba.id)
-    name = profile.pop("name", None)
-    profile["individual_name"] = name
-    profile["business_name"] = name  # backward-compat alias
-    return UserBillingProfileResponse(**profile)
 
 
 # ============================================================================

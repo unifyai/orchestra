@@ -308,37 +308,11 @@ class OnboardingStatusCreateRequest(BaseModel):
 
 # ============================================================================
 # User Billing Profile Schemas
+# (Canonical definitions live in orchestra.web.api.billing.schema;
+#  re-exported here for backward compatibility.)
 # ============================================================================
 
-
-class UserBillingProfileUpdate(BaseModel):
-    """Schema for updating user billing profile.
-
-    Accepts ``individual_name`` (preferred) or ``business_name``
-    (backward-compat alias).  If both are provided, ``individual_name``
-    takes precedence.
-    """
-
-    billing_email: Optional[str] = None
-    individual_name: Optional[str] = None
-    business_name: Optional[str] = None  # backward-compat alias
-    tax_id: Optional[str] = None
-    tax_id_type: Optional[str] = None
-    billing_address: Optional[Dict[str, Any]] = None
-
-    @property
-    def resolved_name(self) -> Optional[str]:
-        """Return the effective name (individual_name wins)."""
-        return self.individual_name or self.business_name
-
-
-class UserBillingProfileResponse(BaseModel):
-    """Schema for user billing profile response."""
-
-    billing_email: Optional[str] = None
-    individual_name: Optional[str] = None
-    business_name: Optional[str] = None  # backward-compat alias (same value)
-    tax_id: Optional[str] = None
-    tax_id_type: Optional[str] = None
-    billing_address: Dict[str, Any] = Field(default_factory=dict)
-    billing_setup_complete: bool = False
+from orchestra.web.api.billing.schema import (  # noqa: F401, E402
+    UserBillingProfileResponse,
+    UserBillingProfileUpdate,
+)
