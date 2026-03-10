@@ -14,6 +14,11 @@ Run these tests:
 
     # Run the tests
     pytest orchestra/tests/test_organization/test_org_billing_live.py -v
+
+NOTE: The explicit ``/organizations/{id}/billing/stripe-customer`` and
+``/organizations/{id}/billing/checkout`` endpoints have been consolidated
+into the unified ``/billing/checkout-session`` endpoint.  These tests now
+use the unified endpoint + org-scoped API keys.
 """
 
 import os
@@ -22,7 +27,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import create_test_org, create_test_user
 
 # Skip all tests in this module if Stripe is not configured
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -51,6 +56,15 @@ def _ensure_stripe_configured(monkeypatch):
             settings,
             "stripe_secret_key",
             STRIPE_SECRET_KEY,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            settings,
+            "stripe_unify_credits_price_id_business",
+            os.environ.get(
+                "STRIPE_UNIFY_CREDITS_PRICE_ID_BUSINESS",
+                "price_test_business_dummy",
+            ),
             raising=False,
         )
 
@@ -96,70 +110,17 @@ def track_stripe_customer(customer_id: str):
 # ============================================================================
 
 
-async def test_live_org_stripe_customer_creation(
-    client: AsyncClient,
-    dbsession: Session,
-):
-    """
-    LIVE TEST: Create organization with Stripe customer.
-
-    This test validates:
-    - Organization can be created
-    - Stripe customer is created via ensure endpoint
-    - Customer ID is stored in database
-    """
-    import stripe
-
-    from orchestra.db.dao.organization_dao import OrganizationDAO
-
-    stripe.api_key = STRIPE_SECRET_KEY
-
-    user = await create_test_user(
-        client,
-        f"live_org_owner_{os.urandom(4).hex()}@example.com",
-    )
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Live Test Org {os.urandom(4).hex()}"},
-        headers=user["headers"],
-    )
-    assert org_response.status_code in [200, 201], org_response.json()
-    org_id = org_response.json()["id"]
-
-    # Ensure Stripe customer
-    stripe_response = await client.post(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=user["headers"],
-    )
-    assert stripe_response.status_code == 200, stripe_response.json()
-
-    stripe_customer_id = stripe_response.json()["stripe_customer_id"]
-    assert stripe_customer_id.startswith("cus_")
-
-    # Track for cleanup
-    track_stripe_customer(stripe_customer_id)
-
-    # Verify customer exists in Stripe
-    customer = stripe.Customer.retrieve(stripe_customer_id)
-    assert customer.id == stripe_customer_id
-
-    # Verify stored in DB
-    org_dao = OrganizationDAO(session=dbsession)
-    org = org_dao.get(org_id)
-    assert org is not None
-    assert org.billing_account.stripe_customer_id == stripe_customer_id
-
-
-async def test_live_org_checkout_session(client: AsyncClient):
+async def test_live_org_checkout_session(client: AsyncClient, dbsession: Session):
     """
     LIVE TEST: Create checkout session for organization credit purchase.
+
+    The unified /billing/checkout-session endpoint creates a Stripe customer
+    automatically if one doesn't exist.
 
     This test validates:
     - Checkout session is created with organization metadata
     - Session URL is valid Stripe URL
-    - Amount is correctly calculated
+    - Stripe customer is created/reused correctly
     """
     import stripe
 
@@ -169,37 +130,21 @@ async def test_live_org_checkout_session(client: AsyncClient):
         client,
         f"live_org_checkout_{os.urandom(4).hex()}@example.com",
     )
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Checkout Org {os.urandom(4).hex()}"},
-        headers=user["headers"],
-    )
-    assert org_response.status_code in [200, 201]
-    org_id = org_response.json()["id"]
-
-    # Ensure Stripe customer first
-    await client.post(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=user["headers"],
+    org = await create_test_org(
+        client,
+        user,
+        f"Checkout Org {os.urandom(4).hex()}",
     )
 
-    # Create checkout session
+    # Create checkout session via unified endpoint
     checkout_response = await client.post(
-        f"/v0/organizations/{org_id}/billing/checkout",
-        json={
-            "amount": 100,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-        headers=user["headers"],
+        "/v0/billing/checkout-session",
+        headers=org["headers"],
     )
-
     assert checkout_response.status_code == 200, checkout_response.json()
     data = checkout_response.json()
 
-    assert data["checkout_url"].startswith("https://checkout.stripe.com/")
+    assert data["url"].startswith("https://checkout.stripe.com/")
     assert data["session_id"].startswith("cs_test_")
 
     # Verify session in Stripe
@@ -211,15 +156,12 @@ async def test_live_org_checkout_session(client: AsyncClient):
     assert session.mode == "payment"
     assert session.payment_status == "unpaid"
 
-    # Verify amount ($100 = 10000 cents)
-    line_item = session.line_items.data[0]
-    assert line_item.amount_total == 10000
-
     # Track for cleanup
-    track_stripe_customer(session.customer)
+    if session.customer:
+        track_stripe_customer(session.customer)
 
 
-async def test_live_org_with_business_details(client: AsyncClient):
+async def test_live_org_with_business_details(client: AsyncClient, dbsession: Session):
     """
     LIVE TEST: Create organization with business details synced to Stripe.
 
@@ -229,38 +171,41 @@ async def test_live_org_with_business_details(client: AsyncClient):
     """
     import stripe
 
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
     stripe.api_key = STRIPE_SECRET_KEY
 
     user = await create_test_user(
         client,
         f"live_org_business_{os.urandom(4).hex()}@example.com",
     )
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={
-            "name": f"Business Org {os.urandom(4).hex()}",
-        },
-        headers=user["headers"],
+    org = await create_test_org(
+        client,
+        user,
+        f"Business Org {os.urandom(4).hex()}",
     )
-    assert org_response.status_code in [200, 201]
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # First ensure Stripe customer exists
-    stripe_response = await client.post(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=user["headers"],
+    # Create a checkout session to generate Stripe customer
+    checkout_response = await client.post(
+        "/v0/billing/checkout-session",
+        headers=org["headers"],
     )
-    assert stripe_response.status_code == 200
-    customer_id = stripe_response.json()["stripe_customer_id"]
+    assert checkout_response.status_code == 200
+
+    # Get customer ID from DB (set during checkout session creation)
+    dbsession.expire_all()
+    org_dao = OrganizationDAO(session=dbsession)
+    org_obj = org_dao.get(org_id)
+    customer_id = org_obj.billing_account.stripe_customer_id
+    assert customer_id is not None, "Stripe customer should be created by checkout"
 
     # Track for cleanup
     track_stripe_customer(customer_id)
 
     # Now update business profile via the billing endpoint - this syncs to Stripe
     update_response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
+        "/v0/billing/billing-profile",
         json={
             "business_name": "Acme Corporation",
             "billing_address": {
@@ -271,7 +216,7 @@ async def test_live_org_with_business_details(client: AsyncClient):
                 "country": "US",
             },
         },
-        headers=user["headers"],
+        headers=org["headers"],
     )
     assert update_response.status_code == 200, update_response.json()
 
@@ -290,15 +235,20 @@ async def test_live_org_with_business_details(client: AsyncClient):
     assert customer.address.country == "US"
 
 
-async def test_live_org_multiple_checkouts_same_customer(client: AsyncClient):
+async def test_live_org_multiple_checkouts_same_customer(
+    client: AsyncClient,
+    dbsession: Session,
+):
     """
     LIVE TEST: Multiple checkouts use the same Stripe customer.
 
     This test validates:
-    - First checkout uses existing customer
+    - First checkout creates a customer
     - Subsequent checkouts reuse the same customer
     """
     import stripe
+
+    from orchestra.db.dao.organization_dao import OrganizationDAO
 
     stripe.api_key = STRIPE_SECRET_KEY
 
@@ -306,49 +256,38 @@ async def test_live_org_multiple_checkouts_same_customer(client: AsyncClient):
         client,
         f"live_org_multi_{os.urandom(4).hex()}@example.com",
     )
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Multi Checkout Org {os.urandom(4).hex()}"},
-        headers=user["headers"],
+    org = await create_test_org(
+        client,
+        user,
+        f"Multi Checkout Org {os.urandom(4).hex()}",
     )
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Ensure Stripe customer
-    stripe_response = await client.post(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=user["headers"],
+    # First checkout – creates customer
+    first_checkout = await client.post(
+        "/v0/billing/checkout-session",
+        headers=org["headers"],
     )
-    original_customer_id = stripe_response.json()["stripe_customer_id"]
+    assert first_checkout.status_code == 200
 
-    # Multiple checkouts
-    customer_ids = []
-    for amount in [25, 50, 75]:
-        checkout_response = await client.post(
-            f"/v0/organizations/{org_id}/billing/checkout",
-            json={
-                "amount": amount,
-                "success_url": "https://example.com/success",
-                "cancel_url": "https://example.com/cancel",
-            },
-            headers=user["headers"],
-        )
-        assert checkout_response.status_code == 200
-
-        session = stripe.checkout.Session.retrieve(
-            checkout_response.json()["session_id"],
-        )
-        customer_ids.append(session.customer)
-
-    # All should be the same customer
-    assert all(cid == original_customer_id for cid in customer_ids)
-
-    # Track for cleanup
+    dbsession.expire_all()
+    org_dao = OrganizationDAO(session=dbsession)
+    original_customer_id = org_dao.get(org_id).billing_account.stripe_customer_id
     track_stripe_customer(original_customer_id)
 
+    # Subsequent checkouts
+    for _ in range(2):
+        checkout = await client.post(
+            "/v0/billing/checkout-session",
+            headers=org["headers"],
+        )
+        assert checkout.status_code == 200
 
-async def test_live_org_tax_id_sync(client: AsyncClient):
+        session = stripe.checkout.Session.retrieve(checkout.json()["session_id"])
+        assert session.customer == original_customer_id
+
+
+async def test_live_org_tax_id_sync(client: AsyncClient, dbsession: Session):
     """
     LIVE TEST: Tax ID is synced to Stripe customer.
 
@@ -358,35 +297,37 @@ async def test_live_org_tax_id_sync(client: AsyncClient):
     """
     import stripe
 
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
     stripe.api_key = STRIPE_SECRET_KEY
 
     user = await create_test_user(
         client,
         f"live_org_tax_{os.urandom(4).hex()}@example.com",
     )
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Tax Org {os.urandom(4).hex()}"},
-        headers=user["headers"],
+    org = await create_test_org(
+        client,
+        user,
+        f"Tax Org {os.urandom(4).hex()}",
     )
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Ensure Stripe customer first
-    stripe_response = await client.post(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=user["headers"],
+    # Create a Stripe customer via checkout
+    checkout = await client.post(
+        "/v0/billing/checkout-session",
+        headers=org["headers"],
     )
-    assert stripe_response.status_code == 200
-    customer_id = stripe_response.json()["stripe_customer_id"]
+    assert checkout.status_code == 200
 
-    # Track for cleanup
+    dbsession.expire_all()
+    org_dao = OrganizationDAO(session=dbsession)
+    customer_id = org_dao.get(org_id).billing_account.stripe_customer_id
+    assert customer_id is not None
     track_stripe_customer(customer_id)
 
     # Update business profile with tax ID (US EIN format for testing)
     update_response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
+        "/v0/billing/billing-profile",
         json={
             "tax_id": "12-3456789",
             "billing_address": {
@@ -396,7 +337,7 @@ async def test_live_org_tax_id_sync(client: AsyncClient):
                 "postal_code": "12345",
             },
         },
-        headers=user["headers"],
+        headers=org["headers"],
     )
     assert update_response.status_code == 200, update_response.json()
 

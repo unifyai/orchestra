@@ -4,7 +4,6 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Checkout / Portal / Status (original billing schemas)
 # ---------------------------------------------------------------------------
@@ -212,3 +211,51 @@ class OrganizationStripeCustomerCreateRequest(BaseModel):
     # Optional business info to set during creation
     business_name: Optional[str] = None
     billing_email: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Unified Billing Profile Schemas
+# ---------------------------------------------------------------------------
+
+
+class BillingProfileResponse(BaseModel):
+    """
+    Unified billing profile response for both personal and org contexts.
+
+    Returned by ``GET /billing/billing-profile``.
+    Context (personal vs org) is derived from the API key.
+    """
+
+    billing_email: Optional[str] = None
+    name: Optional[str] = None  # canonical name field
+    individual_name: Optional[str] = None  # backward-compat alias for personal
+    business_name: Optional[str] = None  # backward-compat alias for org
+    tax_id: Optional[str] = None
+    tax_id_type: Optional[str] = None
+    billing_address: Dict[str, Any] = Field(default_factory=dict)
+    billing_setup_complete: bool = False
+    is_business: bool = False
+
+
+class BillingProfileUpdate(BaseModel):
+    """
+    Unified billing profile update for both personal and org contexts.
+
+    Accepted by ``PATCH /billing/billing-profile``.
+    Accepts ``name`` (preferred), ``individual_name``, or ``business_name``
+    (backward-compat aliases).  If multiple are provided, ``name`` wins,
+    then ``individual_name``, then ``business_name``.
+    """
+
+    billing_email: Optional[str] = None
+    name: Optional[str] = None
+    individual_name: Optional[str] = None  # backward-compat alias
+    business_name: Optional[str] = None  # backward-compat alias
+    tax_id: Optional[str] = None
+    tax_id_type: Optional[str] = None
+    billing_address: Optional[Dict[str, Any]] = None
+
+    @property
+    def resolved_name(self) -> Optional[str]:
+        """Return the effective name (name > individual_name > business_name)."""
+        return self.name or self.individual_name or self.business_name
