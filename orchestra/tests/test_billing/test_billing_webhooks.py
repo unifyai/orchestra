@@ -1,0 +1,509 @@
+"""
+Billing webhook handler tests.
+
+Tests call the webhook handler functions directly (e.g.
+``process_checkout_session_event``, ``process_invoice_event``,
+``handle_event_core``) — **no live Stripe API**.
+
+Sections:
+- CheckoutSessionEvent: checkout.session.completed for user & org
+- InvoiceEvent: invoice.payment_succeeded / failed idempotency
+- ChargeDispute: charge.dispute.created idempotency
+- WebhookIdempotency: duplicate event de-duplication
+- CheckoutEligibility: spending threshold tracking via checkout
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import time
+from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
+from httpx import AsyncClient
+
+from orchestra.db.models.orchestra_models import Recharge, RechargeStatus, WebhookLog
+from orchestra.settings import settings
+from orchestra.tests.test_billing.conftest import (
+    make_org_with_billing,
+    make_user_with_billing,
+)
+
+
+@pytest.fixture(autouse=True)
+def _env_secrets(monkeypatch):
+    import os
+
+    if not os.environ.get("STRIPE_WEBHOOK_SECRET"):
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    existing_key = os.environ.get("STRIPE_SECRET_KEY")
+    if not existing_key or not existing_key.startswith("sk_test_"):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy_for_mocking")
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_test", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "stripe_secret_key",
+        "sk_test_dummy_for_mocking",
+        raising=False,
+    )
+    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _mock_stripe(monkeypatch):
+    """Mock Stripe at the webhook module level so handler functions
+    don't need a live key."""
+    import orchestra.web.api.webhooks.stripe as webhook_module
+
+    dummy = SimpleNamespace(
+        PaymentIntent=SimpleNamespace(
+            modify=lambda pi_id, **kw: None,
+            retrieve=lambda pi_id: {
+                "metadata": {"user_id": "test_user", "credits_purchased": "50"},
+                "invoice": "in_test_dispute",
+            },
+        ),
+        Customer=SimpleNamespace(
+            modify=lambda cid, **kw: None,
+        ),
+        Webhook=SimpleNamespace(
+            construct_event=lambda payload, sig_header, secret, tolerance=None: json.loads(
+                payload,
+            ),
+        ),
+        error=SimpleNamespace(
+            SignatureVerificationError=Exception,
+            StripeError=Exception,
+        ),
+    )
+    monkeypatch.setattr(webhook_module, "stripe", dummy)
+    return dummy
+
+
+def _signed_hdr(body: str) -> str:
+    ts = str(int(time.time()))
+    sig_raw = f"{ts}.{body}"
+    sig = hmac.new(
+        settings.STRIPE_WEBHOOK_SECRET.encode(),
+        sig_raw.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"t={ts},v1={sig}"
+
+
+# ============================================================================
+# Checkout Session Events
+# ============================================================================
+
+
+class TestCheckoutSessionEvent:
+    """Direct tests for process_checkout_session_event."""
+
+    def test_user_checkout_adds_credits(self, dbsession, monkeypatch):
+        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_user_ckout",
+            credits=0,
+            stripe_customer_id="cus_wh_user",
+        )
+        dbsession.commit()
+
+        event = {
+            "id": "evt_user_checkout",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": user.id,
+                    "amount_total": 5000,
+                    "customer": "cus_wh_user",
+                    "payment_intent": "pi_wh_user",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = process_checkout_session_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 50.0
+
+        recharge = (
+            dbsession.query(Recharge)
+            .filter_by(billing_account_id=ba.id, type="payment")
+            .first()
+        )
+        assert recharge is not None
+        assert recharge.quantity == Decimal("50")
+        assert recharge.amount_usd == Decimal("50")
+        assert recharge.status == RechargeStatus.PAID
+
+    def test_org_checkout_adds_credits(self, dbsession, monkeypatch):
+        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+        org, org_ba = make_org_with_billing(
+            dbsession,
+            name="Checkout Org",
+            stripe_customer_id="cus_wh_org",
+            credits=0,
+        )
+        dbsession.commit()
+
+        event = {
+            "id": "evt_org_checkout",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": None,
+                    "amount_total": 10000,
+                    "customer": "cus_wh_org",
+                    "payment_intent": "pi_wh_org",
+                    "metadata": {"organization_id": str(org.id)},
+                },
+            },
+        }
+
+        response = process_checkout_session_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(org_ba)
+        assert float(org_ba.credits) == 100.0
+
+        recharge = (
+            dbsession.query(Recharge)
+            .filter_by(billing_account_id=org_ba.id, type="payment")
+            .first()
+        )
+        assert recharge is not None
+        assert recharge.quantity == Decimal("100")
+        assert recharge.status == RechargeStatus.PAID
+
+    def test_checkout_eligibility_counts_toward_autorecharge(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Checkout-created Recharge counts toward auto-recharge eligibility."""
+        from orchestra.db.dao.billing_account_dao import (
+            MIN_SPEND_FOR_AUTO_RECHARGE,
+            BillingAccountDAO,
+        )
+        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_elig_user",
+            credits=0,
+            stripe_customer_id="cus_wh_elig",
+        )
+        dbsession.commit()
+
+        ba_dao = BillingAccountDAO(dbsession)
+        assert not ba_dao.can_enable_auto_recharge(ba.id)
+
+        event = {
+            "id": "evt_elig_checkout",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": user.id,
+                    "amount_total": 15000,
+                    "customer": "cus_wh_elig",
+                    "payment_intent": "pi_wh_elig",
+                    "metadata": {},
+                },
+            },
+        }
+
+        process_checkout_session_event(event, dbsession)
+
+        total_spending = ba_dao.get_total_spending(ba.id)
+        assert float(total_spending) == 150.0
+        assert total_spending >= MIN_SPEND_FOR_AUTO_RECHARGE
+        assert ba_dao.can_enable_auto_recharge(ba.id)
+
+
+# ============================================================================
+# Invoice Events
+# ============================================================================
+
+
+class TestInvoiceEvent:
+    """Direct tests for process_invoice_event."""
+
+    def test_payment_succeeded_marks_recharges_paid(self, dbsession):
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_inv_user",
+            credits=0,
+            stripe_customer_id="cus_inv_wh",
+        )
+
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=5,
+            amount_usd=Decimal("50.00"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_wh_test_1",
+            type="usage",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_inv_paid",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_wh_test_1",
+                    "status": "paid",
+                    "metadata": {"user_id": user.id},
+                },
+            },
+        }
+
+        response = process_invoice_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.PAID
+
+    def test_idempotency(self, dbsession):
+        """Same invoice.payment_succeeded event processed only once."""
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_idem_user",
+            credits=0,
+            stripe_customer_id="cus_idem",
+        )
+
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=5,
+            amount_usd=Decimal("50.00"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_idem_test",
+            type="usage",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_idem_inv",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_idem_test",
+                    "status": "paid",
+                    "metadata": {"user_id": user.id},
+                },
+            },
+        }
+
+        # Process twice
+        for _ in range(2):
+            response = process_invoice_event(event, dbsession)
+            assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.PAID
+        assert (
+            dbsession.query(WebhookLog).filter_by(event_id="evt_idem_inv").count() == 1
+        )
+
+
+# ============================================================================
+# Webhook Idempotency (via HTTP endpoint)
+# ============================================================================
+
+
+class TestWebhookIdempotency:
+    """Test idempotency via the full HTTP endpoint."""
+
+    @pytest.mark.anyio
+    async def test_invoice_event_idempotent(self, client: AsyncClient, dbsession):
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_http_user",
+            stripe_customer_id="cus_http_x",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=5,
+            amount_usd=Decimal("50.00"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_http_test_1",
+            type="usage",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        payload = {
+            "id": "evt_http_test",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_http_test_1",
+                    "status": "paid",
+                    "metadata": {"user_id": user.id},
+                },
+            },
+        }
+        body = json.dumps(payload)
+        hdr = _signed_hdr(body)
+
+        for _ in range(2):
+            res = await client.post(
+                "/v0/webhooks/stripe",
+                content=body,
+                headers={"Stripe-Signature": hdr},
+            )
+            assert res.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.PAID
+        assert (
+            dbsession.query(WebhookLog).filter_by(event_id="evt_http_test").count() == 1
+        )
+
+    @pytest.mark.anyio
+    async def test_charge_dispute_idempotent(self, client: AsyncClient, dbsession):
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_dispute_user",
+            credits=100,
+            stripe_customer_id="cus_dispute_wh",
+        )
+        dbsession.commit()
+
+        payload = {
+            "id": "evt_dispute_wh_test",
+            "type": "charge.dispute.created",
+            "data": {
+                "object": {
+                    "id": "ch_dispute_wh_123",
+                    "payment_intent": "pi_dispute_wh",
+                    "invoice": "in_dispute_wh",
+                },
+            },
+        }
+        body = json.dumps(payload)
+        hdr = _signed_hdr(body)
+
+        for _ in range(2):
+            res = await client.post(
+                "/v0/webhooks/stripe",
+                content=body,
+                headers={"Stripe-Signature": hdr},
+            )
+            assert res.status_code == 200
+
+        logs = (
+            dbsession.query(WebhookLog).filter_by(event_id="evt_dispute_wh_test").all()
+        )
+        assert len(logs) == 1
+        assert logs[0].event_type == "charge.dispute.created"
+
+
+# ============================================================================
+# handle_event_core Dispatch
+# ============================================================================
+
+
+class TestHandleEventCore:
+    """Tests for the main event dispatcher."""
+
+    def test_routes_checkout_event(self, dbsession, monkeypatch):
+        from orchestra.web.api.webhooks.stripe import handle_event_core
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "core_checkout_user",
+            credits=0,
+            stripe_customer_id="cus_core",
+        )
+        dbsession.commit()
+
+        event = {
+            "id": "evt_core_checkout",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": user.id,
+                    "amount_total": 2500,
+                    "customer": "cus_core",
+                    "payment_intent": "pi_core",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = handle_event_core(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 25.0
+
+    def test_routes_invoice_event(self, dbsession):
+        from orchestra.web.api.webhooks.stripe import handle_event_core
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "core_inv_user",
+            stripe_customer_id="cus_core_inv",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=10,
+            amount_usd=Decimal("100"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_core_inv",
+            type="usage",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_core_inv",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_core_inv",
+                    "status": "paid",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = handle_event_core(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.PAID
+
+    def test_unhandled_event_type(self, dbsession):
+        from orchestra.web.api.webhooks.stripe import handle_event_core
+
+        event = {
+            "id": "evt_unhandled_123",
+            "type": "some.unknown.event",
+            "data": {"object": {}},
+        }
+
+        response = handle_event_core(event, dbsession)
+        assert response.status_code == 200
+
+        log = (
+            dbsession.query(WebhookLog).filter_by(event_id="evt_unhandled_123").first()
+        )
+        assert log is not None
+        assert log.event_type == "some.unknown.event"
