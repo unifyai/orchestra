@@ -8,18 +8,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import stripe
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
     BillingAccount,
-    Organization,
     Recharge,
     RechargeStatus,
-    User,
 )
 from orchestra.lib.time import month_end_utc
 from orchestra.settings import settings
@@ -84,49 +83,6 @@ class BillingEntity:
         return new_balance <= self.autorecharge_threshold
 
 
-def _get_billing_account_for_user(
-    session: Session,
-    user: User,
-) -> BillingAccount:
-    """Get or raise for a user's billing account."""
-    if user.billing_account_id is None:
-        raise ValueError(
-            f"User {user.id} has no billing account set up.",
-        )
-    ba = (
-        session.query(BillingAccount)
-        .filter(BillingAccount.id == user.billing_account_id)
-        .first()
-    )
-    if ba is None:
-        raise ValueError(
-            f"BillingAccount {user.billing_account_id} not found for user {user.id}.",
-        )
-    return ba
-
-
-def _get_billing_account_for_org(
-    session: Session,
-    org: Organization,
-) -> BillingAccount:
-    """Get or raise for an org's billing account."""
-    if org.billing_account_id is None:
-        raise ValueError(
-            f"Organization {org.id} has no billing set up. "
-            f"Please set up billing in the organization settings.",
-        )
-    ba = (
-        session.query(BillingAccount)
-        .filter(BillingAccount.id == org.billing_account_id)
-        .first()
-    )
-    if ba is None:
-        raise ValueError(
-            f"BillingAccount {org.billing_account_id} not found for org {org.id}.",
-        )
-    return ba
-
-
 def get_billing_entity(
     session: Session,
     user_id: str,
@@ -151,17 +107,18 @@ def get_billing_entity(
     Raises:
         ValueError: If entity not found or billing not set up.
     """
-    # Personal query - bill the user directly
+    ba_dao = BillingAccountDAO(session)
+
     if organization_id is None:
-        user = session.query(User).filter_by(id=user_id).first()
-        if not user:
-            raise ValueError(f"User with id {user_id} not found.")
-
-        ba = _get_billing_account_for_user(session, user)
-
+        # Personal context – bill the user directly
+        ba = ba_dao.resolve_for_user(user_id)
+        if ba is None:
+            raise ValueError(
+                f"User {user_id} not found or has no billing account.",
+            )
         return BillingEntity(
             entity_type=BillingEntityType.USER,
-            entity_id=user.id,
+            entity_id=user_id,
             billing_account_id=ba.id,
             credits=ba.credits,
             stripe_customer_id=ba.stripe_customer_id,
@@ -171,13 +128,13 @@ def get_billing_entity(
         )
 
     # Organization context
-    org = session.query(Organization).filter_by(id=organization_id).first()
-    if not org:
-        raise ValueError(f"Organization with id {organization_id} not found.")
+    ba = ba_dao.resolve_for_org(organization_id)
+    if ba is None:
+        raise ValueError(
+            f"Organization {organization_id} not found or has no billing "
+            f"set up. Please set up billing in the organization settings.",
+        )
 
-    ba = _get_billing_account_for_org(session, org)
-
-    # Check if organization is active
     if ba.account_status != "ACTIVE":
         raise ValueError(
             f"Organization {organization_id} is {ba.account_status}. "
@@ -186,7 +143,7 @@ def get_billing_entity(
 
     return BillingEntity(
         entity_type=BillingEntityType.ORGANIZATION,
-        entity_id=org.id,
+        entity_id=organization_id,
         billing_account_id=ba.id,
         credits=ba.credits,
         stripe_customer_id=ba.stripe_customer_id,
@@ -215,18 +172,16 @@ def deduct_credits(
     Raises:
         ValueError: If billing account not found.
     """
-    ba = (
-        session.query(BillingAccount)
-        .filter(BillingAccount.id == billing_entity.billing_account_id)
-        .first()
+    ba_dao = BillingAccountDAO(session)
+    new_balance = ba_dao.deduct_credits(
+        billing_entity.billing_account_id,
+        float(amount),
     )
-    if not ba:
+    if new_balance is None:
         raise ValueError(
             f"BillingAccount {billing_entity.billing_account_id} not found.",
         )
-
-    ba.credits = ba.credits - amount
-    return ba.credits
+    return new_balance
 
 
 def queue_auto_recharge(
@@ -410,4 +365,103 @@ def sync_tax_id_to_customer(
             "Failed to sync tax ID for Stripe customer %s",
             customer_id,
             exc_info=True,
+        )
+
+
+# =========================================================================
+# Billing Profile → Stripe sync
+# =========================================================================
+
+
+def sync_billing_profile_to_stripe(
+    stripe_customer_id: str,
+    *,
+    is_business: bool,
+    billing_email: Optional[str] = None,
+    name: Optional[str] = None,
+    tax_id: Optional[str] = None,
+    billing_address: Optional[dict] = None,
+    existing_billing_address: Optional[dict] = None,
+    logger_instance: Any = None,
+) -> None:
+    """
+    Sync billing profile fields to an existing Stripe customer.
+
+    This is the shared implementation used by both user and organization
+    billing-profile update endpoints.  It is best-effort: failures are
+    logged but do **not** propagate.
+
+    Args:
+        stripe_customer_id: Stripe customer ID.
+        is_business: True for organization accounts, False for personal.
+        billing_email: Updated email for invoices (None = skip).
+        name: Updated display name (None = skip).
+        tax_id: Updated tax ID value (None = skip sync).
+        billing_address: New address dict from the update request.
+        existing_billing_address: The billing address already stored on the
+            BillingAccount (used as fallback for country when resolving
+            tax ID type).
+        logger_instance: Optional logger; falls back to module logger.
+    """
+    from orchestra.web.api.utils.business_validation import (
+        build_stripe_customer_name,
+        sync_tax_id_to_stripe,
+    )
+
+    log = logger_instance or logger
+
+    try:
+        if not settings.stripe_secret_key:
+            return
+        stripe.api_key = settings.stripe_secret_key
+
+        update_params: dict = {}
+
+        if billing_email is not None:
+            update_params["email"] = billing_email
+
+        if name is not None:
+            update_params.update(
+                build_stripe_customer_name(
+                    is_business=is_business,
+                    name=name,
+                ),
+            )
+
+        if billing_address and billing_address.get("line1"):
+            update_params["address"] = {
+                "line1": billing_address.get("line1", ""),
+                "line2": billing_address.get("line2", ""),
+                "city": billing_address.get("city", ""),
+                "state": billing_address.get("state", ""),
+                "postal_code": billing_address.get("postal_code", ""),
+                "country": billing_address.get("country", ""),
+            }
+            update_params["tax"] = {"validate_location": "immediately"}
+
+        if update_params:
+            stripe.Customer.modify(stripe_customer_id, **update_params)
+
+        # Sync tax ID (requires separate Stripe API calls)
+        if tax_id is not None:
+            country_code = None
+            if billing_address and billing_address.get("country"):
+                country_code = billing_address["country"]
+            elif existing_billing_address and existing_billing_address.get(
+                "country",
+            ):
+                country_code = existing_billing_address["country"]
+
+            sync_tax_id_to_stripe(
+                stripe_customer_id,
+                tax_id,
+                country_code,
+                logger=log,
+            )
+
+    except Exception as e:
+        log.warning(
+            "Failed to sync billing profile to Stripe for %s: %s",
+            stripe_customer_id,
+            e,
         )
