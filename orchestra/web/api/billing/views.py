@@ -9,13 +9,18 @@ keeping the Stripe secret key exclusively on the backend.
 import logging
 import math
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 
 import stripe
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.param_functions import Depends
 
-from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+from orchestra.db.dao.billing_account_dao import (
+    MIN_AUTORECHARGE_AMOUNT,
+    MIN_SPEND_FOR_AUTO_RECHARGE,
+    BillingAccountDAO,
+)
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
@@ -29,6 +34,8 @@ from orchestra.lib.billing import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.billing.schema import (
+    AutoRechargeResponse,
+    AutoRechargeUpdateRequest,
     CheckoutSessionResponse,
     CheckoutStatusResponse,
     PortalSessionResponse,
@@ -393,4 +400,163 @@ def get_checkout_status(
     return CheckoutStatusResponse(
         status=checkout_session.status,
         payment_status=checkout_session.payment_status,
+    )
+
+
+@router.get(
+    "/billing/auto-recharge",
+    response_model=AutoRechargeResponse,
+    responses={
+        200: {"description": "Auto-recharge settings and eligibility"},
+        400: {"description": "Billing not set up"},
+    },
+)
+def get_auto_recharge(
+    request_fastapi: Request,
+    session=Depends(get_db_session),
+) -> AutoRechargeResponse:
+    """
+    Return auto-recharge settings **and** eligibility in a single call.
+
+    The response includes:
+    - Current settings (``enabled``, ``threshold``, ``qty``).
+    - Eligibility data (``eligible``, ``total_spending``,
+      ``minimum_spend_required``, ``remaining_spend_needed``).
+
+    Context (personal vs org) is derived from the API key.
+    """
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    ba = (
+        session.query(BillingAccount)
+        .filter_by(id=billing_entity.billing_account_id)
+        .first()
+    )
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing account not found")
+
+    ba_dao = BillingAccountDAO(session)
+    total_spending = float(ba_dao.get_total_spending(ba.id))
+    can_enable = ba_dao.can_enable_auto_recharge(ba.id)
+    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
+
+    return AutoRechargeResponse(
+        enabled=ba.autorecharge,
+        threshold=float(ba.autorecharge_threshold),
+        qty=float(ba.autorecharge_qty),
+        eligible=can_enable,
+        total_spending=total_spending,
+        minimum_spend_required=min_required,
+        remaining_spend_needed=max(0.0, min_required - total_spending),
+    )
+
+
+@router.put(
+    "/billing/auto-recharge",
+    response_model=AutoRechargeResponse,
+    responses={
+        200: {"description": "Auto-recharge settings updated"},
+        400: {"description": "Validation error or eligibility not met"},
+    },
+)
+def update_auto_recharge(
+    request_fastapi: Request,
+    body: AutoRechargeUpdateRequest,
+    session=Depends(get_db_session),
+) -> AutoRechargeResponse:
+    """
+    Update auto-recharge settings atomically.
+
+    - ``enabled`` (required) – enable or disable auto-recharge.
+    - ``threshold`` (optional) – the credit balance that triggers a top-up.
+    - ``qty`` (optional) – the amount of credits to add per top-up.
+
+    When *enabling*, the account must have met the minimum spending
+    threshold (fraud-prevention measure).  ``qty`` must be ≥ $25.
+
+    Context (personal vs org) is derived from the API key.
+    Returns the updated settings + eligibility (same shape as GET).
+    """
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    ba = (
+        session.query(BillingAccount)
+        .filter_by(id=billing_entity.billing_account_id)
+        .first()
+    )
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing account not found")
+
+    ba_dao = BillingAccountDAO(session)
+
+    # --- Eligibility check when enabling ---------------------------------
+    if body.enabled and not ba.autorecharge:
+        if not ba_dao.can_enable_auto_recharge(ba.id):
+            total_spending = float(ba_dao.get_total_spending(ba.id))
+            min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"You must spend at least ${min_required:.2f} before "
+                    f"enabling auto-recharge. "
+                    f"Current spending: ${total_spending:.2f}"
+                ),
+            )
+
+    # --- Validate qty if provided ----------------------------------------
+    if body.qty is not None and body.qty < float(MIN_AUTORECHARGE_AMOUNT):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Minimum auto-recharge amount is "
+                f"${float(MIN_AUTORECHARGE_AMOUNT):.2f}. "
+                f"Provided: ${body.qty:.2f}"
+            ),
+        )
+
+    # --- Apply updates ---------------------------------------------------
+    ba.autorecharge = body.enabled
+
+    if body.threshold is not None:
+        ba.autorecharge_threshold = Decimal(str(body.threshold))
+
+    if body.qty is not None:
+        ba.autorecharge_qty = Decimal(str(body.qty))
+
+    session.commit()
+    session.refresh(ba)
+
+    # --- Return updated state + eligibility ------------------------------
+    total_spending = float(ba_dao.get_total_spending(ba.id))
+    can_enable = ba_dao.can_enable_auto_recharge(ba.id)
+    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
+
+    return AutoRechargeResponse(
+        enabled=ba.autorecharge,
+        threshold=float(ba.autorecharge_threshold),
+        qty=float(ba.autorecharge_qty),
+        eligible=can_enable,
+        total_spending=total_spending,
+        minimum_spend_required=min_required,
+        remaining_spend_needed=max(0.0, min_required - total_spending),
     )

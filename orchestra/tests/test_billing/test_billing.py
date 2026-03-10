@@ -2808,3 +2808,279 @@ async def test_checkout_session_no_price_id_configured(client, dbsession, monkey
 
     assert response.status_code == 500
     assert "price ID not configured" in response.json()["detail"]
+
+
+# ========================================================================= #
+# Auto-recharge endpoint tests                                               #
+# ========================================================================= #
+
+
+@pytest.mark.anyio
+async def test_get_auto_recharge_returns_settings_and_eligibility(
+    client,
+    dbsession,
+):
+    """GET /billing/auto-recharge returns combined settings + eligibility."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "ar_get_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(
+            credits=Decimal("10"),
+            autorecharge=True,
+            autorecharge_threshold=Decimal("5"),
+            autorecharge_qty=Decimal("50"),
+        )
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        ba = db_user.billing_account
+        ba.autorecharge = True
+        ba.autorecharge_threshold = Decimal("5")
+        ba.autorecharge_qty = Decimal("50")
+    dbsession.commit()
+
+    response = await client.get(
+        "/v0/billing/auto-recharge",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+
+    # Settings
+    assert data["enabled"] is True
+    assert data["threshold"] == 5.0
+    assert data["qty"] == 50.0
+
+    # Eligibility (no recharges yet ⇒ not eligible)
+    assert data["eligible"] is False
+    assert data["total_spending"] == 0.0
+    assert data["minimum_spend_required"] == 100.0
+    assert data["remaining_spend_needed"] == 100.0
+
+
+@pytest.mark.anyio
+async def test_get_auto_recharge_eligible_after_spending(client, dbsession):
+    """GET /billing/auto-recharge shows eligible=true after meeting spend threshold."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "ar_elig_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("200"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        ba = db_user.billing_account
+
+    # Add a paid recharge of $150 to meet the $100 threshold
+    recharge = Recharge(
+        billing_account_id=ba.id,
+        type="payment",
+        quantity=Decimal("150"),
+        amount_usd=Decimal("150"),
+        status=RechargeStatus.PAID,
+    )
+    dbsession.add(recharge)
+    dbsession.commit()
+
+    response = await client.get(
+        "/v0/billing/auto-recharge",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["eligible"] is True
+    assert data["total_spending"] == 150.0
+    assert data["remaining_spend_needed"] == 0.0
+
+
+@pytest.mark.anyio
+async def test_put_auto_recharge_enable_with_all_settings(client, dbsession):
+    """PUT /billing/auto-recharge updates enabled + threshold + qty atomically."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "ar_put_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("100"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        ba = db_user.billing_account
+
+    # Add spending to meet eligibility
+    recharge = Recharge(
+        billing_account_id=ba.id,
+        type="payment",
+        quantity=Decimal("200"),
+        amount_usd=Decimal("200"),
+        status=RechargeStatus.PAID,
+    )
+    dbsession.add(recharge)
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": True, "threshold": 10.0, "qty": 50.0},
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["threshold"] == 10.0
+    assert data["qty"] == 50.0
+    assert data["eligible"] is True
+
+    # Verify database was updated
+    dbsession.refresh(ba)
+    assert ba.autorecharge is True
+    assert float(ba.autorecharge_threshold) == 10.0
+    assert float(ba.autorecharge_qty) == 50.0
+
+
+@pytest.mark.anyio
+async def test_put_auto_recharge_toggle_only(client, dbsession):
+    """PUT /billing/auto-recharge with only enabled flag toggles without changing threshold/qty."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "ar_toggle_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(
+            credits=Decimal("50"),
+            autorecharge=True,
+            autorecharge_threshold=Decimal("15"),
+            autorecharge_qty=Decimal("75"),
+        )
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        ba = db_user.billing_account
+        ba.autorecharge = True
+        ba.autorecharge_threshold = Decimal("15")
+        ba.autorecharge_qty = Decimal("75")
+    dbsession.commit()
+
+    # Disable auto-recharge — threshold/qty should remain unchanged
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": False},
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is False
+    assert data["threshold"] == 15.0  # unchanged
+    assert data["qty"] == 75.0  # unchanged
+
+
+@pytest.mark.anyio
+async def test_put_auto_recharge_enable_fails_without_spending(client, dbsession):
+    """PUT /billing/auto-recharge returns 400 when trying to enable without meeting spend threshold."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "ar_ineligible@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("50"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": True, "threshold": 5.0, "qty": 25.0},
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 400
+    assert "must spend" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_put_auto_recharge_rejects_low_qty(client, dbsession):
+    """PUT /billing/auto-recharge returns 400 when qty is below the $25 minimum."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "ar_low_qty@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("50"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": False, "threshold": 5.0, "qty": 10.0},
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 400
+    assert "minimum" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_put_auto_recharge_disable_always_allowed(client, dbsession):
+    """PUT /billing/auto-recharge allows disabling even without spending threshold."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "ar_disable_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(
+            credits=Decimal("50"),
+            autorecharge=True,
+            autorecharge_threshold=Decimal("5"),
+            autorecharge_qty=Decimal("25"),
+        )
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        ba = db_user.billing_account
+        ba.autorecharge = True
+    dbsession.commit()
+
+    # Disabling should succeed even with no spending
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": False},
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
