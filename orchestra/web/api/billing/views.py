@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import stripe
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.param_functions import Depends
 from sqlalchemy.orm import Session
 
@@ -46,6 +46,7 @@ from orchestra.web.api.billing.schema import (
     CheckoutSessionResponse,
     CheckoutStatusResponse,
     PortalSessionResponse,
+    TaxIdValidationRequest,
 )
 from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
 from orchestra.web.api.utils.tax_id_validator import (
@@ -668,12 +669,13 @@ def update_auto_recharge(
 @router.post("/billing/validate-tax-id")
 def validate_tax_id(
     request: Request,
-    tax_id: str = Query(..., description="Tax ID to validate"),
-    country: str = Query(..., description="Two-letter country code"),
+    body: TaxIdValidationRequest,
     session: Session = Depends(get_db_session),
 ):
     """Validate a tax ID format for a specific country."""
     try:
+        tax_id = body.tax_id
+        country = body.country
         validation_result = validate_tax_id_for_country(tax_id, country)
 
         return {
