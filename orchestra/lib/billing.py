@@ -4,11 +4,12 @@ All billing operations now operate through BillingAccount.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import stripe
 from sqlalchemy.orm import Session
@@ -465,3 +466,59 @@ def sync_billing_profile_to_stripe(
             stripe_customer_id,
             e,
         )
+
+
+# =========================================================================
+# Tax ID display helpers
+# =========================================================================
+
+# Tax module identifier → human-readable name and expected input format.
+# Used by the supported-tax-countries endpoint so frontends receive
+# structured data instead of having to parse description strings.
+TAX_TYPE_MAP: Dict[str, Dict[str, str]] = {
+    "us.ein": {"name": "EIN", "format": "XX-XXXXXXX"},
+    "gb.vat": {"name": "VAT Number", "format": "GB999999999"},
+    "au.abn": {"name": "ABN", "format": "XX XXX XXX XXX"},
+    "ca.gst_hst": {"name": "GST/HST Number", "format": "XXXXXXXXX"},
+    "de.vat": {"name": "VAT Number", "format": "DEXXXXXXXXX"},
+    "fr.tva": {"name": "TVA Number", "format": "FRXXXXXXXXXXX"},
+    "it.iva": {"name": "IVA Number", "format": "ITXXXXXXXXXXX"},
+    "es.vat": {"name": "VAT Number", "format": "ESXXXXXXXXX"},
+    "jp.cn": {"name": "Corporate Number", "format": "XXXXXXXXXXXXX"},
+    "nl.btw": {"name": "BTW Number", "format": "NLXXXXXXXXX"},
+    "be.vat": {"name": "VAT Number", "format": "BEXXXXXXXXX"},
+    "at.uid": {"name": "UID Number", "format": "ATXXXXXXXXX"},
+    "se.vat": {"name": "VAT Number", "format": "SEXXXXXXXXX"},
+    "dk.cvr": {"name": "CVR Number", "format": "XXXXXXXX"},
+    "pt.nif": {"name": "NIF Number", "format": "XXXXXXXXX"},
+    "no.mva": {"name": "MVA Number", "format": "XXXXXXXXX"},
+    "ch.vat": {"name": "VAT Number", "format": "CHXXXXXXXXX"},
+    "kr.brn": {"name": "Business Registration Number", "format": "XXX-XX-XXXXX"},
+    "in.gstin": {"name": "GSTIN", "format": "XXXXXXXXXXXX"},
+    "sg.uen": {"name": "UEN", "format": "XXXXXXXXX"},
+    "my.nric": {"name": "NRIC/Company No.", "format": "XXXXXXXXX"},
+    "th.moa": {"name": "MOA Number", "format": "XXXXXXXXX"},
+    "br.cnpj": {"name": "CNPJ", "format": "XX.XXX.XXX/XXXX-XX"},
+    "mx.rfc": {"name": "RFC", "format": "XXXXXXXXXXX"},
+    "ru.inn": {"name": "INN", "format": "XXXXXXXXXX"},
+    "cn.uscc": {"name": "USCC", "format": "XXXXXXXXXXXXXXXXX"},
+}
+
+
+def extract_tax_id_info(description: str) -> Dict[str, str]:
+    """Extract structured tax ID info from a description string.
+
+    Parses descriptions produced by
+    :pymethod:`TaxIDValidator.get_supported_countries` — e.g.
+    ``"Full validation (us.ein)"`` or ``"EU VAT validation"`` — and
+    returns ``{"name": ..., "format": ...}``.
+    """
+    match = re.search(r"\(([^)]+)\)", description)
+    if match:
+        tax_type = match.group(1)
+        info = TAX_TYPE_MAP.get(tax_type)
+        if info:
+            return info
+    if "EU VAT" in description:
+        return {"name": "VAT Number", "format": "Enter VAT number"}
+    return {"name": "Tax ID", "format": "Enter tax ID"}

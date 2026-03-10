@@ -41,6 +41,9 @@ class AutoRechargeResponse(BaseModel):
     threshold: float = 0.0
     qty: float = 25.0
 
+    # Validation constraints (so frontends don't hardcode them)
+    min_recharge_amount: float = 25.0
+
     # Eligibility (fraud-prevention spending gate)
     eligible: bool = False
     total_spending: float = 0.0
