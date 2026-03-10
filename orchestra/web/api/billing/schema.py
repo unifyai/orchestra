@@ -55,3 +55,24 @@ class AutoRechargeUpdateRequest(BaseModel):
     enabled: bool
     threshold: Optional[float] = None
     qty: Optional[float] = None
+
+
+class AccountInfoResponse(BaseModel):
+    """
+    Response from ``GET /billing/account-info``.
+
+    Returns the key billing account fields needed by the frontend:
+    credit balance, billing history indicator, auto-recharge settings,
+    and account status.  Context (personal vs org) is derived from
+    the API key.
+    """
+
+    billing_account_id: int
+    credits: float = 0.0
+    account_status: str = "ACTIVE"
+    last_recharge_at: Optional[str] = None
+
+    # Auto-recharge settings (mirrors AutoRechargeResponse subset)
+    autorecharge: bool = False
+    autorecharge_threshold: float = 0.0
+    autorecharge_qty: float = 25.0

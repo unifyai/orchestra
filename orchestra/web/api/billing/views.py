@@ -25,7 +25,11 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import BillingAccount
+from orchestra.db.models.orchestra_models import (
+    BillingAccount,
+    Recharge,
+    RechargeStatus,
+)
 from orchestra.lib.billing import (
     configure_stripe,
     get_billing_entity,
@@ -35,6 +39,7 @@ from orchestra.lib.billing import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.billing.schema import (
+    AccountInfoResponse,
     AutoRechargeResponse,
     AutoRechargeUpdateRequest,
     CheckoutSessionResponse,
@@ -81,10 +86,90 @@ def _check_org_billing_permission(
         raise HTTPException(
             status_code=403,
             detail=(
-                f"You do not have {permission} permission "
-                f"in this organization"
+                f"You do not have {permission} permission " f"in this organization"
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# GET /billing/account-info  (user-facing)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/billing/account-info",
+    response_model=AccountInfoResponse,
+    responses={
+        200: {"description": "Billing account information"},
+        400: {"description": "Billing not set up"},
+    },
+)
+def get_account_info(
+    request_fastapi: Request,
+    session=Depends(get_db_session),
+) -> AccountInfoResponse:
+    """
+    Return billing account information for the authenticated user / org.
+
+    The response includes credit balance, Stripe customer status,
+    account status, and auto-recharge settings.  Context (personal vs org)
+    is derived from the API key.
+    """
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+
+    _check_org_billing_permission(
+        session,
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    ba = (
+        session.query(BillingAccount)
+        .filter_by(id=billing_entity.billing_account_id)
+        .first()
+    )
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing account not found")
+
+    # Find the most recent paid recharge for this billing account
+    last_recharge = (
+        session.query(Recharge)
+        .filter(
+            Recharge.billing_account_id == ba.id,
+            Recharge.status == RechargeStatus.PAID,
+        )
+        .order_by(Recharge.at.desc())
+        .first()
+    )
+    last_recharge_at: Optional[str] = None
+    if last_recharge and last_recharge.at:
+        ts = last_recharge.at
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        last_recharge_at = ts.isoformat()
+
+    return AccountInfoResponse(
+        billing_account_id=ba.id,
+        credits=float(ba.credits) if ba.credits else 0.0,
+        account_status=ba.account_status or "ACTIVE",
+        last_recharge_at=last_recharge_at,
+        autorecharge=ba.autorecharge,
+        autorecharge_threshold=(
+            float(ba.autorecharge_threshold) if ba.autorecharge_threshold else 0.0
+        ),
+        autorecharge_qty=(float(ba.autorecharge_qty) if ba.autorecharge_qty else 25.0),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,8 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
+    RECHARGE_TYPE_PAYMENT,
+    RECHARGE_TYPE_PROMO,
     BillingAccount,
     Recharge,
     RechargeStatus,
@@ -3091,7 +3093,13 @@ async def test_put_auto_recharge_disable_always_allowed(client, dbsession):
 # ========================================================================= #
 
 
-async def _create_org_with_member(client, dbsession, owner_email, member_email, role_name):
+async def _create_org_with_member(
+    client,
+    dbsession,
+    owner_email,
+    member_email,
+    role_name,
+):
     """
     Helper: create an org (owner), add a member with the given role,
     and return (org_id, owner_headers, member_org_headers, org_billing_account).
@@ -3149,8 +3157,11 @@ async def _create_org_with_member(client, dbsession, owner_email, member_email, 
 async def test_org_owner_can_read_auto_recharge(client, dbsession):
     """Owner (billing:read) can GET /billing/auto-recharge via org API key."""
     org_id, owner_headers, _ = await _create_org_with_member(
-        client, dbsession,
-        "perm_owner_read@test.com", "perm_member_read@test.com", "Member",
+        client,
+        dbsession,
+        "perm_owner_read@test.com",
+        "perm_member_read@test.com",
+        "Member",
     )
 
     response = await client.get(
@@ -3165,8 +3176,11 @@ async def test_org_owner_can_read_auto_recharge(client, dbsession):
 async def test_org_member_can_read_auto_recharge(client, dbsession):
     """Member (billing:read) can GET /billing/auto-recharge via org API key."""
     _, _, member_headers = await _create_org_with_member(
-        client, dbsession,
-        "perm_owner_mread@test.com", "perm_member_mread@test.com", "Member",
+        client,
+        dbsession,
+        "perm_owner_mread@test.com",
+        "perm_member_mread@test.com",
+        "Member",
     )
 
     response = await client.get(
@@ -3181,8 +3195,11 @@ async def test_org_member_can_read_auto_recharge(client, dbsession):
 async def test_org_member_cannot_update_auto_recharge(client, dbsession):
     """Member (no billing:write) is blocked from PUT /billing/auto-recharge."""
     _, _, member_headers = await _create_org_with_member(
-        client, dbsession,
-        "perm_owner_mwrite@test.com", "perm_member_mwrite@test.com", "Member",
+        client,
+        dbsession,
+        "perm_owner_mwrite@test.com",
+        "perm_member_mwrite@test.com",
+        "Member",
     )
 
     response = await client.put(
@@ -3198,8 +3215,11 @@ async def test_org_member_cannot_update_auto_recharge(client, dbsession):
 async def test_org_owner_can_update_auto_recharge(client, dbsession):
     """Owner (billing:write) can PUT /billing/auto-recharge via org API key."""
     _, owner_headers, _ = await _create_org_with_member(
-        client, dbsession,
-        "perm_owner_owrite@test.com", "perm_member_owrite@test.com", "Member",
+        client,
+        dbsession,
+        "perm_owner_owrite@test.com",
+        "perm_member_owrite@test.com",
+        "Member",
     )
 
     response = await client.put(
@@ -3211,11 +3231,18 @@ async def test_org_owner_can_update_auto_recharge(client, dbsession):
 
 
 @pytest.mark.anyio
-async def test_org_member_cannot_create_checkout_session(client, dbsession, monkeypatch):
+async def test_org_member_cannot_create_checkout_session(
+    client,
+    dbsession,
+    monkeypatch,
+):
     """Member (no billing:write) is blocked from POST /billing/checkout-session."""
     _, _, member_headers = await _create_org_with_member(
-        client, dbsession,
-        "perm_owner_checkout@test.com", "perm_member_checkout@test.com", "Member",
+        client,
+        dbsession,
+        "perm_owner_checkout@test.com",
+        "perm_member_checkout@test.com",
+        "Member",
     )
 
     # Mock stripe so the test doesn't need real keys
@@ -3236,8 +3263,11 @@ async def test_org_member_cannot_create_checkout_session(client, dbsession, monk
 async def test_org_member_cannot_create_portal_session(client, dbsession, monkeypatch):
     """Member (no billing:write) is blocked from POST /billing/portal-session."""
     _, _, member_headers = await _create_org_with_member(
-        client, dbsession,
-        "perm_owner_portal@test.com", "perm_member_portal@test.com", "Member",
+        client,
+        dbsession,
+        "perm_owner_portal@test.com",
+        "perm_member_portal@test.com",
+        "Member",
     )
 
     import orchestra.web.api.billing.views as billing_views
@@ -3256,11 +3286,13 @@ async def test_org_member_cannot_create_portal_session(client, dbsession, monkey
 @pytest.mark.anyio
 async def test_org_viewer_can_read_checkout_status(client, dbsession, monkeypatch):
     """Viewer (billing:read) can GET /billing/checkout-status via org API key."""
-    from orchestra.db.dao.organization_dao import OrganizationDAO
 
     _, _, viewer_headers = await _create_org_with_member(
-        client, dbsession,
-        "perm_owner_vread@test.com", "perm_viewer_vread@test.com", "Viewer",
+        client,
+        dbsession,
+        "perm_owner_vread@test.com",
+        "perm_viewer_vread@test.com",
+        "Viewer",
     )
 
     import orchestra.web.api.billing.views as billing_views
@@ -3287,7 +3319,10 @@ async def test_org_viewer_can_read_checkout_status(client, dbsession, monkeypatc
     )
     # Viewer has billing:read so permission check passes.
     # May get 400 (billing not set up) or 200/403 (ownership) — but NOT 403 from permission check.
-    assert response.status_code != 403 or "billing:read" not in response.json().get("detail", "")
+    assert response.status_code != 403 or "billing:read" not in response.json().get(
+        "detail",
+        "",
+    )
 
 
 @pytest.mark.anyio
@@ -3321,3 +3356,300 @@ async def test_personal_api_key_bypasses_org_permission_check(client, dbsession)
         headers=user["headers"],
     )
     assert response.status_code == 200
+
+
+# ========================================================================= #
+# GET /billing/account-info tests                                            #
+# ========================================================================= #
+
+
+@pytest.mark.anyio
+async def test_get_account_info_personal(client, dbsession):
+    """GET /billing/account-info returns balance, customer status, and settings
+    for a personal workspace."""
+    user = await create_test_user(client, "acctinfo_personal@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    ba = BillingAccount(
+        credits=Decimal("42.50"),
+        stripe_customer_id="cus_test123",
+        autorecharge=True,
+        autorecharge_threshold=Decimal("10"),
+        autorecharge_qty=Decimal("50"),
+    )
+    dbsession.add(ba)
+    dbsession.flush()
+
+    # Add a paid recharge so last_recharge_at is populated
+    recharge = Recharge(
+        billing_account_id=ba.id,
+        type=RECHARGE_TYPE_PAYMENT,
+        quantity=Decimal("42.50"),
+        amount_usd=Decimal("42.50"),
+        status=RechargeStatus.PAID,
+    )
+    dbsession.add(recharge)
+    dbsession.flush()
+
+    db_user.billing_account_id = ba.id
+    dbsession.flush()
+    dbsession.commit()
+
+    response = await client.get(
+        "/v0/billing/account-info",
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["billing_account_id"] == ba.id
+    assert data["credits"] == 42.5
+    assert data["last_recharge_at"] is not None
+    assert data["autorecharge"] is True
+    assert data["autorecharge_threshold"] == 10.0
+    assert data["autorecharge_qty"] == 50.0
+
+
+@pytest.mark.anyio
+async def test_get_account_info_no_recharge_history(client, dbsession):
+    """GET /billing/account-info returns last_recharge_at=null when no
+    paid recharges exist."""
+    user = await create_test_user(client, "acctinfo_nocust@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    ba = BillingAccount(credits=Decimal("0"))
+    dbsession.add(ba)
+    dbsession.flush()
+    db_user.billing_account_id = ba.id
+    dbsession.flush()
+    dbsession.commit()
+
+    response = await client.get(
+        "/v0/billing/account-info",
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["last_recharge_at"] is None
+    assert data["credits"] == 0.0
+
+
+@pytest.mark.anyio
+async def test_get_account_info_org_owner(client, dbsession):
+    """GET /billing/account-info works for org owner via org API key."""
+    _, owner_headers, _ = await _create_org_with_member(
+        client,
+        dbsession,
+        "acctinfo_owner@test.com",
+        "acctinfo_member@test.com",
+        "Member",
+    )
+
+    response = await client.get(
+        "/v0/billing/account-info",
+        headers=owner_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "credits" in data
+    assert "last_recharge_at" in data
+
+
+@pytest.mark.anyio
+async def test_get_account_info_org_member_read(client, dbsession):
+    """GET /billing/account-info works for org member (billing:read)."""
+    _, _, member_headers = await _create_org_with_member(
+        client,
+        dbsession,
+        "acctinfo_mread_owner@test.com",
+        "acctinfo_mread@test.com",
+        "Member",
+    )
+
+    response = await client.get(
+        "/v0/billing/account-info",
+        headers=member_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "credits" in data
+
+
+@pytest.mark.anyio
+async def test_get_account_info_no_billing_setup(client, dbsession):
+    """GET /billing/account-info returns 400 when no billing account exists."""
+    user = await create_test_user(client, "acctinfo_nobilling@test.com")
+
+    # Ensure no billing account is linked
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    db_user.billing_account_id = None
+    dbsession.commit()
+
+    response = await client.get(
+        "/v0/billing/account-info",
+        headers=user["headers"],
+    )
+    assert response.status_code == 400
+    assert "not set up" in response.json()["detail"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# Credit Grant → Promo Recharge Tests                                          #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.anyio
+async def test_credit_grant_creates_promo_recharge(client, dbsession):
+    """Claiming a credit grant link creates a PROMO recharge record."""
+    from orchestra.db.dao.one_time_credit_grant_link_dao import (
+        OneTimeCreditGrantLinkDAO,
+    )
+
+    # Create a user with a billing account
+    user = await create_test_user(client, "promo_recharge@test.com")
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+
+    ba = BillingAccount(credits=Decimal("0"))
+    dbsession.add(ba)
+    dbsession.flush()
+    db_user.billing_account_id = ba.id
+    dbsession.commit()
+
+    # Create a credit grant link
+    token_dao = OneTimeCreditGrantLinkDAO(dbsession)
+    link = token_dao.create(
+        expires_at=datetime.now(dt.timezone.utc) + dt.timedelta(days=7),
+        credit_amount=15.0,
+    )
+    dbsession.commit()
+
+    # Claim the link
+    response = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link.token},
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["credits_granted"] == 15.0
+
+    # Verify a PROMO recharge record was created
+    dbsession.expire_all()
+    recharges = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).all()
+    assert len(recharges) == 1
+    r = recharges[0]
+    assert r.type == RECHARGE_TYPE_PROMO
+    assert float(r.quantity) == 15.0
+    assert float(r.amount_usd) == 0.0
+    assert r.status == RechargeStatus.PAID
+
+
+@pytest.mark.anyio
+async def test_credit_grant_promo_recharge_populates_last_recharge_at(
+    client,
+    dbsession,
+):
+    """After claiming a credit grant, GET /billing/account-info returns
+    last_recharge_at (not null), proving the promo recharge gives billing
+    history."""
+    from orchestra.db.dao.one_time_credit_grant_link_dao import (
+        OneTimeCreditGrantLinkDAO,
+    )
+
+    user = await create_test_user(client, "promo_last_recharge@test.com")
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+
+    ba = BillingAccount(credits=Decimal("0"))
+    dbsession.add(ba)
+    dbsession.flush()
+    db_user.billing_account_id = ba.id
+    dbsession.commit()
+
+    # Before claiming: last_recharge_at should be null
+    resp_before = await client.get(
+        "/v0/billing/account-info",
+        headers=user["headers"],
+    )
+    assert resp_before.status_code == 200
+    assert resp_before.json()["last_recharge_at"] is None
+
+    # Create and claim a credit grant link
+    token_dao = OneTimeCreditGrantLinkDAO(dbsession)
+    link = token_dao.create(
+        expires_at=datetime.now(dt.timezone.utc) + dt.timedelta(days=7),
+        credit_amount=20.0,
+    )
+    dbsession.commit()
+
+    claim_resp = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link.token},
+        headers=user["headers"],
+    )
+    assert claim_resp.status_code == 200
+
+    # After claiming: last_recharge_at should be populated
+    resp_after = await client.get(
+        "/v0/billing/account-info",
+        headers=user["headers"],
+    )
+    assert resp_after.status_code == 200
+    data = resp_after.json()
+    assert data["last_recharge_at"] is not None
+    assert data["credits"] == 20.0
+
+
+@pytest.mark.anyio
+async def test_credit_grant_new_billing_account_creates_promo_recharge(
+    client,
+    dbsession,
+):
+    """When a user without a billing account claims a grant link, both the
+    billing account and a promo recharge are created."""
+    from orchestra.db.dao.one_time_credit_grant_link_dao import (
+        OneTimeCreditGrantLinkDAO,
+    )
+
+    user = await create_test_user(client, "promo_newba@test.com")
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+
+    # Ensure no billing account exists
+    db_user.billing_account_id = None
+    dbsession.commit()
+
+    # Create and claim
+    token_dao = OneTimeCreditGrantLinkDAO(dbsession)
+    link = token_dao.create(
+        expires_at=datetime.now(dt.timezone.utc) + dt.timedelta(days=7),
+        credit_amount=5.0,
+    )
+    dbsession.commit()
+
+    response = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": link.token},
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+    assert response.json()["credits_granted"] == 5.0
+
+    # Verify the new billing account has a promo recharge
+    dbsession.expire_all()
+    db_user = user_dao.get_user_with_id(user["id"])
+    assert db_user.billing_account_id is not None
+
+    recharges = (
+        dbsession.query(Recharge)
+        .filter_by(billing_account_id=db_user.billing_account_id)
+        .all()
+    )
+    assert len(recharges) == 1
+    assert recharges[0].type == RECHARGE_TYPE_PROMO
+    assert recharges[0].status == RechargeStatus.PAID

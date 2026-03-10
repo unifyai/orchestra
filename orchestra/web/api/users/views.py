@@ -1093,6 +1093,12 @@ def claim_credit_grant_link(
             )
 
         # Determine which billing account receives the credits
+        from orchestra.db.models.orchestra_models import (
+            RECHARGE_TYPE_PROMO,
+            Recharge,
+            RechargeStatus,
+        )
+
         credit_amount = float(link.credit_amount)
         credited_to = "personal"
 
@@ -1117,6 +1123,18 @@ def claim_credit_grant_link(
                 new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
                 user_instance.billing_account_id = new_ba.id
                 session.flush()
+
+        # Record a promo Recharge so the account has billing history.
+        # This allows the frontend to detect "has prior billing activity"
+        # via last_recharge_at without relying on Stripe-specific state.
+        recharge = Recharge(
+            billing_account_id=ba.id,
+            type=RECHARGE_TYPE_PROMO,
+            quantity=Decimal(str(credit_amount)),
+            amount_usd=Decimal("0"),
+            status=RechargeStatus.PAID,
+        )
+        session.add(recharge)
 
         session.commit()
         return CreditGrantClaimResponse(
