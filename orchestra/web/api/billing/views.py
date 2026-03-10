@@ -29,6 +29,7 @@ from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.lib.billing import (
+    COUNTRY_NAMES,
     configure_stripe,
     extract_tax_id_info,
     is_stripe_mode_conflict,
@@ -47,6 +48,7 @@ from orchestra.web.api.billing.schema import (
     CheckoutStatusResponse,
     PortalSessionResponse,
 )
+from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
 from orchestra.web.api.utils.tax_id_validator import (
     TaxIDValidator,
     validate_tax_id_for_country,
@@ -705,6 +707,9 @@ def get_supported_tax_countries():
             "description": description,
             "tax_id_name": info["name"],
             "tax_id_format": info["format"],
+            "name": COUNTRY_NAMES.get(code, code),
+            "tax_id_type": info.get("tax_id_type"),
+            "stripe_tax_id_type": get_stripe_tax_id_type(code),
         }
     return {
         "supported_countries": structured,
