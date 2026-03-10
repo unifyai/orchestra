@@ -8,9 +8,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    RECHARGE_TYPE_PROMO,
     BillingAccount,
+    Organization,
     Recharge,
     RechargeStatus,
+    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +85,57 @@ class BillingAccountDAO:
             BillingAccount.stripe_customer_id == stripe_customer_id,
         )
         return self.session.execute(query).scalars().first()
+
+    # =========================================================================
+    # RESOLUTION (user / org → BillingAccount)
+    # =========================================================================
+
+    def resolve_for_user(self, user_id: str) -> Optional[BillingAccount]:
+        """
+        Look up a user's billing account.
+
+        :param user_id: User ID.
+        :return: BillingAccount, or None if user or BA not found.
+        """
+        user = self.session.query(User).filter(User.id == user_id).first()
+        if not user or not user.billing_account_id:
+            return None
+        return self.get(user.billing_account_id)
+
+    def resolve_for_org(self, organization_id: int) -> Optional[BillingAccount]:
+        """
+        Look up an organization's billing account.
+
+        :param organization_id: Organization ID.
+        :return: BillingAccount, or None if org or BA not found.
+        """
+        org = (
+            self.session.query(Organization)
+            .filter(Organization.id == organization_id)
+            .first()
+        )
+        if not org or not org.billing_account_id:
+            return None
+        return self.get(org.billing_account_id)
+
+    def resolve(
+        self,
+        user_id: str,
+        organization_id: Optional[int] = None,
+    ) -> Optional[BillingAccount]:
+        """
+        Resolve the billing account for a request context.
+
+        If ``organization_id`` is given, returns the org's billing account.
+        Otherwise returns the user's personal billing account.
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID (None = personal context).
+        :return: BillingAccount, or None if not found.
+        """
+        if organization_id is not None:
+            return self.resolve_for_org(organization_id)
+        return self.resolve_for_user(user_id)
 
     # =========================================================================
     # CREDITS
@@ -410,6 +464,41 @@ class BillingAccountDAO:
             ba.billing_address = {**existing, **billing_address}
 
         return True
+
+    def apply_credit_grant(
+        self,
+        billing_account_id: int,
+        credit_amount: float,
+    ) -> Recharge:
+        """
+        Apply a promotional credit grant to a billing account.
+
+        Adds credits to the account and creates a ``PAID`` promo
+        :class:`Recharge` record so the account has billing history.
+
+        :param billing_account_id: BillingAccount ID.
+        :param credit_amount: Amount of credits to grant.
+        :return: The created Recharge record.
+        :raises ValueError: If the billing account is not found.
+        """
+        ba = self.get(billing_account_id)
+        if ba is None:
+            raise ValueError(
+                f"BillingAccount {billing_account_id} not found.",
+            )
+
+        ba.credits = ba.credits + decimal.Decimal(str(credit_amount))
+
+        recharge = Recharge(
+            billing_account_id=billing_account_id,
+            type=RECHARGE_TYPE_PROMO,
+            quantity=decimal.Decimal(str(credit_amount)),
+            amount_usd=decimal.Decimal("0"),
+            status=RechargeStatus.PAID,
+        )
+        self.session.add(recharge)
+        self.session.flush()
+        return recharge
 
     def get_billing_profile(self, billing_account_id: int) -> Optional[dict]:
         """

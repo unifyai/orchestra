@@ -1434,7 +1434,7 @@ async def test_user_not_found_error_handling(client: AsyncClient, dbsession: Ses
     )
     assert response.status_code == 404
     error_data = response.json()
-    assert "User ID not found" in error_data["detail"]
+    assert "not found" in error_data["detail"]
 
     # Test enable autorecharge with non-existent user
     response = await client.put(

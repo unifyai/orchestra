@@ -2279,69 +2279,19 @@ async def update_organization_billing_profile(
     session.commit()
 
     # Sync changes to Stripe if org has a Stripe customer via BillingAccount
-    stripe_cust_id = ba.stripe_customer_id if ba else None
-    if stripe_cust_id:
-        try:
-            stripe_key = settings.stripe_secret_key
-            if stripe_key:
-                import stripe
+    if ba.stripe_customer_id:
+        from orchestra.lib.billing import sync_billing_profile_to_stripe
 
-                from orchestra.web.api.utils.business_validation import (
-                    build_stripe_customer_name,
-                    sync_tax_id_to_stripe,
-                )
-
-                stripe.api_key = stripe_key
-
-                # Build update params for customer
-                update_params: dict = {}
-
-                if profile_update.billing_email:
-                    update_params["email"] = profile_update.billing_email
-                if profile_update.business_name:
-                    update_params.update(
-                        build_stripe_customer_name(
-                            is_business=True,
-                            name=profile_update.business_name,
-                        ),
-                    )
-                if billing_address_dict and billing_address_dict.get("line1"):
-                    update_params["address"] = {
-                        "line1": billing_address_dict.get("line1", ""),
-                        "line2": billing_address_dict.get("line2", ""),
-                        "city": billing_address_dict.get("city", ""),
-                        "state": billing_address_dict.get("state", ""),
-                        "postal_code": billing_address_dict.get("postal_code", ""),
-                        "country": billing_address_dict.get("country", ""),
-                    }
-                    # Validate location immediately when address changes
-                    update_params["tax"] = {"validate_location": "immediately"}
-
-                if update_params:
-                    stripe.Customer.modify(stripe_cust_id, **update_params)
-
-                # Sync tax ID if provided (uses shared helper that also
-                # sets tax_exempt for B2B reverse-charge)
-                if profile_update.tax_id is not None:
-                    country_code = None
-                    if billing_address_dict and billing_address_dict.get("country"):
-                        country_code = billing_address_dict["country"]
-                    elif existing_billing_address and existing_billing_address.get(
-                        "country",
-                    ):
-                        country_code = existing_billing_address["country"]
-
-                    sync_tax_id_to_stripe(
-                        stripe_cust_id,
-                        profile_update.tax_id,
-                        country_code,
-                        logger=logger,
-                    )
-        except Exception as e:
-            # Log but don't fail - Stripe sync is best-effort
-            logger.warning(
-                f"Failed to sync business profile to Stripe for org {organization_id}: {e}",
-            )
+        sync_billing_profile_to_stripe(
+            ba.stripe_customer_id,
+            is_business=True,
+            billing_email=profile_update.billing_email,
+            name=profile_update.business_name,
+            tax_id=profile_update.tax_id,
+            billing_address=billing_address_dict,
+            existing_billing_address=existing_billing_address,
+            logger_instance=logger,
+        )
 
     # Return updated profile from the BillingAccount directly
     session.refresh(ba)
