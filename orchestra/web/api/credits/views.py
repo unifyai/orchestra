@@ -1,12 +1,12 @@
 import logging
 from decimal import Decimal
-from typing import Dict
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.lib.billing import get_billing_entity
+from orchestra.db.models.orchestra_models import BillingAccount
+from orchestra.lib.billing import get_billing_entity, queue_auto_recharge
 from orchestra.web.api.credits.schema import (
     CreditsResponse,
     DeductCreditsRequest,
@@ -122,14 +122,37 @@ def deduct_credits(
             detail=f"Insufficient credits. Available: {current_credits}, requested: {request.amount}",
         )
 
-    billing_deduct_credits(session, billing_entity, Decimal(str(request.amount)))
-    session.commit()
+    new_balance = billing_deduct_credits(
+        session,
+        billing_entity,
+        Decimal(str(request.amount)),
+    )
 
-    new_credits = current_credits - request.amount
+    # Trigger auto-recharge if credits fell below threshold
+    if billing_entity.should_trigger_autorecharge(new_balance):
+        ba = (
+            session.query(BillingAccount)
+            .filter(BillingAccount.id == billing_entity.billing_account_id)
+            .first()
+        )
+        if ba:
+            queue_auto_recharge(
+                session,
+                ba,
+                int(billing_entity.autorecharge_qty),
+                entity_label=(
+                    f"user {billing_entity.entity_id}"
+                    if billing_entity.is_user
+                    else f"org {billing_entity.entity_id}"
+                ),
+            )
+            # Re-read balance after auto-recharge added credits
+            new_balance = ba.credits
+
+    session.commit()
 
     return DeductCreditsResponse(
         previous_credits=current_credits,
         deducted=request.amount,
-        current_credits=new_credits,
+        current_credits=float(new_balance),
     )
-

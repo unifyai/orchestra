@@ -263,9 +263,15 @@ def queue_auto_recharge(
 
     session.add(recharge)
 
+    # Credit the billing account immediately (pay-now, invoice-later model).
+    # The monthly invoicer will bill the customer at month-end; if the
+    # invoice payment fails, the account will be marked PAST_DUE.
+    billing_account.credits = billing_account.credits + Decimal(credits)
+
     print(
         f"[AUTO-RECHARGE] Record created for billing_account {billing_account.id}: "
-        f"${credits:.2f} ({credits} credits), Invoice group: {invoice_group}",
+        f"${credits:.2f} ({credits} credits), Invoice group: {invoice_group}. "
+        f"Credits added immediately (new balance: {billing_account.credits})",
     )
 
     # Create Stripe invoice item if billing account has Stripe customer ID

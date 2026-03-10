@@ -1613,11 +1613,11 @@ def test_auto_recharge_flow_creates_stripe_items(
     dbsession.refresh(ba)
     assert float(ba.credits) == 5
 
-    # Simulate the auto-recharge trigger (normally done in bg_tasks)
+    # Simulate the auto-recharge trigger (normally done in bg_tasks).
+    # queue_auto_recharge now adds credits immediately, so no separate
+    # add_credits call is needed.
     if ba.credits <= ba.autorecharge_threshold:
         queue_auto_recharge(dbsession, ba, int(ba.autorecharge_qty))
-        # Credit billing account immediately
-        ba_dao.add_credits(ba.id, int(ba.autorecharge_qty))
         dbsession.commit()
 
     # Verify final state
@@ -1720,7 +1720,8 @@ async def test_get_billing_entity_personal(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_get_billing_entity_org_no_stripe_customer(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test get_billing_entity returns entity for org without stripe_customer_id.
 
@@ -1930,3 +1931,475 @@ async def test_billing_entity_no_autorecharge_without_stripe(
     assert entity.should_trigger_autorecharge(Decimal("100")) is False
     # Credits below threshold - should trigger autorecharge
     assert entity.should_trigger_autorecharge(Decimal("40")) is True
+
+
+def test_queue_auto_recharge_adds_credits_immediately(dbsession: Session, monkeypatch):
+    """Test that queue_auto_recharge adds credits to the billing account right away."""
+    import orchestra.lib.billing
+
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(
+            create=lambda **kw: SimpleNamespace(id="ii_test"),
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    user, ba = _make_user(
+        dbsession,
+        "ar_adds_credits_user",
+        credits=5,
+        stripe_customer_id="cus_ar_credits",
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.commit()
+
+    assert float(ba.credits) == 5
+
+    queue_auto_recharge(dbsession, ba, 50, entity_label="test")
+    dbsession.commit()
+
+    dbsession.refresh(ba)
+    # Credits should have been added immediately: 5 + 50 = 55
+    assert float(ba.credits) == 55
+
+    # Recharge record should also exist
+    recharge = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).first()
+    assert recharge is not None
+    assert recharge.quantity == Decimal("50")
+    assert recharge.status == RechargeStatus.PENDING_INVOICE
+
+
+def test_queue_auto_recharge_credits_survive_negative_balance(
+    dbsession: Session,
+    monkeypatch,
+):
+    """Test that auto-recharge can bring a negative balance back to positive."""
+    import orchestra.lib.billing
+
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(
+            create=lambda **kw: SimpleNamespace(id="ii_test_neg"),
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    user, ba = _make_user(
+        dbsession,
+        "ar_negative_user",
+        credits=-10,
+        stripe_customer_id="cus_ar_negative",
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=100,
+    )
+    dbsession.commit()
+
+    queue_auto_recharge(dbsession, ba, 100, entity_label="test")
+    dbsession.commit()
+
+    dbsession.refresh(ba)
+    # -10 + 100 = 90
+    assert float(ba.credits) == 90
+
+
+def test_levy_auto_recharge_adds_credits(dbsession: Session, monkeypatch):
+    """Test that the levy + auto-recharge flow properly adds credits.
+
+    After the levy deducts credits, auto-recharge should add credits back
+    immediately, preventing the account from staying at zero/negative.
+    """
+    import orchestra.lib.billing
+
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(
+            create=lambda **kw: SimpleNamespace(id="ii_levy_ar"),
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    user, ba = _make_user(
+        dbsession,
+        "levy_ar_user",
+        credits=15,
+        stripe_customer_id="cus_levy_ar",
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.commit()
+
+    # Simulate what the levy does: deduct credits, then auto-recharge
+    ba.credits = ba.credits - Decimal("12")  # 15 - 12 = 3, below threshold
+    dbsession.flush()
+
+    if (
+        ba.autorecharge
+        and ba.stripe_customer_id
+        and ba.credits <= ba.autorecharge_threshold
+    ):
+        queue_auto_recharge(
+            dbsession,
+            ba,
+            int(ba.autorecharge_qty),
+            entity_label="test",
+        )
+
+    dbsession.commit()
+    dbsession.refresh(ba)
+
+    # Credits should be: 15 - 12 + 50 = 53
+    assert float(ba.credits) == 53
+
+
+@pytest.mark.anyio
+async def test_deduct_endpoint_triggers_auto_recharge(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch,
+):
+    """Test that the /credits/deduct endpoint triggers auto-recharge when
+    credits fall below the threshold."""
+    import orchestra.lib.billing
+
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(
+            create=lambda **kw: SimpleNamespace(id="ii_deduct_ar"),
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    user = await create_test_user(client, "deduct_ar@test.com")
+
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.dao.user_dao import UserDAO
+
+    user_dao = UserDAO(dbsession)
+    ba_dao = BillingAccountDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user["id"])
+
+    # Set up autorecharge on the billing account
+    ba = user_obj.billing_account
+    ba.credits = Decimal("15")
+    ba.autorecharge = True
+    ba.autorecharge_threshold = Decimal("10")
+    ba.autorecharge_qty = Decimal("50")
+    ba.stripe_customer_id = "cus_deduct_ar"
+    dbsession.commit()
+
+    # Deduct 10 credits → balance goes to 5, below threshold of 10
+    response = await client.post(
+        "/v0/credits/deduct",
+        json={"amount": 10.0},
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["previous_credits"] == 15.0
+    assert data["deducted"] == 10.0
+    # Auto-recharge should have kicked in: 15 - 10 + 50 = 55
+    assert data["current_credits"] == 55.0
+
+    # Verify a Recharge record was created
+    dbsession.expire_all()
+    recharge = (
+        dbsession.query(Recharge)
+        .filter_by(billing_account_id=ba.id, type="auto")
+        .first()
+    )
+    assert recharge is not None
+    assert recharge.quantity == Decimal("50")
+    assert recharge.status == RechargeStatus.PENDING_INVOICE
+
+
+@pytest.mark.anyio
+async def test_deduct_endpoint_no_auto_recharge_when_above_threshold(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch,
+):
+    """Test that /credits/deduct does NOT trigger auto-recharge when
+    credits remain above the threshold."""
+    import orchestra.lib.billing
+
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(
+            create=lambda **kw: SimpleNamespace(id="ii_no_ar"),
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    user = await create_test_user(client, "deduct_no_ar@test.com")
+
+    from orchestra.db.dao.user_dao import UserDAO
+
+    user_dao = UserDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user["id"])
+
+    ba = user_obj.billing_account
+    ba.credits = Decimal("100")
+    ba.autorecharge = True
+    ba.autorecharge_threshold = Decimal("10")
+    ba.autorecharge_qty = Decimal("50")
+    ba.stripe_customer_id = "cus_no_ar"
+    dbsession.commit()
+
+    # Deduct 5 credits → balance is 95, above threshold
+    response = await client.post(
+        "/v0/credits/deduct",
+        json={"amount": 5.0},
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["current_credits"] == 95.0
+
+    # No Recharge record should have been created
+    dbsession.expire_all()
+    recharge = (
+        dbsession.query(Recharge)
+        .filter_by(billing_account_id=ba.id, type="auto")
+        .first()
+    )
+    assert recharge is None
+
+
+@pytest.mark.anyio
+async def test_deduct_endpoint_no_auto_recharge_when_disabled(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test that /credits/deduct does NOT trigger auto-recharge when
+    autorecharge is disabled."""
+    user = await create_test_user(client, "deduct_ar_disabled@test.com")
+
+    from orchestra.db.dao.user_dao import UserDAO
+
+    user_dao = UserDAO(dbsession)
+    user_obj = user_dao.get_user_with_id(user["id"])
+
+    ba = user_obj.billing_account
+    ba.credits = Decimal("15")
+    ba.autorecharge = False  # disabled
+    ba.autorecharge_threshold = Decimal("10")
+    ba.autorecharge_qty = Decimal("50")
+    ba.stripe_customer_id = "cus_ar_disabled"
+    dbsession.commit()
+
+    response = await client.post(
+        "/v0/credits/deduct",
+        json={"amount": 10.0},
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+
+    data = response.json()
+    # No auto-recharge, so 15 - 10 = 5
+    assert data["current_credits"] == 5.0
+
+    dbsession.expire_all()
+    recharge = (
+        dbsession.query(Recharge)
+        .filter_by(billing_account_id=ba.id, type="auto")
+        .first()
+    )
+    assert recharge is None
+
+
+def test_checkout_creates_recharge_record_for_user(
+    dbsession: Session,
+    monkeypatch,
+):
+    """Test that checkout.session.completed creates a PAID Recharge record
+    for user purchases, so spending is tracked for auto-recharge eligibility."""
+    import orchestra.web.api.webhooks.stripe as webhook_module
+
+    # Mock Stripe calls used in the webhook handler
+    mock_stripe_module = SimpleNamespace(
+        PaymentIntent=SimpleNamespace(
+            modify=lambda pi_id, **kw: None,
+        ),
+        Customer=SimpleNamespace(
+            modify=lambda cid, **kw: None,
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(webhook_module, "stripe", mock_stripe_module)
+
+    user, ba = _make_user(
+        dbsession,
+        "checkout_recharge_user",
+        credits=0,
+        stripe_customer_id="cus_checkout_recharge",
+    )
+    dbsession.commit()
+
+    from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+    event = {
+        "id": "evt_checkout_recharge_user",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "client_reference_id": user.id,
+                "amount_total": 5000,  # $50
+                "customer": "cus_checkout_recharge",
+                "payment_intent": "pi_checkout_recharge",
+                "metadata": {},
+            },
+        },
+    }
+
+    response = process_checkout_session_event(event, dbsession)
+    assert response.status_code == 200
+
+    # Verify credits were added
+    dbsession.refresh(ba)
+    assert float(ba.credits) == 50.0
+
+    # Verify a PAID Recharge record was created
+    recharge = (
+        dbsession.query(Recharge)
+        .filter_by(billing_account_id=ba.id, type="payment")
+        .first()
+    )
+    assert recharge is not None
+    assert recharge.quantity == Decimal("50")
+    assert recharge.amount_usd == Decimal("50")
+    assert recharge.status == RechargeStatus.PAID
+
+
+def test_checkout_creates_recharge_record_for_org(
+    dbsession: Session,
+    monkeypatch,
+):
+    """Test that checkout.session.completed creates a PAID Recharge record
+    for organization purchases."""
+    import orchestra.web.api.webhooks.stripe as webhook_module
+
+    mock_stripe_module = SimpleNamespace(
+        PaymentIntent=SimpleNamespace(
+            modify=lambda pi_id, **kw: None,
+        ),
+        Customer=SimpleNamespace(
+            modify=lambda cid, **kw: None,
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(webhook_module, "stripe", mock_stripe_module)
+
+    # Create org via the test helper
+    org, org_ba = _create_org_for_invoicing_test(
+        dbsession,
+        name="Checkout Recharge Org",
+        stripe_customer_id="cus_checkout_org",
+        credits=Decimal("0"),
+    )
+    dbsession.commit()
+
+    from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+    event = {
+        "id": "evt_checkout_recharge_org",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "client_reference_id": None,
+                "amount_total": 10000,  # $100
+                "customer": "cus_checkout_org",
+                "payment_intent": "pi_checkout_org",
+                "metadata": {"organization_id": str(org.id)},
+            },
+        },
+    }
+
+    response = process_checkout_session_event(event, dbsession)
+    assert response.status_code == 200
+
+    # Verify credits were added
+    dbsession.refresh(org_ba)
+    assert float(org_ba.credits) == 100.0
+
+    # Verify a PAID Recharge record was created
+    recharge = (
+        dbsession.query(Recharge)
+        .filter_by(billing_account_id=org_ba.id, type="payment")
+        .first()
+    )
+    assert recharge is not None
+    assert recharge.quantity == Decimal("100")
+    assert recharge.amount_usd == Decimal("100")
+    assert recharge.status == RechargeStatus.PAID
+
+
+def test_checkout_recharge_counts_toward_auto_recharge_eligibility(
+    dbsession: Session,
+    monkeypatch,
+):
+    """Test that a checkout-created Recharge record counts toward the
+    cumulative spending threshold for auto-recharge eligibility."""
+    import orchestra.web.api.webhooks.stripe as webhook_module
+    from orchestra.db.dao.billing_account_dao import (
+        MIN_SPEND_FOR_AUTO_RECHARGE,
+        BillingAccountDAO,
+    )
+
+    mock_stripe_module = SimpleNamespace(
+        PaymentIntent=SimpleNamespace(
+            modify=lambda pi_id, **kw: None,
+        ),
+        Customer=SimpleNamespace(
+            modify=lambda cid, **kw: None,
+        ),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+    monkeypatch.setattr(webhook_module, "stripe", mock_stripe_module)
+
+    user, ba = _make_user(
+        dbsession,
+        "checkout_eligibility_user",
+        credits=0,
+        stripe_customer_id="cus_checkout_elig",
+    )
+    dbsession.commit()
+
+    ba_dao = BillingAccountDAO(dbsession)
+
+    # Initially not eligible
+    assert not ba_dao.can_enable_auto_recharge(ba.id)
+    assert ba_dao.get_total_spending(ba.id) == 0
+
+    # Process a checkout that exceeds the threshold
+    from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+    event = {
+        "id": "evt_checkout_eligibility",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "client_reference_id": user.id,
+                "amount_total": 15000,  # $150
+                "customer": "cus_checkout_elig",
+                "payment_intent": "pi_checkout_elig",
+                "metadata": {},
+            },
+        },
+    }
+
+    process_checkout_session_event(event, dbsession)
+
+    # Now spending should be tracked
+    total_spending = ba_dao.get_total_spending(ba.id)
+    assert float(total_spending) == 150.0
+    assert total_spending >= MIN_SPEND_FOR_AUTO_RECHARGE
+
+    # Now eligible for auto-recharge
+    assert ba_dao.can_enable_auto_recharge(ba.id)
