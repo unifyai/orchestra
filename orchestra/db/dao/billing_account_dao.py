@@ -222,18 +222,6 @@ class BillingAccountDAO:
         ba.stripe_customer_id = stripe_customer_id
         return True
 
-    def has_billing(self, billing_account_id: int) -> bool:
-        """
-        Check if a billing account has direct billing enabled.
-
-        :param billing_account_id: BillingAccount ID.
-        :return: True if stripe_customer_id is set.
-        """
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        return ba.stripe_customer_id is not None
-
     # =========================================================================
     # AUTORECHARGE
     # =========================================================================
@@ -349,20 +337,6 @@ class BillingAccountDAO:
         ba.account_status = status
         return True
 
-    def is_account_active(self, billing_account_id: int) -> bool:
-        """Check if account is active."""
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        return ba.account_status == "ACTIVE"
-
-    def is_account_frozen_or_suspended(self, billing_account_id: int) -> bool:
-        """Check if account is frozen (SUSPENDED or CLOSED)."""
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        return ba.account_status in ("SUSPENDED", "CLOSED")
-
     # =========================================================================
     # AUTO-RECHARGE ELIGIBILITY (fraud prevention)
     # =========================================================================
@@ -402,22 +376,6 @@ class BillingAccountDAO:
         """
         total = self.get_total_spending(billing_account_id)
         return total >= MIN_SPEND_FOR_AUTO_RECHARGE
-
-    # =========================================================================
-    # BILLING SETUP
-    # =========================================================================
-
-    def set_billing_setup_complete(
-        self,
-        billing_account_id: int,
-        complete: bool,
-    ) -> bool:
-        """Mark whether billing setup is complete."""
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        ba.billing_setup_complete = complete
-        return True
 
     # =========================================================================
     # BILLING PROFILE
