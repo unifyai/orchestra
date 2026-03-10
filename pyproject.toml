@@ -137,7 +137,8 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "manual: marks tests as manual",
     "performance: long-running performance tests",
-    "serial: marks tests that must run serially (not in parallel)"
+    "serial: marks tests that must run serially (not in parallel)",
+    "integration: tests that call real third-party APIs (Stripe, GCP, etc.) — skipped in CI by default"
 ]
 
 [fastapi-template.options]

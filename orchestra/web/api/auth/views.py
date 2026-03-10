@@ -48,6 +48,7 @@ from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO, MFARecoveryDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.settings import settings
 from orchestra.web.api.auth.schema import (
     AuthenticateResponse,
     AuthRegisterResponse,

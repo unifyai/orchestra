@@ -153,40 +153,6 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
 
-    def get_assistant_by_name(
-        self,
-        user_id: str,
-        first_name: str,
-        surname: str,
-        organization_id: Optional[int] = None,
-    ) -> Optional[Assistant]:
-        """
-        Retrieve an Assistant by name within a user/org context.
-
-        Used to check for name uniqueness when creating assistants.
-
-        :param user_id: User ID.
-        :param first_name: Assistant first name.
-        :param surname: Assistant surname.
-        :param organization_id: Organization ID (None for personal assistants).
-        :return: Assistant if found, None otherwise.
-        """
-        if organization_id is not None:
-            stmt = select(Assistant).where(
-                Assistant.organization_id == organization_id,
-                Assistant.first_name == first_name,
-                Assistant.surname == surname,
-            )
-        else:
-            stmt = select(Assistant).where(
-                Assistant.user_id == user_id,
-                Assistant.organization_id.is_(None),
-                Assistant.first_name == first_name,
-                Assistant.surname == surname,
-            )
-        result = self.session.execute(stmt).scalar_one_or_none()
-        return result
-
     def list_assistants_for_user(
         self,
         user_id: str,
@@ -442,6 +408,8 @@ class AssistantDAO:
         # Track changes for contact sync
         should_sync_timezone = False
         should_sync_bio = False
+        should_sync_first_name = False
+        should_sync_surname = False
 
         if "timezone" in update_data:
             old_timezone = assistant.timezone
@@ -455,14 +423,30 @@ class AssistantDAO:
             if new_about != old_about:
                 should_sync_bio = True
 
+        if "first_name" in update_data:
+            if update_data["first_name"] != assistant.first_name:
+                should_sync_first_name = True
+
+        if "surname" in update_data:
+            if update_data["surname"] != assistant.surname:
+                should_sync_surname = True
+
         for key, value in update_data.items():
             setattr(assistant, key, value)
 
         self.session.add(assistant)
         self.session.flush()
 
-        # Sync timezone/bio changes to Contact logs in Assistants project
-        if should_sync_timezone or should_sync_bio:
+        # Sync changes to Contact logs in Assistants project
+        needs_sync = any(
+            [
+                should_sync_timezone,
+                should_sync_bio,
+                should_sync_first_name,
+                should_sync_surname,
+            ]
+        )
+        if needs_sync:
             from orchestra.services.contact_sync_service import ContactSyncService
 
             sync_service = ContactSyncService(self.session)
@@ -479,6 +463,20 @@ class AssistantDAO:
                     organization_id=organization_id,
                     agent_id=assistant.agent_id,
                     new_bio=assistant.about,
+                )
+            if should_sync_first_name:
+                sync_service.sync_assistant_first_name(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    agent_id=assistant.agent_id,
+                    new_first_name=assistant.first_name,
+                )
+            if should_sync_surname:
+                sync_service.sync_assistant_surname(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    agent_id=assistant.agent_id,
+                    new_surname=assistant.surname,
                 )
 
         return assistant

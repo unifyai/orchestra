@@ -16,7 +16,7 @@ import uuid
 from typing import Dict
 
 import stripe
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -26,6 +26,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     BillingAccount,
     Recharge,
@@ -202,6 +203,7 @@ def process_checkout_session_event(
                     )
 
                 ba_dao.add_credits(ba.id, credits)
+                session.flush()  # persist credit update before refresh in maybe_clear_grace_period
                 logger.info(
                     {
                         "message": "Organization credited",
@@ -257,6 +259,7 @@ def process_checkout_session_event(
                     )
 
                 ba_dao.add_credits(ba.id, credits)
+                session.flush()  # persist credit update before refresh in maybe_clear_grace_period
                 logger.info(
                     {
                         "message": "User credited",
@@ -1100,7 +1103,10 @@ def handle_event(event: Dict) -> Response:  # convenience wrapper
 
 
 @router.post("/webhooks/stripe", include_in_schema=False)
-async def handle_stripe_webhook(request: Request):
+async def handle_stripe_webhook(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
     """Handle Stripe webhook events to update user credits based on payment outcomes."""
     payload = await request.body()
     sig_header = request.headers.get("Stripe-Signature")
@@ -1153,5 +1159,5 @@ async def handle_stripe_webhook(request: Request):
             logger.error({"message": "Signature verification failed", "error": str(e)})
             raise HTTPException(status_code=400, detail="Invalid signature")
 
-    # Process all events using the unified handler
-    return handle_event(event)
+    # Process all events using the DI-provided session
+    return handle_event_core(event, session)

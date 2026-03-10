@@ -483,6 +483,7 @@ class TestBucketServiceAttachmentCleanup:
                 "GOOGLE_APPLICATION_CREDENTIALS": "/fake/path",
                 "GCP_PROJECT_ID": "test-project",
                 "ORCHESTRA_GCP_BUCKET_NAME": "test-bucket",
+                "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME": "assistant-message-attachments",
             },
         ):
             with patch("orchestra.services.bucket_service.service_account"):

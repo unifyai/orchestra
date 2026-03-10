@@ -267,16 +267,6 @@ def _build_assistant_read(
                 },
             },
         },
-        409: {
-            "description": "Conflict",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "An assistant with the name 'Alice Smith' already exists for this user.",
-                    },
-                },
-            },
-        },
         422: {
             "description": "Validation Error",
             "content": {
@@ -622,16 +612,6 @@ async def create_assistant(
 
     except IntegrityError as e:
         session.rollback()
-        if "uq_user_assistant_name" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"An assistant with the name '{assistant_in.first_name} {assistant_in.surname}' already exists.",
-            )
-        if "uq_org_assistant_name" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"An assistant with the name '{assistant_in.first_name} {assistant_in.surname}' already exists in this organization.",
-            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Database error creating assistant: {str(e)}",
@@ -4892,18 +4872,6 @@ async def create_demo_assistant(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Source assistant {demo_create.source_assistant_id} not found or you don't have access to it.",
-        )
-
-    # Check name uniqueness for the new assistant
-    existing = assistant_dao.get_assistant_by_name(
-        user_id=user_id,
-        first_name=demo_create.first_name,
-        surname=demo_create.surname,
-    )
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"An assistant with name '{demo_create.first_name} {demo_create.surname}' already exists.",
         )
 
     try:
