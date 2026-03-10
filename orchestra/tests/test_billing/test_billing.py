@@ -3084,3 +3084,240 @@ async def test_put_auto_recharge_disable_always_allowed(client, dbsession):
 
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+
+
+# ========================================================================= #
+# Org billing permission tests                                               #
+# ========================================================================= #
+
+
+async def _create_org_with_member(client, dbsession, owner_email, member_email, role_name):
+    """
+    Helper: create an org (owner), add a member with the given role,
+    and return (org_id, owner_headers, member_org_headers, org_billing_account).
+    """
+    from orchestra.db.dao.role_dao import RoleDAO
+    from orchestra.tests.utils import create_test_user
+
+    owner = await create_test_user(client, owner_email)
+    member = await create_test_user(client, member_email)
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": f"Perm Test Org {owner_email}"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == 201, org_response.json()
+    org_data = org_response.json()
+    org_id = org_data["id"]
+    owner_org_key = org_data["api_key"]
+    owner_org_headers = {"Authorization": f"Bearer {owner_org_key}"}
+
+    # Get the role
+    role_dao = RoleDAO(dbsession)
+    role = role_dao.get_by_name(role_name, organization_id=None)
+    assert role is not None, f"Role {role_name} not found"
+
+    # Add member
+    add_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "role_id": role.id},
+        headers=owner["headers"],
+    )
+    assert add_response.status_code == 201, add_response.json()
+    member_org_key = add_response.json()["api_key"]
+    member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
+
+    # Ensure org has a billing account
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
+    org_dao = OrganizationDAO(dbsession)
+    org = org_dao.get(org_id)
+    if org.billing_account is None:
+        ba = BillingAccount(credits=Decimal("100"))
+        dbsession.add(ba)
+        dbsession.flush()
+        org.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    return org_id, owner_org_headers, member_org_headers
+
+
+@pytest.mark.anyio
+async def test_org_owner_can_read_auto_recharge(client, dbsession):
+    """Owner (billing:read) can GET /billing/auto-recharge via org API key."""
+    org_id, owner_headers, _ = await _create_org_with_member(
+        client, dbsession,
+        "perm_owner_read@test.com", "perm_member_read@test.com", "Member",
+    )
+
+    response = await client.get(
+        "/v0/billing/auto-recharge",
+        headers=owner_headers,
+    )
+    assert response.status_code == 200, response.json()
+    assert "enabled" in response.json()
+
+
+@pytest.mark.anyio
+async def test_org_member_can_read_auto_recharge(client, dbsession):
+    """Member (billing:read) can GET /billing/auto-recharge via org API key."""
+    _, _, member_headers = await _create_org_with_member(
+        client, dbsession,
+        "perm_owner_mread@test.com", "perm_member_mread@test.com", "Member",
+    )
+
+    response = await client.get(
+        "/v0/billing/auto-recharge",
+        headers=member_headers,
+    )
+    assert response.status_code == 200, response.json()
+    assert "enabled" in response.json()
+
+
+@pytest.mark.anyio
+async def test_org_member_cannot_update_auto_recharge(client, dbsession):
+    """Member (no billing:write) is blocked from PUT /billing/auto-recharge."""
+    _, _, member_headers = await _create_org_with_member(
+        client, dbsession,
+        "perm_owner_mwrite@test.com", "perm_member_mwrite@test.com", "Member",
+    )
+
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": False},
+        headers=member_headers,
+    )
+    assert response.status_code == 403
+    assert "billing:write" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_org_owner_can_update_auto_recharge(client, dbsession):
+    """Owner (billing:write) can PUT /billing/auto-recharge via org API key."""
+    _, owner_headers, _ = await _create_org_with_member(
+        client, dbsession,
+        "perm_owner_owrite@test.com", "perm_member_owrite@test.com", "Member",
+    )
+
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": False},
+        headers=owner_headers,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_org_member_cannot_create_checkout_session(client, dbsession, monkeypatch):
+    """Member (no billing:write) is blocked from POST /billing/checkout-session."""
+    _, _, member_headers = await _create_org_with_member(
+        client, dbsession,
+        "perm_owner_checkout@test.com", "perm_member_checkout@test.com", "Member",
+    )
+
+    # Mock stripe so the test doesn't need real keys
+    import orchestra.web.api.billing.views as billing_views
+
+    mock_stripe = SimpleNamespace(api_key=None, InvalidRequestError=Exception)
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.post(
+        "/v0/billing/checkout-session",
+        headers=member_headers,
+    )
+    assert response.status_code == 403
+    assert "billing:write" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_org_member_cannot_create_portal_session(client, dbsession, monkeypatch):
+    """Member (no billing:write) is blocked from POST /billing/portal-session."""
+    _, _, member_headers = await _create_org_with_member(
+        client, dbsession,
+        "perm_owner_portal@test.com", "perm_member_portal@test.com", "Member",
+    )
+
+    import orchestra.web.api.billing.views as billing_views
+
+    mock_stripe = SimpleNamespace(api_key=None, InvalidRequestError=Exception)
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.post(
+        "/v0/billing/portal-session",
+        headers=member_headers,
+    )
+    assert response.status_code == 403
+    assert "billing:write" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_org_viewer_can_read_checkout_status(client, dbsession, monkeypatch):
+    """Viewer (billing:read) can GET /billing/checkout-status via org API key."""
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
+    _, _, viewer_headers = await _create_org_with_member(
+        client, dbsession,
+        "perm_owner_vread@test.com", "perm_viewer_vread@test.com", "Viewer",
+    )
+
+    import orchestra.web.api.billing.views as billing_views
+
+    # Need to mock stripe.checkout.Session.retrieve
+    class MockCheckoutSession:
+        status = "complete"
+        payment_status = "paid"
+        customer = None
+        client_reference_id = None
+
+    mock_stripe = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(retrieve=lambda sid: MockCheckoutSession()),
+        ),
+        InvalidRequestError=Exception,
+    )
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.get(
+        "/v0/billing/checkout-status?session_id=cs_viewer_test",
+        headers=viewer_headers,
+    )
+    # Viewer has billing:read so permission check passes.
+    # May get 400 (billing not set up) or 200/403 (ownership) — but NOT 403 from permission check.
+    assert response.status_code != 403 or "billing:read" not in response.json().get("detail", "")
+
+
+@pytest.mark.anyio
+async def test_personal_api_key_bypasses_org_permission_check(client, dbsession):
+    """Personal API key users can always access their own billing (no org permission check)."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "perm_personal_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("50"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    # Personal key — should succeed (no org permission check)
+    response = await client.get(
+        "/v0/billing/auto-recharge",
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+
+    # PUT should also work for personal key
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": False},
+        headers=user["headers"],
+    )
+    assert response.status_code == 200

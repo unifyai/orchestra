@@ -22,6 +22,7 @@ from orchestra.db.dao.billing_account_dao import (
     BillingAccountDAO,
 )
 from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BillingAccount
@@ -52,6 +53,38 @@ def _init_stripe() -> None:
         configure_stripe()
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _check_org_billing_permission(
+    session,
+    user_id: str,
+    organization_id: Optional[int],
+    permission: str,
+) -> None:
+    """
+    Enforce ``billing:read`` or ``billing:write`` for org-context requests.
+
+    Personal-context requests (``organization_id is None``) are always
+    allowed — the user is managing their own billing account.
+
+    :raises HTTPException: 403 when the user lacks the required permission.
+    """
+    if organization_id is None:
+        return  # Personal context — always allowed
+
+    ra_dao = ResourceAccessDAO(session)
+    if not ra_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        permission,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"You do not have {permission} permission "
+                f"in this organization"
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +120,8 @@ def create_checkout_session(
         "organization_id",
         None,
     )
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
 
     # --- Resolve billing account -----------------------------------------
     user_dao = UserDAO(session)
@@ -284,6 +319,8 @@ def create_portal_session(
         None,
     )
 
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
+
     try:
         billing_entity = get_billing_entity(session, user_id, organization_id)
     except ValueError:
@@ -362,6 +399,8 @@ def get_checkout_status(
         None,
     )
 
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
     # Get billing account to find stripe customer
     try:
         billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -432,6 +471,8 @@ def get_auto_recharge(
         None,
     )
 
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
     try:
         billing_entity = get_billing_entity(session, user_id, organization_id)
     except ValueError:
@@ -493,6 +534,8 @@ def update_auto_recharge(
         "organization_id",
         None,
     )
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
 
     try:
         billing_entity = get_billing_entity(session, user_id, organization_id)
