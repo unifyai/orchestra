@@ -756,13 +756,9 @@ def get_billing_profile(
     if not profile:
         return BillingProfileResponse(is_business=is_business)
 
-    name = profile.get("name")
-
     return BillingProfileResponse(
         billing_email=profile.get("billing_email"),
-        name=name,
-        individual_name=name if not is_business else None,
-        business_name=name,
+        name=profile.get("name"),
         tax_id=profile.get("tax_id"),
         tax_id_type=profile.get("tax_id_type"),
         billing_address=profile.get("billing_address", {}),
@@ -807,7 +803,7 @@ def update_billing_profile(
     is_business = organization_id is not None
 
     billing_email = profile_update.billing_email
-    resolved_name = profile_update.resolved_name
+    resolved_name = profile_update.name
     tax_id = profile_update.tax_id
     tax_id_type = profile_update.tax_id_type
     billing_address = profile_update.billing_address
@@ -883,13 +879,10 @@ def update_billing_profile(
 
     # Build response
     profile = ba_dao.get_billing_profile(ba.id)
-    name = profile.get("name") if profile else None
 
     return BillingProfileResponse(
         billing_email=profile.get("billing_email") if profile else None,
-        name=name,
-        individual_name=name if not is_business else None,
-        business_name=name,
+        name=profile.get("name") if profile else None,
         tax_id=profile.get("tax_id") if profile else None,
         tax_id_type=profile.get("tax_id_type") if profile else None,
         billing_address=profile.get("billing_address", {}) if profile else {},
