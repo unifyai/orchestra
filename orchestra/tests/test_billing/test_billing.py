@@ -1083,7 +1083,7 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
             email="test-user@example.com",
             name="Test User",
         )
-    except real_stripe.error.InvalidRequestError as e:
+    except real_stripe.InvalidRequestError as e:
         if "already exists" in str(e):
             customer = real_stripe.Customer.retrieve(stripe_customer_id)
         else:

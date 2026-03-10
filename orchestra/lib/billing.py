@@ -202,10 +202,13 @@ def queue_auto_recharge(
         credits: Number of credits to recharge.
         entity_label: Label for logging (e.g. "user abc" or "org 42").
     """
-    print(
-        f"[AUTO-RECHARGE] Queueing auto-recharge - {entity_label}, "
-        f"BillingAccount: {billing_account.id}, Credits: {credits}, "
-        f"Stripe Customer ID: {billing_account.stripe_customer_id}",
+    logger.info(
+        "Queueing auto-recharge – %s, BillingAccount: %s, Credits: %s, "
+        "Stripe Customer ID: %s",
+        entity_label,
+        billing_account.id,
+        credits,
+        billing_account.stripe_customer_id,
     )
 
     now = datetime.now(timezone.utc)
@@ -227,25 +230,26 @@ def queue_auto_recharge(
     # invoice payment fails, the account will be marked PAST_DUE.
     billing_account.credits = billing_account.credits + Decimal(credits)
 
-    print(
-        f"[AUTO-RECHARGE] Record created for billing_account {billing_account.id}: "
-        f"${credits:.2f} ({credits} credits), Invoice group: {invoice_group}. "
-        f"Credits added immediately (new balance: {billing_account.credits})",
+    logger.info(
+        "Auto-recharge record created for billing_account %s: "
+        "$%.2f (%s credits), Invoice group: %s. "
+        "Credits added immediately (new balance: %s)",
+        billing_account.id,
+        credits,
+        credits,
+        invoice_group,
+        billing_account.credits,
     )
 
     # Create Stripe invoice item if billing account has Stripe customer ID
     if billing_account.stripe_customer_id:
-        print(
-            f"[AUTO-RECHARGE] Creating Stripe invoice item for "
-            f"billing_account {billing_account.id}",
+        logger.info(
+            "Creating Stripe invoice item for billing_account %s",
+            billing_account.id,
         )
 
         try:
-            if not settings.stripe_secret_key:
-                print("[AUTO-RECHARGE] ERROR: stripe_secret_key not configured!")
-                return
-
-            stripe.api_key = settings.stripe_secret_key
+            configure_stripe()
 
             invoice_item = stripe.InvoiceItem.create(
                 customer=billing_account.stripe_customer_id,
@@ -259,24 +263,32 @@ def queue_auto_recharge(
                 },
             )
 
-            print(
-                f"[AUTO-RECHARGE] SUCCESS: Stripe invoice item created - "
-                f"Invoice Item ID: {invoice_item.id}",
+            logger.info(
+                "Stripe invoice item created – Invoice Item ID: %s",
+                invoice_item.id,
             )
 
-        except stripe.error.StripeError as e:
-            print(
-                f"[AUTO-RECHARGE] STRIPE ERROR: {type(e).__name__} - {str(e)}",
+        except stripe.StripeError as e:
+            logger.error(
+                "Stripe error during auto-recharge for billing_account %s: " "%s – %s",
+                billing_account.id,
+                type(e).__name__,
+                e,
             )
 
         except Exception as e:
-            print(
-                f"[AUTO-RECHARGE] UNEXPECTED ERROR: {type(e).__name__} - {str(e)}",
+            logger.error(
+                "Unexpected error during auto-recharge for billing_account %s: "
+                "%s – %s",
+                billing_account.id,
+                type(e).__name__,
+                e,
             )
     else:
-        print(
-            f"[AUTO-RECHARGE] WARNING: BillingAccount {billing_account.id} "
-            f"has no Stripe customer ID",
+        logger.warning(
+            "BillingAccount %s has no Stripe customer ID – "
+            "skipping Stripe invoice item creation",
+            billing_account.id,
         )
 
 
@@ -412,9 +424,7 @@ def sync_billing_profile_to_stripe(
     log = logger_instance or logger
 
     try:
-        if not settings.stripe_secret_key:
-            return
-        stripe.api_key = settings.stripe_secret_key
+        configure_stripe()
 
         update_params: dict = {}
 

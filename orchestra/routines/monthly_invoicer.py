@@ -27,7 +27,6 @@ from orchestra.db.models.orchestra_models import (
     RechargeStatus,
 )
 from orchestra.lib.time import month_end_utc  # helper already exists
-from orchestra.settings import settings
 from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
 from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
@@ -45,10 +44,9 @@ def invoice_month(
     Invoice the given period; defaults to the *previous* month if omitted.
     """
     # Configure Stripe API key
-    if not settings.stripe_secret_key:
-        raise ValueError("stripe_secret_key not configured in settings")
+    from orchestra.lib.billing import configure_stripe
 
-    stripe.api_key = settings.stripe_secret_key
+    configure_stripe()
 
     # Use UTC so "previous month" is calculated consistently on any host
     today = _dt.datetime.now(_dt.timezone.utc).date()
@@ -183,7 +181,7 @@ def _invoice_month_with_session(
                 f"${total_usd} ({quantity} credits). Invoice ID: {invoice.id}",
             )
 
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             print(
                 f"ERROR: Stripe error for billing_account {ba_id}: {str(e)}. "
                 f"Error code: {getattr(e, 'code', 'unknown')}, "

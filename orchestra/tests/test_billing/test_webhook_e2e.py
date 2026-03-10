@@ -480,7 +480,7 @@ async def test_e2e_invoice_paid_webhook(
             current_invoice = stripe.Invoice.retrieve(invoice.id)
             if current_invoice.status == "open":
                 stripe.Invoice.void_invoice(invoice.id)
-        except stripe.error.StripeError:
+        except stripe.StripeError:
             pass
         pytest.skip(f"Stripe trigger failed: {output}")
 
