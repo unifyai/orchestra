@@ -472,6 +472,57 @@ def sync_billing_profile_to_stripe(
 # Tax ID display helpers
 # =========================================================================
 
+# ISO 3166-1 alpha-2 → human-readable country name.
+# Used by the supported-tax-countries endpoint so frontends don't need
+# their own hardcoded mapping.
+COUNTRY_NAMES: Dict[str, str] = {
+    "US": "United States",
+    "GB": "United Kingdom",
+    "AU": "Australia",
+    "CA": "Canada",
+    "DE": "Germany",
+    "FR": "France",
+    "IT": "Italy",
+    "ES": "Spain",
+    "NL": "Netherlands",
+    "BE": "Belgium",
+    "AT": "Austria",
+    "SE": "Sweden",
+    "DK": "Denmark",
+    "FI": "Finland",
+    "IE": "Ireland",
+    "PT": "Portugal",
+    "NO": "Norway",
+    "CH": "Switzerland",
+    "JP": "Japan",
+    "KR": "South Korea",
+    "IN": "India",
+    "SG": "Singapore",
+    "MY": "Malaysia",
+    "TH": "Thailand",
+    "BR": "Brazil",
+    "MX": "Mexico",
+    "RU": "Russia",
+    "CN": "China",
+    "NZ": "New Zealand",
+    "ZA": "South Africa",
+    "BG": "Bulgaria",
+    "CY": "Cyprus",
+    "CZ": "Czech Republic",
+    "EE": "Estonia",
+    "GR": "Greece",
+    "HR": "Croatia",
+    "HU": "Hungary",
+    "LT": "Lithuania",
+    "LU": "Luxembourg",
+    "LV": "Latvia",
+    "MT": "Malta",
+    "PL": "Poland",
+    "RO": "Romania",
+    "SI": "Slovenia",
+    "SK": "Slovakia",
+}
+
 # Tax module identifier → human-readable name and expected input format.
 # Used by the supported-tax-countries endpoint so frontends receive
 # structured data instead of having to parse description strings.
@@ -511,14 +562,18 @@ def extract_tax_id_info(description: str) -> Dict[str, str]:
     Parses descriptions produced by
     :pymethod:`TaxIDValidator.get_supported_countries` — e.g.
     ``"Full validation (us.ein)"`` or ``"EU VAT validation"`` — and
-    returns ``{"name": ..., "format": ...}``.
+    returns ``{"name": ..., "format": ..., "tax_id_type": ...}``.
     """
     match = re.search(r"\(([^)]+)\)", description)
     if match:
         tax_type = match.group(1)
         info = TAX_TYPE_MAP.get(tax_type)
         if info:
-            return info
+            return {**info, "tax_id_type": tax_type}
     if "EU VAT" in description:
-        return {"name": "VAT Number", "format": "Enter VAT number"}
+        return {
+            "name": "VAT Number",
+            "format": "Enter VAT number",
+            "tax_id_type": "eu_vat",
+        }
     return {"name": "Tax ID", "format": "Enter tax ID"}
