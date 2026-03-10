@@ -28,6 +28,7 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    RECHARGE_TYPE_PAYMENT,
     BillingAccount,
     Recharge,
     RechargeStatus,
@@ -203,6 +204,22 @@ def process_checkout_session_event(
                     )
 
                 ba_dao.add_credits(ba.id, credits)
+
+                # Record a PAID Recharge so checkout purchases count
+                # toward the cumulative spending threshold for
+                # auto-recharge eligibility.
+                from decimal import Decimal as _Decimal
+
+                checkout_recharge = Recharge(
+                    billing_account_id=ba.id,
+                    type=RECHARGE_TYPE_PAYMENT,
+                    quantity=_Decimal(str(credits)),
+                    amount_usd=_Decimal(str(credits)),
+                    status=RechargeStatus.PAID,
+                    stripe_invoice_id=data.get("invoice") or payment_intent_id,
+                )
+                session.add(checkout_recharge)
+
                 session.flush()  # persist credit update before refresh in maybe_clear_grace_period
                 logger.info(
                     {
@@ -259,6 +276,22 @@ def process_checkout_session_event(
                     )
 
                 ba_dao.add_credits(ba.id, credits)
+
+                # Record a PAID Recharge so checkout purchases count
+                # toward the cumulative spending threshold for
+                # auto-recharge eligibility.
+                from decimal import Decimal as _Decimal
+
+                checkout_recharge = Recharge(
+                    billing_account_id=ba.id,
+                    type=RECHARGE_TYPE_PAYMENT,
+                    quantity=_Decimal(str(credits)),
+                    amount_usd=_Decimal(str(credits)),
+                    status=RechargeStatus.PAID,
+                    stripe_invoice_id=data.get("invoice") or payment_intent_id,
+                )
+                session.add(checkout_recharge)
+
                 session.flush()  # persist credit update before refresh in maybe_clear_grace_period
                 logger.info(
                     {
