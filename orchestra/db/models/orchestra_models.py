@@ -1360,22 +1360,6 @@ class Assistant(Base):
             ["voices.user_id", "voices.voice_id", "voices.provider"],
             name="fk_assistants_voices",
         ),
-        # Personal assistants: unique name per user (only when not in an org)
-        Index(
-            "uq_user_assistant_name",
-            "user_id",
-            "first_name",
-            "surname",
-            unique=True,
-            postgresql_where=text("organization_id IS NULL"),
-        ),
-        # Org assistants: unique name per organization
-        UniqueConstraint(
-            "organization_id",
-            "first_name",
-            "surname",
-            name="uq_org_assistant_name",
-        ),
         sa.CheckConstraint(
             "desktop_mode IN ('ubuntu', 'windows', 'macos')",
             name="ck_assistant_desktop_mode",

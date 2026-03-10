@@ -7,6 +7,7 @@ encryption (GCP Cloud KMS with local Fernet fallback).
 """
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -106,7 +107,10 @@ def encrypt_secret(plaintext: str) -> bytes:
             return response.ciphertext
         except Exception:
             logger.exception("KMS encrypt failed")
-            if settings.environment != "dev":
+            if (
+                settings.environment not in ("dev", "test", "pytest")
+                and not settings.is_staging
+            ):
                 raise
 
     return _get_fernet().encrypt(payload)
@@ -134,7 +138,10 @@ def decrypt_secret(ciphertext: bytes) -> str:
             return data["secret"]
         except Exception:
             logger.exception("KMS decrypt failed")
-            if settings.environment != "dev":
+            if (
+                settings.environment not in ("dev", "test", "pytest")
+                and not settings.is_staging
+            ):
                 raise
 
     data = json.loads(_get_fernet().decrypt(ciphertext).decode())

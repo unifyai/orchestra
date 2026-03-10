@@ -69,7 +69,7 @@ class TestAccountPhotoBucketNaming:
                 ) as mock_client:
                     mock_client.return_value = MagicMock()
                     with patch(
-                        "orchestra.settings.settings",
+                        "orchestra.services.bucket_service.settings",
                     ) as mock_settings:
                         mock_settings.is_staging = True
                         service = BucketService()
@@ -99,7 +99,7 @@ class TestAccountPhotoBucketNaming:
                 ) as mock_client:
                     mock_client.return_value = MagicMock()
                     with patch(
-                        "orchestra.settings.settings",
+                        "orchestra.services.bucket_service.settings",
                     ) as mock_settings:
                         mock_settings.is_staging = False
                         service = BucketService()
