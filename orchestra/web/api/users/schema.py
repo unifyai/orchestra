@@ -307,48 +307,6 @@ class OnboardingStatusCreateRequest(BaseModel):
 
 
 # ============================================================================
-# User Billing / Checkout Schemas
-# ============================================================================
-
-
-class UserCheckoutRequest(BaseModel):
-    """
-    Request model for creating a Stripe checkout session for user credits.
-
-    Attributes:
-        amount (int): Amount of credits to purchase (1 credit = $1, minimum 5, max 10000).
-        success_url (str): URL to redirect to on successful payment.
-        cancel_url (str): URL to redirect to on cancelled payment.
-    """
-
-    amount: int
-    success_url: str
-    cancel_url: str
-
-    @field_validator("amount")
-    @classmethod
-    def amount_must_be_valid(cls, v: int) -> int:
-        if v < 5:
-            raise ValueError("Minimum purchase amount is 5 credits ($5)")
-        if v > 10000:
-            raise ValueError("Maximum purchase amount is 10000 credits ($10,000)")
-        return v
-
-
-class UserCheckoutResponse(BaseModel):
-    """
-    Response model for user checkout session creation.
-
-    Attributes:
-        checkout_url (str): URL to redirect user to for payment.
-        session_id (str): Stripe checkout session ID.
-    """
-
-    checkout_url: str
-    session_id: str
-
-
-# ============================================================================
 # User Billing Profile Schemas
 # ============================================================================
 
