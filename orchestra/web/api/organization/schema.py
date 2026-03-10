@@ -157,22 +157,6 @@ class DeclineInviteResponse(BaseModel):
     message: str
 
 
-# ============== Organization Billing Schemas ==============
-# (Canonical definitions live in orchestra.web.api.billing.schema;
-#  re-exported here for backward compatibility.)
-
-from orchestra.web.api.billing.schema import (  # noqa: F401, E402
-    BillingAddress,
-    OrganizationBillingResponse,
-    OrganizationBillingUpdate,
-    OrganizationBusinessProfileResponse,
-    OrganizationBusinessProfileUpdate,
-    OrganizationCreditsResponse,
-    OrganizationStripeCustomerCreateRequest,
-    OrganizationStripeCustomerResponse,
-)
-
-
 # ============================================================================
 # Spending Limit Schemas
 # ============================================================================
