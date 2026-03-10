@@ -369,7 +369,7 @@ def create_recharge_model(
                 else:
                     logger.warning("Skipping invoice item creation - quantity is 0")
 
-            except stripe.error.StripeError as e:
+            except stripe.StripeError as e:
                 logger.error(f"Stripe API error for auto-recharge: {e}")
                 raise HTTPException(
                     status_code=500,

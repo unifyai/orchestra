@@ -262,7 +262,7 @@ async def test_live_stripe_webhook_invalid_signature_rejected():
     # Invalid signature
     sig_header = "t=123456,v1=invalid_signature"
 
-    with pytest.raises(stripe.error.SignatureVerificationError):
+    with pytest.raises(stripe.SignatureVerificationError):
         stripe.Webhook.construct_event(
             payload=payload,
             sig_header=sig_header,

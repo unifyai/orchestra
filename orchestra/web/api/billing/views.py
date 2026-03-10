@@ -10,7 +10,6 @@ keeping the Stripe secret key exclusively on the backend.
 import logging
 import math
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Optional
 
 import stripe
@@ -632,14 +631,14 @@ def update_auto_recharge(
             ),
         )
 
-    # --- Apply updates ---------------------------------------------------
-    ba.autorecharge = body.enabled
+    # --- Apply updates via DAO -------------------------------------------
+    ba_dao.set_autorecharge(ba.id, body.enabled)
 
     if body.threshold is not None:
-        ba.autorecharge_threshold = Decimal(str(body.threshold))
+        ba_dao.set_autorecharge_threshold(ba.id, body.threshold)
 
     if body.qty is not None:
-        ba.autorecharge_qty = Decimal(str(body.qty))
+        ba_dao.set_autorecharge_qty(ba.id, body.qty)
 
     session.commit()
     session.refresh(ba)
