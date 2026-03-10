@@ -4,7 +4,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import create_test_org, create_test_user
 
 
 @pytest.mark.anyio
@@ -1313,226 +1313,210 @@ async def test_webhook_invoice_failed_org(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_get_organization_billing_not_configured(client: AsyncClient, dbsession):
-    """Test GET /organizations/{id}/billing for org without billing configured."""
+    """Test GET /billing/account-info for org without billing configured."""
     owner = await create_test_user(client, "api_billing_delegated@test.com")
+    org = await create_test_org(client, owner, "API Billing Not Configured Org")
 
-    # Create organization (default is no billing configured)
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Billing Not Configured Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Get billing info
+    # Get billing info via unified endpoint (uses org API key)
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing",
-        headers=owner["headers"],
+        "/v0/billing/account-info",
+        headers=org["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
-    assert data["organization_id"] == org_id
-    assert data["stripe_customer_id"] is None
-    assert data["billing_setup_complete"] is False
+    assert data["credits"] == 0.0
+    assert data["account_status"] == "ACTIVE"
     assert data["autorecharge"] is False
 
 
 @pytest.mark.anyio
 async def test_get_organization_billing_direct(client: AsyncClient, dbsession):
-    """Test GET /organizations/{id}/billing for direct billing org."""
+    """Test GET /billing/account-info for direct billing org."""
     from decimal import Decimal
 
     from orchestra.db.models.orchestra_models import Organization
 
     owner = await create_test_user(client, "api_billing_direct@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Billing Direct Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
+    org = await create_test_org(client, owner, "API Billing Direct Org")
+    org_id = org["id"]
 
     # Enable direct billing via billing_account
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.billing_account.stripe_customer_id = "cus_api_test"
-    org.billing_account.credits = Decimal("250")
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_api_test"
+    org_db.billing_account.credits = Decimal("250")
     dbsession.commit()
 
-    # Get billing info
+    # Get billing info via unified endpoint
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing",
-        headers=owner["headers"],
+        "/v0/billing/account-info",
+        headers=org["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
-    assert data["organization_id"] == org_id
-    assert data["stripe_customer_id"] == "cus_api_test"
     assert data["credits"] == 250.0
+    assert data["account_status"] == "ACTIVE"
 
 
 @pytest.mark.anyio
 async def test_get_organization_billing_unauthorized(client: AsyncClient, dbsession):
-    """Test that non-members cannot access billing info."""
+    """Test that non-members cannot access org billing info.
+
+    With unified endpoints, org context comes from the API key. An outsider
+    doesn't have the org's API key, so calling account-info with their own
+    personal key returns *their* personal billing — NOT the org's billing.
+    This test verifies that the outsider's personal billing is returned
+    instead of the org's billing (i.e. no data leak).
+    """
     owner = await create_test_user(client, "api_billing_owner@test.com")
     outsider = await create_test_user(client, "api_billing_outsider@test.com")
+    org = await create_test_org(client, owner, "API Billing Unauthorized Org")
 
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Billing Unauthorized Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Try to access as outsider
+    # Outsider uses their personal API key → gets their own billing, not the org's
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing",
+        "/v0/billing/account-info",
         headers=outsider["headers"],
     )
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    # The outsider should get their own personal billing (not the org's)
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    # The billing_account_id should NOT be the org's billing account id
+    assert data["account_status"] == "ACTIVE"
 
 
 @pytest.mark.anyio
 async def test_update_organization_billing(client: AsyncClient, dbsession):
-    """Test PATCH /organizations/{id}/billing to update settings."""
-    owner = await create_test_user(client, "api_update_billing@test.com")
+    """Test PUT /billing/auto-recharge to update org auto-recharge settings."""
+    from decimal import Decimal
 
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Update Billing Org"},
-        headers=owner["headers"],
+    from orchestra.db.models.orchestra_models import (
+        Organization,
+        Recharge,
+        RechargeStatus,
     )
-    org_id = org_response.json()["id"]
 
-    # Update billing settings
-    response = await client.patch(
-        f"/v0/organizations/{org_id}/billing",
+    owner = await create_test_user(client, "api_update_billing@test.com")
+    org = await create_test_org(client, owner, "API Update Billing Org")
+    org_id = org["id"]
+
+    # To enable auto-recharge, the org must have met the minimum spending
+    # threshold ($100). Simulate past spending via a paid recharge.
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    recharge = Recharge(
+        billing_account_id=org_db.billing_account_id,
+        quantity=Decimal("100"),
+        amount_usd=Decimal("100"),
+        type="payment",
+        status=RechargeStatus.PAID,
+    )
+    dbsession.add(recharge)
+    dbsession.commit()
+
+    # Update auto-recharge settings via unified endpoint
+    response = await client.put(
+        "/v0/billing/auto-recharge",
         json={
-            "autorecharge": True,
-            "autorecharge_threshold": 25.0,
-            "autorecharge_qty": 150.0,
+            "enabled": True,
+            "threshold": 25.0,
+            "qty": 150.0,
         },
-        headers=owner["headers"],
+        headers=org["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
-    assert data["autorecharge"] is True
-    assert data["autorecharge_threshold"] == 25.0
-    assert data["autorecharge_qty"] == 150.0
+    assert data["enabled"] is True
+    assert data["threshold"] == 25.0
+    assert data["qty"] == 150.0
 
 
 @pytest.mark.anyio
 async def test_update_organization_billing_non_owner(client: AsyncClient, dbsession):
-    """Test that only owner can update billing settings."""
+    """Test that members without billing:write cannot update auto-recharge."""
     owner = await create_test_user(client, "api_billing_update_owner@test.com")
     member = await create_test_user(client, "api_billing_update_member@test.com")
+    org = await create_test_org(client, owner, "API Billing Non-Owner Org")
+    org_id = org["id"]
 
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Billing Non-Owner Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Add member
-    await client.post(
+    # Add member (default Member role — has billing:read but NOT billing:write)
+    add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
         json={"user_id": member["id"]},
         headers=owner["headers"],
     )
+    assert add_response.status_code == status.HTTP_201_CREATED
+    member_org_key = add_response.json()["api_key"]
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {member_org_key}",
+    }
 
-    # Try to update as member
-    response = await client.patch(
-        f"/v0/organizations/{org_id}/billing",
-        json={"autorecharge": True},
-        headers=member["headers"],
+    # Try to update auto-recharge as member (should be forbidden)
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": True},
+        headers=member_org_headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.anyio
 async def test_get_organization_credits(client: AsyncClient, dbsession):
-    """Test GET /organizations/{id}/billing/credits endpoint."""
+    """Test credits are accessible via GET /billing/account-info with org key."""
     from decimal import Decimal
 
     from orchestra.db.models.orchestra_models import Organization
 
     owner = await create_test_user(client, "api_credits@test.com")
-
-    # Create organization with direct billing
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Credits Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
+    org = await create_test_org(client, owner, "API Credits Org")
+    org_id = org["id"]
 
     # Enable direct billing with credits via billing_account
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    org.billing_account.stripe_customer_id = "cus_credits_test"
-    org.billing_account.credits = Decimal("300.50")
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_credits_test"
+    org_db.billing_account.credits = Decimal("300.50")
     dbsession.commit()
 
-    # Get credits
+    # Get credits via unified endpoint
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=owner["headers"],
+        "/v0/billing/account-info",
+        headers=org["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
-    assert data["organization_id"] == org_id
     assert data["credits"] == 300.5
 
 
 @pytest.mark.anyio
 async def test_get_organization_billing_profile(client: AsyncClient, dbsession):
-    """Test GET /organizations/{id}/billing/billing-profile endpoint."""
+    """Test GET /billing/billing-profile with org API key."""
     owner = await create_test_user(client, "api_billing_profile@test.com")
+    org = await create_test_org(client, owner, "API Business Profile Org")
 
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Business Profile Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Get business profile (initially all null)
+    # Get billing profile (initially all null)
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        headers=owner["headers"],
+        "/v0/billing/billing-profile",
+        headers=org["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
     assert data["billing_email"] is None
     assert data["business_name"] is None
+    assert data["is_business"] is True
 
 
 @pytest.mark.anyio
 async def test_update_organization_billing_profile(client: AsyncClient, dbsession):
-    """Test PATCH /organizations/{id}/billing/billing-profile endpoint."""
+    """Test PATCH /billing/billing-profile with org API key."""
     owner = await create_test_user(client, "api_update_profile@test.com")
+    org = await create_test_org(client, owner, "API Update Profile Org")
 
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Update Profile Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Update business profile (using valid EIN format for US)
+    # Update billing profile (using valid EIN format for US)
     response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
+        "/v0/billing/billing-profile",
         json={
             "billing_email": "finance@company.com",
             "business_name": "Company LLC",
@@ -1543,7 +1527,7 @@ async def test_update_organization_billing_profile(client: AsyncClient, dbsessio
                 "country": "US",
             },
         },
-        headers=owner["headers"],
+        headers=org["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
 
@@ -1554,6 +1538,7 @@ async def test_update_organization_billing_profile(client: AsyncClient, dbsessio
     assert data["billing_address"]["line1"] == "456 Business Pkwy"
     assert data["billing_address"]["city"] == "New York"
     assert data["billing_address"]["country"] == "US"
+    assert data["is_business"] is True
 
 
 # ============== End-to-End Integration Tests ==============
@@ -1581,17 +1566,12 @@ async def test_e2e_org_direct_billing_flow(client: AsyncClient, dbsession):
     owner = await create_test_user(client, "e2e_direct@test.com")
 
     # Step 1: Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "E2E Direct Billing Org"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == status.HTTP_201_CREATED
-    org_id = org_response.json()["id"]
+    org = await create_test_org(client, owner, "E2E Direct Billing Org")
+    org_id = org["id"]
 
     # Step 2: Enable direct billing via billing_account
-    org = dbsession.query(Organization).filter(Organization.id == org_id).first()
-    ba = org.billing_account
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    ba = org_db.billing_account
     ba.stripe_customer_id = "cus_e2e_direct_test"
     ba.autorecharge = True
     ba.autorecharge_threshold = Decimal("50")
@@ -1613,10 +1593,10 @@ async def test_e2e_org_direct_billing_flow(client: AsyncClient, dbsession):
     response = process_checkout_session_event(checkout_event, dbsession)
     assert response.status_code == 200
 
-    # Step 4: Verify credits via API
+    # Step 4: Verify credits via unified endpoint
     credits_response = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=owner["headers"],
+        "/v0/billing/account-info",
+        headers=org["headers"],
     )
     assert credits_response.status_code == status.HTTP_200_OK
     assert credits_response.json()["credits"] == 200.0
@@ -1633,7 +1613,7 @@ async def test_e2e_org_direct_billing_flow(client: AsyncClient, dbsession):
     assert new_balance == Decimal("40")  # 200 - 160 = 40
 
     # Step 6: Check autorecharge should trigger (40 <= 50)
-    dbsession.refresh(org)
+    dbsession.refresh(org_db)
     billing_entity_updated = get_billing_entity(
         dbsession,
         owner["id"],
@@ -1776,85 +1756,98 @@ async def test_billing_permissions_member_read_only(client: AsyncClient, dbsessi
 
 @pytest.mark.anyio
 async def test_billing_api_admin_can_update(client: AsyncClient, dbsession):
-    """Test that Admin can update billing settings via API."""
+    """Test that Admin can update auto-recharge settings via API."""
+    from decimal import Decimal
+
     from orchestra.db.dao.role_dao import RoleDAO
+    from orchestra.db.models.orchestra_models import (
+        Organization,
+        Recharge,
+        RechargeStatus,
+    )
 
     owner = await create_test_user(client, "api_admin_owner@test.com")
     admin = await create_test_user(client, "api_admin@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Admin API Billing Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
+    org = await create_test_org(client, owner, "Admin API Billing Org")
+    org_id = org["id"]
 
     # Get Admin role
     role_dao = RoleDAO(dbsession)
     admin_role = role_dao.get_by_name("Admin", organization_id=None)
 
     # Add admin as member with Admin role
-    await client.post(
+    add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
         json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
+    assert add_response.status_code == status.HTTP_201_CREATED
+    admin_org_key = add_response.json()["api_key"]
+    admin_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_org_key}",
+    }
 
-    # Admin should be able to update billing settings
-    response = await client.patch(
-        f"/v0/organizations/{org_id}/billing",
-        json={"autorecharge": True, "autorecharge_threshold": 50},
-        headers=admin["headers"],
+    # Meet minimum spending requirement for auto-recharge
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    recharge = Recharge(
+        billing_account_id=org_db.billing_account_id,
+        quantity=Decimal("100"),
+        amount_usd=Decimal("100"),
+        type="payment",
+        status=RechargeStatus.PAID,
+    )
+    dbsession.add(recharge)
+    dbsession.commit()
+
+    # Admin should be able to update auto-recharge settings
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": True, "threshold": 50},
+        headers=admin_org_headers,
     )
     assert response.status_code == status.HTTP_200_OK
-    assert response.json()["autorecharge"] is True
-    assert response.json()["autorecharge_threshold"] == 50
+    assert response.json()["enabled"] is True
+    assert response.json()["threshold"] == 50
 
 
 @pytest.mark.anyio
 async def test_billing_api_member_cannot_update(client: AsyncClient, dbsession):
-    """Test that Member cannot update billing settings via API."""
+    """Test that Member cannot update auto-recharge settings via API."""
     owner = await create_test_user(client, "api_member_owner@test.com")
     member = await create_test_user(client, "api_member@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Member API Billing Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
+    org = await create_test_org(client, owner, "Member API Billing Org")
+    org_id = org["id"]
 
     # Add member with default Member role
-    await client.post(
+    add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
         json={"user_id": member["id"]},
         headers=owner["headers"],
     )
+    assert add_response.status_code == status.HTTP_201_CREATED
+    member_org_key = add_response.json()["api_key"]
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {member_org_key}",
+    }
 
-    # Member should NOT be able to update billing settings
-    response = await client.patch(
-        f"/v0/organizations/{org_id}/billing",
-        json={"autorecharge": True},
-        headers=member["headers"],
+    # Member should NOT be able to update auto-recharge settings
+    response = await client.put(
+        "/v0/billing/auto-recharge",
+        json={"enabled": True},
+        headers=member_org_headers,
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.anyio
 async def test_billing_api_member_can_read(client: AsyncClient, dbsession):
-    """Test that Member can read billing info via API."""
+    """Test that Member can read billing info via unified API."""
     owner = await create_test_user(client, "api_member_read_owner@test.com")
     member = await create_test_user(client, "api_member_read@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Member Read Billing Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
+    org = await create_test_org(client, owner, "Member Read Billing Org")
+    org_id = org["id"]
 
     # Add member with default Member role
     add_response = await client.post(
@@ -1865,11 +1858,16 @@ async def test_billing_api_member_can_read(client: AsyncClient, dbsession):
     assert (
         add_response.status_code == status.HTTP_201_CREATED
     ), f"Failed to add member: {add_response.json()}"
+    member_org_key = add_response.json()["api_key"]
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {member_org_key}",
+    }
 
-    # Member should be able to read billing info
+    # Member should be able to read billing info via unified endpoint
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing",
-        headers=member["headers"],
+        "/v0/billing/account-info",
+        headers=member_org_headers,
     )
     if response.status_code != status.HTTP_200_OK:
         print(f"Response: {response.status_code} - {response.json()}")
@@ -2033,17 +2031,11 @@ async def test_international_address_japan(client: AsyncClient, dbsession):
 async def test_international_address_api_update(client: AsyncClient, dbsession):
     """Test updating international address via API."""
     owner = await create_test_user(client, "api_intl_addr@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "API Intl Address Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
+    org = await create_test_org(client, owner, "API Intl Address Org")
 
     # Update with Indian address via API
     response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
+        "/v0/billing/billing-profile",
         json={
             "billing_email": "billing@indiancompany.in",
             "business_name": "Indian Tech Pvt Ltd",
@@ -2056,7 +2048,7 @@ async def test_international_address_api_update(client: AsyncClient, dbsession):
                 "postal_code": "500081",
             },
         },
-        headers=owner["headers"],
+        headers=org["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
 
