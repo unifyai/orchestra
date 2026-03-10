@@ -30,6 +30,7 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.lib.billing import (
     configure_stripe,
+    extract_tax_id_info,
     is_stripe_mode_conflict,
     prefill_customer_fields,
     sync_billing_profile_to_stripe,
@@ -556,6 +557,7 @@ def get_auto_recharge(
         enabled=ba.autorecharge,
         threshold=float(ba.autorecharge_threshold),
         qty=float(ba.autorecharge_qty),
+        min_recharge_amount=float(MIN_AUTORECHARGE_AMOUNT),
         eligible=can_enable,
         total_spending=total_spending,
         minimum_spend_required=min_required,
@@ -649,6 +651,7 @@ def update_auto_recharge(
         enabled=ba.autorecharge,
         threshold=float(ba.autorecharge_threshold),
         qty=float(ba.autorecharge_qty),
+        min_recharge_amount=float(MIN_AUTORECHARGE_AMOUNT),
         eligible=can_enable,
         total_spending=total_spending,
         minimum_spend_required=min_required,
@@ -687,10 +690,25 @@ def validate_tax_id(
 
 @router.get("/billing/supported-tax-countries")
 def get_supported_tax_countries():
-    """Get list of countries supported for tax ID validation."""
+    """
+    Get list of countries supported for tax ID validation.
+
+    Returns structured data per country including the human-readable tax ID
+    name and expected format, so frontends don't need to parse description
+    strings.
+    """
+    raw = TaxIDValidator.get_supported_countries()
+    structured: dict = {}
+    for code, description in raw.items():
+        info = extract_tax_id_info(description)
+        structured[code] = {
+            "description": description,
+            "tax_id_name": info["name"],
+            "tax_id_format": info["format"],
+        }
     return {
-        "supported_countries": TaxIDValidator.get_supported_countries(),
-        "total_countries": len(TaxIDValidator.get_supported_countries()),
+        "supported_countries": structured,
+        "total_countries": len(structured),
     }
 
 
