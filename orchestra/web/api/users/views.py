@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLinkDAO
@@ -1615,74 +1614,6 @@ def _compat_list_users_by_assistant_hiring_approval(
 ):
     """Backward-compat stub: returns empty list (approval flow removed)."""
     return []
-
-
-# -- Old Business / Account-Type stubs (replaced by BillingAccount-based
-#    business profile endpoints) --
-
-
-@router.get("/user/business-status")
-def _compat_get_user_business_status(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: returns business profile data mapped to old schema."""
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    user_dao = UserDAO(session)
-    user_row = user_dao.get_by_id(user_id)
-    if not user_row:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user = user_row[0]
-    ba = user.billing_account
-
-    # Map new BillingAccount fields to old response shape
-    billing_address = None
-    if ba and ba.billing_address:
-        addr = ba.billing_address if isinstance(ba.billing_address, dict) else {}
-        billing_address = {
-            "line1": addr.get("line1", ""),
-            "line2": addr.get("line2", ""),
-            "city": addr.get("city", ""),
-            "state": addr.get("state", ""),
-            "country": addr.get("country", ""),
-            "postal_code": addr.get("postal_code", ""),
-        }
-
-    return {
-        "account_type": "individual",  # field removed; default
-        "individual_name": ba.name if ba else None,
-        "business_name": ba.name if ba else None,  # backward-compat alias
-        "tax_id": ba.tax_id if ba else None,
-        "business_type": None,  # field removed
-        "business_verified": False,  # field removed; default
-        "tax_exempt": False,  # field removed; default
-        "tax_jurisdiction": None,  # field removed
-        "business_address": billing_address,
-    }
-
-
-@router.put("/user/account-type")
-def _compat_update_user_account_type(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: no-op (account-type concept removed)."""
-    return {"message": "Account type updated successfully (no-op — field removed)"}
-
-
-@router.patch("/user/business-info")
-def _compat_update_user_business_info(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: no-op (use PATCH /user/billing/billing-profile instead)."""
-    return {
-        "message": "Business information updated successfully (no-op — use /user/billing/billing-profile)",
-    }
 
 
 @admin_router.post("/user/verify-business")

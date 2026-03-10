@@ -662,7 +662,6 @@ def update_auto_recharge(
 
 
 @router.post("/billing/validate-tax-id")
-@router.post("/user/validate-tax-id")  # backward-compat alias
 def validate_tax_id(
     request: Request,
     tax_id: str = Query(..., description="Tax ID to validate"),
@@ -687,7 +686,6 @@ def validate_tax_id(
 
 
 @router.get("/billing/supported-tax-countries")
-@router.get("/user/supported-tax-countries")  # backward-compat alias
 def get_supported_tax_countries():
     """Get list of countries supported for tax ID validation."""
     return {

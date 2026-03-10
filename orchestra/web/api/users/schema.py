@@ -304,15 +304,3 @@ class OnboardingStatusCreateRequest(BaseModel):
     user_id: str
     current_step: OnboardingStep = "workspace_setup"
     step_data: Optional[Dict[str, Any]] = None
-
-
-# ============================================================================
-# User Billing Profile Schemas
-# (Canonical definitions live in orchestra.web.api.billing.schema;
-#  re-exported here for backward compatibility.)
-# ============================================================================
-
-from orchestra.web.api.billing.schema import (  # noqa: F401, E402
-    UserBillingProfileResponse,
-    UserBillingProfileUpdate,
-)
