@@ -3,6 +3,7 @@
 All billing operations now operate through BillingAccount.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -22,6 +23,8 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.lib.time import month_end_utc
 from orchestra.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class BillingEntityType(str, Enum):
@@ -318,4 +321,93 @@ def queue_auto_recharge(
         print(
             f"[AUTO-RECHARGE] WARNING: BillingAccount {billing_account.id} "
             f"has no Stripe customer ID",
+        )
+
+
+# =========================================================================
+# Stripe helpers
+# =========================================================================
+
+
+def configure_stripe() -> None:
+    """
+    Configure the ``stripe`` module with the secret key from settings.
+
+    Raises ``RuntimeError`` when the key is not configured so callers can
+    translate this into an appropriate HTTP error.
+    """
+    if not settings.stripe_secret_key:
+        raise RuntimeError("Stripe is not configured on this server.")
+    stripe.api_key = settings.stripe_secret_key
+
+
+def is_stripe_mode_conflict(error: Exception) -> bool:
+    """
+    Detect whether a Stripe API error is caused by a live-mode / test-mode
+    key mismatch — e.g. a live-mode customer ID being used with a test-mode
+    secret key (or vice versa).
+    """
+    msg = str(getattr(error, "user_message", "")) or str(error)
+    return "live mode" in msg and "test mode" in msg
+
+
+def prefill_customer_fields(
+    customer_id: str,
+    email: Optional[str],
+    name: Optional[str],
+) -> None:
+    """
+    Best-effort update of email/name on an existing Stripe customer so that
+    Checkout pre-fills those fields.
+
+    - **email**: Always synced to the canonical value from our DB.
+    - **name**: Only set when missing on the customer record (we don't
+      overwrite a name the customer may have entered themselves).
+    """
+    try:
+        customer = stripe.Customer.retrieve(customer_id)
+        if getattr(customer, "deleted", False):
+            return
+
+        update: dict = {}
+        if email and customer.email != email:
+            update["email"] = email
+        if name and not customer.name:
+            update["name"] = name
+
+        if update:
+            stripe.Customer.modify(customer_id, **update)
+    except Exception:
+        logger.warning(
+            "Failed to pre-fill Stripe customer fields (non-fatal) %s",
+            customer_id,
+            exc_info=True,
+        )
+
+
+def sync_tax_id_to_customer(
+    customer_id: str,
+    tax_id: str,
+    tax_id_type: Optional[str] = None,
+) -> None:
+    """
+    Ensure a tax ID is present on a Stripe customer (idempotent).
+
+    Only adds the tax ID if no entry with the same ``value`` already
+    exists on the customer.
+    """
+    try:
+        existing = stripe.Customer.list_tax_ids(customer_id)
+        already_exists = any(t.value == tax_id for t in existing.data)
+        if not already_exists:
+            stripe.Customer.create_tax_id(
+                customer_id,
+                type=tax_id_type or "eu_vat",
+                value=tax_id,
+            )
+    except Exception:
+        logger.warning(
+            "Failed to sync tax ID for Stripe customer %s",
+            customer_id,
+            exc_info=True,
         )

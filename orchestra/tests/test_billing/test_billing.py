@@ -28,6 +28,7 @@ import sqlalchemy as sa
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
     BillingAccount,
@@ -2403,3 +2404,407 @@ def test_checkout_recharge_counts_toward_auto_recharge_eligibility(
 
     # Now eligible for auto-recharge
     assert ba_dao.can_enable_auto_recharge(ba.id)
+
+
+# =========================================================================== #
+# 12. Billing API endpoints — checkout / portal / status                       #
+# =========================================================================== #
+
+
+@pytest.mark.anyio
+async def test_checkout_session_endpoint(client, dbsession, monkeypatch):
+    """POST /billing/checkout-session creates a Stripe Checkout session."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "checkout_ep_user@test.com")
+
+    # Give user a billing account with stripe_customer_id
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("100"), stripe_customer_id="cus_ep_test")
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        db_user.billing_account.stripe_customer_id = "cus_ep_test"
+    dbsession.commit()
+
+    # Patch settings for price ID
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_credits_price_id_personal",
+        "price_test_personal",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "console_url",
+        "http://localhost:3000",
+        raising=False,
+    )
+
+    # Mock Stripe calls in the billing views module
+    import orchestra.web.api.billing.views as billing_views
+
+    class MockCheckoutSession:
+        def __init__(self):
+            self.url = "https://checkout.stripe.com/test_session"
+            self.id = "cs_test_123"
+
+    class MockCustomer:
+        email = "checkout_ep_user@test.com"
+        name = "Test"
+        deleted = False
+
+    mock_calls = {"create": [], "retrieve": [], "modify": [], "list_tax_ids": []}
+
+    def mock_session_create(**kwargs):
+        mock_calls["create"].append(kwargs)
+        return MockCheckoutSession()
+
+    def mock_customer_retrieve(cid):
+        mock_calls["retrieve"].append(cid)
+        return MockCustomer()
+
+    def mock_customer_modify(cid, **kwargs):
+        mock_calls["modify"].append({"cid": cid, **kwargs})
+
+    def mock_list_tax_ids(cid):
+        mock_calls["list_tax_ids"].append(cid)
+        return SimpleNamespace(data=[])
+
+    def mock_create_tax_id(cid, **kwargs):
+        pass
+
+    mock_stripe = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(create=mock_session_create),
+        ),
+        Customer=SimpleNamespace(
+            retrieve=mock_customer_retrieve,
+            modify=mock_customer_modify,
+            list_tax_ids=mock_list_tax_ids,
+            create_tax_id=mock_create_tax_id,
+        ),
+        InvalidRequestError=Exception,
+    )
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.post(
+        "/v0/billing/checkout-session",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert "url" in data
+    assert "session_id" in data
+    assert data["url"] == "https://checkout.stripe.com/test_session"
+    assert data["session_id"] == "cs_test_123"
+
+    # Verify Stripe was called
+    assert len(mock_calls["create"]) == 1
+    create_params = mock_calls["create"][0]
+    assert create_params["mode"] == "payment"
+    assert create_params["customer"] == "cus_ep_test"
+    assert create_params["client_reference_id"] == user["id"]
+
+
+@pytest.mark.anyio
+async def test_checkout_session_no_stripe_customer(client, dbsession, monkeypatch):
+    """POST /billing/checkout-session works for first-time buyer (no Stripe customer)."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "checkout_new_user@test.com")
+
+    # User has billing account but no stripe_customer_id
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("0"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_credits_price_id_personal",
+        "price_test_personal",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "console_url",
+        "http://localhost:3000",
+        raising=False,
+    )
+
+    import orchestra.web.api.billing.views as billing_views
+
+    class MockCheckoutSession:
+        url = "https://checkout.stripe.com/new_session"
+        id = "cs_new_123"
+
+    mock_calls = {"create": []}
+
+    def mock_session_create(**kwargs):
+        mock_calls["create"].append(kwargs)
+        return MockCheckoutSession()
+
+    mock_stripe = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(create=mock_session_create),
+        ),
+        Customer=SimpleNamespace(),
+        InvalidRequestError=Exception,
+    )
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.post(
+        "/v0/billing/checkout-session",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["url"] == "https://checkout.stripe.com/new_session"
+
+    # Should use customer_creation instead of customer
+    create_params = mock_calls["create"][0]
+    assert "customer" not in create_params
+    assert create_params["customer_creation"] == "always"
+
+
+@pytest.mark.anyio
+async def test_portal_session_endpoint(client, dbsession, monkeypatch):
+    """POST /billing/portal-session creates a Stripe portal session."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "portal_ep_user@test.com")
+
+    # Give user a billing account with stripe_customer_id
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("50"), stripe_customer_id="cus_portal_test")
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        db_user.billing_account.stripe_customer_id = "cus_portal_test"
+    dbsession.commit()
+
+    import orchestra.web.api.billing.views as billing_views
+
+    mock_calls = {"create": []}
+
+    def mock_portal_create(**kwargs):
+        mock_calls["create"].append(kwargs)
+        return SimpleNamespace(url="https://billing.stripe.com/portal_test")
+
+    mock_stripe = SimpleNamespace(
+        api_key=None,
+        billing_portal=SimpleNamespace(
+            Session=SimpleNamespace(create=mock_portal_create),
+        ),
+        InvalidRequestError=Exception,
+    )
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.post(
+        "/v0/billing/portal-session",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["url"] == "https://billing.stripe.com/portal_test"
+
+    # Verify Stripe was called with correct customer
+    assert len(mock_calls["create"]) == 1
+    assert mock_calls["create"][0]["customer"] == "cus_portal_test"
+
+
+@pytest.mark.anyio
+async def test_portal_session_no_customer(client, dbsession, monkeypatch):
+    """POST /billing/portal-session returns 404 when no Stripe customer exists."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "portal_no_cust@test.com")
+
+    # Billing account without stripe_customer_id
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("0"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    import orchestra.web.api.billing.views as billing_views
+
+    mock_stripe = SimpleNamespace(
+        api_key=None,
+        billing_portal=SimpleNamespace(Session=SimpleNamespace()),
+        InvalidRequestError=Exception,
+    )
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.post(
+        "/v0/billing/portal-session",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 404
+    assert "No Stripe customer ID found" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_checkout_status_endpoint(client, dbsession, monkeypatch):
+    """GET /billing/checkout-status returns session status for valid owner."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "checkout_status_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(
+            credits=Decimal("25"),
+            stripe_customer_id="cus_status_test",
+        )
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    else:
+        db_user.billing_account.stripe_customer_id = "cus_status_test"
+    dbsession.commit()
+
+    import orchestra.web.api.billing.views as billing_views
+
+    class MockCheckoutSession:
+        status = "complete"
+        payment_status = "paid"
+        customer = "cus_status_test"
+        client_reference_id = user["id"]
+
+    def mock_session_retrieve(sid):
+        return MockCheckoutSession()
+
+    mock_stripe = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(retrieve=mock_session_retrieve),
+        ),
+        InvalidRequestError=Exception,
+    )
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.get(
+        "/v0/billing/checkout-status?session_id=cs_test_status",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["status"] == "complete"
+    assert data["payment_status"] == "paid"
+
+
+@pytest.mark.anyio
+async def test_checkout_status_wrong_owner(client, dbsession, monkeypatch):
+    """GET /billing/checkout-status returns 403 for wrong owner."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "checkout_wrong_owner@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(
+            credits=Decimal("10"),
+            stripe_customer_id="cus_wrong_owner",
+        )
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    import orchestra.web.api.billing.views as billing_views
+
+    class MockCheckoutSession:
+        status = "complete"
+        payment_status = "paid"
+        customer = "cus_someone_else"  # Different customer!
+        client_reference_id = "other_user_id"  # Different user!
+
+    def mock_session_retrieve(sid):
+        return MockCheckoutSession()
+
+    mock_stripe = SimpleNamespace(
+        api_key=None,
+        checkout=SimpleNamespace(
+            Session=SimpleNamespace(retrieve=mock_session_retrieve),
+        ),
+        InvalidRequestError=Exception,
+    )
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.get(
+        "/v0/billing/checkout-status?session_id=cs_test_wrong",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 403
+    assert "does not belong" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_checkout_session_no_price_id_configured(client, dbsession, monkeypatch):
+    """POST /billing/checkout-session returns 500 when price ID is not configured."""
+    from orchestra.tests.utils import create_test_user
+
+    user = await create_test_user(client, "no_price_user@test.com")
+
+    user_dao = UserDAO(dbsession)
+    db_user = user_dao.get_user_with_id(user["id"])
+    if db_user.billing_account is None:
+        ba = BillingAccount(credits=Decimal("0"))
+        dbsession.add(ba)
+        dbsession.flush()
+        db_user.billing_account_id = ba.id
+        dbsession.flush()
+    dbsession.commit()
+
+    # Explicitly set price ID to None
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_credits_price_id_personal",
+        None,
+        raising=False,
+    )
+
+    import orchestra.web.api.billing.views as billing_views
+
+    mock_stripe = SimpleNamespace(api_key=None, InvalidRequestError=Exception)
+    monkeypatch.setattr(billing_views, "stripe", mock_stripe)
+
+    response = await client.post(
+        "/v0/billing/checkout-session",
+        headers=user["headers"],
+    )
+
+    assert response.status_code == 500
+    assert "price ID not configured" in response.json()["detail"]
