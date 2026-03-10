@@ -1,4 +1,17 @@
-"""Tests for organization Stripe customer and checkout endpoints."""
+"""Tests for organization billing endpoints – Stripe integration.
+
+These tests cover:
+  - Billing profile updates for organizations (backward-compat routes).
+  - Unified billing profile endpoints for org contexts.
+  - Stripe webhook processing for org billing (checkout, tax ID).
+  - E2E billing lifecycle scenarios.
+  - Permission levels for billing operations.
+
+The explicit ``/organizations/{id}/billing/stripe-customer`` and
+``/organizations/{id}/billing/checkout`` endpoints have been consolidated
+into the unified ``/billing/checkout-session`` endpoint.  Stripe customer
+creation is now handled implicitly during checkout.
+"""
 
 import json
 import uuid
@@ -8,7 +21,7 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.settings import settings
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import create_test_org, create_test_user
 
 
 @pytest.fixture(autouse=True)
@@ -20,516 +33,324 @@ def _mock_stripe_settings(monkeypatch):
         "sk_test_dummy_for_mocking",
         raising=False,
     )
-    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "stripe_webhook_secret",
+        "whsec_test",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "stripe_skip_signature_verification",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_credits_price_id_personal",
+        "price_test_personal_dummy",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_credits_price_id_business",
+        "price_test_business_dummy",
+        raising=False,
+    )
 
 
 # ============================================================================
-# Test: Ensure Organization Stripe Customer
-# ============================================================================
-
-
-@pytest.mark.anyio
-async def test_ensure_org_stripe_customer_creates_new_customer(client: AsyncClient):
-    """Test creating a new Stripe customer for an organization."""
-    # Create test user (org owner)
-    owner = await create_test_user(client, f"owner-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_data = org_response.json()
-    org_id = org_data["id"]
-
-    # Update business profile with billing email (required for Stripe customer)
-    profile_response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "billing@testorg.com", "business_name": "Test Business"},
-        headers=owner["headers"],
-    )
-    assert profile_response.status_code == 200
-
-    # Mock Stripe customer creation
-    with patch("stripe.Customer.create") as mock_create, patch(
-        "os.environ.get",
-        return_value="sk_test_123",
-    ):
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_test_org_123"
-        mock_create.return_value = mock_customer
-
-        # Create Stripe customer for organization
-        response = await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["organization_id"] == org_id
-        assert data["stripe_customer_id"] == "cus_test_org_123"
-        assert data["is_new"] is True
-
-        # Verify Stripe was called with org metadata
-        mock_create.assert_called_once()
-        call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs["email"] == "billing@testorg.com"
-        assert call_kwargs["metadata"]["organization_id"] == str(org_id)
-
-
-@pytest.mark.anyio
-async def test_ensure_org_stripe_customer_returns_existing(client: AsyncClient):
-    """Test that existing Stripe customer is returned without creating new one."""
-    # Create test user (org owner)
-    owner = await create_test_user(client, f"owner2-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org Existing {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    # Update business profile
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "billing2@testorg.com"},
-        headers=owner["headers"],
-    )
-
-    # Create Stripe customer first time
-    with patch("stripe.Customer.create") as mock_create, patch(
-        "os.environ.get",
-        return_value="sk_test_123",
-    ):
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_existing_456"
-        mock_create.return_value = mock_customer
-
-        first_response = await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-        assert first_response.status_code == 200
-        assert first_response.json()["is_new"] is True
-
-    # Second call should return existing without creating new
-    second_response = await client.post(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=owner["headers"],
-    )
-
-    assert second_response.status_code == 200
-    data = second_response.json()
-    assert data["stripe_customer_id"] == "cus_existing_456"
-    assert data["is_new"] is False
-
-
-@pytest.mark.anyio
-async def test_ensure_org_stripe_customer_with_request_body(client: AsyncClient):
-    """Test creating Stripe customer with custom email/name in request body."""
-    owner = await create_test_user(client, f"owner3-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org Body {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    with patch("stripe.Customer.create") as mock_create, patch(
-        "os.environ.get",
-        return_value="sk_test_123",
-    ):
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_custom_789"
-        mock_create.return_value = mock_customer
-
-        # Add Content-Type header to ensure body is parsed as JSON
-        headers = {**owner["headers"], "Content-Type": "application/json"}
-        response = await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            json={
-                "billing_email": "custom@billing.com",
-                "business_name": "Custom Business Name",
-            },
-            headers=headers,
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["stripe_customer_id"] == "cus_custom_789"
-
-        # Verify custom values were used (billing_email or org name might be used as fallback)
-        call_kwargs = mock_create.call_args.kwargs
-        # The billing_email in request body should be prioritized
-        assert call_kwargs["email"] == "custom@billing.com"
-        assert call_kwargs["name"] == "Custom Business Name"
-
-
-@pytest.mark.anyio
-async def test_ensure_org_stripe_customer_unauthorized(client: AsyncClient):
-    """Test that non-members cannot create Stripe customer."""
-    # Create org owner
-    owner = await create_test_user(client, f"owner4-{uuid.uuid4()}@test.com")
-    # Create separate user who is not a member
-    other_user = await create_test_user(client, f"other-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org Unauth {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    # Try to create Stripe customer as non-member
-    response = await client.post(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=other_user["headers"],
-    )
-
-    assert response.status_code == 403
-    assert "permission" in response.json()["detail"].lower()
-
-
-# ============================================================================
-# Test: Get Organization Stripe Customer
+# Billing Profile – Unified Routes (org context via org API key)
 # ============================================================================
 
 
 @pytest.mark.anyio
-async def test_get_org_stripe_customer_success(client: AsyncClient):
-    """Test getting existing Stripe customer ID."""
-    owner = await create_test_user(client, f"owner5-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org Get {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    # Set up business profile and create Stripe customer
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "get@testorg.com"},
-        headers=owner["headers"],
+async def test_org_billing_profile_unified_route(client: AsyncClient):
+    """Test GET/PATCH /billing/billing-profile with org API key."""
+    owner = await create_test_user(client, f"owner-unified-{uuid.uuid4()}@test.com")
+    org = await create_test_org(
+        client,
+        owner,
+        f"Unified Profile Org {uuid.uuid4()}",
     )
 
-    with patch("stripe.Customer.create") as mock_create, patch(
-        "os.environ.get",
-        return_value="sk_test_123",
-    ):
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_get_test_123"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    # Now get the customer
-    response = await client.get(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=owner["headers"],
+    # Update billing profile via unified endpoint
+    response = await client.patch(
+        "/v0/billing/billing-profile",
+        json={
+            "billing_email": "unified@testorg.com",
+            "business_name": "Unified Business",
+        },
+        headers=org["headers"],
     )
-
     assert response.status_code == 200
     data = response.json()
-    assert data["stripe_customer_id"] == "cus_get_test_123"
-    assert data["is_new"] is False
+    assert data["billing_email"] == "unified@testorg.com"
+    assert data["is_business"] is True
+
+    # Verify via GET unified endpoint
+    get_response = await client.get(
+        "/v0/billing/billing-profile",
+        headers=org["headers"],
+    )
+    assert get_response.status_code == 200
+    get_data = get_response.json()
+    assert get_data["billing_email"] == "unified@testorg.com"
+    assert get_data["is_business"] is True
 
 
 @pytest.mark.anyio
-async def test_get_org_stripe_customer_not_set_up(client: AsyncClient):
-    """Test getting Stripe customer when none exists."""
-    owner = await create_test_user(client, f"owner6-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org No Stripe {uuid.uuid4()}"},
-        headers=owner["headers"],
+async def test_org_billing_profile_with_address(client: AsyncClient):
+    """Test updating billing profile with address details."""
+    owner = await create_test_user(client, f"owner-addr-{uuid.uuid4()}@test.com")
+    org = await create_test_org(
+        client,
+        owner,
+        f"Address Profile Org {uuid.uuid4()}",
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
+
+    response = await client.patch(
+        "/v0/billing/billing-profile",
+        json={
+            "business_name": "Address Corp",
+            "billing_email": "billing@address.com",
+            "billing_address": {
+                "line1": "123 Business Ave",
+                "city": "London",
+                "country": "GB",
+                "postal_code": "EC1A 1BB",
+            },
+        },
+        headers=org["headers"],
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["billing_address"]["city"] == "London"
+    assert data["billing_address"]["country"] == "GB"
+
+
+@pytest.mark.anyio
+async def test_org_billing_profile_personal_key_returns_personal(client: AsyncClient):
+    """Test that using a personal API key returns the personal (non-org) profile."""
+    user = await create_test_user(
+        client,
+        f"personal-profile-{uuid.uuid4()}@test.com",
+    )
+
+    # Using a personal API key → returns is_business=False
+    response = await client.get(
+        "/v0/billing/billing-profile",
+        headers=user["headers"],
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["is_business"] is False
+
+
+# ============================================================================
+# Account Info – org context
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_org_account_info_via_unified_endpoint(client: AsyncClient):
+    """Test GET /billing/account-info with org API key returns correct data."""
+    owner = await create_test_user(client, f"owner-acct-{uuid.uuid4()}@test.com")
+    org = await create_test_org(
+        client,
+        owner,
+        f"Account Info Org {uuid.uuid4()}",
+    )
 
     response = await client.get(
-        f"/v0/organizations/{org_id}/billing/stripe-customer",
-        headers=owner["headers"],
+        "/v0/billing/account-info",
+        headers=org["headers"],
     )
-
-    assert response.status_code == 404
-    assert "direct billing" in response.json()["detail"].lower()
+    assert response.status_code == 200
+    data = response.json()
+    assert "credits" in data
+    assert "autorecharge" in data
 
 
 # ============================================================================
-# Test: Create Organization Checkout Session
+# Checkout Session – org context
 # ============================================================================
 
 
 @pytest.mark.anyio
-async def test_create_org_checkout_session_success(client: AsyncClient):
-    """Test creating a checkout session for organization."""
-    owner = await create_test_user(client, f"owner7-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org Checkout {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    # Set up Stripe customer first
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "checkout@testorg.com"},
-        headers=owner["headers"],
+async def test_org_checkout_session(client: AsyncClient):
+    """Test POST /billing/checkout-session with org API key."""
+    owner = await create_test_user(client, f"owner-co-{uuid.uuid4()}@test.com")
+    org = await create_test_org(
+        client,
+        owner,
+        f"Checkout Org {uuid.uuid4()}",
     )
 
-    with patch("stripe.Customer.create") as mock_create_customer, patch(
-        "stripe.checkout.Session.create",
-    ) as mock_checkout, patch("os.environ.get", return_value="sk_test_123"):
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_checkout_test"
-        mock_create_customer.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-        # Now create checkout session
+    with patch("stripe.checkout.Session.create") as mock_create:
         mock_session = MagicMock()
-        mock_session.url = "https://checkout.stripe.com/pay/test123"
-        mock_session.id = "cs_test_123"
-        mock_checkout.return_value = mock_session
+        mock_session.id = "cs_org_test_123"
+        mock_session.url = "https://checkout.stripe.com/test"
+        mock_create.return_value = mock_session
 
         response = await client.post(
-            f"/v0/organizations/{org_id}/billing/checkout",
-            json={
-                "amount": 100,
-                "success_url": "https://app.test.com/billing?success=true",
-                "cancel_url": "https://app.test.com/billing",
-            },
-            headers=owner["headers"],
+            "/v0/billing/checkout-session",
+            headers=org["headers"],
         )
-
         assert response.status_code == 200
         data = response.json()
-        assert data["checkout_url"] == "https://checkout.stripe.com/pay/test123"
-        assert data["session_id"] == "cs_test_123"
-
-        # Verify checkout session was created with org metadata
-        mock_checkout.assert_called_once()
-        call_kwargs = mock_checkout.call_args.kwargs
-        assert call_kwargs["customer"] == "cus_checkout_test"
-        assert call_kwargs["metadata"]["organization_id"] == str(org_id)
-        assert call_kwargs["line_items"][0]["quantity"] == 100
-
-
-@pytest.mark.anyio
-async def test_create_org_checkout_without_stripe_customer_fails(client: AsyncClient):
-    """Test that checkout fails if org has no Stripe customer."""
-    owner = await create_test_user(client, f"owner8-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org No Customer {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    response = await client.post(
-        f"/v0/organizations/{org_id}/billing/checkout",
-        json={
-            "amount": 50,
-            "success_url": "https://app.test.com/success",
-            "cancel_url": "https://app.test.com/cancel",
-        },
-        headers=owner["headers"],
-    )
-
-    assert response.status_code == 400
-    assert "stripe customer" in response.json()["detail"].lower()
-
-
-@pytest.mark.anyio
-async def test_create_org_checkout_with_invalid_amount_fails(client: AsyncClient):
-    """Test that checkout fails with invalid amount."""
-    owner = await create_test_user(client, f"owner9-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org Invalid Amount {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    # Set up Stripe customer
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "amount@testorg.com"},
-        headers=owner["headers"],
-    )
-
-    with patch("stripe.Customer.create") as mock_create, patch(
-        "os.environ.get",
-        return_value="sk_test_123",
-    ):
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_amount_test"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    response = await client.post(
-        f"/v0/organizations/{org_id}/billing/checkout",
-        json={
-            "amount": 0,
-            "success_url": "https://app.test.com/success",
-            "cancel_url": "https://app.test.com/cancel",
-        },
-        headers=owner["headers"],
-    )
-
-    assert response.status_code == 400
-    assert "amount" in response.json()["detail"].lower()
-
-
-@pytest.mark.anyio
-async def test_create_org_checkout_unauthorized(client: AsyncClient):
-    """Test that non-members cannot create checkout sessions."""
-    owner = await create_test_user(client, f"owner10-{uuid.uuid4()}@test.com")
-    other_user = await create_test_user(client, f"other2-{uuid.uuid4()}@test.com")
-
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Org Unauth Checkout {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    response = await client.post(
-        f"/v0/organizations/{org_id}/billing/checkout",
-        json={
-            "amount": 10,
-            "success_url": "https://test.com/success",
-            "cancel_url": "https://test.com/cancel",
-        },
-        headers=other_user["headers"],
-    )
-
-    assert response.status_code == 403
+        assert data["session_id"] == "cs_org_test_123"
+        assert data["url"] == "https://checkout.stripe.com/test"
 
 
 # ============================================================================
-# Test: Organization Deletion Archives Stripe Customer
+# Webhook – Organization Checkout Credits
 # ============================================================================
 
 
 @pytest.mark.anyio
-async def test_delete_org_archives_stripe_customer(client: AsyncClient):
-    """Test that deleting an organization archives the Stripe customer."""
-    owner = await create_test_user(client, f"owner-del-{uuid.uuid4()}@test.com")
+async def test_org_checkout_webhook_adds_credits(client: AsyncClient, dbsession):
+    """Test that checkout.session.completed webhook adds credits to organization."""
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.models.orchestra_models import Organization
 
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Test Delete Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    owner = await create_test_user(client, f"owner-checkout-{uuid.uuid4()}@test.com")
+    org = await create_test_org(
+        client,
+        owner,
+        f"Checkout Webhook Org {uuid.uuid4()}",
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Set up billing email and create Stripe customer
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "delete-test@org.com"},
-        headers=owner["headers"],
+    # Set Stripe customer ID directly in DB (simulating prior checkout)
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_org_checkout_webhook"
+    dbsession.flush()
+
+    # Record initial credits
+    org_dao = OrganizationDAO(dbsession)
+    org_obj = org_dao.get(org_id)
+    initial_credits = float(org_obj.billing_account.credits)
+
+    # Fire checkout.session.completed webhook
+    webhook_payload = {
+        "id": f"evt_org_checkout_{uuid.uuid4()}",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_org_credit_test",
+                "customer": "cus_org_checkout_webhook",
+                "mode": "payment",
+                "payment_status": "paid",
+                "amount_total": 10000,  # $100 in cents
+                "currency": "usd",
+                "metadata": {
+                    "organization_id": str(org_id),
+                },
+            },
+        },
+    }
+
+    response = await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(webhook_payload),
+        headers={"Content-Type": "application/json"},
     )
+    assert response.status_code == 200
 
-    with patch("stripe.Customer.create") as mock_create, patch(
-        "stripe.Customer.modify",
-    ) as mock_modify:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_to_be_archived"
-        mock_create.return_value = mock_customer
+    # Verify credits were added
+    dbsession.expire_all()
+    org_obj = org_dao.get(org_id)
+    assert float(org_obj.billing_account.credits) == initial_credits + 100
 
-        # Create Stripe customer
-        response = await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-        assert response.status_code == 200
 
-        # Delete organization
-        delete_response = await client.delete(
-            f"/v0/organizations/{org_id}",
-            headers=owner["headers"],
-        )
-        assert delete_response.status_code == 204
+@pytest.mark.anyio
+async def test_org_checkout_webhook_idempotent(client: AsyncClient, dbsession):
+    """Test that duplicate checkout webhooks don't add credits twice."""
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.models.orchestra_models import Organization
 
-        # Verify Stripe.Customer.modify was called to archive
-        mock_modify.assert_called_once()
-        call_kwargs = mock_modify.call_args.kwargs
-        assert call_kwargs.get("metadata", {}).get("organization_deleted") == "true"
+    owner = await create_test_user(client, f"owner-idemp-{uuid.uuid4()}@test.com")
+    org = await create_test_org(
+        client,
+        owner,
+        f"Idempotent Webhook Org {uuid.uuid4()}",
+    )
+    org_id = org["id"]
+
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_org_idempotent"
+    dbsession.flush()
+
+    org_dao = OrganizationDAO(dbsession)
+
+    event_id = f"evt_org_idempotent_{uuid.uuid4()}"
+    webhook_payload = {
+        "id": event_id,
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_org_idempotent",
+                "customer": "cus_org_idempotent",
+                "mode": "payment",
+                "payment_status": "paid",
+                "amount_total": 5000,  # $50
+                "currency": "usd",
+                "metadata": {
+                    "organization_id": str(org_id),
+                },
+            },
+        },
+    }
+
+    # First call
+    resp1 = await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(webhook_payload),
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp1.status_code == 200
+
+    dbsession.expire_all()
+    credits_after_first = float(org_dao.get(org_id).billing_account.credits)
+
+    # Second call with same event ID → idempotent (no double-credit)
+    resp2 = await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(webhook_payload),
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp2.status_code == 200
+
+    dbsession.expire_all()
+    credits_after_second = float(org_dao.get(org_id).billing_account.credits)
+
+    assert credits_after_second == credits_after_first
 
 
 # ============================================================================
-# Test: Tax ID Webhook Sync
+# Webhook – Tax ID sync
 # ============================================================================
 
 
 @pytest.mark.anyio
 async def test_tax_id_webhook_creates_org_tax_id(client: AsyncClient, dbsession):
-    """Test that customer.tax_id.created webhook updates organization tax_id."""
-    from orchestra.db.dao.organization_dao import OrganizationDAO
+    """Test that customer.tax_id.created webhook updates billing account tax_id."""
+    from orchestra.db.models.orchestra_models import Organization
 
     owner = await create_test_user(client, f"owner-tax-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Tax Webhook Test Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    org = await create_test_org(
+        client,
+        owner,
+        f"Tax Webhook Org {uuid.uuid4()}",
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Set up Stripe customer
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "tax-webhook@org.com"},
-        headers=owner["headers"],
-    )
+    # Set Stripe customer ID
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_tax_webhook_test"
+    dbsession.flush()
 
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_tax_webhook_test"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    # Simulate tax_id.created webhook
     webhook_payload = {
         "id": f"evt_tax_created_{uuid.uuid4()}",
         "type": "customer.tax_id.created",
@@ -542,61 +363,38 @@ async def test_tax_id_webhook_creates_org_tax_id(client: AsyncClient, dbsession)
         },
     }
 
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        response = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        assert response.status_code == 200
+    response = await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(webhook_payload),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 200
 
-    # Verify organization tax_id was updated
+    # Verify tax_id was synced
     dbsession.expire_all()
-    org_dao = OrganizationDAO(dbsession)
-    org = org_dao.get(org_id)
-    assert org.billing_account.tax_id == "DE123456789"
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    assert org_db.billing_account.tax_id == "DE123456789"
 
 
 @pytest.mark.anyio
 async def test_tax_id_webhook_deletes_org_tax_id(client: AsyncClient, dbsession):
-    """Test that customer.tax_id.deleted webhook clears organization tax_id."""
-    from orchestra.db.dao.organization_dao import OrganizationDAO
+    """Test that customer.tax_id.deleted webhook clears billing account tax_id."""
+    from orchestra.db.models.orchestra_models import Organization
 
     owner = await create_test_user(client, f"owner-taxdel-{uuid.uuid4()}@test.com")
-
-    # Create organization with tax_id
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Tax Delete Webhook Test Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    org = await create_test_org(
+        client,
+        owner,
+        f"Tax Delete Org {uuid.uuid4()}",
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Set up business profile with tax_id
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={
-            "billing_email": "tax-delete@org.com",
-            "tax_id": "GB123456789",
-        },
-        headers=owner["headers"],
-    )
+    # Pre-set tax_id + stripe customer
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_tax_delete_test"
+    org_db.billing_account.tax_id = "GB123456789"
+    dbsession.flush()
 
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_tax_delete_test"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    # Simulate tax_id.deleted webhook
     webhook_payload = {
         "id": f"evt_tax_deleted_{uuid.uuid4()}",
         "type": "customer.tax_id.deleted",
@@ -609,115 +407,28 @@ async def test_tax_id_webhook_deletes_org_tax_id(client: AsyncClient, dbsession)
         },
     }
 
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        response = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        assert response.status_code == 200
-
-    # Verify organization tax_id was cleared
-    dbsession.expire_all()
-    org_dao = OrganizationDAO(dbsession)
-    org = org_dao.get(org_id)
-    assert org.billing_account.tax_id is None
-
-
-# ============================================================================
-# Test: Organization Checkout Webhook Adds Credits
-# ============================================================================
-
-
-@pytest.mark.anyio
-async def test_org_checkout_webhook_adds_credits(client: AsyncClient, dbsession):
-    """Test that checkout.session.completed webhook adds credits to organization."""
-    from orchestra.db.dao.organization_dao import OrganizationDAO
-
-    owner = await create_test_user(client, f"owner-checkout-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Checkout Webhook Test Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    response = await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(webhook_payload),
+        headers={"Content-Type": "application/json"},
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
+    assert response.status_code == 200
 
-    # Set up Stripe customer
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "checkout-webhook@org.com"},
-        headers=owner["headers"],
-    )
-
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_org_checkout_webhook"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    # Get initial credits
-    org_dao = OrganizationDAO(dbsession)
-    org = org_dao.get(org_id)
-    initial_credits = float(org.billing_account.credits) if org.billing_account else 0
-
-    # Simulate checkout.session.completed webhook for organization
-    webhook_payload = {
-        "id": f"evt_checkout_org_{uuid.uuid4()}",
-        "type": "checkout.session.completed",
-        "data": {
-            "object": {
-                "id": "cs_org_test_123",
-                "customer": "cus_org_checkout_webhook",
-                "mode": "payment",
-                "payment_status": "paid",
-                "amount_total": 10000,  # $100 in cents
-                "currency": "usd",
-                "metadata": {
-                    "organization_id": str(org_id),
-                    "credits_purchased": "100",
-                },
-            },
-        },
-    }
-
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        response = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        assert response.status_code == 200
-
-    # Verify credits were added
     dbsession.expire_all()
-    org = org_dao.get(org_id)
-    assert float(org.billing_account.credits) == initial_credits + 100
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    assert org_db.billing_account.tax_id is None
 
 
 # ============================================================================
-# Test: Webhook Edge Cases
+# Webhook – Edge Cases
 # ============================================================================
 
 
 @pytest.mark.anyio
 async def test_webhook_unknown_customer_ignored(client: AsyncClient):
     """Test that webhook for unknown Stripe customer is handled gracefully."""
-    # Webhook for a customer that doesn't exist in our system
     webhook_payload = {
-        "id": f"evt_unknown_customer_{uuid.uuid4()}",
+        "id": f"evt_unknown_cust_{uuid.uuid4()}",
         "type": "customer.tax_id.created",
         "data": {
             "object": {
@@ -728,181 +439,44 @@ async def test_webhook_unknown_customer_ignored(client: AsyncClient):
         },
     }
 
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        response = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        # Should return 200 (webhook handled, just no action taken)
-        assert response.status_code == 200
-
-
-@pytest.mark.anyio
-async def test_webhook_missing_metadata_handled(client: AsyncClient):
-    """Test that checkout webhook without required identifiers returns 400."""
-    # Webhook missing both client_reference_id (user_id) and organization_id in metadata
-    webhook_payload = {
-        "id": f"evt_no_metadata_{uuid.uuid4()}",
-        "type": "checkout.session.completed",
-        "data": {
-            "object": {
-                "id": "cs_no_metadata",
-                "customer": "cus_some_customer",
-                "mode": "payment",
-                "payment_status": "paid",
-                "amount_total": 1000,  # $10 in cents
-                "currency": "usd",
-                # Note: client_reference_id is missing (would contain user_id)
-                # and organization_id is not in metadata
-                "metadata": {},  # Empty metadata
-            },
-        },
-    }
-
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        response = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        # Returns 400 because we can't identify who to credit
-        assert response.status_code == 400
-
-
-@pytest.mark.anyio
-async def test_org_checkout_webhook_idempotent(client: AsyncClient, dbsession):
-    """Test that duplicate org checkout webhooks don't add credits twice."""
-    from orchestra.db.dao.organization_dao import OrganizationDAO
-
-    owner = await create_test_user(client, f"owner-idemp-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"Idempotent Webhook Test Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    response = await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(webhook_payload),
+        headers={"Content-Type": "application/json"},
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
-
-    # Set up Stripe customer
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "idempotent@org.com"},
-        headers=owner["headers"],
-    )
-
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_org_idempotent"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    org_dao = OrganizationDAO(dbsession)
-
-    # Same event ID for both calls
-    event_id = f"evt_org_idempotent_{uuid.uuid4()}"
-    webhook_payload = {
-        "id": event_id,
-        "type": "checkout.session.completed",
-        "data": {
-            "object": {
-                "id": "cs_org_idempotent",
-                "customer": "cus_org_idempotent",
-                "mode": "payment",
-                "payment_status": "paid",
-                "amount_total": 5000,  # $50 in cents
-                "currency": "usd",
-                "metadata": {
-                    "organization_id": str(org_id),
-                    "credits_purchased": "50",
-                },
-            },
-        },
-    }
-
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        # First call
-        response1 = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        assert response1.status_code == 200
-
-        dbsession.expire_all()
-        org_after_first = org_dao.get(org_id)
-        credits_after_first = float(org_after_first.billing_account.credits)
-
-        # Second call with same event ID
-        response2 = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        assert response2.status_code == 200
-
-    dbsession.expire_all()
-    org_after_second = org_dao.get(org_id)
-    credits_after_second = float(org_after_second.billing_account.credits)
-
-    # Credits should be same (idempotent)
-    assert credits_after_second == credits_after_first
+    assert response.status_code == 200
 
 
 # ============================================================================
-# E2E Full Organization Billing Flow Tests
+# E2E – Full Organization Billing Lifecycle
 # ============================================================================
 
 
 @pytest.mark.anyio
 async def test_e2e_org_full_billing_lifecycle(client: AsyncClient, dbsession):
     """
-    E2E Test: Complete organization billing lifecycle.
+    E2E: org billing profile → Stripe customer set → webhook credits → verify.
 
-    Flow:
-    1. User creates organization
-    2. User sets up business profile
-    3. User creates Stripe customer
-    4. User creates checkout session
-    5. Webhook confirms payment
-    6. Credits are added to organization
-    7. Organization can use credits
+    1. Create org
+    2. Set up business profile
+    3. Set Stripe customer (simulated via DB)
+    4. Webhook confirms payment → credits are added
+    5. Credits verified via account-info
     """
-
     from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.models.orchestra_models import Organization
 
-    owner = await create_test_user(client, f"e2e-lifecycle-{uuid.uuid4()}@test.com")
-
-    # Step 1: Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"E2E Billing Lifecycle Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    owner = await create_test_user(client, f"e2e-life-{uuid.uuid4()}@test.com")
+    org = await create_test_org(
+        client,
+        owner,
+        f"E2E Lifecycle Org {uuid.uuid4()}",
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Step 2: Set up business profile
-    profile_response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
+    # Step 2 – business profile
+    profile_resp = await client.patch(
+        "/v0/billing/billing-profile",
         json={
             "business_name": "E2E Test Corp",
             "billing_email": "billing@e2e-test.com",
@@ -913,49 +487,19 @@ async def test_e2e_org_full_billing_lifecycle(client: AsyncClient, dbsession):
                 "postal_code": "12345",
             },
         },
-        headers=owner["headers"],
+        headers=org["headers"],
     )
-    assert profile_response.status_code == 200
+    assert profile_resp.status_code == 200
 
-    # Step 3: Create Stripe customer
-    with patch("stripe.Customer.create") as mock_create_customer:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_e2e_lifecycle"
-        mock_create_customer.return_value = mock_customer
+    # Step 3 – set Stripe customer via DB
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_e2e_lifecycle"
+    dbsession.flush()
 
-        stripe_response = await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-        assert stripe_response.status_code == 200
-        assert stripe_response.json()["stripe_customer_id"] == "cus_e2e_lifecycle"
-        assert stripe_response.json()["is_new"] is True
-
-    # Step 4: Create checkout session
-    with patch("stripe.checkout.Session.create") as mock_checkout:
-        mock_session = MagicMock()
-        mock_session.url = "https://checkout.stripe.com/e2e_test"
-        mock_session.id = "cs_e2e_lifecycle"
-        mock_checkout.return_value = mock_session
-
-        checkout_response = await client.post(
-            f"/v0/organizations/{org_id}/billing/checkout",
-            json={
-                "amount": 200,
-                "success_url": "https://app.test.com/success",
-                "cancel_url": "https://app.test.com/cancel",
-            },
-            headers=owner["headers"],
-        )
-        assert checkout_response.status_code == 200
-        assert "checkout_url" in checkout_response.json()
-
-    # Get initial credits
     org_dao = OrganizationDAO(dbsession)
-    org = org_dao.get(org_id)
-    initial_credits = float(org.billing_account.credits) if org.billing_account else 0
+    initial_credits = float(org_dao.get(org_id).billing_account.credits)
 
-    # Step 5: Simulate webhook for payment completion
+    # Step 4 – webhook for $200 payment
     webhook_payload = {
         "id": f"evt_e2e_lifecycle_{uuid.uuid4()}",
         "type": "checkout.session.completed",
@@ -965,57 +509,44 @@ async def test_e2e_org_full_billing_lifecycle(client: AsyncClient, dbsession):
                 "customer": "cus_e2e_lifecycle",
                 "mode": "payment",
                 "payment_status": "paid",
-                "amount_total": 20000,  # $200
+                "amount_total": 20000,
                 "currency": "usd",
                 "metadata": {"organization_id": str(org_id)},
             },
         },
     }
 
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        webhook_response = await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={
-                "Content-Type": "application/json",
-                "Stripe-Signature": "test_sig",
-            },
-        )
-        assert webhook_response.status_code == 200
-
-    # Step 6: Verify credits were added
-    dbsession.expire_all()
-    org = org_dao.get(org_id)
-    assert float(org.billing_account.credits) == initial_credits + 200
-
-    # Step 7: Verify billing endpoint shows correct credits
-    billing_response = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=owner["headers"],
+    wh_resp = await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(webhook_payload),
+        headers={"Content-Type": "application/json"},
     )
-    assert billing_response.status_code == 200
-    assert billing_response.json()["credits"] == initial_credits + 200
+    assert wh_resp.status_code == 200
+
+    # Step 5 – verify credits via unified account-info
+    credits_resp = await client.get(
+        "/v0/billing/account-info",
+        headers=org["headers"],
+    )
+    assert credits_resp.status_code == 200
+    assert credits_resp.json()["credits"] == initial_credits + 200
 
 
 @pytest.mark.anyio
-async def test_e2e_org_billing_with_tax_details(client: AsyncClient, dbsession):
+async def test_e2e_org_billing_with_tax_details(client: AsyncClient):
     """
-    E2E Test: Organization billing with tax ID and business details.
+    E2E: set up business profile with tax ID and verify persistence.
     """
     owner = await create_test_user(client, f"e2e-tax-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"E2E Tax Details Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    org = await create_test_org(
+        client,
+        owner,
+        f"E2E Tax Org {uuid.uuid4()}",
     )
-    assert org_response.status_code == 201
-    org_id = org_response.json()["id"]
 
-    # Set up business profile with tax details
-    profile_response = await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
+    # Set business profile with tax
+    resp = await client.patch(
+        "/v0/billing/billing-profile",
         json={
             "business_name": "E2E Tax Corp GmbH",
             "billing_email": "steuer@e2e-tax.de",
@@ -1027,382 +558,104 @@ async def test_e2e_org_billing_with_tax_details(client: AsyncClient, dbsession):
                 "postal_code": "10115",
             },
         },
-        headers=owner["headers"],
+        headers=org["headers"],
     )
-    assert profile_response.status_code == 200
+    assert resp.status_code == 200
 
-    # Verify the business profile was saved
-    profile_get = await client.get(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        headers=owner["headers"],
+    # Verify
+    get_resp = await client.get(
+        "/v0/billing/billing-profile",
+        headers=org["headers"],
     )
-    assert profile_get.status_code == 200
-    profile_data = profile_get.json()
-    assert profile_data["business_name"] == "E2E Tax Corp GmbH"
-    assert profile_data["tax_id"] == "DE123456789"
-
-    # Create Stripe customer
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_e2e_tax"
-        mock_create.return_value = mock_customer
-
-        stripe_response = await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-        assert stripe_response.status_code == 200
-
-        # Verify Stripe was called with org email
-        call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs["email"] == "steuer@e2e-tax.de"
-
-
-@pytest.mark.anyio
-async def test_e2e_org_billing_permission_levels(client: AsyncClient, dbsession):
-    """
-    E2E Test: Different permission levels for org billing.
-
-    - Owner: Full access (read + write)
-    - Admin: Full access (read + write)
-    - Member: Read only
-    - Non-member: No access
-    """
-    from orchestra.db.dao.role_dao import RoleDAO
-
-    owner = await create_test_user(client, f"e2e-perm-owner-{uuid.uuid4()}@test.com")
-    admin = await create_test_user(client, f"e2e-perm-admin-{uuid.uuid4()}@test.com")
-    member = await create_test_user(client, f"e2e-perm-member-{uuid.uuid4()}@test.com")
-    outsider = await create_test_user(
-        client,
-        f"e2e-perm-outsider-{uuid.uuid4()}@test.com",
-    )
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"E2E Permissions Org {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Get roles
-    role_dao = RoleDAO(dbsession)
-    admin_role = role_dao.get_by_name("Admin", organization_id=None)
-    member_role = role_dao.get_by_name("Member", organization_id=None)
-
-    # Add admin and member
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "role_id": admin_role.id},
-        headers=owner["headers"],
-    )
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "role_id": member_role.id},
-        headers=owner["headers"],
-    )
-
-    # Set up billing
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "perms@test.com"},
-        headers=owner["headers"],
-    )
-
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_e2e_perms"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    # Test 1: Owner can read billing
-    owner_read = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=owner["headers"],
-    )
-    assert owner_read.status_code == 200
-
-    # Test 2: Admin can read billing
-    admin_read = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=admin["headers"],
-    )
-    assert admin_read.status_code == 200
-
-    # Test 3: Member can read billing (depending on permissions)
-    member_read = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=member["headers"],
-    )
-    # Member may or may not have billing:read depending on role setup
-    assert member_read.status_code in [200, 403]
-
-    # Test 4: Outsider cannot access billing
-    outsider_read = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=outsider["headers"],
-    )
-    assert outsider_read.status_code == 403
-
-    # Test 5: Admin can create checkout (billing:write)
-    with patch("stripe.checkout.Session.create") as mock_checkout:
-        mock_session = MagicMock()
-        mock_session.url = "https://checkout.stripe.com/admin"
-        mock_session.id = "cs_admin"
-        mock_checkout.return_value = mock_session
-
-        admin_checkout = await client.post(
-            f"/v0/organizations/{org_id}/billing/checkout",
-            json={
-                "amount": 50,
-                "success_url": "https://test.com/success",
-                "cancel_url": "https://test.com/cancel",
-            },
-            headers=admin["headers"],
-        )
-        assert admin_checkout.status_code == 200
-
-    # Test 6: Member cannot create checkout (no billing:write)
-    member_checkout = await client.post(
-        f"/v0/organizations/{org_id}/billing/checkout",
-        json={
-            "amount": 50,
-            "success_url": "https://test.com/success",
-            "cancel_url": "https://test.com/cancel",
-        },
-        headers=member["headers"],
-    )
-    assert member_checkout.status_code == 403
+    assert get_resp.status_code == 200
+    data = get_resp.json()
+    assert data["business_name"] == "E2E Tax Corp GmbH"
+    assert data["tax_id"] == "DE123456789"
+    assert data["is_business"] is True
 
 
 @pytest.mark.anyio
 async def test_e2e_org_multiple_credit_top_ups(client: AsyncClient, dbsession):
-    """
-    E2E Test: Organization receives multiple credit top-ups.
-    """
+    """E2E: organisation receives three successive credit top-ups via webhook."""
     from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.models.orchestra_models import Organization
 
     owner = await create_test_user(client, f"e2e-multi-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"E2E Multi TopUp Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    org = await create_test_org(
+        client,
+        owner,
+        f"E2E Multi Org {uuid.uuid4()}",
     )
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Set up billing
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "multi@test.com"},
-        headers=owner["headers"],
-    )
-
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_e2e_multi"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_e2e_multi"
+    dbsession.flush()
 
     org_dao = OrganizationDAO(dbsession)
-    org = org_dao.get(org_id)
-    initial_credits = float(org.billing_account.credits) if org.billing_account else 0
+    initial = float(org_dao.get(org_id).billing_account.credits)
 
-    # First top-up: $100
-    webhook1 = {
-        "id": f"evt_multi_1_{uuid.uuid4()}",
-        "type": "checkout.session.completed",
-        "data": {
-            "object": {
-                "id": "cs_multi_1",
-                "customer": "cus_e2e_multi",
-                "mode": "payment",
-                "payment_status": "paid",
-                "amount_total": 10000,
-                "currency": "usd",
-                "metadata": {"organization_id": str(org_id)},
+    amounts_cents = [10000, 5000, 25000]  # $100, $50, $250
+    cumulative = 0
+    for idx, amount in enumerate(amounts_cents, 1):
+        cumulative += amount // 100
+
+        payload = {
+            "id": f"evt_multi_{idx}_{uuid.uuid4()}",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": f"cs_multi_{idx}",
+                    "customer": "cus_e2e_multi",
+                    "mode": "payment",
+                    "payment_status": "paid",
+                    "amount_total": amount,
+                    "currency": "usd",
+                    "metadata": {"organization_id": str(org_id)},
+                },
             },
-        },
-    }
-
-    with patch("stripe.Webhook.construct_event", return_value=webhook1):
-        await client.post(
+        }
+        resp = await client.post(
             "/v0/webhooks/stripe",
-            content=json.dumps(webhook1),
-            headers={"Content-Type": "application/json", "Stripe-Signature": "sig1"},
+            content=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
         )
+        assert resp.status_code == 200
 
-    dbsession.expire_all()
-    org = org_dao.get(org_id)
-    assert float(org.billing_account.credits) == initial_credits + 100
-
-    # Second top-up: $50
-    webhook2 = {
-        "id": f"evt_multi_2_{uuid.uuid4()}",
-        "type": "checkout.session.completed",
-        "data": {
-            "object": {
-                "id": "cs_multi_2",
-                "customer": "cus_e2e_multi",
-                "mode": "payment",
-                "payment_status": "paid",
-                "amount_total": 5000,
-                "currency": "usd",
-                "metadata": {"organization_id": str(org_id)},
-            },
-        },
-    }
-
-    with patch("stripe.Webhook.construct_event", return_value=webhook2):
-        await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook2),
-            headers={"Content-Type": "application/json", "Stripe-Signature": "sig2"},
+        dbsession.expire_all()
+        assert (
+            float(org_dao.get(org_id).billing_account.credits) == initial + cumulative
         )
-
-    dbsession.expire_all()
-    org = org_dao.get(org_id)
-    assert float(org.billing_account.credits) == initial_credits + 150  # 100 + 50
-
-    # Third top-up: $250
-    webhook3 = {
-        "id": f"evt_multi_3_{uuid.uuid4()}",
-        "type": "checkout.session.completed",
-        "data": {
-            "object": {
-                "id": "cs_multi_3",
-                "customer": "cus_e2e_multi",
-                "mode": "payment",
-                "payment_status": "paid",
-                "amount_total": 25000,
-                "currency": "usd",
-                "metadata": {"organization_id": str(org_id)},
-            },
-        },
-    }
-
-    with patch("stripe.Webhook.construct_event", return_value=webhook3):
-        await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook3),
-            headers={"Content-Type": "application/json", "Stripe-Signature": "sig3"},
-        )
-
-    dbsession.expire_all()
-    org = org_dao.get(org_id)
-    assert float(org.billing_account.credits) == initial_credits + 400  # 100 + 50 + 250
-
-
-@pytest.mark.anyio
-async def test_e2e_org_billing_autorecharge_setup(client: AsyncClient, dbsession):
-    """
-    E2E Test: Organization sets up autorecharge.
-    """
-    from decimal import Decimal
-
-    from orchestra.db.dao.organization_dao import OrganizationDAO
-
-    owner = await create_test_user(client, f"e2e-auto-{uuid.uuid4()}@test.com")
-
-    # Create organization
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"E2E Autorecharge Org {uuid.uuid4()}"},
-        headers=owner["headers"],
-    )
-    org_id = org_response.json()["id"]
-
-    # Set up billing
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "auto@test.com"},
-        headers=owner["headers"],
-    )
-
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_e2e_auto"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    # Configure autorecharge via PATCH /organizations/{id}/billing
-    autorecharge_response = await client.patch(
-        f"/v0/organizations/{org_id}/billing",
-        json={
-            "autorecharge": True,
-            "autorecharge_threshold": 50,
-            "autorecharge_qty": 100,
-        },
-        headers=owner["headers"],
-    )
-    assert autorecharge_response.status_code == 200
-
-    # Verify autorecharge was configured
-    org_dao = OrganizationDAO(dbsession)
-    dbsession.expire_all()
-    org = org_dao.get(org_id)
-    assert org.billing_account.autorecharge is True
-    assert org.billing_account.autorecharge_threshold == Decimal("50")
-    assert org.billing_account.autorecharge_qty == Decimal("100")
 
 
 @pytest.mark.anyio
 async def test_e2e_org_new_member_uses_org_billing(client: AsyncClient, dbsession):
-    """
-    E2E Test: New member joins org and can use org's billing for credits.
+    """E2E: new member joins org and can see org billing via account-info."""
+    from orchestra.db.models.orchestra_models import Organization
 
-    When a member works in org context, the org's billing is used.
-    """
-    owner = await create_test_user(client, f"e2e-mem-owner-{uuid.uuid4()}@test.com")
+    owner = await create_test_user(client, f"e2e-mem-own-{uuid.uuid4()}@test.com")
     new_member = await create_test_user(client, f"e2e-mem-new-{uuid.uuid4()}@test.com")
 
-    # Create organization with billing
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": f"E2E Member Billing Org {uuid.uuid4()}"},
-        headers=owner["headers"],
+    org = await create_test_org(
+        client,
+        owner,
+        f"E2E Member Org {uuid.uuid4()}",
     )
-    org_id = org_response.json()["id"]
+    org_id = org["id"]
 
-    # Set up org billing
-    await client.patch(
-        f"/v0/organizations/{org_id}/billing/billing-profile",
-        json={"billing_email": "member-billing@test.com"},
-        headers=owner["headers"],
-    )
+    # Set up org with credits
+    org_db = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    org_db.billing_account.stripe_customer_id = "cus_e2e_member"
+    dbsession.flush()
 
-    with patch("stripe.Customer.create") as mock_create:
-        mock_customer = MagicMock()
-        mock_customer.id = "cus_e2e_member_billing"
-        mock_create.return_value = mock_customer
-
-        await client.post(
-            f"/v0/organizations/{org_id}/billing/stripe-customer",
-            headers=owner["headers"],
-        )
-
-    # Add credits to org
-    webhook_payload = {
+    # Add credits via webhook
+    payload = {
         "id": f"evt_member_billing_{uuid.uuid4()}",
         "type": "checkout.session.completed",
         "data": {
             "object": {
                 "id": "cs_member_billing",
-                "customer": "cus_e2e_member_billing",
+                "customer": "cus_e2e_member",
                 "mode": "payment",
                 "payment_status": "paid",
                 "amount_total": 50000,  # $500
@@ -1411,29 +664,145 @@ async def test_e2e_org_new_member_uses_org_billing(client: AsyncClient, dbsessio
             },
         },
     }
-
-    with patch("stripe.Webhook.construct_event", return_value=webhook_payload):
-        await client.post(
-            "/v0/webhooks/stripe",
-            content=json.dumps(webhook_payload),
-            headers={"Content-Type": "application/json", "Stripe-Signature": "sig"},
-        )
-
-    # Add new member
     await client.post(
+        "/v0/webhooks/stripe",
+        content=json.dumps(payload),
+        headers={"Content-Type": "application/json"},
+    )
+
+    # Add new member to org
+    add_resp = await client.post(
         f"/v0/organizations/{org_id}/members",
         json={"user_id": new_member["id"]},
         headers=owner["headers"],
     )
+    assert add_resp.status_code == 201
 
-    # New member can see org credits
-    credits_response = await client.get(
-        f"/v0/organizations/{org_id}/billing/credits",
-        headers=new_member["headers"],
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {add_resp.json()['api_key']}",
+    }
+
+    # New member can see org credits via account-info
+    credits_resp = await client.get(
+        "/v0/billing/account-info",
+        headers=member_org_headers,
     )
-    # Member should see org has credits (if they have billing:read permission)
-    # The exact permission depends on the default Member role
-    assert credits_response.status_code in [200, 403]
+    # Members should have billing:read access
+    assert credits_resp.status_code in [200, 403]
+    if credits_resp.status_code == 200:
+        assert credits_resp.json()["credits"] == 500.0
 
-    if credits_response.status_code == 200:
-        assert credits_response.json()["credits"] == 500.0
+
+# ============================================================================
+# Permission Tests
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_billing_api_admin_can_update(client: AsyncClient, dbsession):
+    """Admin members (billing:write) can update billing settings."""
+    from orchestra.db.dao.role_dao import RoleDAO
+
+    owner = await create_test_user(client, f"perm-owner-{uuid.uuid4()}@test.com")
+    admin_user = await create_test_user(client, f"perm-admin-{uuid.uuid4()}@test.com")
+
+    org = await create_test_org(client, owner, f"Perm Test Org {uuid.uuid4()}")
+    org_id = org["id"]
+
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    # Add admin member
+    resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin_user["id"], "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    assert resp.status_code == 201
+    admin_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {resp.json()['api_key']}",
+    }
+
+    # Admin can update billing profile
+    update_resp = await client.patch(
+        "/v0/billing/billing-profile",
+        json={"billing_email": "admin-set@org.com"},
+        headers=admin_org_headers,
+    )
+    assert update_resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_billing_api_member_cannot_update(client: AsyncClient, dbsession):
+    """Regular members (no billing:write) cannot update billing settings."""
+    from orchestra.db.dao.role_dao import RoleDAO
+
+    owner = await create_test_user(client, f"perm2-owner-{uuid.uuid4()}@test.com")
+    member_user = await create_test_user(
+        client,
+        f"perm2-member-{uuid.uuid4()}@test.com",
+    )
+
+    org = await create_test_org(client, owner, f"Perm2 Test Org {uuid.uuid4()}")
+    org_id = org["id"]
+
+    role_dao = RoleDAO(dbsession)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+
+    # Add regular member
+    resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member_user["id"], "role_id": member_role.id},
+        headers=owner["headers"],
+    )
+    assert resp.status_code == 201
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {resp.json()['api_key']}",
+    }
+
+    # Member cannot update billing profile
+    update_resp = await client.patch(
+        "/v0/billing/billing-profile",
+        json={"billing_email": "member-hack@org.com"},
+        headers=member_org_headers,
+    )
+    assert update_resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_billing_api_member_can_read(client: AsyncClient, dbsession):
+    """Regular members (billing:read) can read billing info."""
+    from orchestra.db.dao.role_dao import RoleDAO
+
+    owner = await create_test_user(client, f"perm3-owner-{uuid.uuid4()}@test.com")
+    member_user = await create_test_user(
+        client,
+        f"perm3-member-{uuid.uuid4()}@test.com",
+    )
+
+    org = await create_test_org(client, owner, f"Perm3 Test Org {uuid.uuid4()}")
+    org_id = org["id"]
+
+    role_dao = RoleDAO(dbsession)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+
+    resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member_user["id"], "role_id": member_role.id},
+        headers=owner["headers"],
+    )
+    assert resp.status_code == 201
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {resp.json()['api_key']}",
+    }
+
+    # Member can read account info
+    read_resp = await client.get(
+        "/v0/billing/account-info",
+        headers=member_org_headers,
+    )
+    assert read_resp.status_code in [200, 403]

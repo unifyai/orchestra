@@ -116,6 +116,39 @@ async def create_test_user(
     }
 
 
+async def create_test_org(
+    client: AsyncClient,
+    owner: Dict[str, Any],
+    org_name: str,
+) -> Dict[str, Any]:
+    """
+    Create a test organization and return its metadata including the org API key.
+
+    :param client: Test client.
+    :param owner: Owner dict returned by ``create_test_user``.
+    :param org_name: Name for the new organization.
+    :return: Dict with ``id``, ``name``, ``api_key``, and ``headers`` (org-scoped).
+    """
+    response = await client.post(
+        "/v0/organizations",
+        json={"name": org_name},
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.json()
+    org_data = response.json()
+    org_api_key = org_data["api_key"]
+    return {
+        "id": org_data["id"],
+        "name": org_data["name"],
+        "api_key": org_api_key,
+        "headers": {
+            "accept": "application/json",
+            "Authorization": f"Bearer {org_api_key}",
+        },
+        "owner_id": owner["id"],
+    }
+
+
 async def get_credits(
     client: AsyncClient,
     user_headers: Optional[Dict[str, Any]] = None,

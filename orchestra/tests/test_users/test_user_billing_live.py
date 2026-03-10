@@ -119,12 +119,7 @@ async def test_live_stripe_customer_creation(client: AsyncClient):
 
     # Create checkout session which triggers customer creation
     response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 10,
-            "success_url": "https://example.com/success?session_id={CHECKOUT_SESSION_ID}",
-            "cancel_url": "https://example.com/cancel",
-        },
+        "/v0/billing/checkout-session",
         headers=user["headers"],
     )
 
@@ -134,8 +129,8 @@ async def test_live_stripe_customer_creation(client: AsyncClient):
     data = response.json()
 
     # Verify we got a real Stripe checkout URL
-    assert "checkout_url" in data
-    assert data["checkout_url"].startswith("https://checkout.stripe.com/")
+    assert "url" in data
+    assert data["url"].startswith("https://checkout.stripe.com/")
 
     # Verify session ID format (sandbox sessions start with cs_test_)
     assert "session_id" in data
@@ -169,14 +164,9 @@ async def test_live_stripe_checkout_session_structure(client: AsyncClient):
         f"live_session_{os.urandom(4).hex()}@example.com",
     )
 
-    # Request 25 credits ($25)
+    # Create checkout session (amount is server-controlled via settings)
     response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 25,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
+        "/v0/billing/checkout-session",
         headers=user["headers"],
     )
 
@@ -194,11 +184,9 @@ async def test_live_stripe_checkout_session_structure(client: AsyncClient):
     assert session.client_reference_id == user["id"]
     assert session.mode == "payment"
 
-    # Verify line items (amount in cents)
+    # Verify line items exist (quantity is server-controlled)
     assert session.line_items is not None
     assert len(session.line_items.data) == 1
-    line_item = session.line_items.data[0]
-    assert line_item.amount_total == 2500  # $25.00 in cents
 
     # Track customer for cleanup
     track_stripe_customer(session.customer)
@@ -226,12 +214,7 @@ async def test_live_stripe_customer_reuse(client: AsyncClient, dbsession: Sessio
 
     # First checkout - creates customer
     response1 = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 10,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
+        "/v0/billing/checkout-session",
         headers=user["headers"],
     )
     assert response1.status_code == 200
@@ -243,12 +226,7 @@ async def test_live_stripe_customer_reuse(client: AsyncClient, dbsession: Sessio
 
     # Second checkout - should reuse customer
     response2 = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 20,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
+        "/v0/billing/checkout-session",
         headers=user["headers"],
     )
     assert response2.status_code == 200
@@ -285,12 +263,7 @@ async def test_live_stripe_customer_email_metadata(client: AsyncClient):
     user = await create_test_user(client, email)
 
     response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 5,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
+        "/v0/billing/checkout-session",
         headers=user["headers"],
     )
 
@@ -307,14 +280,11 @@ async def test_live_stripe_customer_email_metadata(client: AsyncClient):
     track_stripe_customer(session.customer)
 
 
-async def test_live_stripe_multiple_amounts(client: AsyncClient):
+async def test_live_stripe_multiple_checkouts(client: AsyncClient):
     """
-    LIVE TEST: Verify different checkout amounts work correctly.
+    LIVE TEST: Verify multiple checkout sessions reuse the same customer.
 
-    Tests boundary values:
-    - Minimum amount (5)
-    - Medium amount (50)
-    - Large amount (500)
+    Creates multiple sessions and ensures Stripe customer is consistent.
     """
     import stripe
 
@@ -325,35 +295,34 @@ async def test_live_stripe_multiple_amounts(client: AsyncClient):
         f"live_amounts_{os.urandom(4).hex()}@example.com",
     )
 
-    test_amounts = [5, 50, 500]
-
-    for amount in test_amounts:
+    # Create multiple checkout sessions — all should succeed and reuse the
+    # same Stripe customer (amount is server-controlled, not per-request).
+    customer_ids = set()
+    for i in range(3):
         response = await client.post(
-            "/v0/user/billing/checkout",
-            json={
-                "amount": amount,
-                "success_url": "https://example.com/success",
-                "cancel_url": "https://example.com/cancel",
-            },
+            "/v0/billing/checkout-session",
             headers=user["headers"],
         )
 
         assert (
             response.status_code == 200
-        ), f"Failed for amount {amount}: {response.json()}"
+        ), f"Failed on iteration {i}: {response.json()}"
 
         session = stripe.checkout.Session.retrieve(
             response.json()["session_id"],
             expand=["line_items"],
         )
 
-        # Verify amount in cents
-        expected_cents = amount * 100
-        line_item = session.line_items.data[0]
-        assert (
-            line_item.amount_total == expected_cents
-        ), f"Expected {expected_cents}, got {line_item.amount_total}"
+        # Verify a line item exists
+        assert session.line_items is not None
+        assert len(session.line_items.data) >= 1
+
+        if session.customer:
+            customer_ids.add(session.customer)
 
         # Track customer for cleanup (only once per user)
-        if amount == test_amounts[0]:
+        if i == 0:
             track_stripe_customer(session.customer)
+
+    # All sessions should share the same Stripe customer
+    assert len(customer_ids) <= 1, f"Expected single customer, got {customer_ids}"

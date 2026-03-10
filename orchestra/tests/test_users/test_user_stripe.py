@@ -81,66 +81,14 @@ async def test_user_checkout_session_success(client: AsyncClient):
         mock_session_create.return_value = mock_session
 
         response = await client.post(
-            "/v0/user/billing/checkout",
-            json={
-                "amount": 50,
-                "success_url": "https://example.com/success",
-                "cancel_url": "https://example.com/cancel",
-            },
+            "/v0/billing/checkout-session",
             headers=user["headers"],
         )
 
         assert response.status_code == 200, response.json()
         data = response.json()
-        assert "checkout_url" in data
+        assert "url" in data
         assert "session_id" in data
-
-
-@pytest.mark.anyio
-async def test_user_checkout_session_invalid_amount(client: AsyncClient):
-    """Test checkout session rejects invalid amounts."""
-    user = await create_test_user(client, "stripe_checkout_invalid@example.com")
-
-    # Amount below minimum (5)
-    response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 2,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-        headers=user["headers"],
-    )
-    assert response.status_code == 422
-
-    # Amount above maximum (10000)
-    response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 15000,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-        headers=user["headers"],
-    )
-    assert response.status_code == 422
-
-
-@pytest.mark.anyio
-async def test_user_checkout_session_missing_fields(client: AsyncClient):
-    """Test checkout session requires all fields."""
-    user = await create_test_user(client, "stripe_checkout_missing@example.com")
-
-    # Missing success_url
-    response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 50,
-            "cancel_url": "https://example.com/cancel",
-        },
-        headers=user["headers"],
-    )
-    assert response.status_code == 422
 
 
 # ============================================================================
@@ -185,12 +133,7 @@ async def test_lazy_stripe_customer_creation_during_checkout(client: AsyncClient
         mock_session_create.return_value = mock_session
 
         response = await client.post(
-            "/v0/user/billing/checkout",
-            json={
-                "amount": 100,
-                "success_url": "https://example.com/success",
-                "cancel_url": "https://example.com/cancel",
-            },
+            "/v0/billing/checkout-session",
             headers=user["headers"],
         )
 
@@ -344,16 +287,11 @@ async def test_e2e_user_personal_checkout_flow(client: AsyncClient, dbsession):
         mock_session_create.return_value = mock_session
 
         checkout_response = await client.post(
-            "/v0/user/billing/checkout",
-            json={
-                "amount": 100,
-                "success_url": "https://example.com/success",
-                "cancel_url": "https://example.com/cancel",
-            },
+            "/v0/billing/checkout-session",
             headers=user["headers"],
         )
         assert checkout_response.status_code == 200
-        assert "checkout_url" in checkout_response.json()
+        assert "url" in checkout_response.json()
 
     # Get initial credits
     user_dao = UserDAO(dbsession)
@@ -472,33 +410,15 @@ async def test_e2e_user_multiple_top_ups(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_e2e_user_checkout_requires_valid_urls(client: AsyncClient):
+async def test_e2e_user_checkout_session_creates_session(client: AsyncClient):
     """
-    E2E Test: Checkout requires valid success/cancel URLs.
+    E2E Test: Checkout session can be created via the unified endpoint.
+
+    The unified endpoint derives amount/URLs from settings, so there is
+    no request body.
     """
-    user = await create_test_user(client, "e2e_invalid_url@example.com")
+    user = await create_test_user(client, "e2e_checkout_unified@example.com")
 
-    # Test with missing required field (clear validation error)
-    response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 50,
-            # Missing success_url
-            "cancel_url": "https://example.com/cancel",
-        },
-        headers=user["headers"],
-    )
-    assert response.status_code == 422
-
-
-@pytest.mark.anyio
-async def test_e2e_user_checkout_amount_boundaries(client: AsyncClient):
-    """
-    E2E Test: Checkout validates amount boundaries.
-    """
-    user = await create_test_user(client, "e2e_amount_bounds@example.com")
-
-    # Test minimum boundary (5)
     with patch("stripe.Customer.create") as mock_customer, patch(
         "stripe.checkout.Session.create",
     ) as mock_session:
@@ -506,27 +426,13 @@ async def test_e2e_user_checkout_amount_boundaries(client: AsyncClient):
         mock_session.return_value = MagicMock(id="cs_test", url="https://test.com")
 
         response = await client.post(
-            "/v0/user/billing/checkout",
-            json={
-                "amount": 5,  # Minimum
-                "success_url": "https://example.com/success",
-                "cancel_url": "https://example.com/cancel",
-            },
+            "/v0/billing/checkout-session",
             headers=user["headers"],
         )
         assert response.status_code == 200
-
-    # Below minimum
-    response = await client.post(
-        "/v0/user/billing/checkout",
-        json={
-            "amount": 4,
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-        headers=user["headers"],
-    )
-    assert response.status_code == 422
+        data = response.json()
+        assert "url" in data
+        assert "session_id" in data
 
 
 @pytest.mark.anyio
