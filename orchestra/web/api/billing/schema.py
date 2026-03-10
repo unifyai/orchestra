@@ -119,3 +119,15 @@ class BillingProfileUpdate(BaseModel):
     tax_id: Optional[str] = None
     tax_id_type: Optional[str] = None
     billing_address: Optional[Dict[str, Any]] = None
+
+
+# ---------------------------------------------------------------------------
+# Tax Validation Schemas
+# ---------------------------------------------------------------------------
+
+
+class TaxIdValidationRequest(BaseModel):
+    """Request body for ``POST /billing/validate-tax-id``."""
+
+    tax_id: str = Field(..., description="Tax ID to validate")
+    country: str = Field(..., description="Two-letter country code")
