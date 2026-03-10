@@ -90,7 +90,7 @@ def _cleanup_stripe_customers():  # noqa: PT004 - autouse fixture doesn't need r
             try:
                 stripe.Customer.delete(customer_id)
                 print(f"Cleaned up Stripe customer: {customer_id}")
-            except stripe.error.InvalidRequestError:
+            except stripe.InvalidRequestError:
                 # Customer already deleted or doesn't exist
                 pass
             except Exception as e:

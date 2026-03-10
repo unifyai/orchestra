@@ -293,22 +293,6 @@ class BillingAccountDAO:
         ba.autorecharge_qty = qty_decimal
         return True
 
-    def should_trigger_autorecharge(self, billing_account_id: int) -> bool:
-        """
-        Check if autorecharge should be triggered.
-
-        Returns True if billing account has direct billing, autorecharge enabled,
-        and credits at or below threshold.
-        """
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        if ba.stripe_customer_id is None:
-            return False
-        if not ba.autorecharge:
-            return False
-        return ba.credits <= ba.autorecharge_threshold
-
     # =========================================================================
     # ACCOUNT STATUS
     # =========================================================================

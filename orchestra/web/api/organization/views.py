@@ -3,7 +3,7 @@
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List
 
 from fastapi import (
     APIRouter,
@@ -31,7 +31,6 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Recharge, RechargeStatus
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
-from orchestra.settings import settings
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     DeclineInviteResponse,
@@ -668,7 +667,9 @@ async def delete_organization(
         try:
             import stripe
 
-            stripe.api_key = settings.stripe_secret_key
+            from orchestra.lib.billing import configure_stripe
+
+            configure_stripe()
             stripe.Customer.modify(
                 stripe_customer_id,
                 metadata={
@@ -676,7 +677,7 @@ async def delete_organization(
                     "deleted_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             # Log but don't fail - org is already deleted from DB
             logger.warning(
                 f"Failed to archive Stripe customer {stripe_customer_id}: {e}",
