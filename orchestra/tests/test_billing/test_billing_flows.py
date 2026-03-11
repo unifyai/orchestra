@@ -85,10 +85,19 @@ def _ensure_stripe_configured(monkeypatch):
         )
         monkeypatch.setattr(
             settings,
+            "stripe_unify_credits_price_id_personal",
+            os.environ.get(
+                "STRIPE_UNIFY_CREDITS_PRICE_ID_PERSONAL",
+                "price_1T1p4kLGH7MGCUMnzgCUPWg4",
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            settings,
             "stripe_unify_credits_price_id_business",
             os.environ.get(
                 "STRIPE_UNIFY_CREDITS_PRICE_ID_BUSINESS",
-                "price_test_business_dummy",
+                "price_1T1p4lLGH7MGCUMnaZPuy2Ig",
             ),
             raising=False,
         )
@@ -212,7 +221,9 @@ class TestAutoRechargeInvoicerFlows:
             return r and r.status == RechargeStatus.PAID
 
         assert wait_for_db_condition(
-            dbsession, check_paid, timeout=15
+            dbsession,
+            check_paid,
+            timeout=15,
         ), "Recharge status not updated to PAID after invoice payment webhook"
 
 
@@ -323,20 +334,27 @@ class TestBillingProfileFlows:
         org, customer_id = create_test_org_with_stripe(dbsession, name, email)
         ba = org.billing_account
 
-        ba.billing_email = "billing@e2etest.com"
-        ba.business_name = "E2E Test Corp"
-        ba.billing_address = {
+        billing_address = {
             "line1": "123 Test Street",
             "city": "San Francisco",
             "state": "CA",
             "country": "US",
             "postal_code": "94105",
         }
+        ba.billing_email = "billing@e2etest.com"
+        ba.name = "E2E Test Corp"
+        ba.billing_address = billing_address
         dbsession.commit()
 
         from orchestra.lib.billing import sync_billing_profile_to_stripe
 
-        sync_billing_profile_to_stripe(ba)
+        sync_billing_profile_to_stripe(
+            customer_id,
+            is_business=True,
+            billing_email="billing@e2etest.com",
+            name="E2E Test Corp",
+            billing_address=billing_address,
+        )
 
         customer = stripe.Customer.retrieve(customer_id)
         assert customer.email == "billing@e2etest.com"
@@ -655,9 +673,12 @@ class TestLiveCheckoutFlows:
         assert response.status_code == 200
 
         session = stripe.checkout.Session.retrieve(response.json()["session_id"])
-        customer = stripe.Customer.retrieve(session.customer)
-        assert customer.email == email
-        track_stripe_customer(session.customer)
+        # customer_creation="always" means the customer object is created
+        # only when the session is completed (paid); before that,
+        # customer_email / customer_details carry the pre-fill values.
+        assert session.customer_email == email
+        if session.customer:
+            track_stripe_customer(session.customer)
 
     async def test_multiple_checkouts(self, client: AsyncClient):
         import stripe
@@ -748,10 +769,8 @@ class TestLiveOrgFlows:
 
         stripe.api_key = STRIPE_SECRET_KEY
 
-        user = await create_test_user(
-            client,
-            f"live_org_business_{os.urandom(4).hex()}@example.com",
-        )
+        email = f"live_org_business_{os.urandom(4).hex()}@example.com"
+        user = await create_test_user(client, email)
         org = await create_test_org(
             client,
             user,
@@ -759,24 +778,33 @@ class TestLiveOrgFlows:
         )
         org_id = org["id"]
 
-        # Trigger Stripe customer creation
-        checkout = await client.post(
-            "/v0/billing/checkout-session",
-            headers=org["headers"],
-        )
-        assert checkout.status_code == 200
+        # Pre-create Stripe customer and link to the org's billing account
+        # (checkout sessions with customer_creation="always" only create the
+        # customer on completion/payment, not on session creation)
+        from .conftest import create_stripe_customer
 
-        dbsession.expire_all()
+        customer_id = create_stripe_customer(
+            email=email,
+            metadata={"organization_id": str(org_id)},
+        )
         org_dao = OrganizationDAO(session=dbsession)
-        customer_id = org_dao.get(org_id).billing_account.stripe_customer_id
-        assert customer_id is not None
+        db_org = org_dao.get(org_id)
+        if db_org.billing_account is None:
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+            ba_dao = BillingAccountDAO(dbsession)
+            ba = ba_dao.create()
+            db_org.billing_account_id = ba.id
+            dbsession.flush()
+        db_org.billing_account.stripe_customer_id = customer_id
+        dbsession.commit()
         track_stripe_customer(customer_id)
 
         # Update business profile
         update = await client.patch(
             "/v0/billing/billing-profile",
             json={
-                "business_name": "Acme Corporation",
+                "name": "Acme Corporation",
                 "billing_address": {
                     "line1": "123 Main Street",
                     "city": "San Francisco",
@@ -848,10 +876,8 @@ class TestLiveOrgFlows:
 
         stripe.api_key = STRIPE_SECRET_KEY
 
-        user = await create_test_user(
-            client,
-            f"live_org_tax_{os.urandom(4).hex()}@example.com",
-        )
+        email = f"live_org_tax_{os.urandom(4).hex()}@example.com"
+        user = await create_test_user(client, email)
         org = await create_test_org(
             client,
             user,
@@ -859,16 +885,24 @@ class TestLiveOrgFlows:
         )
         org_id = org["id"]
 
-        checkout = await client.post(
-            "/v0/billing/checkout-session",
-            headers=org["headers"],
-        )
-        assert checkout.status_code == 200
+        # Pre-create Stripe customer and link to the org's billing account
+        from .conftest import create_stripe_customer
 
-        dbsession.expire_all()
+        customer_id = create_stripe_customer(
+            email=email,
+            metadata={"organization_id": str(org_id)},
+        )
         org_dao = OrganizationDAO(session=dbsession)
-        customer_id = org_dao.get(org_id).billing_account.stripe_customer_id
-        assert customer_id is not None
+        db_org = org_dao.get(org_id)
+        if db_org.billing_account is None:
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+            ba_dao = BillingAccountDAO(dbsession)
+            ba = ba_dao.create()
+            db_org.billing_account_id = ba.id
+            dbsession.flush()
+        db_org.billing_account.stripe_customer_id = customer_id
+        dbsession.commit()
         track_stripe_customer(customer_id)
 
         update = await client.patch(
