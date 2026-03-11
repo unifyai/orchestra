@@ -845,10 +845,16 @@ async def test_e2e_invite_to_org_with_existing_billing(client: AsyncClient, dbse
     )
     assert accept.status_code == status.HTTP_200_OK
 
-    # New member can view org billing status
+    # New member can view org billing status via unified endpoint
+    # (use the org-scoped API key returned by accept)
+    org_api_key = accept.json()["api_key"]
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+    }
     billing = await client.get(
-        f"/v0/organizations/{org_id}/billing",
-        headers=new_member["headers"],
+        "/v0/billing/billing-profile",
+        headers=org_headers,
     )
     # Members with billing:read should be able to see billing
     # (Default Member role should have billing:read)

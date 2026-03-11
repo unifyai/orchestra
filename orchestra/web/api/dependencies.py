@@ -8,12 +8,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.models.orchestra_models import (
-    AdminUser,
-    BillingAccount,
-    Organization,
-    User,
-)
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+from orchestra.db.models.orchestra_models import AdminUser
 from orchestra.web.api.utils.http_responses import (
     account_frozen,
     account_suspended,
@@ -137,24 +133,15 @@ def auth_admin_key(
     raise admin_not_authorized
 
 
-def _is_billing_account_frozen(session: Session, ba_id: int) -> bool:
-    """Check if a BillingAccount is PAST_DUE, SUSPENDED, or CLOSED."""
-    ba = session.query(BillingAccount).filter(BillingAccount.id == ba_id).first()
-    if ba is None:
-        return False
-    if ba.account_status in ("SUSPENDED", "CLOSED"):
-        return True
-    if ba.account_status == "PAST_DUE":
-        raise account_suspended
-    return False
-
-
 def check_account_not_frozen(request: Request):
     """
     Check if the relevant billing account is frozen or suspended.
 
     For personal API keys: checks the user's BillingAccount.
     For org API keys: checks the organization's BillingAccount.
+
+    Uses :class:`BillingAccountDAO` to resolve the billing account rather
+    than duplicating ORM queries here.
     """
     user_id = getattr(request.state, "user_id", None)
     organization_id = getattr(request.state, "organization_id", None)
@@ -163,23 +150,15 @@ def check_account_not_frozen(request: Request):
 
     try:
         with _ro_session() as session:
-            # If request is in org context, check the org's billing account
-            if organization_id:
-                org = (
-                    session.query(Organization)
-                    .filter(Organization.id == organization_id)
-                    .first()
-                )
-                if org and org.billing_account_id:
-                    if _is_billing_account_frozen(session, org.billing_account_id):
-                        raise account_frozen
-                return
+            ba_dao = BillingAccountDAO(session)
+            ba = ba_dao.resolve(user_id, organization_id)
+            if ba is None:
+                return  # No billing account → allow through
 
-            # Personal context — check user's billing account
-            user = session.query(User).filter(User.id == user_id).first()
-            if user and user.billing_account_id:
-                if _is_billing_account_frozen(session, user.billing_account_id):
-                    raise account_frozen
+            if ba.account_status in ("SUSPENDED", "CLOSED"):
+                raise account_frozen
+            if ba.account_status == "PAST_DUE":
+                raise account_suspended
 
     except Exception as e:
         if e == account_frozen or e == account_suspended:
