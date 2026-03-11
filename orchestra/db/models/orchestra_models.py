@@ -487,6 +487,14 @@ class Organization(Base):
         comment="When the org was verified",
     )
 
+    # === FREE TRIAL ===
+    free_trial = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
     # Relationships
     billing_account = relationship(
         "BillingAccount",

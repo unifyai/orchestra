@@ -50,6 +50,9 @@ class AutoRechargeResponse(BaseModel):
     minimum_spend_required: float = 0.0
     remaining_spend_needed: float = 0.0
 
+    # Whether the Stripe customer has a default payment method on file
+    has_payment_method: bool = False
+
 
 class AutoRechargeUpdateRequest(BaseModel):
     """

@@ -172,9 +172,6 @@ def get_user(
         "api_key": api_key_value,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
-        # backward-compat aliases (approval flow removed; always approved)
-        "assistant_hiring_approval": "approved",
-        "has_claimed_approval_link": has_claimed,
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
@@ -244,9 +241,6 @@ def get_user_by_email(
         "api_key": api_key_value,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
-        # backward-compat aliases (approval flow removed; always approved)
-        "assistant_hiring_approval": "approved",
-        "has_claimed_approval_link": has_claimed,
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
@@ -323,9 +317,6 @@ def get_user_by_account(
         "api_key": api_key_value,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
-        # backward-compat aliases (approval flow removed; always approved)
-        "assistant_hiring_approval": "approved",
-        "has_claimed_approval_link": has_claimed,
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
@@ -986,11 +977,6 @@ def update_query_logging_status(
     response_model=CreditGrantClaimResponse,
     status_code=200,
 )
-@router.post(
-    "/user/claim-assistant-hiring-one-time-link",  # backward-compat alias
-    response_model=CreditGrantClaimResponse,
-    status_code=200,
-)
 def claim_credit_grant_link(
     request: Request,
     payload: CreditGrantLinkClaimRequest,
@@ -1569,51 +1555,6 @@ def admin_get_user_spend(
 # ivory, etc.) continue to work after the underlying models and logic have
 # been refactored.  They should be removed once all callers have migrated.
 # ============================================================================
-
-
-# -- Assistant Hiring Approval stubs (approval flow removed; access now
-#    controlled by rate limits) --
-
-
-@router.post("/user/assistant-hiring-approval")
-def _compat_request_assistant_hiring_approval(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: always returns 'approved' (approval flow removed)."""
-    return {
-        "message": "Access is now managed through rate limits. No approval required.",
-        "assistant_hiring_approval": "approved",
-    }
-
-
-@admin_router.put(
-    "/user/{target_user_id}/assistant-hiring-approval/{status_value}",
-)
-def _compat_set_user_assistant_hiring_status(
-    target_user_id: str,
-    status_value: str,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: no-op (approval flow removed)."""
-    return {
-        "message": (
-            f"User {target_user_id} assistant hiring approval status "
-            f"set to '{status_value}' (no-op — approval flow removed)."
-        ),
-        "assistant_hiring_approval": status_value,
-    }
-
-
-@admin_router.get("/user/assistant-hiring-approval")
-def _compat_list_users_by_assistant_hiring_approval(
-    status_filter: Optional[str] = Query(None),
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: returns empty list (approval flow removed)."""
-    return []
 
 
 @admin_router.post("/user/verify-business")
