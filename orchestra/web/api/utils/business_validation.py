@@ -275,7 +275,7 @@ def sync_tax_id_to_stripe(
         for existing in existing_tax_ids.data:
             try:
                 stripe.Customer.delete_tax_id(stripe_customer_id, existing.id)
-            except stripe.error.StripeError:
+            except stripe.StripeError:
                 pass  # Ignore deletion errors
 
         # 2. Create new tax ID if provided
@@ -294,12 +294,12 @@ def sync_tax_id_to_stripe(
             tax_exempt=tax_exempt,
         )
 
-    except stripe.error.InvalidRequestError as e:
+    except stripe.InvalidRequestError as e:
         if logger:
             logger.warning(
                 f"Could not sync tax ID to Stripe for {stripe_customer_id}: {e}",
             )
-    except stripe.error.StripeError as e:
+    except stripe.StripeError as e:
         if logger:
             logger.warning(
                 f"Stripe error syncing tax ID for {stripe_customer_id}: {e}",

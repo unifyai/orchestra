@@ -128,6 +128,27 @@ class RechargeDAO:
 
         return raw_recharge.scalar()
 
+    def get_last_paid(self, billing_account_id: int) -> Optional[Recharge]:
+        """
+        Get the most recent paid recharge for a billing account.
+
+        :param billing_account_id: BillingAccount ID.
+        :return: The most recent paid Recharge, or None.
+        """
+        return (
+            self.session.execute(
+                select(Recharge)
+                .where(
+                    Recharge.billing_account_id == billing_account_id,
+                    Recharge.status == RechargeStatus.PAID,
+                )
+                .order_by(Recharge.at.desc())
+                .limit(1),
+            )
+            .scalars()
+            .first()
+        )
+
     def has_pending_bills(self, billing_account_id: int) -> Tuple[bool, Decimal]:
         """
         Check if billing account has unpaid bills (PENDING_INVOICE or INVOICE_CREATED).
