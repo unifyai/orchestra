@@ -17,20 +17,7 @@ from httpx import AsyncClient
 
 from orchestra.db.models.orchestra_models import Organization, OrganizationMember
 from orchestra.settings import settings
-from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
-
-
-@pytest.fixture(scope="function", autouse=True)
-async def approve_default_user(client: AsyncClient):
-    """Ensures the default test user for this module is approved for hiring."""
-    credits_resp = await client.get("/v0/credits", headers=HEADERS)
-    user_id = credits_resp.json()["id"]
-
-    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
-    approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
-    assert (
-        approve_resp.status_code == status.HTTP_200_OK
-    ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
+from orchestra.tests.utils import HEADERS
 
 
 @pytest.fixture

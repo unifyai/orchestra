@@ -38,24 +38,11 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     User,
 )
-from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+from orchestra.tests.utils import HEADERS, create_test_user
 
 # ============================================================================
 # Fixtures
 # ============================================================================
-
-
-@pytest.fixture(scope="function", autouse=True)
-async def approve_default_user(client: AsyncClient):
-    """Ensures the default test user for this module is approved for hiring."""
-    credits_resp = await client.get("/v0/credits", headers=HEADERS)
-    user_id = credits_resp.json()["id"]
-
-    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
-    approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
-    assert (
-        approve_resp.status_code == status.HTTP_200_OK
-    ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
 
 
 @pytest.fixture(autouse=True)
@@ -3024,14 +3011,6 @@ class TestTransferGracePeriodGuard:
         """Transfer to org is blocked when assistant has grace_period contacts."""
         user = await create_test_user(client, "p5xfer_to_org@test.com")
 
-        # Approve for hiring
-        credits_resp = await client.get("/v0/credits", headers=user["headers"])
-        uid = credits_resp.json()["id"]
-        await client.put(
-            f"/v0/admin/user/{uid}/assistant-hiring-approval/approved",
-            headers=ADMIN_HEADERS,
-        )
-
         # Create personal assistant
         create_resp = await client.post(
             "/v0/assistant",
@@ -3084,13 +3063,6 @@ class TestTransferGracePeriodGuard:
         """Transfer to org succeeds when assistant has only active contacts."""
         user = await create_test_user(client, "p5xfer_ok@test.com")
 
-        credits_resp = await client.get("/v0/credits", headers=user["headers"])
-        uid = credits_resp.json()["id"]
-        await client.put(
-            f"/v0/admin/user/{uid}/assistant-hiring-approval/approved",
-            headers=ADMIN_HEADERS,
-        )
-
         create_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "P5Xfer", "surname": "OkOrg", "create_infra": False},
@@ -3135,13 +3107,6 @@ class TestTransferGracePeriodGuard:
         """Transfer to org succeeds when assistant has no contacts at all."""
         user = await create_test_user(client, "p5xfer_none@test.com")
 
-        credits_resp = await client.get("/v0/credits", headers=user["headers"])
-        uid = credits_resp.json()["id"]
-        await client.put(
-            f"/v0/admin/user/{uid}/assistant-hiring-approval/approved",
-            headers=ADMIN_HEADERS,
-        )
-
         create_resp = await client.post(
             "/v0/assistant",
             json={
@@ -3176,13 +3141,6 @@ class TestTransferGracePeriodGuard:
     ):
         """Transfer to personal is blocked when assistant has grace_period contacts."""
         user = await create_test_user(client, "p5xfer_to_pers@test.com")
-
-        credits_resp = await client.get("/v0/credits", headers=user["headers"])
-        uid = credits_resp.json()["id"]
-        await client.put(
-            f"/v0/admin/user/{uid}/assistant-hiring-approval/approved",
-            headers=ADMIN_HEADERS,
-        )
 
         # Create org + org API key
         org_resp = await client.post(
@@ -3238,13 +3196,6 @@ class TestTransferGracePeriodGuard:
         """Transfer to personal succeeds when assistant has only active contacts."""
         user = await create_test_user(client, "p5xfer_pers_ok@test.com")
 
-        credits_resp = await client.get("/v0/credits", headers=user["headers"])
-        uid = credits_resp.json()["id"]
-        await client.put(
-            f"/v0/admin/user/{uid}/assistant-hiring-approval/approved",
-            headers=ADMIN_HEADERS,
-        )
-
         org_resp = await client.post(
             "/v0/organizations",
             json={"name": "P5 Transfer PersOK Org"},
@@ -3293,13 +3244,6 @@ class TestTransferGracePeriodGuard:
         can still be transferred.
         """
         user = await create_test_user(client, "p5xfer_del_ok@test.com")
-
-        credits_resp = await client.get("/v0/credits", headers=user["headers"])
-        uid = credits_resp.json()["id"]
-        await client.put(
-            f"/v0/admin/user/{uid}/assistant-hiring-approval/approved",
-            headers=ADMIN_HEADERS,
-        )
 
         create_resp = await client.post(
             "/v0/assistant",
