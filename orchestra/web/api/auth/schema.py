@@ -120,23 +120,6 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
-class ResetPasswordRequest(BaseModel):
-    """Request to reset a password with a verification code."""
-
-    email: EmailStr
-    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
-    new_password: str = Field(
-        ...,
-        min_length=_PASSWORD_MIN_LENGTH,
-        max_length=_PASSWORD_MAX_LENGTH,
-    )
-
-    @field_validator("new_password")
-    @classmethod
-    def validate_new_password(cls, v: str) -> str:
-        return _validate_password_strength(v)
-
-
 class ChangePasswordRequest(BaseModel):
     """Request to change password (authenticated user)."""
 
@@ -219,14 +202,6 @@ class EmailCredentialsResponse(BaseModel):
     email_verified: Optional[bool] = None
     created_at: Optional[str] = None
     password_changed_at: Optional[str] = None
-
-
-class AuthErrorResponse(BaseModel):
-    """Error response with optional provider hints."""
-
-    error: str
-    message: str
-    providers: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------
