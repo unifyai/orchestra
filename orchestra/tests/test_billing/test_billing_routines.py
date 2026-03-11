@@ -616,7 +616,8 @@ class TestLevyCreditManagement:
     def test_marked_past_due_when_negative(self, dbsession: Session):
         """Account status changes to PAST_DUE when credits go negative."""
         ba = make_billing_account(
-            dbsession, credits=5
+            dbsession,
+            credits=5,
         )  # Will go negative with $14 email
         user = make_user(dbsession, "cred_u4", ba)
         asst = make_assistant(dbsession, user.id, first_name="CredPD")
@@ -1152,7 +1153,9 @@ class TestBillingGuard:
         ba1 = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
         ba2 = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
         ba3 = make_billing_account(
-            dbsession, credits=50, account_status="PAST_DUE"
+            dbsession,
+            credits=50,
+            account_status="PAST_DUE",
         )  # has credits
         dbsession.commit()
 
@@ -1421,7 +1424,9 @@ class TestMonthlyInvoicer:
         monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
 
         ba = make_billing_account(
-            dbsession, credits=100, stripe_customer_id="cus_prepaid"
+            dbsession,
+            credits=100,
+            stripe_customer_id="cus_prepaid",
         )
         make_user(dbsession, "inv_prepaid", ba)
         r = Recharge(
@@ -1618,6 +1623,7 @@ class TestAutoRechargeQueuing:
                     MockStripeError("Customer not found"),
                 ),
             ),
+            StripeError=MockStripeError,
             error=SimpleNamespace(
                 StripeError=MockStripeError,
                 InvalidRequestError=MockStripeError,
