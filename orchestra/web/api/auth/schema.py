@@ -118,6 +118,7 @@ class ForgotPasswordRequest(BaseModel):
     """Request to initiate a password reset."""
 
     email: EmailStr
+    captcha_token: Optional[str] = None  # Cloudflare Turnstile token
 
 
 class ChangePasswordRequest(BaseModel):
