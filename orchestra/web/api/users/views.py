@@ -16,8 +16,8 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.auth_dao import AuthDAO, decrypt_secret
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLinkDAO
@@ -33,7 +33,6 @@ from orchestra.services.user_account_cleanup_service import UserAccountCleanupSe
 from orchestra.web.api.users.schema import (
     AccountDeletionConfirmation,
     AccountDeletionResponse,
-    AccountRequest,
     CanDeleteAccountResponse,
     CreditGrantClaimResponse,
     CreditGrantLinkClaimRequest,
@@ -253,14 +252,14 @@ def get_user_by_account(
     provider: str,
     session: Session = Depends(get_db_session),
 ):
-    account_dao = AccountDAO(session)
+    auth_dao = AuthDAO(session)
     user_dao = UserDAO(session)
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     organization_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
 
-    account = account_dao.filter(
+    account = auth_dao.filter_oauth_accounts(
         provider_account_id=provider_account_id,
         provider=provider,
     )
@@ -370,15 +369,9 @@ def delete_user(
     TOTP code is required.  When the header is missing or invalid the
     endpoint returns ``403 { error: "mfa_required" }``.
     """
-    from orchestra.db.dao.mfa_credential_dao import (
-        MFACredentialDAO,
-        MFARecoveryDAO,
-        decrypt_secret,
-    )
-
     # --- MFA gate for sensitive action ---
-    mfa_dao = MFACredentialDAO(session)
-    credential = mfa_dao.get_enabled_totp(user_id)
+    auth_dao = AuthDAO(session)
+    credential = auth_dao.get_enabled_totp(user_id)
     if credential:
         mfa_code = request.headers.get("x-mfa-code")
         mfa_recovery = request.headers.get("x-mfa-recovery-code")
@@ -404,8 +397,7 @@ def delete_user(
             totp = pyotp.TOTP(secret)
             verified = totp.verify(mfa_code, valid_window=1)
         elif mfa_recovery:
-            recovery_dao = MFARecoveryDAO(session)
-            remaining = recovery_dao.verify_and_consume(user_id, mfa_recovery)
+            remaining = auth_dao.verify_recovery_code(user_id, mfa_recovery)
             verified = remaining is not None
 
         if not verified:
@@ -429,32 +421,8 @@ def delete_user(
     return AccountDeletionResponse(success=True, message=result.message)
 
 
-@admin_router.post("/account")
-def link_account(
-    account: AccountRequest,
-    session: Session = Depends(get_db_session),
-):
-    account_dao = AccountDAO(session)
-    account_dao.create(
-        user_id=account.user_id,
-        provider=account.provider,
-        provider_type="oauth",  # TODO: This can most likely be removed look into it
-        provider_account_id=account.provider_account_id,
-        access_token=account.access_token,
-        expires_at=datetime.datetime.fromtimestamp(account.expires_at),
-    )
-    return ""
-
-
-@admin_router.delete("/account")
-def unlink_account(account: AccountRequest):  # TODO, when would this be used?
-    # Unlink an account from the user
-    return {
-        "message": f"Account {account.provider} unlinked for user {account.user_id}",
-    }
-
-
 ### Not related to next-auth
+# Note: link_account and unlink_account endpoints moved to auth/views.py
 
 
 def generate_key(size=32):

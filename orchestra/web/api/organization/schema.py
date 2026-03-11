@@ -266,26 +266,6 @@ class OrgMFASettingsResponse(BaseModel):
     )
 
 
-class MFAEnforcementStatusResponse(BaseModel):
-    """Response for checking MFA enforcement status for a specific user + org."""
-
-    enforced: bool = Field(
-        ...,
-        description="Whether the org has require_mfa enabled.",
-    )
-    has_mfa: bool = Field(
-        ...,
-        description="Whether the user has an enabled MFA credential.",
-    )
-    setup_required: bool = Field(
-        ...,
-        description=(
-            "Whether the user must set up MFA to access this org. "
-            "True when enforced AND NOT has_mfa."
-        ),
-    )
-
-
 class MemberSpendResponse(BaseModel):
     """Response for getting an organization member's cumulative spend."""
 
