@@ -504,6 +504,18 @@ async def forgot_password(
         identifier=email,
     )
 
+    # Validate CAPTCHA (Cloudflare Turnstile)
+    remote_ip = request.client.host if request.client else None
+    captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
+    if not captcha_ok:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "captcha_failed",
+                "message": "CAPTCHA verification failed. Please try again.",
+            },
+        )
+
     # Look up user + email account silently
     user_dao = UserDAO(session)
     existing = user_dao.filter(email=email)

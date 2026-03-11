@@ -25,15 +25,6 @@ from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 # ===========================================================================
 
 
-@pytest.fixture(scope="function", autouse=True)
-async def approve_default_user(client: AsyncClient):
-    """Ensures the default test user is approved for hiring."""
-    credits_resp = await client.get("/v0/credits", headers=HEADERS)
-    user_id = credits_resp.json()["id"]
-    approve_url = f"/v0/admin/user/{user_id}/assistant-hiring-approval/approved"
-    await client.put(approve_url, headers=ADMIN_HEADERS)
-
-
 @pytest.fixture(autouse=True)
 def mock_assistant_infra_calls(request):
     """Mock assistant infrastructure to prevent real network calls."""
