@@ -2283,6 +2283,55 @@ def admin_get_organization_verification(
 
 
 # =============================================================================
+# Organization Free Trial
+# =============================================================================
+
+
+@admin_router.put("/organization/{organization_id}/free-trial")
+def admin_enable_free_trial(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """Enable free trial mode for an organization."""
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    org.free_trial = True
+    session.commit()
+
+    return {
+        "message": "Free trial enabled.",
+        "organization_id": organization_id,
+        "name": org.name,
+        "free_trial": True,
+    }
+
+
+@admin_router.delete("/organization/{organization_id}/free-trial")
+def admin_disable_free_trial(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """Disable free trial mode for an organization."""
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    org.free_trial = False
+    session.commit()
+
+    return {
+        "message": "Free trial disabled.",
+        "organization_id": organization_id,
+        "name": org.name,
+        "free_trial": False,
+    }
+
+
+# =============================================================================
 # Organization MFA Enforcement
 # =============================================================================
 

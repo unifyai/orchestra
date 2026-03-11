@@ -507,6 +507,7 @@ class UserDAO:
                         "role_name": member_role_name,
                         "api_key": org_api_key,
                         "timezone": org_result.timezone,
+                        "free_trial": org_result.free_trial,
                     },
                 )
 
