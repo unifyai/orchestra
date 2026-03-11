@@ -78,15 +78,31 @@ check_stripe_cli() {
 }
 
 check_stripe_auth() {
+    # If STRIPE_SECRET_KEY is set, we can use --api-key instead of login
+    if [[ -n "${STRIPE_SECRET_KEY:-}" ]]; then
+        return 0
+    fi
     # Check if user is logged in by attempting to list a resource
     if ! stripe config --list 2>/dev/null | grep -q "test_mode"; then
-        log_warn "Stripe CLI may not be authenticated"
+        log_warn "Stripe CLI is not authenticated and STRIPE_SECRET_KEY is not set"
         echo ""
-        echo "Run: stripe login"
+        echo "Either:  export STRIPE_SECRET_KEY=sk_test_..."
+        echo "Or run:  stripe login"
         echo ""
         return 1
     fi
     return 0
+}
+
+# =============================================================================
+# API Key Flag
+# =============================================================================
+
+# Build --api-key flag if STRIPE_SECRET_KEY is set (avoids needing `stripe login`)
+stripe_api_key_flag() {
+    if [[ -n "${STRIPE_SECRET_KEY:-}" ]]; then
+        echo "--api-key ${STRIPE_SECRET_KEY}"
+    fi
 }
 
 # =============================================================================
@@ -160,7 +176,9 @@ cmd_start() {
     echo ""
 
     # Run in foreground - user will see the webhook secret in output
+    # shellcheck disable=SC2046
     stripe listen \
+        $(stripe_api_key_flag) \
         --forward-to "$WEBHOOK_URL" \
         --device-name "$STRIPE_DEVICE_NAME" \
         --events checkout.session.completed,invoice.payment_succeeded,invoice.paid,invoice.payment_failed,invoice.payment_action_required,charge.refunded,charge.refund.updated,charge.dispute.created,charge.dispute.funds_withdrawn,charge.dispute.closed,customer.tax_id.created,customer.tax_id.updated,customer.tax_id.deleted,customer.updated,review.opened,review.closed
@@ -192,7 +210,9 @@ cmd_bg() {
     rm -f "$STRIPE_LOGFILE" "$STRIPE_SECRET_FILE"
 
     # Start in background
+    # shellcheck disable=SC2046
     nohup stripe listen \
+        $(stripe_api_key_flag) \
         --forward-to "$WEBHOOK_URL" \
         --device-name "$STRIPE_DEVICE_NAME" \
         --events checkout.session.completed,invoice.payment_succeeded,invoice.paid,invoice.payment_failed,invoice.payment_action_required,charge.refunded,charge.refund.updated,charge.dispute.created,charge.dispute.funds_withdrawn,charge.dispute.closed,customer.tax_id.created,customer.tax_id.updated,customer.tax_id.deleted,customer.updated,review.opened,review.closed \
@@ -265,10 +285,12 @@ cmd_status() {
     fi
 
     echo -n "Stripe Auth: "
-    if check_stripe_auth 2>/dev/null; then
+    if [[ -n "${STRIPE_SECRET_KEY:-}" ]]; then
+        echo -e "${GREEN}via STRIPE_SECRET_KEY${NC}"
+    elif check_stripe_auth 2>/dev/null; then
         echo -e "${GREEN}authenticated${NC}"
     else
-        echo -e "${YELLOW}not authenticated (run: stripe login)${NC}"
+        echo -e "${YELLOW}not authenticated (set STRIPE_SECRET_KEY or run: stripe login)${NC}"
     fi
 
     echo -n "Listener: "
@@ -291,30 +313,33 @@ cmd_status() {
 
 cmd_trigger() {
     local event="${1:-checkout.session.completed}"
+    # shellcheck disable=SC2046
+    local api_key_flag
+    api_key_flag=$(stripe_api_key_flag)
 
     log_info "Triggering test event: $event"
 
     case "$event" in
         checkout|checkout.session.completed)
-            stripe trigger checkout.session.completed
+            stripe trigger $api_key_flag checkout.session.completed
             ;;
         invoice|invoice.paid)
-            stripe trigger invoice.paid
+            stripe trigger $api_key_flag invoice.paid
             ;;
         tax_id|customer.tax_id.created)
-            stripe trigger customer.tax_id.created
+            stripe trigger $api_key_flag customer.tax_id.created
             ;;
         subscription|customer.subscription.created)
-            stripe trigger customer.subscription.created
+            stripe trigger $api_key_flag customer.subscription.created
             ;;
         all)
             log_info "Triggering all relevant events..."
-            stripe trigger checkout.session.completed
-            stripe trigger invoice.paid
-            stripe trigger customer.tax_id.created
+            stripe trigger $api_key_flag checkout.session.completed
+            stripe trigger $api_key_flag invoice.paid
+            stripe trigger $api_key_flag customer.tax_id.created
             ;;
         *)
-            stripe trigger "$event"
+            stripe trigger $api_key_flag "$event"
             ;;
     esac
 }
@@ -424,6 +449,7 @@ main() {
             echo "  <any>            Pass any Stripe event type"
             echo ""
             echo "Environment Variables:"
+            echo "  STRIPE_SECRET_KEY      Stripe API key (avoids needing 'stripe login')"
             echo "  ORCHESTRA_PORT         FastAPI port (default: 8000)"
             echo "  STRIPE_WEBHOOK_PATH    Webhook path (default: /v0/webhooks/stripe)"
             echo "  STRIPE_DEVICE_NAME     Stripe device name (default: orchestra-local)"

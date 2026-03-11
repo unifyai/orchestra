@@ -12,7 +12,6 @@ from orchestra.db.dao.billing_account_dao import (
     MIN_SPEND_FOR_AUTO_RECHARGE,
     BillingAccountDAO,
 )
-from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -22,7 +21,6 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     BillingAccount,
-    CreditCardFingerprint,
     Organization,
     Recharge,
     RechargeStatus,
@@ -36,7 +34,6 @@ from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     AssistantContactCostRead,
     AssistantContactCostWrite,
-    CreditCardFingerprintModelResponse,
     OrganizationListItem,
     OrganizationListResponse,
     RechargeModelRequest,
@@ -62,6 +59,7 @@ def _resolve_billing_account(
     Resolve a BillingAccount from either a user_id or an organization_id.
 
     Exactly one of the two parameters must be provided.
+    Delegates to :class:`BillingAccountDAO` for the actual lookup.
 
     :param session: Database session.
     :param user_id: User ID (for personal billing accounts).
@@ -80,29 +78,22 @@ def _resolve_billing_account(
             detail="Provide either user_id or organization_id.",
         )
 
+    ba_dao = BillingAccountDAO(session)
+
     if user_id:
-        user_dao = UserDAO(session)
-        user = user_dao.get_user_with_id(user_id)
-        ba = user.billing_account
+        ba = ba_dao.resolve_for_user(user_id)
         if ba is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"User {user_id} has no billing account.",
+                detail=f"User {user_id} not found or has no billing account.",
             )
         return ba
 
-    # organization_id path
-    org = session.query(Organization).filter_by(id=organization_id).first()
-    if org is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Organization {organization_id} not found.",
-        )
-    ba = org.billing_account
+    ba = ba_dao.resolve_for_org(organization_id)
     if ba is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Organization {organization_id} has no billing account.",
+            detail=f"Organization {organization_id} not found or has no billing account.",
         )
     return ba
 
@@ -378,7 +369,7 @@ def create_recharge_model(
                 else:
                     logger.warning("Skipping invoice item creation - quantity is 0")
 
-            except stripe.error.StripeError as e:
+            except stripe.StripeError as e:
                 logger.error(f"Stripe API error for auto-recharge: {e}")
                 raise HTTPException(
                     status_code=500,
@@ -589,73 +580,6 @@ def get_user_prompt_telemetry(
     """
     user_dao = UserDAO(session)
     return user_dao.is_telemetry_activated(user_id)
-
-
-@router.post("/credit_card_fingerprint")
-def create_credit_card_fingerprint(
-    fingerprint: str,
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Store a credit card fingerprint for a billing account.
-
-    Accepts ``user_id`` or ``organization_id``.
-    """
-    ba = _resolve_billing_account(
-        session,
-        user_id=user_id,
-        organization_id=organization_id,
-    )
-    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    credit_card_fingerprint_dao.create(ba.id, fingerprint)
-
-
-@router.get("/duplicated_credit_card_fingerprint")
-def duplicated_credit_card_fingerprint(
-    fingerprint: str,
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> bool:
-    """
-    Check if a credit card fingerprint is used by another billing account.
-
-    Accepts ``user_id`` or ``organization_id``.
-    """
-    ba = _resolve_billing_account(
-        session,
-        user_id=user_id,
-        organization_id=organization_id,
-    )
-    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    results = credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
-    results = [r for r in results if r.billing_account_id != ba.id]
-    return len(results) > 0
-
-
-@router.get(
-    "/credit_card_fingerprint",
-    response_model=List[CreditCardFingerprintModelResponse],
-)
-def get_credit_card_fingerprint(
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> List[CreditCardFingerprint]:
-    """
-    Get credit card fingerprints for a billing account.
-
-    Accepts ``user_id`` or ``organization_id``.
-    """
-    ba = _resolve_billing_account(
-        session,
-        user_id=user_id,
-        organization_id=organization_id,
-    )
-    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    return credit_card_fingerprint_dao.filter(billing_account_id=ba.id)
 
 
 @router.post("/billing/invoice-month")

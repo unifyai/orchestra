@@ -30,7 +30,8 @@ def suspend_past_due_accounts(session: Optional[Session] = None) -> None:
 def _suspend_accounts_in_session(session: Session) -> None:
     """Internal function to suspend billing accounts within a given session."""
     try:
-        # Get the billing accounts that will be suspended
+        # Fetch the accounts that match, update them in-place, and collect
+        # IDs for metrics — all in a single query.
         accounts_to_suspend = (
             session.query(BillingAccount)
             .filter(
@@ -40,18 +41,9 @@ def _suspend_accounts_in_session(session: Session) -> None:
             .all()
         )
 
-        # Update their status
-        count = (
-            session.query(BillingAccount)
-            .filter(
-                BillingAccount.account_status == "PAST_DUE",
-                BillingAccount.credits <= 0,
-            )
-            .update(
-                {"account_status": "SUSPENDED"},
-                synchronize_session=False,
-            )
-        )
+        for ba in accounts_to_suspend:
+            ba.account_status = "SUSPENDED"
+
         session.commit()
 
         # Increment metrics for each suspended account
@@ -64,5 +56,5 @@ def _suspend_accounts_in_session(session: Session) -> None:
 
     logger.info(
         "Billing-guard: suspended %s billing account(s) for non-payment",
-        count,
+        len(accounts_to_suspend),
     )
