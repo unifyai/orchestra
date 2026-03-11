@@ -28,6 +28,7 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    RECHARGE_TYPE_PAYMENT,
     BillingAccount,
     Recharge,
     RechargeStatus,
@@ -203,6 +204,22 @@ def process_checkout_session_event(
                     )
 
                 ba_dao.add_credits(ba.id, credits)
+
+                # Record a PAID Recharge so checkout purchases count
+                # toward the cumulative spending threshold for
+                # auto-recharge eligibility.
+                from decimal import Decimal as _Decimal
+
+                checkout_recharge = Recharge(
+                    billing_account_id=ba.id,
+                    type=RECHARGE_TYPE_PAYMENT,
+                    quantity=_Decimal(str(credits)),
+                    amount_usd=_Decimal(str(credits)),
+                    status=RechargeStatus.PAID,
+                    stripe_invoice_id=data.get("invoice") or payment_intent_id,
+                )
+                session.add(checkout_recharge)
+
                 session.flush()  # persist credit update before refresh in maybe_clear_grace_period
                 logger.info(
                     {
@@ -259,6 +276,22 @@ def process_checkout_session_event(
                     )
 
                 ba_dao.add_credits(ba.id, credits)
+
+                # Record a PAID Recharge so checkout purchases count
+                # toward the cumulative spending threshold for
+                # auto-recharge eligibility.
+                from decimal import Decimal as _Decimal
+
+                checkout_recharge = Recharge(
+                    billing_account_id=ba.id,
+                    type=RECHARGE_TYPE_PAYMENT,
+                    quantity=_Decimal(str(credits)),
+                    amount_usd=_Decimal(str(credits)),
+                    status=RechargeStatus.PAID,
+                    stripe_invoice_id=data.get("invoice") or payment_intent_id,
+                )
+                session.add(checkout_recharge)
+
                 session.flush()  # persist credit update before refresh in maybe_clear_grace_period
                 logger.info(
                     {
@@ -546,7 +579,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                             "error": str(e),
                         },
                     )
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             logger.error(
                 {
                     "message": "Failed to retrieve PaymentIntent for refund",
@@ -688,7 +721,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                         "payment_intent_id": payment_intent_id,
                     },
                 )
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             logger.error(
                 {
                     "message": "Failed to retrieve PaymentIntent for dispute",
@@ -781,7 +814,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                             "payment_intent_id": payment_intent_id,
                         },
                     )
-            except stripe.error.StripeError as e:
+            except stripe.StripeError as e:
                 logger.error(
                     {
                         "message": "Failed to process won dispute",
@@ -839,7 +872,7 @@ def process_review_event(event: Dict, session: Session) -> Response:
         try:
             payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
             user_id = payment_intent.get("metadata", {}).get("user_id")
-        except stripe.error.StripeError as e:
+        except stripe.StripeError as e:
             logger.error(
                 {
                     "message": "Failed to retrieve PaymentIntent",
@@ -1112,11 +1145,13 @@ async def handle_stripe_webhook(
     sig_header = request.headers.get("Stripe-Signature")
 
     # Configure Stripe API key
-    if not settings.stripe_secret_key:
+    from orchestra.lib.billing import configure_stripe
+
+    try:
+        configure_stripe()
+    except RuntimeError:
         logger.error({"message": "stripe_secret_key not configured in settings"})
         raise HTTPException(status_code=500, detail="Stripe configuration error")
-
-    stripe.api_key = settings.stripe_secret_key
 
     # For local development, allow skipping signature verification
     SKIP_SIGNATURE_VERIFICATION = settings.stripe_skip_signature_verification
@@ -1155,7 +1190,7 @@ async def handle_stripe_webhook(
         except ValueError as e:
             logger.error({"message": "Invalid payload", "error": str(e)})
             raise HTTPException(status_code=400, detail="Invalid payload")
-        except stripe.error.SignatureVerificationError as e:
+        except stripe.SignatureVerificationError as e:
             logger.error({"message": "Signature verification failed", "error": str(e)})
             raise HTTPException(status_code=400, detail="Invalid signature")
 
