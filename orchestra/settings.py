@@ -259,6 +259,15 @@ class Settings(BaseSettings):
     stripe_unify_credits_price_id_business: Optional[str] = os.environ.get(
         "STRIPE_UNIFY_CREDITS_PRICE_ID_BUSINESS",
     )
+    stripe_default_credit_qty: int = int(
+        os.environ.get("STRIPE_DEFAULT_CREDIT_QTY", "25"),
+    )
+    stripe_min_credit_qty: int = int(
+        os.environ.get("STRIPE_MIN_CREDIT_QTY", "5"),
+    )
+    stripe_max_credit_qty: int = int(
+        os.environ.get("STRIPE_MAX_CREDIT_QTY", "500"),
+    )
 
     # Assistant creation
     assistant_creation_cost: float = 10.0

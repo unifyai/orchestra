@@ -87,13 +87,6 @@ class RechargeModelResponse(BaseModel):
     type: str
 
 
-class CreditCardFingerprintModelResponse(BaseModel):
-    model_config = {"from_attributes": True}
-
-    billing_account_id: int
-    fingerprint: str
-
-
 # Organization list schemas for admin endpoint
 class OrganizationListItem(BaseModel):
     """Response model for a single organization in the list."""

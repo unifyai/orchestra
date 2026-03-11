@@ -250,11 +250,10 @@ class UserAccountCleanupService:
         Uses raw SQL - no ORM overhead, no entity loading.
         Order matters due to FK constraints.
 
-        Note: credit_card_fingerprint and recharge now reference billing_account_id
-        and will be cascade-deleted when the billing_account row is removed.
+        Note: recharge references billing_account_id and will be
+        cascade-deleted when the billing_account row is removed.
         """
         # Currently no non-cascading tables reference user.id directly.
-        # credit_card_fingerprint is cascade-deleted via billing_account.
 
     def _deprovision_user_contacts(self, user_id: str) -> None:
         """Soft-delete and deprovision all contacts for the user's personal assistants.

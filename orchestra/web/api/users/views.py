@@ -2,7 +2,6 @@ import base64
 import datetime
 import logging
 import secrets
-from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import (
@@ -19,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLinkDAO
@@ -32,7 +30,6 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
-from orchestra.settings import settings
 from orchestra.web.api.users.schema import (
     AccountDeletionConfirmation,
     AccountDeletionResponse,
@@ -50,20 +47,12 @@ from orchestra.web.api.users.schema import (
     QueryLoggingStatus,
     UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
-    UserBillingProfileResponse,
-    UserBillingProfileUpdate,
-    UserCheckoutRequest,
-    UserCheckoutResponse,
     UserRequest,
     UserSpendingLimitRequest,
     UserSpendingLimitResponse,
     UserSpendResponse,
 )
 from orchestra.web.api.utils.http_responses import not_found
-from orchestra.web.api.utils.tax_id_validator import (
-    TaxIDValidator,
-    validate_tax_id_for_country,
-)
 
 admin_router = APIRouter()
 router = APIRouter()
@@ -1097,28 +1086,25 @@ def claim_credit_grant_link(
         # Determine which billing account receives the credits
         credit_amount = float(link.credit_amount)
         credited_to = "personal"
+        ba_dao = BillingAccountDAO(session)
 
         if org_instance:
             # Organization claim — credit the org's billing account
             ba = org_instance.billing_account
-            if ba:
-                ba.credits += Decimal(str(credit_amount))
-            else:
-                ba_dao = BillingAccountDAO(session)
-                new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
-                org_instance.billing_account_id = new_ba.id
+            if ba is None:
+                ba = ba_dao.create()
+                org_instance.billing_account_id = ba.id
                 session.flush()
+            ba_dao.apply_credit_grant(ba.id, credit_amount)
             credited_to = org_instance.name
         else:
             # Personal claim — credit the user's billing account
             ba = user_instance.billing_account
-            if ba:
-                ba.credits += Decimal(str(credit_amount))
-            else:
-                ba_dao = BillingAccountDAO(session)
-                new_ba = ba_dao.create(credits=Decimal(str(credit_amount)))
-                user_instance.billing_account_id = new_ba.id
+            if ba is None:
+                ba = ba_dao.create()
+                user_instance.billing_account_id = ba.id
                 session.flush()
+            ba_dao.apply_credit_grant(ba.id, credit_amount)
 
         session.commit()
         return CreditGrantClaimResponse(
@@ -1252,41 +1238,6 @@ def delete_credit_grant_link(
         raise not_found("One-time credit grant link")
     session.commit()
     return None
-
-
-@router.post("/billing/validate-tax-id")
-@router.post("/user/validate-tax-id")  # backward-compat alias
-def validate_tax_id(
-    request: Request,
-    tax_id: str = Query(..., description="Tax ID to validate"),
-    country: str = Query(..., description="Two-letter country code"),
-    session: Session = Depends(get_db_session),
-):
-    """Validate a tax ID format for a specific country."""
-    try:
-        validation_result = validate_tax_id_for_country(tax_id, country)
-
-        return {
-            "tax_id": tax_id,
-            "country": country.upper(),
-            "is_valid": validation_result["is_valid"],
-            "formatted_tax_id": validation_result["formatted_tax_id"],
-            "error": validation_result["error"],
-            "supported_countries": TaxIDValidator.get_supported_countries(),
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
-
-
-@router.get("/billing/supported-tax-countries")
-@router.get("/user/supported-tax-countries")  # backward-compat alias
-def get_supported_tax_countries():
-    """Get list of countries supported for tax ID validation."""
-    return {
-        "supported_countries": TaxIDValidator.get_supported_countries(),
-        "total_countries": len(TaxIDValidator.get_supported_countries()),
-    }
 
 
 @router.get("/user/onboarding-status", response_model=OnboardingStatusResponse)
@@ -1560,425 +1511,6 @@ async def get_user_spending_limit(
 
 
 # ============================================================================
-# User Billing / Checkout Endpoints
-# ============================================================================
-
-
-@router.post(
-    "/user/billing/checkout",
-    response_model=UserCheckoutResponse,
-    responses={
-        200: {
-            "description": "Checkout session created successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "checkout_url": "https://checkout.stripe.com/...",
-                        "session_id": "cs_test_...",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Invalid request",
-        },
-        500: {
-            "description": "Failed to create checkout session",
-        },
-    },
-)
-async def create_user_checkout_session(
-    request_fastapi: Request,
-    checkout_request: UserCheckoutRequest,
-    session: Session = Depends(get_db_session),
-) -> UserCheckoutResponse:
-    """
-    Create a Stripe checkout session for purchasing credits for the current user.
-
-    This endpoint creates a one-time payment checkout session for the
-    authenticated user's personal workspace. Upon successful payment,
-    credits will be added to the user's balance via webhook.
-
-    If the user doesn't have a Stripe customer ID yet, one will be
-    created during the checkout process.
-
-    Args:
-        amount: Amount of credits to purchase (1 credit = $1, min 5, max 10000)
-        success_url: URL to redirect to on successful payment
-        cancel_url: URL to redirect to on cancelled payment
-
-    Returns:
-        - checkout_url: URL to redirect the user to for payment
-        - session_id: Stripe checkout session ID
-    """
-    import stripe
-
-    user_id = request_fastapi.state.user_id
-    user_dao = UserDAO(session)
-
-    # Get user
-    user_row = user_dao.get_by_id(user_id)
-    if not user_row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-    user = user_row[0]
-
-    # Configure Stripe
-    if not settings.stripe_secret_key:
-        logger.error("Stripe secret key not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Payment system not configured",
-        )
-
-    stripe.api_key = settings.stripe_secret_key
-
-    try:
-        # Ensure user has a BillingAccount and Stripe customer (lazy creation)
-        billing_account_dao = BillingAccountDAO(session)
-        ba = user.billing_account
-        if ba is None:
-            ba = billing_account_dao.create()
-            user.billing_account_id = ba.id
-            session.flush()
-
-        if not ba.stripe_customer_id:
-            from orchestra.web.api.utils.business_validation import (
-                build_stripe_customer_name,
-                get_stripe_tax_exempt_status,
-                get_stripe_tax_id_data,
-            )
-
-            customer_params = {
-                "email": user.email,
-                "metadata": {
-                    "user_id": user_id,
-                    "billing_account_id": str(ba.id),
-                },
-            }
-
-            # Include profile name — users are always individuals
-            if ba.name:
-                customer_params.update(
-                    build_stripe_customer_name(
-                        is_business=False,
-                        name=ba.name,
-                    ),
-                )
-            if ba.billing_email:
-                customer_params["email"] = ba.billing_email
-
-            # Include address if available
-            ba_address = ba.billing_address or {}
-            if ba_address.get("line1"):
-                customer_params["address"] = {
-                    "line1": ba_address.get("line1", ""),
-                    "line2": ba_address.get("line2", ""),
-                    "city": ba_address.get("city", ""),
-                    "state": ba_address.get("state", ""),
-                    "postal_code": ba_address.get("postal_code", ""),
-                    "country": ba_address.get("country", ""),
-                }
-                customer_params["tax"] = {"validate_location": "immediately"}
-
-            # Include tax ID if available
-            country_code = ba_address.get("country")
-            tax_id_data = get_stripe_tax_id_data(ba.tax_id, country_code)
-            if tax_id_data:
-                customer_params["tax_id_data"] = tax_id_data
-
-            customer_params["tax_exempt"] = get_stripe_tax_exempt_status(
-                ba.tax_id,
-                country_code,
-            )
-
-            customer = stripe.Customer.create(**customer_params)
-            ba.stripe_customer_id = customer.id
-            session.flush()
-            logger.info(
-                {
-                    "message": "Created Stripe customer for user",
-                    "user_id": user_id,
-                    "stripe_customer_id": customer.id,
-                },
-            )
-
-        # Resolve the pre-configured Price ID (personal context for this endpoint)
-        price_id = settings.stripe_unify_credits_price_id_personal
-        if not price_id:
-            logger.error("STRIPE_UNIFY_CREDITS_PRICE_ID_PERSONAL not configured")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Payment system not fully configured",
-            )
-
-        # Build checkout session parameters
-        checkout_params = {
-            "mode": "payment",
-            "submit_type": "pay",
-            "customer": ba.stripe_customer_id,
-            "client_reference_id": user_id,
-            "line_items": [
-                {
-                    "price": price_id,
-                    "quantity": checkout_request.amount,
-                },
-            ],
-            "automatic_tax": {"enabled": True},
-            "customer_update": {
-                "address": "auto",
-                "name": "auto",
-            },
-            "billing_address_collection": "required",
-            "tax_id_collection": {"enabled": True},
-            "success_url": checkout_request.success_url,
-            "cancel_url": checkout_request.cancel_url,
-            "metadata": {
-                "user_id": user_id,
-                "credits_purchased": str(checkout_request.amount),
-            },
-            "payment_intent_data": {
-                "metadata": {
-                    "user_id": user_id,
-                    "credits_purchased": str(checkout_request.amount),
-                },
-            },
-            "payment_method_options": {
-                "card": {"request_three_d_secure": "any"},
-            },
-            "invoice_creation": {
-                "enabled": True,
-                "invoice_data": {
-                    "description": f"Unify Credits purchase ({checkout_request.amount} credits)",
-                },
-            },
-        }
-
-        checkout_session = stripe.checkout.Session.create(**checkout_params)
-
-        if not checkout_session.url:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create checkout session URL",
-            )
-
-        logger.info(
-            {
-                "message": "User checkout session created",
-                "user_id": user_id,
-                "amount": checkout_request.amount,
-                "session_id": checkout_session.id,
-            },
-        )
-
-        return UserCheckoutResponse(
-            checkout_url=checkout_session.url,
-            session_id=checkout_session.id,
-        )
-
-    except stripe.error.StripeError as e:
-        logger.error(
-            {
-                "message": "Failed to create checkout session",
-                "user_id": user_id,
-                "error": str(e),
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create checkout session: {str(e)}",
-        )
-
-
-# ============================================================================
-# User Business Profile Endpoints
-# ============================================================================
-
-
-@router.get(
-    "/user/billing/billing-profile",
-    response_model=UserBillingProfileResponse,
-    summary="Get user business profile",
-    description="Get the current user's billing/business profile information.",
-)
-def get_user_billing_profile(
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> UserBillingProfileResponse:
-    """
-    Get the current user's billing profile.
-
-    Returns billing_email, individual_name (+ business_name alias),
-    tax_id, tax_id_type, billing_address from the user's BillingAccount.
-    """
-    user_id = request.state.user_id
-    user_dao = UserDAO(session)
-    user = user_dao.get_user_with_id(user_id)
-
-    ba = user.billing_account
-    if not ba:
-        return UserBillingProfileResponse()
-
-    billing_account_dao = BillingAccountDAO(session)
-    profile = billing_account_dao.get_billing_profile(ba.id)
-    if not profile:
-        return UserBillingProfileResponse()
-
-    # Map DAO's generic "name" to individual_name + backward-compat alias
-    name = profile.pop("name", None)
-    profile["individual_name"] = name
-    profile["business_name"] = name  # backward-compat alias
-    return UserBillingProfileResponse(**profile)
-
-
-@router.patch(
-    "/user/billing/billing-profile",
-    response_model=UserBillingProfileResponse,
-    summary="Update user business profile",
-    description="Update the current user's billing/business profile information.",
-)
-def update_user_billing_profile(
-    request: Request,
-    profile_update: UserBillingProfileUpdate,
-    session: Session = Depends(get_db_session),
-) -> UserBillingProfileResponse:
-    """
-    Update the current user's business profile (billing details).
-
-    Only provided fields are updated. Billing address is merged with existing data.
-    Also syncs changes to Stripe customer if one exists.
-    """
-    user_id = request.state.user_id
-    user_dao = UserDAO(session)
-    user = user_dao.get_user_with_id(user_id)
-
-    ba = user.billing_account
-    if not ba:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User has no billing account",
-        )
-
-    resolved_name = profile_update.resolved_name
-
-    # Validate billing address if provided
-    if profile_update.billing_address is not None:
-        from orchestra.web.api.utils.business_validation import (
-            validate_billing_address_data,
-        )
-
-        addr = (
-            profile_update.billing_address
-            if isinstance(profile_update.billing_address, dict)
-            else {}
-        )
-        if addr.get("line1") or addr.get("city") or addr.get("country"):
-            is_valid, error_msg = validate_billing_address_data(
-                line1=addr.get("line1"),
-                city=addr.get("city"),
-                country=addr.get("country"),
-                line2=addr.get("line2"),
-                state=addr.get("state"),
-                postal_code=addr.get("postal_code"),
-            )
-            if not is_valid:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid billing address: {error_msg}",
-                )
-
-    billing_account_dao = BillingAccountDAO(session)
-    billing_account_dao.update_billing_profile(
-        billing_account_id=ba.id,
-        billing_email=profile_update.billing_email,
-        name=resolved_name,
-        tax_id=profile_update.tax_id,
-        tax_id_type=profile_update.tax_id_type,
-        billing_address=profile_update.billing_address,
-    )
-    session.flush()
-
-    # Sync to Stripe if customer exists
-    if ba.stripe_customer_id:
-        try:
-            import stripe
-
-            from orchestra.web.api.utils.business_validation import (
-                build_stripe_customer_name,
-                sync_tax_id_to_stripe,
-            )
-
-            stripe.api_key = settings.stripe_secret_key
-
-            update_params: dict = {}
-            if profile_update.billing_email is not None:
-                update_params["email"] = profile_update.billing_email
-            if resolved_name is not None:
-                # Users are individuals; pass is_business=False so Stripe
-                # gets individual_name.  If the user supplied a tax_id
-                # they're treated as a business for tax purposes, but
-                # the *name* is still their individual name.
-                update_params.update(
-                    build_stripe_customer_name(
-                        is_business=False,
-                        name=resolved_name,
-                    ),
-                )
-
-            # Sync billing address to Stripe
-            billing_address_dict = None
-            if profile_update.billing_address is not None:
-                billing_address_dict = (
-                    profile_update.billing_address
-                    if isinstance(profile_update.billing_address, dict)
-                    else profile_update.billing_address
-                )
-            if billing_address_dict and billing_address_dict.get("line1"):
-                update_params["address"] = {
-                    "line1": billing_address_dict.get("line1", ""),
-                    "line2": billing_address_dict.get("line2", ""),
-                    "city": billing_address_dict.get("city", ""),
-                    "state": billing_address_dict.get("state", ""),
-                    "postal_code": billing_address_dict.get("postal_code", ""),
-                    "country": billing_address_dict.get("country", ""),
-                }
-                # Validate location immediately when address changes
-                update_params["tax"] = {"validate_location": "immediately"}
-
-            if update_params:
-                stripe.Customer.modify(ba.stripe_customer_id, **update_params)
-
-            # Sync tax ID if provided (requires separate API calls)
-            if profile_update.tax_id is not None:
-                country_code = None
-                if billing_address_dict and billing_address_dict.get("country"):
-                    country_code = billing_address_dict["country"]
-                elif ba.billing_address and ba.billing_address.get("country"):
-                    country_code = ba.billing_address["country"]
-
-                sync_tax_id_to_stripe(
-                    ba.stripe_customer_id,
-                    profile_update.tax_id,
-                    country_code,
-                    logger=logger,
-                )
-        except Exception as e:
-            logging.warning(
-                f"Failed to sync business profile to Stripe for user {user_id}: {e}",
-            )
-
-    session.commit()
-
-    profile = billing_account_dao.get_billing_profile(ba.id)
-    name = profile.pop("name", None)
-    profile["individual_name"] = name
-    profile["business_name"] = name  # backward-compat alias
-    return UserBillingProfileResponse(**profile)
-
-
-# ============================================================================
 # Admin Spend Endpoints (for UniLLM service calls)
 # ============================================================================
 
@@ -2082,74 +1614,6 @@ def _compat_list_users_by_assistant_hiring_approval(
 ):
     """Backward-compat stub: returns empty list (approval flow removed)."""
     return []
-
-
-# -- Old Business / Account-Type stubs (replaced by BillingAccount-based
-#    business profile endpoints) --
-
-
-@router.get("/user/business-status")
-def _compat_get_user_business_status(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: returns business profile data mapped to old schema."""
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    user_dao = UserDAO(session)
-    user_row = user_dao.get_by_id(user_id)
-    if not user_row:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user = user_row[0]
-    ba = user.billing_account
-
-    # Map new BillingAccount fields to old response shape
-    billing_address = None
-    if ba and ba.billing_address:
-        addr = ba.billing_address if isinstance(ba.billing_address, dict) else {}
-        billing_address = {
-            "line1": addr.get("line1", ""),
-            "line2": addr.get("line2", ""),
-            "city": addr.get("city", ""),
-            "state": addr.get("state", ""),
-            "country": addr.get("country", ""),
-            "postal_code": addr.get("postal_code", ""),
-        }
-
-    return {
-        "account_type": "individual",  # field removed; default
-        "individual_name": ba.name if ba else None,
-        "business_name": ba.name if ba else None,  # backward-compat alias
-        "tax_id": ba.tax_id if ba else None,
-        "business_type": None,  # field removed
-        "business_verified": False,  # field removed; default
-        "tax_exempt": False,  # field removed; default
-        "tax_jurisdiction": None,  # field removed
-        "business_address": billing_address,
-    }
-
-
-@router.put("/user/account-type")
-def _compat_update_user_account_type(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: no-op (account-type concept removed)."""
-    return {"message": "Account type updated successfully (no-op — field removed)"}
-
-
-@router.patch("/user/business-info")
-def _compat_update_user_business_info(
-    request: Request,
-    session: Session = Depends(get_db_session),
-):
-    """Backward-compat stub: no-op (use PATCH /user/billing/billing-profile instead)."""
-    return {
-        "message": "Business information updated successfully (no-op — use /user/billing/billing-profile)",
-    }
 
 
 @admin_router.post("/user/verify-business")
