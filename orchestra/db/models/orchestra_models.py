@@ -131,13 +131,6 @@ class BillingAccount(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    credit_card_fingerprints = relationship(
-        "CreditCardFingerprint",
-        back_populates="billing_account",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-
     __table_args__ = (
         sa.CheckConstraint(
             "account_status IN ('ACTIVE', 'PAST_DUE', 'SUSPENDED', 'CLOSED')",
@@ -209,27 +202,6 @@ class RechargeType(Base):
     __tablename__ = "recharge_type"
 
     type = Column(String(), primary_key=True)
-
-
-class CreditCardFingerprint(Base):
-    """Model class for the credit card fingerprint table."""
-
-    __tablename__ = "credit_card_fingerprint"
-
-    id = Column(Integer(), primary_key=True)
-    billing_account_id = Column(
-        Integer,
-        ForeignKey("billing_account.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    fingerprint = Column(String(), nullable=False)
-
-    # ORM relationship
-    billing_account = relationship(
-        "BillingAccount",
-        back_populates="credit_card_fingerprints",
-    )
 
 
 class User(Base):
