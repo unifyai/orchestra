@@ -190,9 +190,7 @@ async def list_organization_members_by_api_key(
 
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
-    user_dao = UserDAO(session)
 
     # Verify organization exists
     org = org_dao.get(organization_id)
@@ -214,58 +212,8 @@ async def list_organization_members_by_api_key(
             detail="You do not have permission to view members of this organization",
         )
 
-    # Get all members
-    all_members_result = org_member_dao.filter(organization_id=organization_id)
-
-    # Build response with role names and user info
-    members_response = []
-    for member_row in all_members_result:
-        member = member_row[0]
-        role_name = None
-        if member.role_id:
-            role = role_dao.get(member.role_id)
-            role_name = role.name if role else None
-
-        # Fetch user info
-        user_info_row = user_dao.get_by_id(member.user_id)
-        user_name = None
-        user_email = None
-        user_image = None
-        user_bio = None
-        user_timezone = None
-        user_phone_number = None
-        if user_info_row:
-            user_info = user_info_row[0]
-            name_parts = []
-            if user_info.name:
-                name_parts.append(user_info.name)
-            if user_info.last_name:
-                name_parts.append(user_info.last_name)
-            user_name = " ".join(name_parts) if name_parts else None
-            user_email = user_info.email
-            user_image = user_info.image
-            user_bio = user_info.bio
-            user_timezone = user_info.timezone
-            user_phone_number = user_info.phone_number
-
-        members_response.append(
-            OrganizationMemberResponse(
-                id=member.id,
-                user_id=member.user_id,
-                organization_id=member.organization_id,
-                role_id=member.role_id,
-                role_name=role_name,
-                created_at=member.created_at,
-                name=user_name,
-                email=user_email,
-                image=user_image,
-                bio=user_bio,
-                timezone=user_timezone,
-                phone_number=user_phone_number,
-            ),
-        )
-
-    return members_response
+    members = org_member_dao.get_members_with_details(organization_id)
+    return [OrganizationMemberResponse(**m) for m in members]
 
 
 @router.get("/organizations/{organization_id}", response_model=OrganizationResponse)
@@ -996,9 +944,7 @@ async def list_organization_members(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
-    user_dao = UserDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -1020,60 +966,8 @@ async def list_organization_members(
             detail="You do not have permission to view members of this organization",
         )
 
-    # Get all members
-    all_members_result = org_member_dao.filter(organization_id=organization_id)
-
-    # Build response with role names and user info
-    members_response = []
-    for member_row in all_members_result:
-        member = member_row[0]
-        role_name = None
-        if member.role_id:
-            role = role_dao.get(member.role_id)
-            role_name = role.name if role else None
-
-        # Fetch user info
-        user_info_row = user_dao.get_by_id(member.user_id)
-        user_name = None
-        user_email = None
-        user_image = None
-        user_bio = None
-        user_timezone = None
-        user_phone_number = None
-        if user_info_row:
-            # get_by_id returns a Row, extract the User model
-            user_info = user_info_row[0]
-            # Combine first and last name if available
-            name_parts = []
-            if user_info.name:
-                name_parts.append(user_info.name)
-            if user_info.last_name:
-                name_parts.append(user_info.last_name)
-            user_name = " ".join(name_parts) if name_parts else None
-            user_email = user_info.email
-            user_image = user_info.image
-            user_bio = user_info.bio
-            user_timezone = user_info.timezone
-            user_phone_number = user_info.phone_number
-
-        members_response.append(
-            OrganizationMemberResponse(
-                id=member.id,
-                user_id=member.user_id,
-                organization_id=member.organization_id,
-                role_id=member.role_id,
-                role_name=role_name,
-                created_at=member.created_at,
-                name=user_name,
-                email=user_email,
-                image=user_image,
-                bio=user_bio,
-                timezone=user_timezone,
-                phone_number=user_phone_number,
-            ),
-        )
-
-    return members_response
+    members = org_member_dao.get_members_with_details(organization_id)
+    return [OrganizationMemberResponse(**m) for m in members]
 
 
 @router.patch(
@@ -1164,46 +1058,19 @@ async def update_member_role(
         )
         session.commit()
 
-        # Return updated member with user info
-        updated_member = org_member_dao.get_member(member_user_id, organization_id)
-
-        # Fetch user info
-        user_dao = UserDAO(session)
-        user_info_row = user_dao.get_by_id(member_user_id)
-        user_name = None
-        user_email = None
-        user_image = None
-        user_bio = None
-        user_timezone = None
-        user_phone_number = None
-        if user_info_row:
-            user_info = user_info_row[0]
-            name_parts = []
-            if user_info.name:
-                name_parts.append(user_info.name)
-            if user_info.last_name:
-                name_parts.append(user_info.last_name)
-            user_name = " ".join(name_parts) if name_parts else None
-            user_email = user_info.email
-            user_image = user_info.image
-            user_bio = user_info.bio
-            user_timezone = user_info.timezone
-            user_phone_number = user_info.phone_number
-
-        return OrganizationMemberResponse(
-            id=updated_member.id,
-            user_id=updated_member.user_id,
-            organization_id=updated_member.organization_id,
-            role_id=updated_member.role_id,
-            role_name=role.name,
-            created_at=updated_member.created_at,
-            name=user_name,
-            email=user_email,
-            image=user_image,
-            bio=user_bio,
-            timezone=user_timezone,
-            phone_number=user_phone_number,
+        # Return updated member with user info (single JOIN query)
+        member_dict = org_member_dao.get_member_with_details(
+            member_user_id,
+            organization_id,
         )
+        if not member_dict:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Member not found after update",
+            )
+        return OrganizationMemberResponse(**member_dict)
+    except HTTPException:
+        raise
     except Exception as e:
         session.rollback()
         raise HTTPException(
@@ -2412,6 +2279,55 @@ def admin_get_organization_verification(
         "name": org.name,
         "verified": org.verified,
         "verified_at": org.verified_at.isoformat() if org.verified_at else None,
+    }
+
+
+# =============================================================================
+# Organization Free Trial
+# =============================================================================
+
+
+@admin_router.put("/organization/{organization_id}/free-trial")
+def admin_enable_free_trial(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """Enable free trial mode for an organization."""
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    org.free_trial = True
+    session.commit()
+
+    return {
+        "message": "Free trial enabled.",
+        "organization_id": organization_id,
+        "name": org.name,
+        "free_trial": True,
+    }
+
+
+@admin_router.delete("/organization/{organization_id}/free-trial")
+def admin_disable_free_trial(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """Disable free trial mode for an organization."""
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    org.free_trial = False
+    session.commit()
+
+    return {
+        "message": "Free trial disabled.",
+        "organization_id": organization_id,
+        "name": org.name,
+        "free_trial": False,
     }
 
 

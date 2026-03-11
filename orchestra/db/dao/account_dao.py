@@ -52,20 +52,6 @@ class AccountDAO:
         rows = self.session.execute(query)
         return rows.fetchall()
 
-    def update(  # noqa: WPS211, WPS213, WPS231, C901
-        self,
-        id: int,  # noqa: WPS125
-        name: Optional[str] = None,
-    ) -> None:
-        # query = select(DefaultPrompt)
-        # query = query.where(DefaultPrompt.id == id)
-        # raw = self.session.execute(query)
-        # entry = raw.scalars().first()
-        # if entry is not None:
-        #     if name:
-        #         setattr(entry, "name", name)  # noqa: B010
-        pass
-
     def delete(self, id: str):
         try:
             account = self.session.query(Account).filter_by(id=id).one()

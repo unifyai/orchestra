@@ -59,6 +59,7 @@ class OrganizationResponse(BaseModel):
     owner_id: str
     image: Optional[str] = None
     timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
+    free_trial: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

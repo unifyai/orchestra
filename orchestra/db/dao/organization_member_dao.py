@@ -9,6 +9,7 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     Organization,
     OrganizationMember,
+    Role,
     User,
 )
 
@@ -94,8 +95,6 @@ class OrganizationMemberDAO:
                 setattr(entry, "role_id", role_id)
 
     def list_members(self, name: str):
-        from orchestra.db.models.orchestra_models import Role
-
         query = (
             select(
                 User.email,
@@ -135,6 +134,136 @@ class OrganizationMemberDAO:
             .filter_by(user_id=user_id, organization_id=organization_id)
             .first()
         )
+
+    def get_members_with_details(
+        self,
+        organization_id: int,
+    ) -> list[dict]:
+        """
+        Get all members of an organization with user info and role name in
+        a single query (avoids N+1).
+
+        Returns a list of dicts, each containing:
+          - All OrganizationMember columns (id, user_id, organization_id,
+            role_id, created_at)
+          - role_name (from Role)
+          - User profile fields: name, last_name, email, image, bio,
+            timezone, phone_number
+
+        :param organization_id: Organization ID.
+        :return: List of member detail dicts.
+        """
+        query = (
+            select(
+                OrganizationMember.id,
+                OrganizationMember.user_id,
+                OrganizationMember.organization_id,
+                OrganizationMember.role_id,
+                OrganizationMember.created_at,
+                Role.name.label("role_name"),
+                User.name.label("user_first_name"),
+                User.last_name.label("user_last_name"),
+                User.email.label("user_email"),
+                User.image.label("user_image"),
+                User.bio.label("user_bio"),
+                User.timezone.label("user_timezone"),
+                User.phone_number.label("user_phone_number"),
+            )
+            .join(User, OrganizationMember.user_id == User.id)
+            .join(Role, OrganizationMember.role_id == Role.id)
+            .where(OrganizationMember.organization_id == organization_id)
+        )
+
+        rows = self.session.execute(query).fetchall()
+
+        results: list[dict] = []
+        for row in rows:
+            # Build full display name from first + last name
+            name_parts = []
+            if row.user_first_name:
+                name_parts.append(row.user_first_name)
+            if row.user_last_name:
+                name_parts.append(row.user_last_name)
+            full_name = " ".join(name_parts) if name_parts else None
+
+            results.append(
+                {
+                    "id": row.id,
+                    "user_id": row.user_id,
+                    "organization_id": row.organization_id,
+                    "role_id": row.role_id,
+                    "created_at": row.created_at,
+                    "role_name": row.role_name,
+                    "name": full_name,
+                    "email": row.user_email,
+                    "image": row.user_image,
+                    "bio": row.user_bio,
+                    "timezone": row.user_timezone,
+                    "phone_number": row.user_phone_number,
+                },
+            )
+
+        return results
+
+    def get_member_with_details(
+        self,
+        user_id: str,
+        organization_id: int,
+    ) -> Optional[dict]:
+        """
+        Get a single member with user info and role name in one query.
+
+        Returns the same dict shape as ``get_members_with_details`` items,
+        or ``None`` if the member is not found.
+        """
+        query = (
+            select(
+                OrganizationMember.id,
+                OrganizationMember.user_id,
+                OrganizationMember.organization_id,
+                OrganizationMember.role_id,
+                OrganizationMember.created_at,
+                Role.name.label("role_name"),
+                User.name.label("user_first_name"),
+                User.last_name.label("user_last_name"),
+                User.email.label("user_email"),
+                User.image.label("user_image"),
+                User.bio.label("user_bio"),
+                User.timezone.label("user_timezone"),
+                User.phone_number.label("user_phone_number"),
+            )
+            .join(User, OrganizationMember.user_id == User.id)
+            .join(Role, OrganizationMember.role_id == Role.id)
+            .where(
+                OrganizationMember.organization_id == organization_id,
+                OrganizationMember.user_id == user_id,
+            )
+        )
+
+        row = self.session.execute(query).first()
+        if row is None:
+            return None
+
+        name_parts = []
+        if row.user_first_name:
+            name_parts.append(row.user_first_name)
+        if row.user_last_name:
+            name_parts.append(row.user_last_name)
+
+        return {
+            "id": row.id,
+            "user_id": row.user_id,
+            "organization_id": row.organization_id,
+            "role_id": row.role_id,
+            "created_at": row.created_at,
+            "role_name": row.role_name,
+            "name": " ".join(name_parts) if name_parts else None,
+            "email": row.user_email,
+            "image": row.user_image,
+            "bio": row.user_bio,
+            "timezone": row.user_timezone,
+            "phone_number": row.user_phone_number,
+        }
 
     def update_member_role(
         self,

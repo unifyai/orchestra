@@ -1251,6 +1251,113 @@ async def test_register_captcha_failure_prevents_side_effects(
 
 
 # =============================================================================
+# Forgot-password CAPTCHA tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_forgot_password_rejects_missing_captcha_when_configured(
+    client: AsyncClient,
+):
+    """Forgot-password fails when Turnstile is configured but no token is provided."""
+    with patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = False
+
+        resp = await client.post(
+            "/v0/admin/auth/forgot-password",
+            json={"email": "captcha_forgot@example.com"},
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "captcha_failed"
+
+
+@pytest.mark.anyio
+async def test_forgot_password_rejects_invalid_captcha_token(
+    client: AsyncClient,
+):
+    """Forgot-password fails when Cloudflare rejects the Turnstile token."""
+    with patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = False
+
+        resp = await client.post(
+            "/v0/admin/auth/forgot-password",
+            json={
+                "email": "captcha_forgot_invalid@example.com",
+                "captcha_token": "bad-token-value",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "captcha_failed"
+    mock_verify.assert_called_once()
+    call_args = mock_verify.call_args
+    assert call_args[0][0] == "bad-token-value"
+
+
+@pytest.mark.anyio
+async def test_forgot_password_succeeds_with_valid_captcha_token(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Forgot-password succeeds when Turnstile validation passes."""
+    email = "captcha_forgot_ok@example.com"
+    await _register_and_verify(client, dbsession, email)
+
+    with (
+        patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify,
+        patch(_EMAIL_PATCH_TARGET, new_callable=AsyncMock) as mock_send,
+    ):
+        mock_verify.return_value = True
+        mock_send.return_value = True
+
+        resp = await client.post(
+            "/v0/admin/auth/forgot-password",
+            json={
+                "email": email,
+                "captcha_token": "valid-token",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    mock_verify.assert_called_once()
+    call_args = mock_verify.call_args
+    assert call_args[0][0] == "valid-token"
+
+
+@pytest.mark.anyio
+async def test_forgot_password_captcha_failure_prevents_side_effects(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """When captcha fails on forgot-password, no verification entry is created."""
+    email = "captcha_forgot_no_side@example.com"
+    await _register_and_verify(client, dbsession, email)
+
+    with patch(_TURNSTILE_PATCH_TARGET, new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = False
+
+        resp = await client.post(
+            "/v0/admin/auth/forgot-password",
+            json={
+                "email": email,
+                "captcha_token": "bad-token",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 400
+
+    # No password reset verification entry should exist
+    dao = EmailVerificationDAO(dbsession)
+    entry = dao.get_pending(email, "password_reset")
+    assert entry is None
+
+
+# =============================================================================
 # Set Password Tests (OAuth-only user adds email/password — 7.4, 7.7–7.10)
 # =============================================================================
 
