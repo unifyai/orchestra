@@ -72,6 +72,41 @@ def _init_stripe() -> None:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _customer_has_payment_method(stripe_customer_id: Optional[str]) -> bool:
+    """
+    Check whether a Stripe customer has a default payment method on file.
+
+    Returns ``False`` when there is no customer or Stripe is not configured.
+    """
+    if not stripe_customer_id:
+        return False
+    try:
+        _init_stripe()
+        customer = stripe.Customer.retrieve(
+            stripe_customer_id,
+            expand=["invoice_settings.default_payment_method"],
+        )
+        # Check invoice_settings.default_payment_method first (used for invoices),
+        # then fall back to the legacy default_source field.
+        if (
+            customer.invoice_settings
+            and customer.invoice_settings.default_payment_method
+        ):
+            return True
+        if customer.default_source:
+            return True
+        return False
+    except Exception:
+        # If Stripe is unreachable, don't block the response – just
+        # report "no payment method" so the UI shows the right hint.
+        logger.warning(
+            "Could not verify payment method for customer %s",
+            stripe_customer_id,
+            exc_info=True,
+        )
+        return False
+
+
 def _check_org_billing_permission(
     session,
     user_id: str,
@@ -554,6 +589,7 @@ def get_auto_recharge(
     total_spending = float(ba_dao.get_total_spending(ba.id))
     can_enable = ba_dao.can_enable_auto_recharge(ba.id)
     min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
+    has_pm = _customer_has_payment_method(ba.stripe_customer_id)
 
     return AutoRechargeResponse(
         enabled=ba.autorecharge,
@@ -564,6 +600,7 @@ def get_auto_recharge(
         total_spending=total_spending,
         minimum_spend_required=min_required,
         remaining_spend_needed=max(0.0, min_required - total_spending),
+        has_payment_method=has_pm,
     )
 
 
@@ -620,6 +657,14 @@ def update_auto_recharge(
                     f"Current spending: ${total_spending:.2f}"
                 ),
             )
+        if not _customer_has_payment_method(ba.stripe_customer_id):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A default payment method is required to enable "
+                    "auto-recharge. Please add one via Manage Payment Methods."
+                ),
+            )
 
     # --- Validate qty if provided ----------------------------------------
     if body.qty is not None and body.qty < float(MIN_AUTORECHARGE_AMOUNT):
@@ -648,6 +693,7 @@ def update_auto_recharge(
     total_spending = float(ba_dao.get_total_spending(ba.id))
     can_enable = ba_dao.can_enable_auto_recharge(ba.id)
     min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
+    has_pm = _customer_has_payment_method(ba.stripe_customer_id)
 
     return AutoRechargeResponse(
         enabled=ba.autorecharge,
@@ -658,6 +704,7 @@ def update_auto_recharge(
         total_spending=total_spending,
         minimum_spend_required=min_required,
         remaining_spend_needed=max(0.0, min_required - total_spending),
+        has_payment_method=has_pm,
     )
 
 
