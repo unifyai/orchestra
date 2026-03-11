@@ -952,7 +952,7 @@ class TestCheckoutPortalStatus:
             "/v0/billing/portal-session",
             headers=user["headers"],
         )
-        assert response.status_code in (400, 500)
+        assert response.status_code == 404
         assert "detail" in response.json()
 
 
@@ -1197,7 +1197,11 @@ class TestAutoRechargeEndpoints:
 
 
 async def _create_org_with_member(
-    client, dbsession, owner_email, member_email, role_name
+    client,
+    dbsession,
+    owner_email,
+    member_email,
+    role_name,
 ):
     from orchestra.db.dao.role_dao import RoleDAO
 
@@ -1305,7 +1309,10 @@ class TestOrgBillingPermissions:
 
     @pytest.mark.anyio
     async def test_member_cannot_create_checkout_session(
-        self, client, dbsession, monkeypatch
+        self,
+        client,
+        dbsession,
+        monkeypatch,
     ):
         _, _, member_headers = await _create_org_with_member(
             client,
@@ -1328,7 +1335,10 @@ class TestOrgBillingPermissions:
 
     @pytest.mark.anyio
     async def test_member_cannot_create_portal_session(
-        self, client, dbsession, monkeypatch
+        self,
+        client,
+        dbsession,
+        monkeypatch,
     ):
         _, _, member_headers = await _create_org_with_member(
             client,
@@ -1351,7 +1361,10 @@ class TestOrgBillingPermissions:
 
     @pytest.mark.anyio
     async def test_viewer_can_read_checkout_status(
-        self, client, dbsession, monkeypatch
+        self,
+        client,
+        dbsession,
+        monkeypatch,
     ):
         _, _, viewer_headers = await _create_org_with_member(
             client,
@@ -1388,7 +1401,9 @@ class TestOrgBillingPermissions:
 
     @pytest.mark.anyio
     async def test_personal_api_key_bypasses_org_permission_check(
-        self, client, dbsession
+        self,
+        client,
+        dbsession,
     ):
         user = await create_test_user(client, "perm_personal_user@test.com")
 
@@ -1403,7 +1418,8 @@ class TestOrgBillingPermissions:
         dbsession.commit()
 
         response = await client.get(
-            "/v0/billing/auto-recharge", headers=user["headers"]
+            "/v0/billing/auto-recharge",
+            headers=user["headers"],
         )
         assert response.status_code == 200
 
@@ -1585,7 +1601,8 @@ class TestCreditGrants:
         dbsession.commit()
 
         resp_before = await client.get(
-            "/v0/billing/account-info", headers=user["headers"]
+            "/v0/billing/account-info",
+            headers=user["headers"],
         )
         assert resp_before.status_code == 200
         assert resp_before.json()["last_recharge_at"] is None
@@ -1605,7 +1622,8 @@ class TestCreditGrants:
         assert claim_resp.status_code == 200
 
         resp_after = await client.get(
-            "/v0/billing/account-info", headers=user["headers"]
+            "/v0/billing/account-info",
+            headers=user["headers"],
         )
         assert resp_after.status_code == 200
         data = resp_after.json()
@@ -1663,12 +1681,13 @@ class TestBillingProfile:
     async def test_get_personal(self, client: AsyncClient, dbsession):
         user = await create_test_user(client, "profile_personal@test.com")
         response = await client.get(
-            "/v0/billing/billing-profile", headers=user["headers"]
+            "/v0/billing/billing-profile",
+            headers=user["headers"],
         )
         assert response.status_code == 200
         data = response.json()
         assert "billing_email" in data
-        assert "business_name" in data
+        assert "name" in data
         assert "tax_id" in data
         assert "billing_address" in data
         assert "is_business" in data
@@ -1679,12 +1698,13 @@ class TestBillingProfile:
         owner = await create_test_user(client, "profile_org_owner@test.com")
         org = await create_test_org(client, owner, "Profile Org")
         response = await client.get(
-            "/v0/billing/billing-profile", headers=org["headers"]
+            "/v0/billing/billing-profile",
+            headers=org["headers"],
         )
         assert response.status_code == 200
         data = response.json()
         assert data["billing_email"] is None
-        assert data["business_name"] is None
+        assert data["name"] is None
         assert data["is_business"] is True
 
     @pytest.mark.anyio
@@ -1695,7 +1715,7 @@ class TestBillingProfile:
             "/v0/billing/billing-profile",
             json={
                 "billing_email": "finance@company.com",
-                "business_name": "Company LLC",
+                "name": "Company LLC",
                 "tax_id": "12-3456789",
                 "billing_address": {
                     "line1": "456 Business Pkwy",
@@ -1708,7 +1728,7 @@ class TestBillingProfile:
         assert response.status_code == 200
         data = response.json()
         assert data["billing_email"] == "finance@company.com"
-        assert data["business_name"] == "Company LLC"
+        assert data["name"] == "Company LLC"
         assert data["tax_id"] == "12-3456789"
         assert data["billing_address"]["line1"] == "456 Business Pkwy"
         assert data["billing_address"]["city"] == "New York"
@@ -1724,7 +1744,7 @@ class TestBillingProfile:
             "/v0/billing/billing-profile",
             json={
                 "billing_email": "initial@company.com",
-                "business_name": "Initial Corp",
+                "name": "Initial Corp",
                 "billing_address": {
                     "line1": "100 First Ave",
                     "city": "Boston",
@@ -1743,7 +1763,7 @@ class TestBillingProfile:
         assert response.status_code == 200
         data = response.json()
         assert data["billing_email"] == "updated@company.com"
-        assert data["business_name"] == "Initial Corp"
+        assert data["name"] == "Initial Corp"
 
     @pytest.mark.anyio
     async def test_international_address(self, client: AsyncClient, dbsession):
@@ -1754,7 +1774,7 @@ class TestBillingProfile:
             "/v0/billing/billing-profile",
             json={
                 "billing_email": "billing@indianco.in",
-                "business_name": "Indian Tech Pvt Ltd",
+                "name": "Indian Tech Pvt Ltd",
                 "billing_address": {
                     "country": "IN",
                     "line1": "Tower B, Tech Park",
@@ -1800,14 +1820,14 @@ class TestTaxValidation:
         user = await create_test_user(client, "tax_validate_invalid@test.com")
         response = await client.post(
             "/v0/billing/validate-tax-id",
-            json={"tax_id": "invalid-tax-id", "country": "US"},
+            json={"tax_id": "!@#$", "country": "US"},
             headers=user["headers"],
         )
         assert response.status_code == 200
         data = response.json()
         assert data["is_valid"] is False
         assert data["country"] == "US"
-        assert "error" in data
+        assert data["error"] is not None
 
     @pytest.mark.anyio
     async def test_india_gst(self, client: AsyncClient, dbsession):
@@ -1832,21 +1852,21 @@ class TestTaxValidation:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, dict)
-        assert "countries" in data
-        countries = data["countries"]
-        assert isinstance(countries, list)
+        assert "supported_countries" in data
+        assert "total_countries" in data
+        countries = data["supported_countries"]
+        assert isinstance(countries, dict)
         assert len(countries) > 0
 
-        for country in countries:
-            assert "code" in country
-            assert "name" in country
-            assert isinstance(country["code"], str)
-            assert len(country["code"]) == 2
+        for code, info in countries.items():
+            assert isinstance(code, str)
+            assert len(code) == 2
+            assert "name" in info
+            assert "description" in info
 
-        country_codes = [c["code"] for c in countries]
-        assert "US" in country_codes
-        assert "GB" in country_codes
-        assert "IN" in country_codes
+        assert "US" in countries
+        assert "GB" in countries
+        assert "IN" in countries
 
     @pytest.mark.anyio
     async def test_unsupported_country(self, client: AsyncClient, dbsession):
@@ -1926,12 +1946,12 @@ class TestAdminBillingEndpoints:
         response = await client.post(url, json=params, headers=ADMIN_HEADERS)
         user_id = response.json()["id"]
 
-        url = f"/v0/admin/user/by-user-id?user_id={user_id}"
+        url = f"/v0/admin/billing/account-info?user_id={user_id}"
         response = await client.get(url, headers=ADMIN_HEADERS)
         assert response.status_code == 200
         data = response.json()
         assert "credits" in data
-        assert isinstance(data["credits"], (int, float, type(None)))
+        assert isinstance(data["credits"], (int, float))
 
     @pytest.mark.anyio
     async def test_recharge_user_credits(self, client: AsyncClient):
@@ -1973,7 +1993,10 @@ class TestAdminBillingEndpoints:
 
     @pytest.mark.anyio
     async def test_stripe_customer_id(
-        self, client: AsyncClient, fastapi_app, dbsession
+        self,
+        client: AsyncClient,
+        fastapi_app,
+        dbsession,
     ):
         url = fastapi_app.url_path_for("update_stripe_customer_id")
         query = text(
@@ -1994,7 +2017,10 @@ class TestAdminBillingEndpoints:
 
     @pytest.mark.anyio
     async def test_autorecharge_threshold(
-        self, client: AsyncClient, fastapi_app, dbsession
+        self,
+        client: AsyncClient,
+        fastapi_app,
+        dbsession,
     ):
         url = fastapi_app.url_path_for("update_autorecharge_threshold")
         query = text(
@@ -2399,10 +2425,14 @@ class TestBillingModel:
 
         # NULL stripe_customer_id is allowed for multiple accounts
         org3_ba = BillingAccount(
-            credits=0, account_status="ACTIVE", stripe_customer_id=None
+            credits=0,
+            account_status="ACTIVE",
+            stripe_customer_id=None,
         )
         org4_ba = BillingAccount(
-            credits=0, account_status="ACTIVE", stripe_customer_id=None
+            credits=0,
+            account_status="ACTIVE",
+            stripe_customer_id=None,
         )
         dbsession.add(org3_ba)
         dbsession.add(org4_ba)
