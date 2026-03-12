@@ -1287,6 +1287,7 @@ class Assistant(Base):
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
+    desktop_filesync_sshkey = Column(String, nullable=True)
     user_desktop_id = Column(
         Integer,
         ForeignKey("user_desktops.id", ondelete="SET NULL"),
