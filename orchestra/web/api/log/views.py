@@ -2605,16 +2605,35 @@ def _delete_logs(
     # =========================================================================
     # Group 2: Entire log event deletions (fields is empty i.e. passed in as None)
     # =========================================================================
+    entire_log_deletion_candidates = [
+        log_id
+        for log_id, fields in ids_and_fields.items()
+        if log_id is not None and len(fields) == 0
+    ]
+
+    # Validate ownership in a single query (same pattern as Group 3).
+    # For personal projects Project.user_id matches user_id; for org projects
+    # Project.user_id is NULL but Project.id == project_id still validates
+    # that the log belongs to the correct (already-authorised) project.
+    if entire_log_deletion_candidates:
+        valid_entire_ids = set(
+            row[0]
+            for row in session.query(LogEvent.id)
+            .filter(
+                LogEvent.id.in_(entire_log_deletion_candidates),
+                LogEvent.project_id == project_id,
+            )
+            .all()
+        )
+    else:
+        valid_entire_ids = set()
+
     entire_log_deletions = []
-    for log_id, fields in ids_and_fields.items():
-        if log_id is not None and len(fields) == 0:
-            # Verify if the log belongs to the user
-            try:
-                if log_event_dao.get_user_id(id=log_id) != user_id:
-                    raise IndexError
-                entire_log_deletions.append(log_id)
-            except IndexError:
-                not_found_logs.append(log_id)
+    for log_id in entire_log_deletion_candidates:
+        if log_id in valid_entire_ids:
+            entire_log_deletions.append(log_id)
+        else:
+            not_found_logs.append(log_id)
 
     if entire_log_deletions:
         # In JSONB mode, source_type='derived' without specific fields is not allowed
