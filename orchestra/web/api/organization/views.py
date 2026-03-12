@@ -33,6 +33,7 @@ from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
+    AdminOrganizationCreate,
     DeclineInviteResponse,
     InviteListResponse,
     InviteResponse,
@@ -40,6 +41,7 @@ from orchestra.web.api.organization.schema import (
     MemberSpendingLimitRequest,
     MemberSpendingLimitResponse,
     MemberSpendResponse,
+    MFAEnforcementStatusResponse,
     OrganizationCreate,
     OrganizationMemberAdd,
     OrganizationMemberResponse,
@@ -1698,10 +1700,10 @@ async def accept_invite(
         # Check if org requires MFA and user hasn't set it up
         mfa_setup_required = False
         if org.require_mfa:
-            from orchestra.db.dao.auth_dao import AuthDAO
+            from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
 
-            auth_dao = AuthDAO(session)
-            if not auth_dao.has_enabled_mfa(user_id):
+            mfa_cred_dao = MFACredentialDAO(session)
+            if not mfa_cred_dao.has_enabled_mfa(user_id):
                 mfa_setup_required = True
 
         return AcceptInviteResponse(
@@ -2331,6 +2333,89 @@ def admin_disable_free_trial(
 
 
 # =============================================================================
+# Admin Organization Creation (white-glove onboarding)
+# =============================================================================
+
+
+@admin_router.post(
+    "/organizations",
+    status_code=status.HTTP_201_CREATED,
+)
+def admin_create_organization(
+    organization: AdminOrganizationCreate,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Admin endpoint: Create an organization on behalf of a user.
+
+    The specified creator_user_id becomes the Owner of the new organization
+    and receives an organization API key. Used for white-glove enterprise
+    onboarding where a Unify team member provisions an org, configures it
+    (logo, invites, etc.), and later transfers ownership to the client.
+    """
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    role_dao = RoleDAO(session)
+    user_dao = UserDAO(session)
+
+    # Validate creator exists
+    creator_row = user_dao.get_by_id(organization.creator_user_id)
+    if not creator_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{organization.creator_user_id}' not found",
+        )
+
+    # Check name uniqueness
+    existing = org_dao.filter(name=organization.name)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Organization with name '{organization.name}' already exists",
+        )
+
+    # Resolve timezone
+    if organization.timezone is not None:
+        org_timezone = organization.timezone
+    else:
+        creator = creator_row[0]
+        org_timezone = creator.timezone if creator.timezone else None
+
+    org = org_dao.create(
+        name=organization.name,
+        owner_id=organization.creator_user_id,
+        timezone=org_timezone,
+    )
+
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    if not owner_role:
+        raise ValueError("Owner system role not found")
+
+    org_member_dao.create(
+        organization_id=org.id,
+        user_id=organization.creator_user_id,
+        role_id=owner_role.id,
+    )
+
+    new_api_key = generate_key()
+    api_key_dao.create(
+        key=new_api_key,
+        name=f"org_{org.name}",
+        user_id=organization.creator_user_id,
+        organization_id=org.id,
+    )
+
+    session.commit()
+
+    org_response = OrganizationResponse.model_validate(org)
+    return {
+        **org_response.model_dump(),
+        "api_key": new_api_key,
+    }
+
+
+# =============================================================================
 # Organization MFA Enforcement
 # =============================================================================
 
@@ -2421,3 +2506,47 @@ def update_org_mfa_settings(
     session.commit()
 
     return OrgMFASettingsResponse(**result)
+
+
+@admin_router.get(
+    "/auth/mfa-enforcement-status",
+    response_model=MFAEnforcementStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_enforcement_status(
+    user_id: str,
+    org_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check whether a user must set up MFA to access a given organization.
+
+    Called by the Next.js server (admin-key auth) during workspace
+    resolution to decide if the user should be redirected to MFA setup.
+
+    MFA enforcement applies to all members regardless of auth provider
+    (email/password, Google, GitHub). If the org requires MFA and the
+    user hasn't set it up, ``setup_required`` is True.
+    """
+    from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
+
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(org_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {org_id} not found",
+        )
+
+    enforced = org.require_mfa
+
+    mfa_dao = MFACredentialDAO(session)
+    has_mfa = mfa_dao.has_enabled_mfa(user_id)
+
+    setup_required = enforced and not has_mfa
+
+    return MFAEnforcementStatusResponse(
+        enforced=enforced,
+        has_mfa=has_mfa,
+        setup_required=setup_required,
+    )
