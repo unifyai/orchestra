@@ -2280,6 +2280,7 @@ def admin_get_organization_verification(
         "name": org.name,
         "verified": org.verified,
         "verified_at": org.verified_at.isoformat() if org.verified_at else None,
+        "free_trial": org.free_trial,
     }
 
 
@@ -2413,6 +2414,146 @@ def admin_create_organization(
         **org_response.model_dump(),
         "api_key": new_api_key,
     }
+
+
+# =============================================================================
+# Admin Invite User to Organization
+# =============================================================================
+
+
+@admin_router.post(
+    "/organization/{organization_id}/invite",
+    status_code=status.HTTP_201_CREATED,
+)
+async def admin_invite_user(
+    organization_id: int,
+    invite_request: InviteUserRequest,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Admin endpoint: Invite a user to an organization.
+
+    Bypasses org membership permission checks – intended for white-glove
+    onboarding by Unify admins.
+    """
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+    role_dao = RoleDAO(session)
+    user_dao = UserDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    email = invite_request.email.lower()
+
+    # Check if already a member
+    existing_user_row = user_dao.filter(email=email)
+    if existing_user_row:
+        existing_user = existing_user_row[0][0]
+        existing_member = org_member_dao.filter(
+            organization_id=organization_id,
+            user_id=existing_user.id,
+        )
+        if existing_member:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User is already a member of this organization",
+            )
+
+    # Check for existing invite – refresh if found
+    existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
+    if existing_invite:
+        existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
+            days=invite_request.expires_in_days,
+        )
+        session.commit()
+        # Use the org owner as the "inviter" for the email
+        await _send_invite_email(existing_invite, org, user_dao, org.owner_id)
+        return {
+            "message": f"Invite resent to {email}",
+            "invite_id": str(existing_invite.id),
+        }
+
+    # Determine role_id (default to Member)
+    role_id = invite_request.role_id
+    if not role_id:
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        if not member_role:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Default Member role not found",
+            )
+        role_id = member_role.id
+
+    invitee_user_id = None
+    if existing_user_row:
+        invitee_user_id = existing_user_row[0][0].id
+
+    try:
+        invite = invite_dao.create(
+            organization_id=organization_id,
+            invitee_email=email,
+            invited_by_user_id=org.owner_id,
+            role_id=role_id,
+            expires_in_days=invite_request.expires_in_days,
+            invitee_user_id=invitee_user_id,
+        )
+        session.commit()
+
+        await _send_invite_email(invite, org, user_dao, org.owner_id)
+
+        return {
+            "message": f"Invite sent to {email}",
+            "invite_id": str(invite.id),
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create invite: {str(e)}",
+        )
+
+
+@admin_router.get("/organization/{organization_id}/invites")
+def admin_list_invites(
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> list:
+    """
+    Admin endpoint: List all pending invites for an organization.
+    """
+    org_dao = OrganizationDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    invites = invite_dao.list_by_organization(organization_id, include_expired=True)
+    now = datetime.now(timezone.utc)
+
+    result = []
+    for inv in invites:
+        expired = inv.expires_at < now if inv.expires_at else False
+        result.append(
+            {
+                "id": inv.id,
+                "email": inv.invitee_email,
+                "status": "expired" if expired else "pending",
+                "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+            },
+        )
+
+    return result
 
 
 # =============================================================================
