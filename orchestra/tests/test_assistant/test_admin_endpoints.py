@@ -1436,3 +1436,124 @@ async def test_admin_list_assistant_team_ids_requested_via_from_fields(
     our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
     assert "team_ids" in our
     assert our["team_ids"] == []
+
+
+# =============================================================================
+# desktop_filesync_sshkey (internal field)
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_admin_update_assistant_desktop_filesync_sshkey(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test setting desktop_filesync_sshkey via admin PATCH endpoint."""
+    owner = await create_test_user(client, "admin_sshkey@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SSHKey",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    ssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake-key-data\n-----END OPENSSH PRIVATE KEY-----"
+
+    update_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"desktop_filesync_sshkey": ssh_key},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200
+    data = update_resp.json()
+    assert "desktop_filesync_sshkey" in data["updated_fields"]
+
+    assistant_dao = AssistantDAO(dbsession)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    assert assistant.desktop_filesync_sshkey == ssh_key
+
+
+@pytest.mark.anyio
+async def test_admin_list_returns_desktop_filesync_sshkey(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that admin list endpoint returns desktop_filesync_sshkey when set."""
+    owner = await create_test_user(client, "admin_sshkey_list@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SSHKeyList",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    ssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nlist-test-key\n-----END OPENSSH PRIVATE KEY-----"
+
+    # Set the key via admin update
+    await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"desktop_filesync_sshkey": ssh_key},
+        headers=ADMIN_HEADERS,
+    )
+
+    # Verify it appears in admin list
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"agent_id": agent_id},
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    assistants = admin_resp.json()["info"]
+    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    assert our["desktop_filesync_sshkey"] == ssh_key
+
+
+@pytest.mark.anyio
+async def test_non_admin_does_not_return_desktop_filesync_sshkey(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that regular (non-admin) assistant GET does not expose the SSH key."""
+    owner = await create_test_user(client, "sshkey_nonadmin@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SSHKeyHidden",
+            "surname": "Test",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    ssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nhidden-key\n-----END OPENSSH PRIVATE KEY-----"
+
+    # Set the key via admin
+    await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"desktop_filesync_sshkey": ssh_key},
+        headers=ADMIN_HEADERS,
+    )
+
+    # Fetch via regular endpoint
+    get_resp = await client.get(
+        f"/v0/assistant/{agent_id}",
+        headers=owner["headers"],
+    )
+    assert get_resp.status_code == 200
+    assistant_data = get_resp.json()["info"]
+    assert assistant_data["desktop_filesync_sshkey"] is None
