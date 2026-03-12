@@ -98,6 +98,10 @@ def get_app() -> FastAPI:
             self._requests: dict[str, list[float]] = defaultdict(list)
 
         async def dispatch(self, request, call_next):
+            # Bypass rate limits in staging and dev environments
+            if settings.is_staging or settings.environment == "dev":
+                return await call_next(request)
+
             path = request.url.path
             if not (
                 path.startswith("/v0/admin")

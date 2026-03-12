@@ -20,8 +20,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.auth_dao import AuthDAO, hash_code
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.email_verification_dao import EmailVerificationDAO, hash_code
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -142,7 +142,7 @@ async def test_create_user_after_verification_seeds_default_tasks(
     assert resp.status_code == 200, resp.json()
 
     # Step 2: Get the verification code from the DB and set a known code
-    dao = EmailVerificationDAO(dbsession)
+    dao = AuthDAO(dbsession)
     entry = dao.get_pending(email, "signup")
     assert entry is not None, f"No pending signup verification for {email}"
     code = "123456"
