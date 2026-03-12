@@ -40,7 +40,6 @@ from orchestra.web.api.organization.schema import (
     MemberSpendingLimitRequest,
     MemberSpendingLimitResponse,
     MemberSpendResponse,
-    MFAEnforcementStatusResponse,
     OrganizationCreate,
     OrganizationMemberAdd,
     OrganizationMemberResponse,
@@ -1699,10 +1698,10 @@ async def accept_invite(
         # Check if org requires MFA and user hasn't set it up
         mfa_setup_required = False
         if org.require_mfa:
-            from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
+            from orchestra.db.dao.auth_dao import AuthDAO
 
-            mfa_cred_dao = MFACredentialDAO(session)
-            if not mfa_cred_dao.has_enabled_mfa(user_id):
+            auth_dao = AuthDAO(session)
+            if not auth_dao.has_enabled_mfa(user_id):
                 mfa_setup_required = True
 
         return AcceptInviteResponse(
@@ -2422,47 +2421,3 @@ def update_org_mfa_settings(
     session.commit()
 
     return OrgMFASettingsResponse(**result)
-
-
-@admin_router.get(
-    "/auth/mfa-enforcement-status",
-    response_model=MFAEnforcementStatusResponse,
-    status_code=status.HTTP_200_OK,
-)
-def mfa_enforcement_status(
-    user_id: str,
-    org_id: int,
-    session: Session = Depends(get_db_session),
-):
-    """
-    Check whether a user must set up MFA to access a given organization.
-
-    Called by the Next.js server (admin-key auth) during workspace
-    resolution to decide if the user should be redirected to MFA setup.
-
-    MFA enforcement applies to all members regardless of auth provider
-    (email/password, Google, GitHub). If the org requires MFA and the
-    user hasn't set it up, ``setup_required`` is True.
-    """
-    from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
-
-    org_dao = OrganizationDAO(session)
-    org = org_dao.get(org_id)
-    if not org:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Organization with id {org_id} not found",
-        )
-
-    enforced = org.require_mfa
-
-    mfa_dao = MFACredentialDAO(session)
-    has_mfa = mfa_dao.has_enabled_mfa(user_id)
-
-    setup_required = enforced and not has_mfa
-
-    return MFAEnforcementStatusResponse(
-        enforced=enforced,
-        has_mfa=has_mfa,
-        setup_required=setup_required,
-    )

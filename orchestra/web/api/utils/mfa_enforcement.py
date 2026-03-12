@@ -5,7 +5,7 @@ import logging
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO
+from orchestra.db.dao.auth_dao import AuthDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Organization, OrganizationMember
 
@@ -34,8 +34,8 @@ def check_org_mfa_enforcement():
         if not memberships:
             return
 
-        mfa_dao = MFACredentialDAO(session)
-        if not mfa_dao.has_enabled_mfa(user_id):
+        auth_dao = AuthDAO(session)
+        if not auth_dao.has_enabled_mfa(user_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={

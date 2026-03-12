@@ -14,9 +14,7 @@ from orchestra.db.models.orchestra_models import Assistant, BillingAccount, User
 from orchestra.web.api.utils.http_responses import not_found
 
 if TYPE_CHECKING:
-    from orchestra.db.dao.account_dao import AccountDAO
     from orchestra.db.dao.api_key_dao import ApiKeyDAO
-    from orchestra.db.dao.email_account_dao import EmailAccountDAO
     from orchestra.db.dao.organization_dao import OrganizationDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.role_dao import RoleDAO
@@ -412,46 +410,6 @@ class UserDAO:
         if result and result.spend:
             return float(result.spend)
         return 0.0
-
-    # =========================================================================
-    # AUTH PROVIDER HELPERS
-    # =========================================================================
-
-    def get_linked_providers(
-        self,
-        user_id: str,
-        account_dao: Optional["AccountDAO"] = None,
-        email_account_dao: Optional["EmailAccountDAO"] = None,
-    ) -> List[str]:
-        """
-        Get the list of auth providers linked to a user.
-
-        Returns provider names from OAuth accounts (e.g. "google", "github")
-        and "email" if the user has an EmailAccount.
-
-        :param user_id: The user's ID.
-        :param account_dao: Optional AccountDAO instance (created from session if omitted).
-        :param email_account_dao: Optional EmailAccountDAO instance (created if omitted).
-        :return: List of provider name strings.
-        """
-        from orchestra.db.dao.account_dao import AccountDAO
-        from orchestra.db.dao.email_account_dao import EmailAccountDAO
-
-        if account_dao is None:
-            account_dao = AccountDAO(self.session)
-        if email_account_dao is None:
-            email_account_dao = EmailAccountDAO(self.session)
-
-        providers = []
-        # Check OAuth providers
-        accounts = account_dao.filter(user_id=user_id)
-        for row in accounts:
-            account = row[0] if hasattr(row, "__getitem__") else row
-            providers.append(account.provider)
-        # Check email/password
-        if email_account_dao.get_by_user_id(user_id):
-            providers.append("email")
-        return providers
 
     # =========================================================================
     # ORGANIZATION MEMBERSHIP HELPERS

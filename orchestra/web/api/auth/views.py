@@ -1,5 +1,5 @@
 """
-Email authentication & MFA endpoints.
+Authentication endpoints (email/password, OAuth, MFA).
 
 Admin-key endpoints (called by the Next.js server on behalf of users):
   - POST /admin/auth/register
@@ -14,6 +14,9 @@ Admin-key endpoints (called by the Next.js server on behalf of users):
   - POST /admin/auth/mfa/verify          → validate TOTP code during login
   - POST /admin/auth/mfa/verify-recovery → validate recovery code during login
   - GET  /admin/auth/mfa/status-by-email → check MFA status for OAuth sign-in
+  - GET  /admin/auth/mfa/enforcement-status → check MFA enforcement for user+org
+  - POST /admin/auth/account              → link OAuth provider account
+  - DELETE /admin/auth/account           → unlink OAuth provider account
 
 User-API-key endpoints (called by the authenticated user):
   - POST /auth/set-password
@@ -25,6 +28,7 @@ User-API-key endpoints (called by the authenticated user):
   - GET  /auth/mfa/status        → check MFA status
 """
 
+import datetime as dt_module
 import logging
 from datetime import datetime, timezone
 
@@ -34,9 +38,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.email_account_dao import EmailAccountDAO
-from orchestra.db.dao.email_verification_dao import (
-    EmailVerificationDAO,
+from orchestra.db.dao.auth_dao import (
+    AuthDAO,
     check_user_agent,
     decode_verification_token,
     generate_verification_code,
@@ -44,8 +47,8 @@ from orchestra.db.dao.email_verification_dao import (
     sign_verification_token,
     verify_turnstile_token,
 )
-from orchestra.db.dao.mfa_credential_dao import MFACredentialDAO, MFARecoveryDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
+from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.settings import settings
@@ -63,6 +66,7 @@ from orchestra.web.api.auth.schema import (
     MFAConfirmRequest,
     MFAConfirmResponse,
     MFADisableRequest,
+    MFAEnforcementStatusResponse,
     MFARegenerateRecoveryResponse,
     MFASetupResponse,
     MFAStatusByEmailResponse,
@@ -78,6 +82,7 @@ from orchestra.web.api.auth.schema import (
     SetPasswordRequest,
     VerifyCodeResponse,
 )
+from orchestra.web.api.users.schema import AccountRequest
 from orchestra.web.api.utils.auth_rate_limiting import enforce_auth_rate_limit
 
 admin_router = APIRouter()
@@ -167,9 +172,9 @@ async def register(
     password_hash = ph.hash(body.password)
 
     # 4. Create verification entry (overwrites any existing pending signup)
-    verification_dao = EmailVerificationDAO(session)
+    auth_dao = AuthDAO(session)
     code = generate_verification_code()
-    verification_dao.create_signup_verification(
+    auth_dao.create_signup_verification(
         email=email,
         code=code,
         password_hash=password_hash,
@@ -250,8 +255,8 @@ def verify_code(
             },
         )
 
-    verification_dao = EmailVerificationDAO(session)
-    verification = verification_dao.validate_code(email, body.code, purpose)
+    auth_dao = AuthDAO(session)
+    verification = auth_dao.validate_verification_code(email, body.code, purpose)
 
     if verification is None:
         session.commit()
@@ -306,8 +311,8 @@ def create_user_after_verification(
         )
 
     # Retrieve signup data from the verification entry
-    verification_dao = EmailVerificationDAO(session)
-    verification = verification_dao.get_pending(email, "signup")
+    auth_dao = AuthDAO(session)
+    verification = auth_dao.get_pending_verification(email, "signup")
     if verification is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -352,8 +357,7 @@ def create_user_after_verification(
     except Exception as e:
         logger.warning(f"Failed to seed default tasks for user {user.id}: {e}")
 
-    email_account_dao = EmailAccountDAO(session)
-    email_account_dao.create(
+    auth_dao.create_email_credentials(
         user_id=user.id,
         password_hash=verification.password_hash,
         email_verified=True,
@@ -364,7 +368,7 @@ def create_user_after_verification(
     onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
 
     # Delete the verification entry
-    verification_dao.delete(verification.id)
+    auth_dao.delete_verification(verification.id)
     session.commit()
 
     return AuthVerifyResponse(
@@ -412,12 +416,12 @@ def authenticate(
         )
 
     user = existing[0][0]
-    email_account_dao = EmailAccountDAO(session)
-    email_account = email_account_dao.get_by_user_id(user.id)
+    auth_dao = AuthDAO(session)
+    email_account = auth_dao.get_email_credentials(user.id)
 
     if email_account is None:
         # User exists but has no email/password — they signed up via OAuth
-        providers = UserDAO(session).get_linked_providers(user.id)
+        providers = auth_dao.get_linked_providers(user.id)
         provider_str = ", ".join(providers) if providers else "another method"
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -458,8 +462,7 @@ def authenticate(
         )
 
     # Check for enabled MFA credentials
-    mfa_dao = MFACredentialDAO(session)
-    mfa_required = mfa_dao.has_enabled_mfa(user.id)
+    mfa_required = auth_dao.has_enabled_mfa(user.id)
 
     # Derive onboarding step from OnboardingStatus table
     onboarding_dao = OnboardingStatusDAO(session)
@@ -518,20 +521,19 @@ async def forgot_password(
 
     # Look up user + email account silently
     user_dao = UserDAO(session)
+    auth_dao = AuthDAO(session)
     existing = user_dao.filter(email=email)
     if not existing:
         return {"message": "If an account exists, a reset code has been sent."}
 
     user = existing[0][0]
-    email_account_dao = EmailAccountDAO(session)
-    email_account = email_account_dao.get_by_user_id(user.id)
+    email_account = auth_dao.get_email_credentials(user.id)
     if email_account is None:
         return {"message": "If an account exists, a reset code has been sent."}
 
     # Create reset verification
-    verification_dao = EmailVerificationDAO(session)
     code = generate_verification_code()
-    verification_dao.create_password_reset_verification(email=email, code=code)
+    auth_dao.create_password_reset_verification(email=email, code=code)
     session.flush()
 
     # Send reset email
@@ -599,8 +601,8 @@ def reset_password(
         )
 
     # Enforce single-use token via jti check
-    verification_dao = EmailVerificationDAO(session)
-    verification = verification_dao.get_pending(email, "password_reset")
+    auth_dao = AuthDAO(session)
+    verification = auth_dao.get_pending_verification(email, "password_reset")
     if verification is None or verification.token_jti != jti:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -612,8 +614,7 @@ def reset_password(
     verification.token_jti = None
 
     user = existing[0][0]
-    email_account_dao = EmailAccountDAO(session)
-    result = email_account_dao.update_password(
+    result = auth_dao.update_password(
         user_id=user.id,
         new_password_hash=ph.hash(body.new_password),
     )
@@ -628,7 +629,7 @@ def reset_password(
         )
 
     # Clean up any leftover verification entries for this email
-    verification_dao.delete_by_email_and_purpose(email, "password_reset")
+    auth_dao.delete_verifications_by_email_and_purpose(email, "password_reset")
     session.commit()
 
     return {"message": "Password has been reset successfully."}
@@ -660,11 +661,11 @@ async def resend_verification(
         identifier=email,
     )
 
-    verification_dao = EmailVerificationDAO(session)
+    auth_dao = AuthDAO(session)
 
     # Cooldown: reject if the most recent entry for this email+purpose
     # was created less than 60 seconds ago.
-    existing_for_cooldown = verification_dao.get_pending(email, body.purpose)
+    existing_for_cooldown = auth_dao.get_pending_verification(email, body.purpose)
     if existing_for_cooldown and existing_for_cooldown.created_at:
         created = existing_for_cooldown.created_at
         # Ensure timezone-aware comparison (TIMESTAMP columns may be naive).
@@ -683,7 +684,7 @@ async def resend_verification(
 
     if body.purpose == "signup":
         # Get existing pending signup to preserve the password_hash and name
-        existing = verification_dao.get_pending(email, "signup")
+        existing = auth_dao.get_pending_verification(email, "signup")
         if existing is None:
             # No pending signup — silently return to prevent enumeration
             return {
@@ -691,7 +692,7 @@ async def resend_verification(
             }
 
         code = generate_verification_code()
-        verification_dao.create_signup_verification(
+        auth_dao.create_signup_verification(
             email=email,
             code=code,
             password_hash=existing.password_hash,
@@ -708,14 +709,13 @@ async def resend_verification(
             }
 
         user = user_rows[0][0]
-        email_account_dao = EmailAccountDAO(session)
-        if email_account_dao.get_by_user_id(user.id) is None:
+        if auth_dao.get_email_credentials(user.id) is None:
             return {
                 "message": "If a pending verification exists, a new code has been sent.",
             }
 
         code = generate_verification_code()
-        verification_dao.create_password_reset_verification(email=email, code=code)
+        auth_dao.create_password_reset_verification(email=email, code=code)
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -794,7 +794,7 @@ def providers_for_email(
         return ProvidersForEmailResponse(providers=[])
 
     user = existing[0][0]
-    providers = UserDAO(session).get_linked_providers(user.id)
+    providers = AuthDAO(session).get_linked_providers(user.id)
     return ProvidersForEmailResponse(providers=providers)
 
 
@@ -814,8 +814,8 @@ def get_email_credentials(
     non-sensitive metadata (verified status, timestamps). Never exposes
     the password hash.
     """
-    email_account_dao = EmailAccountDAO(session)
-    email_account = email_account_dao.get_by_user_id(user_id)
+    auth_dao = AuthDAO(session)
+    email_account = auth_dao.get_email_credentials(user_id)
 
     if email_account is None:
         return EmailCredentialsResponse(has_email_account=False)
@@ -859,8 +859,8 @@ def change_password(
             detail={"error": "unauthorized", "message": "Authentication required."},
         )
 
-    email_account_dao = EmailAccountDAO(session)
-    email_account = email_account_dao.get_by_user_id(user_id)
+    auth_dao = AuthDAO(session)
+    email_account = auth_dao.get_email_credentials(user_id)
 
     if email_account is None:
         raise HTTPException(
@@ -884,7 +884,7 @@ def change_password(
         )
 
     # Update password
-    email_account_dao.update_password(
+    auth_dao.update_password(
         user_id=user_id,
         new_password_hash=ph.hash(body.new_password),
     )
@@ -915,8 +915,8 @@ def set_password(
             detail={"error": "unauthorized", "message": "Authentication required."},
         )
 
-    email_account_dao = EmailAccountDAO(session)
-    existing = email_account_dao.get_by_user_id(user_id)
+    auth_dao = AuthDAO(session)
+    existing = auth_dao.get_email_credentials(user_id)
 
     if existing is not None:
         raise HTTPException(
@@ -927,7 +927,7 @@ def set_password(
             },
         )
 
-    email_account_dao.create(
+    auth_dao.create_email_credentials(
         user_id=user_id,
         password_hash=ph.hash(body.new_password),
     )
@@ -965,10 +965,10 @@ def mfa_setup(
             detail={"error": "unauthorized", "message": "Authentication required."},
         )
 
-    mfa_dao = MFACredentialDAO(session)
+    auth_dao = AuthDAO(session)
 
     # Block if user already has an enabled TOTP credential
-    existing = mfa_dao.get_enabled_totp(user_id)
+    existing = auth_dao.get_enabled_totp(user_id)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -988,7 +988,7 @@ def mfa_setup(
         )
     user = user_row[0]
 
-    credential, provisioning_uri = mfa_dao.create_totp_credential(
+    credential, provisioning_uri = auth_dao.create_totp_credential(
         user_id=user_id,
         user_email=user.email,
     )
@@ -1020,8 +1020,8 @@ def mfa_confirm(
             detail={"error": "unauthorized", "message": "Authentication required."},
         )
 
-    mfa_dao = MFACredentialDAO(session)
-    credential = mfa_dao.get_pending_totp(user_id)
+    auth_dao = AuthDAO(session)
+    credential = auth_dao.get_pending_totp(user_id)
 
     if credential is None:
         raise HTTPException(
@@ -1033,7 +1033,7 @@ def mfa_confirm(
         )
 
     # Verify the TOTP code against the pending credential
-    if not mfa_dao.verify_totp_code(credential, body.code):
+    if not auth_dao.verify_totp_code(credential, body.code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -1043,11 +1043,10 @@ def mfa_confirm(
         )
 
     # Enable the credential
-    mfa_dao.confirm_totp(credential)
+    auth_dao.confirm_totp(credential)
 
     # Generate recovery codes
-    recovery_dao = MFARecoveryDAO(session)
-    plaintext_codes = recovery_dao.generate_and_store(user_id)
+    plaintext_codes = auth_dao.generate_recovery_codes(user_id)
 
     session.commit()
     return MFAConfirmResponse(recovery_codes=plaintext_codes)
@@ -1080,8 +1079,8 @@ def mfa_disable(
             detail={"error": "unauthorized", "message": "Authentication required."},
         )
 
-    mfa_dao = MFACredentialDAO(session)
-    credential = mfa_dao.get_enabled_totp(user_id)
+    auth_dao = AuthDAO(session)
+    credential = auth_dao.get_enabled_totp(user_id)
 
     if credential is None:
         raise HTTPException(
@@ -1110,11 +1109,9 @@ def mfa_disable(
         )
 
     # Verify the code before disabling (TOTP or recovery code)
-    recovery_dao = MFARecoveryDAO(session)
-
     if body.code:
         # Verify TOTP code
-        if not mfa_dao.verify_totp_code(credential, body.code):
+        if not auth_dao.verify_totp_code(credential, body.code):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -1124,7 +1121,7 @@ def mfa_disable(
             )
     elif body.recovery_code:
         # Verify recovery code
-        remaining = recovery_dao.verify_and_consume(user_id, body.recovery_code)
+        remaining = auth_dao.verify_recovery_code(user_id, body.recovery_code)
         if remaining is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1135,8 +1132,8 @@ def mfa_disable(
             )
 
     # Delete credential and recovery codes
-    mfa_dao.delete_credential(credential)
-    recovery_dao.delete_all_for_user(user_id)
+    auth_dao.delete_mfa_credential(credential)
+    auth_dao.delete_all_recovery_codes(user_id)
 
     session.commit()
     return {"message": "Two-factor authentication has been disabled."}
@@ -1165,8 +1162,8 @@ def mfa_regenerate_recovery_codes(
             detail={"error": "unauthorized", "message": "Authentication required."},
         )
 
-    mfa_dao = MFACredentialDAO(session)
-    credential = mfa_dao.get_enabled_totp(user_id)
+    auth_dao = AuthDAO(session)
+    credential = auth_dao.get_enabled_totp(user_id)
     if credential is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1176,7 +1173,7 @@ def mfa_regenerate_recovery_codes(
             },
         )
 
-    if not mfa_dao.verify_totp_code(credential, body.code):
+    if not auth_dao.verify_totp_code(credential, body.code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -1185,8 +1182,7 @@ def mfa_regenerate_recovery_codes(
             },
         )
 
-    recovery_dao = MFARecoveryDAO(session)
-    plaintext_codes = recovery_dao.generate_and_store(user_id)
+    plaintext_codes = auth_dao.generate_recovery_codes(user_id)
 
     session.commit()
     return MFARegenerateRecoveryResponse(recovery_codes=plaintext_codes)
@@ -1211,14 +1207,13 @@ def mfa_status(
             detail={"error": "unauthorized", "message": "Authentication required."},
         )
 
-    mfa_dao = MFACredentialDAO(session)
-    credential = mfa_dao.get_enabled_totp(user_id)
+    auth_dao = AuthDAO(session)
+    credential = auth_dao.get_enabled_totp(user_id)
 
     if credential is None:
         return MFAStatusResponse(enabled=False)
 
-    recovery_dao = MFARecoveryDAO(session)
-    remaining = recovery_dao.remaining_count(user_id)
+    remaining = auth_dao.recovery_codes_remaining(user_id)
 
     return MFAStatusResponse(
         enabled=True,
@@ -1259,8 +1254,8 @@ def mfa_verify(
         identifier=body.user_id,
     )
 
-    mfa_dao = MFACredentialDAO(session)
-    credential = mfa_dao.get_enabled_totp(body.user_id)
+    auth_dao = AuthDAO(session)
+    credential = auth_dao.get_enabled_totp(body.user_id)
 
     if credential is None:
         raise HTTPException(
@@ -1271,7 +1266,7 @@ def mfa_verify(
             },
         )
 
-    if not mfa_dao.verify_totp_code(credential, body.code):
+    if not auth_dao.verify_totp_code(credential, body.code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -1308,8 +1303,8 @@ def mfa_verify_recovery(
         identifier=body.user_id,
     )
 
-    mfa_dao = MFACredentialDAO(session)
-    if not mfa_dao.has_enabled_mfa(body.user_id):
+    auth_dao = AuthDAO(session)
+    if not auth_dao.has_enabled_mfa(body.user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -1318,8 +1313,7 @@ def mfa_verify_recovery(
             },
         )
 
-    recovery_dao = MFARecoveryDAO(session)
-    remaining = recovery_dao.verify_and_consume(body.user_id, body.code)
+    remaining = auth_dao.verify_recovery_code(body.user_id, body.code)
 
     if remaining is None:
         raise HTTPException(
@@ -1358,8 +1352,7 @@ def mfa_status_by_email(
         return MFAStatusByEmailResponse(user_found=False, mfa_enabled=False)
 
     user = existing[0][0]
-    mfa_dao = MFACredentialDAO(session)
-    has_mfa = mfa_dao.has_enabled_mfa(user.id)
+    has_mfa = AuthDAO(session).has_enabled_mfa(user.id)
 
     return MFAStatusByEmailResponse(user_found=True, mfa_enabled=has_mfa)
 
@@ -1397,3 +1390,101 @@ def onboarding_status_by_email(
     step = onboarding_status.current_step if onboarding_status else "completed"
 
     return OnboardingStatusByEmailResponse(user_found=True, onboarding_step=step)
+
+
+# =============================================================================
+# OAuth provider account linking (admin-key)
+# =============================================================================
+
+
+@admin_router.post("/auth/account")
+def link_account(
+    account: AccountRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Link an OAuth provider account to a user."""
+    auth_dao = AuthDAO(session)
+    auth_dao.create_oauth_account(
+        user_id=account.user_id,
+        provider=account.provider,
+        provider_type="oauth",
+        provider_account_id=account.provider_account_id,
+        access_token=account.access_token,
+        expires_at=dt_module.datetime.fromtimestamp(account.expires_at),
+    )
+    return ""
+
+
+@admin_router.delete("/auth/account")
+def unlink_account(
+    account: AccountRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Unlink an OAuth provider account from a user."""
+    auth_dao = AuthDAO(session)
+    rows = auth_dao.filter_oauth_accounts(
+        user_id=account.user_id,
+        provider=account.provider,
+        provider_account_id=account.provider_account_id,
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "account_not_found",
+                "message": f"No {account.provider} account found for this user.",
+            },
+        )
+    for row in rows:
+        acct = row[0] if hasattr(row, "__getitem__") else row
+        auth_dao.delete_oauth_account(acct.id)
+    return {
+        "message": f"Account {account.provider} unlinked for user {account.user_id}",
+    }
+
+
+# =============================================================================
+# MFA enforcement status (admin-key)
+# =============================================================================
+
+
+@admin_router.get(
+    "/auth/mfa/enforcement-status",
+    response_model=MFAEnforcementStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def mfa_enforcement_status(
+    user_id: str,
+    org_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check whether a user must set up MFA to access a given organization.
+
+    Called by the Next.js server (admin-key auth) during workspace
+    resolution to decide if the user should be redirected to MFA setup.
+
+    MFA enforcement applies to all members regardless of auth provider
+    (email/password, Google, GitHub). If the org requires MFA and the
+    user hasn't set it up, ``setup_required`` is True.
+    """
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(org_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {org_id} not found",
+        )
+
+    enforced = org.require_mfa
+
+    auth_dao = AuthDAO(session)
+    has_mfa = auth_dao.has_enabled_mfa(user_id)
+
+    setup_required = enforced and not has_mfa
+
+    return MFAEnforcementStatusResponse(
+        enforced=enforced,
+        has_mfa=has_mfa,
+        setup_required=setup_required,
+    )
