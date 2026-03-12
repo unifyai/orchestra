@@ -24,7 +24,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestra.db.dao.email_verification_dao import EmailVerificationDAO
+from orchestra.db.dao.auth_dao import AuthDAO
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
@@ -51,8 +51,8 @@ def cleanup_expired_verifications(session: Optional[Session] = None) -> int:
 def _cleanup_in_session(session: Session) -> int:
     """Internal function to clean up expired verifications within a session."""
     try:
-        dao = EmailVerificationDAO(session)
-        deleted_count = dao.delete_expired()
+        dao = AuthDAO(session)
+        deleted_count = dao.delete_expired_verifications()
         session.commit()
 
         if deleted_count > 0:
