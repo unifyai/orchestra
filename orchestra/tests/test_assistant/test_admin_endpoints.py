@@ -1525,7 +1525,7 @@ async def test_non_admin_does_not_return_desktop_filesync_sshkey(
     client: AsyncClient,
     dbsession,
 ):
-    """Test that regular (non-admin) assistant GET does not expose the SSH key."""
+    """Test that regular (non-admin) assistant list does not expose the SSH key."""
     owner = await create_test_user(client, "sshkey_nonadmin@test.com")
 
     create_resp = await client.post(
@@ -1538,7 +1538,7 @@ async def test_non_admin_does_not_return_desktop_filesync_sshkey(
         headers=owner["headers"],
     )
     assert create_resp.status_code == 200
-    agent_id = int(create_resp.json()["info"]["agent_id"])
+    agent_id = create_resp.json()["info"]["agent_id"]
 
     ssh_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nhidden-key\n-----END OPENSSH PRIVATE KEY-----"
 
@@ -1549,11 +1549,12 @@ async def test_non_admin_does_not_return_desktop_filesync_sshkey(
         headers=ADMIN_HEADERS,
     )
 
-    # Fetch via regular endpoint
-    get_resp = await client.get(
-        f"/v0/assistant/{agent_id}",
+    # Fetch via regular list endpoint
+    list_resp = await client.get(
+        "/v0/assistant",
         headers=owner["headers"],
     )
-    assert get_resp.status_code == 200
-    assistant_data = get_resp.json()["info"]
-    assert assistant_data["desktop_filesync_sshkey"] is None
+    assert list_resp.status_code == 200
+    assistants = list_resp.json()["info"]
+    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    assert our["desktop_filesync_sshkey"] is None
