@@ -2,7 +2,7 @@ import json
 import os
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Request
 
 from orchestra.tests.test_interface.test_interface import (
     _create_test_interface,
@@ -1801,6 +1801,327 @@ async def test_projects_tree(client: AsyncClient):
     assert iface["icon"] == "folder"
     # iface tabs list should exist (empty)
     assert isinstance(iface["tabs"], list)
+
+
+# =============================================================================
+# Organization Project – Log Deletion
+#
+# Verify that logs in org projects (where Project.user_id is NULL by design)
+# can be created, read, updated, **and deleted** by org members.
+#
+# Previously, the delete_logs endpoint compared Project.user_id to the
+# requesting user's ID. For org projects (user_id=NULL), NULL != user_id
+# always evaluated True, so every deletion returned 404.
+# =============================================================================
+
+
+async def _create_org_project_setup(
+    client: AsyncClient,
+) -> tuple[str, dict[str, str]]:
+    """
+    Helper: create an organization + org project, return (project_name, org_headers).
+    """
+    import uuid
+
+    org_name = f"test-org-{uuid.uuid4().hex[:8]}"
+    project_name = f"org-proj-{uuid.uuid4().hex[:8]}"
+
+    # Create organization (returns an org API key)
+    response = await client.post(
+        "/v0/organizations",
+        json={"name": org_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 201, response.json()
+    org_api_key = response.json()["api_key"]
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+    }
+
+    # Create project with org API key → org project (user_id = NULL)
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=org_headers,
+    )
+    assert response.status_code == 200, response.json()
+
+    return project_name, org_headers
+
+
+async def _create_org_log(
+    client: AsyncClient,
+    project_name: str,
+    org_headers: dict[str, str],
+    entries: dict | None = None,
+    context: str | None = None,
+) -> int:
+    """Create a single log in an org project and return its ID."""
+    if entries is None:
+        entries = {
+            "name": "test-secret",
+            "value": "secret-value-123",
+            "explicit_types": {
+                "name": {"mutable": True},
+                "value": {"mutable": True},
+            },
+        }
+    payload: dict = {
+        "project_name": project_name,
+        "entries": entries,
+    }
+    if context:
+        payload["context"] = context
+    response = await client.post("/v0/logs", json=payload, headers=org_headers)
+    assert response.status_code == 200, response.json()
+    return response.json()["log_event_ids"][0]
+
+
+@pytest.mark.anyio
+async def test_delete_entire_log_from_org_project(client: AsyncClient):
+    """
+    Regression test: deleting an entire log from an org project must succeed.
+
+    Previously this returned 404 because the ownership check compared
+    Project.user_id (NULL for org projects) against the requesting user.
+    """
+    project_name, org_headers = await _create_org_project_setup(client)
+    log_id = await _create_org_log(client, project_name, org_headers)
+
+    # Verify the log exists
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=org_headers,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 1
+
+    # Delete the log — this used to return 404 for org projects
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs",
+        json={
+            "ids_and_fields": [[log_id, None]],
+            "project_name": project_name,
+        },
+        headers=org_headers,
+    )
+    response = await client.send(request)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify the log was actually deleted
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=org_headers,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 0
+
+
+@pytest.mark.anyio
+async def test_delete_multiple_logs_from_org_project(client: AsyncClient):
+    """Delete several logs at once from an org project."""
+    project_name, org_headers = await _create_org_project_setup(client)
+
+    log_ids = []
+    for i in range(3):
+        lid = await _create_org_log(
+            client,
+            project_name,
+            org_headers,
+            entries={
+                "name": f"secret-{i}",
+                "value": f"value-{i}",
+                "explicit_types": {
+                    "name": {"mutable": True},
+                    "value": {"mutable": True},
+                },
+            },
+        )
+        log_ids.append(lid)
+
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs",
+        json={
+            "ids_and_fields": [[lid, None] for lid in log_ids],
+            "project_name": project_name,
+        },
+        headers=org_headers,
+    )
+    response = await client.send(request)
+    assert response.status_code == 200, response.json()
+
+    # All logs should be gone
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=org_headers,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 0
+
+
+@pytest.mark.anyio
+async def test_delete_fields_from_org_project_log(client: AsyncClient):
+    """Delete a single field from a log in an org project."""
+    project_name, org_headers = await _create_org_project_setup(client)
+
+    log_id = await _create_org_log(
+        client,
+        project_name,
+        org_headers,
+        entries={
+            "name": "test-secret",
+            "value": "secret-value",
+            "category": "api-key",
+            "explicit_types": {
+                "name": {"mutable": True},
+                "value": {"mutable": True},
+                "category": {"mutable": True},
+            },
+        },
+    )
+
+    # Delete only the "value" field
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs",
+        json={
+            "ids_and_fields": [(log_id, "value")],
+            "project_name": project_name,
+        },
+        headers=org_headers,
+    )
+    response = await client.send(request)
+    assert response.status_code == 200, response.json()
+
+    # Log still exists but the deleted field is gone
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        params={"from_ids": str(log_id)},
+        headers=org_headers,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    assert "value" not in logs[0]["entries"]
+    assert "name" in logs[0]["entries"]
+    assert "category" in logs[0]["entries"]
+
+
+@pytest.mark.anyio
+async def test_delete_log_from_org_project_with_context(client: AsyncClient):
+    """Delete a log from a specific context inside an org project."""
+    project_name, org_headers = await _create_org_project_setup(client)
+    context_name = "All/Secrets"
+
+    # Create context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=org_headers,
+    )
+    assert response.status_code == 200, response.json()
+
+    log_id = await _create_org_log(
+        client,
+        project_name,
+        org_headers,
+        context=context_name,
+    )
+
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs",
+        json={
+            "ids_and_fields": [[log_id, None]],
+            "project_name": project_name,
+            "context": context_name,
+        },
+        headers=org_headers,
+    )
+    response = await client.send(request)
+    assert response.status_code == 200, response.json()
+
+    # Verify deleted from context
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        params={"context": context_name},
+        headers=org_headers,
+    )
+    assert response.status_code == 200
+    assert log_id not in [log["id"] for log in response.json()["logs"]]
+
+
+@pytest.mark.anyio
+async def test_delete_nonexistent_log_from_org_project_returns_404(
+    client: AsyncClient,
+):
+    """A non-existent log ID in an org project still returns 404."""
+    project_name, org_headers = await _create_org_project_setup(client)
+
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs",
+        json={
+            "ids_and_fields": [[999999, None]],
+            "project_name": project_name,
+        },
+        headers=org_headers,
+    )
+    response = await client.send(request)
+    assert response.status_code == 404, response.json()
+
+
+@pytest.mark.anyio
+async def test_delete_log_from_wrong_org_project_returns_404(
+    client: AsyncClient,
+):
+    """
+    A log in org-project-A cannot be deleted via org-project-B.
+
+    Ensures the project_id ownership check still works: logs are validated
+    against the project they belong to, not just any project in the org.
+    """
+    project_a, org_headers = await _create_org_project_setup(client)
+
+    import uuid
+
+    project_b = f"org-proj-other-{uuid.uuid4().hex[:8]}"
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_b},
+        headers=org_headers,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Create a log in project A
+    log_id = await _create_org_log(client, project_a, org_headers)
+
+    # Try to delete via project B → should fail
+    request = Request(
+        "DELETE",
+        str(client.base_url) + "/v0/logs",
+        json={
+            "ids_and_fields": [[log_id, None]],
+            "project_name": project_b,
+        },
+        headers=org_headers,
+    )
+    response = await client.send(request)
+    assert response.status_code == 404, response.json()
+
+    # Verify the log still exists in project A
+    response = await client.get(
+        f"/v0/logs?project_name={project_a}",
+        params={"from_ids": str(log_id)},
+        headers=org_headers,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 1
 
 
 if __name__ == "__main__":
