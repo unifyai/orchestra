@@ -132,6 +132,7 @@ def _build_assistant_read(
     user_image: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
     contacts: Optional[list] = None,
+    include_internal: bool = False,
 ) -> AssistantRead:
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
 
@@ -216,6 +217,9 @@ def _build_assistant_read(
             float(a.monthly_spending_cap)
             if a.monthly_spending_cap is not None
             else None
+        ),
+        desktop_filesync_sshkey=(
+            a.desktop_filesync_sshkey if include_internal else None
         ),
         api_key=api_key,
         user_first_name=user_first_name,
@@ -4095,10 +4099,14 @@ def admin_update_assistant(
         assistant.about = request_body.about
         updated_fields.append("about")
 
+    if request_body.desktop_filesync_sshkey is not None:
+        assistant.desktop_filesync_sshkey = request_body.desktop_filesync_sshkey
+        updated_fields.append("desktop_filesync_sshkey")
+
     if not updated_fields:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No fields to update. Provide at least 'timezone' or 'about'.",
+            detail="No fields to update. Provide at least one field.",
         )
 
     # Commit changes
@@ -4252,6 +4260,7 @@ def admin_list_all_assistants(
                 user_image=users[i].image if users else None,
                 team_ids=[] if skip_teams else None,
                 contacts=contacts_by_assistant.get(a.agent_id, []),
+                include_internal=True,
             )
             for i, a in enumerate(assistants)
         ]
@@ -4380,6 +4389,7 @@ def admin_update_assistant_by_filter(
             a,
             session,
             api_key=api_key,
+            include_internal=True,
         ),
     )
 
@@ -4458,6 +4468,7 @@ def admin_list_assistants_for_user(
                     session,
                     api_key=api_keys[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    include_internal=True,
                 )
                 for i, a in enumerate(assistants)
             ],
