@@ -724,7 +724,7 @@ async def test_admin_list_assistants_fields_multiple(client: AsyncClient):
     """
     Test requesting multiple fields returns objects with only those fields.
 
-    When from_fields=email,first_name is specified:
+    When from_fields=first_name,surname,agent_id is specified:
     - Response should contain ONLY the requested fields
     - Order of fields in response doesn't matter
     - Optional fields not requested should NOT be present
@@ -734,42 +734,38 @@ async def test_admin_list_assistants_fields_multiple(client: AsyncClient):
         "fields_multiple@test.com",
     )
 
-    # Create assistant with email
     create_resp = await client.post(
         "/v0/assistant",
         json={
             "first_name": "MultiField",
             "surname": "Test",
-            "email": "multi.field@example.com",
             "create_infra": False,
         },
         headers=owner["headers"],
     )
     assert create_resp.status_code == 200
+    created_agent_id = create_resp.json()["info"]["agent_id"]
 
-    # Request multiple fields including agent_id so we can find our assistant
     admin_resp = await client.get(
-        "/v0/admin/assistant?from_fields=email,first_name,agent_id",
+        "/v0/admin/assistant?from_fields=first_name,surname,agent_id",
         headers=ADMIN_HEADERS,
     )
     assert admin_resp.status_code == 200
     body = admin_resp.json()
     results = body["info"]
 
-    # Find our created assistant by email
     our_assistant = next(
-        (a for a in results if a.get("email") == "multi.field@example.com"),
+        (a for a in results if a.get("agent_id") == created_agent_id),
         None,
     )
     assert our_assistant is not None, "Created assistant not found in results"
 
-    # Verify it has ONLY the requested fields
-    EXPECTED_FIELDS = {"email", "first_name", "agent_id"}
+    EXPECTED_FIELDS = {"first_name", "surname", "agent_id"}
     assert (
         set(our_assistant.keys()) == EXPECTED_FIELDS
     ), f"Expected {EXPECTED_FIELDS}, got {set(our_assistant.keys())}"
-    assert our_assistant["email"] == "multi.field@example.com"
     assert our_assistant["first_name"] == "MultiField"
+    assert our_assistant["surname"] == "Test"
 
 
 @pytest.mark.anyio
@@ -827,8 +823,8 @@ async def test_admin_list_assistants_fields_with_filter_combination(
     """
     Test that field selection works correctly when combined with existing filters.
 
-    Using both email filter and fields parameter:
-    - Should filter by email
+    Using both agent_id filter and fields parameter:
+    - Should filter by agent_id
     - Should return ONLY the requested fields
     """
     owner = await create_test_user(
@@ -836,41 +832,35 @@ async def test_admin_list_assistants_fields_with_filter_combination(
         "fields_filter_combo@test.com",
     )
 
-    unique_email = "filter.combo.unique@example.com"
     create_resp = await client.post(
         "/v0/assistant",
         json={
             "first_name": "FilterCombo",
             "surname": "Test",
-            "email": unique_email,
             "create_infra": False,
         },
         headers=owner["headers"],
     )
     assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
 
-    # Filter by email AND select specific fields
     admin_resp = await client.get(
-        f"/v0/admin/assistant?email={unique_email}&from_fields=first_name",
+        f"/v0/admin/assistant?agent_id={agent_id}&from_fields=first_name",
         headers=ADMIN_HEADERS,
     )
     assert admin_resp.status_code == 200
     results = admin_resp.json()["info"]
 
-    # Should return exactly one result (the filtered assistant)
     assert len(results) == 1, f"Expected 1 result, got {len(results)}"
 
-    # Result should have ONLY the requested fields
     EXPECTED_FIELDS = {"first_name"}
     assert (
         set(results[0].keys()) == EXPECTED_FIELDS
     ), f"Expected {EXPECTED_FIELDS}, got {set(results[0].keys())}"
     assert results[0]["first_name"] == "FilterCombo"
 
-    # Note: email was used for filtering but NOT requested in fields,
-    # so it should NOT be in the response
-    assert "email" not in results[0], "email was not requested in fields"
     assert "agent_id" not in results[0], "agent_id was not requested in fields"
+    assert "email" not in results[0], "email was not requested in fields"
 
 
 @pytest.mark.anyio
@@ -1140,7 +1130,6 @@ async def test_admin_list_assistants_fields_agent_id_filter_with_field_selection
         json={
             "first_name": "AgentFilter",
             "surname": "One",
-            "email": "agent.filter.one@example.com",
             "create_infra": False,
         },
         headers=owner["headers"],
@@ -1150,7 +1139,6 @@ async def test_admin_list_assistants_fields_agent_id_filter_with_field_selection
         json={
             "first_name": "AgentFilter",
             "surname": "Two",
-            "email": "agent.filter.two@example.com",
             "create_infra": False,
         },
         headers=owner["headers"],
@@ -1159,25 +1147,22 @@ async def test_admin_list_assistants_fields_agent_id_filter_with_field_selection
 
     agent_id_1 = resp1.json()["info"]["agent_id"]
 
-    # Filter by agent_id and select only email and surname
     admin_resp = await client.get(
-        f"/v0/admin/assistant?agent_id={agent_id_1}&from_fields=email,surname",
+        f"/v0/admin/assistant?agent_id={agent_id_1}&from_fields=first_name,surname",
         headers=ADMIN_HEADERS,
     )
     assert admin_resp.status_code == 200
     results = admin_resp.json()["info"]
 
-    # Should return exactly one result
     assert (
         len(results) == 1
     ), f"Expected 1 result for agent_id filter, got {len(results)}"
 
-    # Result should have ONLY the requested fields
-    EXPECTED_FIELDS = {"email", "surname"}
+    EXPECTED_FIELDS = {"first_name", "surname"}
     assert (
         set(results[0].keys()) == EXPECTED_FIELDS
     ), f"Expected {EXPECTED_FIELDS}, got {set(results[0].keys())}"
-    assert results[0]["email"] == "agent.filter.one@example.com"
+    assert results[0]["first_name"] == "AgentFilter"
     assert results[0]["surname"] == "One"
 
 
