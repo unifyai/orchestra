@@ -135,8 +135,17 @@ def admin_list_organizations(
     """
     org_dao = OrganizationDAO(session)
     member_dao = OrganizationMemberDAO(session)
+    user_dao = UserDAO(session)
 
     orgs = org_dao.list_all(limit=limit, offset=offset, name_filter=name)
+
+    # Batch-resolve owner emails
+    owner_ids = list({org.owner_id for org in orgs})
+    owner_email_map: dict[str, str] = {}
+    for uid in owner_ids:
+        row = user_dao.get_by_id(uid)
+        if row:
+            owner_email_map[uid] = row[0].email
 
     items = []
     for org in orgs:
@@ -146,6 +155,7 @@ def admin_list_organizations(
                 id=org.id,
                 name=org.name,
                 owner_id=org.owner_id,
+                owner_email=owner_email_map.get(org.owner_id),
                 created_at=org.created_at,
                 member_count=member_count,
             ),
