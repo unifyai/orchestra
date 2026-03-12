@@ -191,7 +191,7 @@ async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
                 f"{COMMS_URL}/infra/pubsub/topic",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 data={"topic_name": topic_name},
-                timeout=40,
+                timeout=10,
             )
             return response.json()
         except httpx.TimeoutException:
@@ -211,14 +211,20 @@ async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
     """
     topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
     async with httpx.AsyncClient() as client:
-        response = await client.request(
-            "DELETE",
-            f"{COMMS_URL}/infra/pubsub/topic",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            data={"topic_name": topic_name},
-            timeout=20,
-        )
-        return response.json()
+        try:
+            response = await client.request(
+                "DELETE",
+                f"{COMMS_URL}/infra/pubsub/topic",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                data={"topic_name": topic_name},
+                timeout=0.1,
+            )
+            return response.json()
+        except httpx.TimeoutException:
+            logging.warning(
+                f"delete_pubsub_topic timed out for assistant {assistant_id}",
+            )
+            return {"success": True, "timed_out": True}
 
 
 async def release_pool_vm(assistant_id: str):
@@ -231,7 +237,7 @@ async def release_pool_vm(assistant_id: str):
                 f"{COMMS_URL}/infra/vm/pool/release",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 json={"assistant_id": assistant_id},
-                timeout=30,
+                timeout=0.1,
             )
             return response.json()
     except httpx.TimeoutException:
@@ -247,7 +253,7 @@ async def delete_assistant_disk(assistant_id: str):
                 "DELETE",
                 f"{COMMS_URL}/infra/vm/pool/disk/{assistant_id}",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                timeout=30,
+                timeout=0.1,
             )
             return response.json()
     except httpx.TimeoutException:
