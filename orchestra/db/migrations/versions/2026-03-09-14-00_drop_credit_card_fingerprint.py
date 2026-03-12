@@ -41,4 +41,3 @@ def downgrade() -> None:
         "credit_card_fingerprint",
         ["billing_account_id"],
     )
-

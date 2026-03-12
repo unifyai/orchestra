@@ -299,6 +299,10 @@ class AssistantRead(AssistantCreate):
         None,
         description="Whether this is a local assistant (runs unity locally instead of on GKE).",
     )
+    desktop_filesync_sshkey: Optional[str] = Field(
+        None,
+        description="SSH private key for desktop filesystem sync. Only returned via admin endpoints.",
+    )
     team_ids: List[int] = Field(
         default_factory=list,
         description="Team IDs the assistant's user belongs to within the assistant's organization. "
@@ -1446,6 +1450,10 @@ class AdminUpdateAssistant(BaseModel):
         None,
         description="About/description to set for the assistant.",
         example="AI assistant specializing in customer support.",
+    )
+    desktop_filesync_sshkey: Optional[str] = Field(
+        None,
+        description="SSH private key for desktop filesystem sync.",
     )
 
     @field_validator("timezone")
