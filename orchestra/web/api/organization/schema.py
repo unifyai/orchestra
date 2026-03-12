@@ -28,6 +28,23 @@ class OrganizationCreate(BaseModel):
         return v
 
 
+class AdminOrganizationCreate(BaseModel):
+    """Schema for admin-created organizations (white-glove onboarding)."""
+
+    name: str
+    creator_user_id: str
+    timezone: Optional[str] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
+
+
 class OrganizationUpdate(BaseModel):
     """Schema for updating an organization."""
 
@@ -263,6 +280,26 @@ class OrgMFASettingsResponse(BaseModel):
     require_mfa: bool = Field(
         ...,
         description="Whether MFA is required for all members.",
+    )
+
+
+class MFAEnforcementStatusResponse(BaseModel):
+    """Response for checking MFA enforcement status for a specific user + org."""
+
+    enforced: bool = Field(
+        ...,
+        description="Whether the org has require_mfa enabled.",
+    )
+    has_mfa: bool = Field(
+        ...,
+        description="Whether the user has an enabled MFA credential.",
+    )
+    setup_required: bool = Field(
+        ...,
+        description=(
+            "Whether the user must set up MFA to access this org. "
+            "True when enforced AND NOT has_mfa."
+        ),
     )
 
 
