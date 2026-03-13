@@ -3793,10 +3793,13 @@ async def animate_video_endpoint(
             from orchestra.lib.billing import deduct_credits
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
+            video_cost = settings.video_generation_cost * (
+                duration if duration is not None else settings.default_video_duration
+            )
             deduct_credits(
                 session,
                 billing_entity,
-                Decimal(str(settings.video_generation_cost)),
+                Decimal(str(video_cost)),
             )
             session.commit()
 
