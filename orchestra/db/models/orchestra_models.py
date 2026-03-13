@@ -813,6 +813,8 @@ class LogEventContext(Base):
         primary_key=True,
     )
 
+    __table_args__ = (Index("idx_log_event_context_context_id", "context_id"),)
+
 
 class Context(Base):
     """Model class for organizing logs and artifacts within projects."""
