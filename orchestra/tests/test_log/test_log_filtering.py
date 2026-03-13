@@ -5093,3 +5093,96 @@ async def test_sort_and_aggregate_json_schema_typed_field(
     result = response.json()
     # Sum of 10 + 2 + 3 = 15 (NULL is ignored)
     assert result == 15, f"Expected sum=15, got {result}"
+
+
+@pytest.mark.anyio
+async def test_ann_search_excludes_soft_deleted_embeddings(
+    client: AsyncClient,
+    dbsession,
+):
+    """ANN vector sort must never return soft-deleted embeddings.
+
+    The partial HNSW index excludes is_deleted=true rows, but if the planner
+    picks a sequential scan (common with small test tables), the missing
+    explicit WHERE filter lets soft-deleted rows leak into results.
+    """
+    from sqlalchemy import text as sa_text
+
+    project_name = "test_ann_soft_delete"
+    await _create_project(client, project_name)
+
+    # Create 3 logs and sync-embed them
+    texts = [
+        "apple fruit is delicious and nutritious",
+        "banana is a yellow tropical fruit",
+        "orange juice is refreshing and healthy",
+    ]
+    log_ids = []
+    for txt in texts:
+        resp = await _create_log(
+            client,
+            project_name,
+            entries={"text_content": txt, "label": txt.split()[0]},
+        )
+        assert resp.status_code == 200
+        log_ids.append(resp.json()["log_event_ids"][0])
+
+    # Create sync embeddings for all 3
+    for lid in log_ids:
+        resp = await _create_derived_entry(
+            client,
+            project_name,
+            key="text_emb",
+            equation="embed({log:text_content})",
+            referenced_logs={"log": [lid]},
+        )
+        assert resp.status_code == 200
+
+    # Sanity: all 3 appear in vector-sorted results
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "sorting": json.dumps(
+                {"cosine(text_emb, embed('fruit'))": "descending"},
+            ),
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()["logs"]) == 3
+
+    # Soft-delete the "apple" embedding (first log)
+    dbsession.execute(
+        sa_text(
+            "UPDATE embedding SET is_deleted = true WHERE ref_id = :rid AND key = 'text_emb'",
+        ),
+        {"rid": log_ids[0]},
+    )
+    dbsession.commit()
+
+    # Disable the HNSW index so the planner must use a sequential scan,
+    # exposing whether the query has an explicit is_deleted filter.
+    dbsession.execute(sa_text("SET enable_indexscan = off"))
+    dbsession.execute(sa_text("SET enable_bitmapscan = off"))
+
+    try:
+        resp = await client.get(
+            "/v0/logs",
+            params={
+                "project_name": project_name,
+                "sorting": json.dumps(
+                    {"cosine(text_emb, embed('fruit'))": "descending"},
+                ),
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200
+        returned_labels = [log["entries"]["label"] for log in resp.json()["logs"]]
+        assert (
+            "apple" not in returned_labels
+        ), f"Soft-deleted embedding leaked into ANN results: {returned_labels}"
+        assert len(resp.json()["logs"]) == 2
+    finally:
+        dbsession.execute(sa_text("SET enable_indexscan = on"))
+        dbsession.execute(sa_text("SET enable_bitmapscan = on"))

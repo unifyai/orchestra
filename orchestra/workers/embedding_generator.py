@@ -486,6 +486,7 @@ def get_generation_queue_metrics(session: Session) -> dict:
         "vector_ready": status_counts.get("vector_ready", 0),
         "inserting": status_counts.get("inserting", 0),
         "failed": status_counts.get("failed", 0),
+        "cancelled": status_counts.get("cancelled", 0),
     }
 
 

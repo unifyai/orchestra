@@ -7,43 +7,49 @@ This worker performs periodic maintenance on HNSW indexes to:
 3. Use REINDEX CONCURRENTLY to rebuild indexes (keeps old index usable during rebuild)
 4. Run VACUUM to reclaim disk space
 
-The worker is triggered by Cloud Scheduler jobs or manual API calls.
+The worker is triggered by Cloud Scheduler (short ops) or Cloud Run Jobs (reindex).
 
-Recommended Cloud Scheduler Configuration (4 separate jobs):
+CRITICAL: REINDEX CONCURRENTLY must NOT run under HTTP timeout pressure.
+An interrupted REINDEX corrupts both old and new indexes, leaving them invalid.
+Always run reindex from a long-lived process (Cloud Run Job, manual invocation).
 
-1. **Health Check** (twice daily) - Quick monitoring, no changes
-   - Cron: `0 8,20 * * *`
-   - Endpoint: `run_index_maintenance?mode=check`
-   - Attempt deadline: 2m
-   - Max retries: 3
+Recommended Production Setup:
 
-2. **Cleanup** (every 4 hours) - Frequent soft-delete cleanup
-   - Cron: `0 */4 * * *`
-   - Endpoint: `run_index_maintenance?mode=cleanup_only&skip_vacuum=true`
-   - Attempt deadline: 15m
-   - Max retries: 2
+Cloud Scheduler Jobs (short, time-bounded operations):
 
-3. **Cleanup + Vacuum** (nightly) - Reclaim disk space
-   - Cron: `0 3 * * *`
-   - Endpoint: `run_index_maintenance?mode=cleanup_only`
-   - Attempt deadline: 30m
-   - Max retries: 1
+1. Health Check (twice daily) - Quick monitoring, no changes
+   - Cron: 0 8,20 * * *
+   - Endpoint: run_index_maintenance?mode=check
+   - Attempt deadline: 2m, Max retries: 3
 
-4. **Full Reindex** (weekly) - Optimize index structure
-   - Cron: `0 4 * * 0`
-   - Endpoint: `run_index_maintenance?mode=full&skip_vacuum=true`
-   - Attempt deadline: 180m (3 hours)
-   - Max retries: 0
+2. Cleanup (every 4 hours) - Frequent soft-delete cleanup
+   - Cron: 0 */4 * * *
+   - Endpoint: run_index_maintenance?mode=cleanup_only&skip_vacuum=true&max_duration=600
+   - Attempt deadline: 15m, Max retries: 2
 
-Usage:
+3. Cleanup + Vacuum (nightly) - Reclaim disk space
+   - Cron: 0 3 * * *
+   - Endpoint: run_index_maintenance?mode=cleanup_only&max_duration=1500
+   - Attempt deadline: 30m, Max retries: 1
+
+Cloud Run Job (weekly reindex - long-running, no HTTP timeout):
+
+4. Full Reindex (weekly) - Optimize index structure
+   - Cron trigger: 0 4 * * 0
+   - Container: python -m orchestra.workers.index_maintenance
+   - Env: MAINTENANCE_MODE=full, MAINTENANCE_SKIP_VACUUM=true
+   - Task timeout: 3h, Max retries: 0
+
+Usage (standalone):
     python -m orchestra.workers.index_maintenance
 
 Environment Variables:
     DB_HOST, DB_USER, DB_PASS, DB_NAME: Database connection parameters
     INSTANCE_CONNECTION_NAME: Cloud SQL instance (for production)
-
-IMPORTANT: Uses REINDEX CONCURRENTLY instead of DROP/CREATE to avoid query degradation
-during index rebuilds. The old index remains usable until the new one is ready.
+    MAINTENANCE_MODE: auto|full|cleanup_only|reindex_only|check (default: auto)
+    MAINTENANCE_SOFT_DELETE_THRESHOLD: int (default: 100)
+    MAINTENANCE_SKIP_VACUUM: true|false (default: false)
+    MAINTENANCE_MAX_DURATION: int seconds, 0=unlimited (default: 0)
 """
 
 import logging
@@ -78,6 +84,10 @@ MAX_DELETE_BATCHES = 1000  # Safety limit: max 10M rows per maintenance run
 DEFAULT_DELETION_TIME_BUDGET = 600  # 10 minutes default
 # Safety margin before deadline to allow graceful completion (seconds)
 DEADLINE_SAFETY_MARGIN = 60  # Stop 1 minute before deadline
+# Minimum time required to safely start REINDEX CONCURRENTLY. If less time
+# remains, reindex is skipped to avoid leaving invalid indexes behind.
+# An interrupted REINDEX CONCURRENTLY corrupts both old and new indexes.
+MIN_REINDEX_TIME_SECONDS = 1800  # 30 minutes
 
 # --- Default Thresholds ---
 # Minimum soft-deleted rows before triggering cleanup in 'auto' mode
@@ -547,9 +557,26 @@ def run_index_maintenance(
         should_cleanup = mode in ("full", "cleanup_only") or (
             mode == "auto" and metrics["soft_deleted_count"] >= soft_delete_threshold
         )
-        should_reindex = mode in ("full", "reindex_only") or (
-            mode == "auto" and should_cleanup
-        )
+        should_reindex = mode in ("full", "reindex_only")
+
+        if mode == "auto" and should_cleanup:
+            # In auto mode, only trigger reindex if we have enough time budget.
+            # REINDEX CONCURRENTLY is dangerous under time pressure — an interrupted
+            # reindex corrupts both old and new indexes, leaving them invalid.
+            if (
+                max_duration_seconds > 0
+                and max_duration_seconds < MIN_REINDEX_TIME_SECONDS
+            ):
+                logger.info(
+                    f"Auto mode: skipping reindex (max_duration={max_duration_seconds}s "
+                    f"< minimum {MIN_REINDEX_TIME_SECONDS}s). "
+                    f"Use mode=full via Cloud Run Job for safe reindexing.",
+                )
+                should_reindex = False
+            elif max_duration_seconds == 0:
+                should_reindex = True
+            else:
+                should_reindex = True
 
         # In 'auto' mode, skip if nothing to do
         if (
@@ -611,20 +638,23 @@ def run_index_maintenance(
 
         # Phase 3: Reindex HNSW indexes
         if should_reindex:
-            # Check if we have enough time remaining for reindex
+            # Check if we have enough time remaining for reindex.
+            # REINDEX CONCURRENTLY is atomic and cannot be safely interrupted —
+            # a killed operation leaves BOTH old and new indexes as invalid.
             if max_duration_seconds > 0:
                 elapsed = time.time() - job_start_time
                 remaining = max_duration_seconds - elapsed - DEADLINE_SAFETY_MARGIN
-                # Reindex needs at least 5 minutes to be worthwhile
-                if remaining < 300:
+                if remaining < MIN_REINDEX_TIME_SECONDS:
                     logger.warning(
                         f"Skipping reindex: only {remaining:.0f}s remaining, "
-                        f"need at least 300s. Consider running reindex_only separately.",
+                        f"need at least {MIN_REINDEX_TIME_SECONDS}s. "
+                        f"Run mode=full via Cloud Run Job for safe reindexing.",
                     )
                     metrics["reindex_results"] = {
                         "skipped": True,
                         "reason": "insufficient_time",
                         "remaining_seconds": round(remaining, 0),
+                        "min_required_seconds": MIN_REINDEX_TIME_SECONDS,
                     }
                     metrics["stopped_early"] = True
                 else:
@@ -685,15 +715,51 @@ def rebuild_hnsw_indexes(session: Session) -> dict:
 
 
 def main():
-    """Main entry point for the index maintenance worker."""
+    """
+    Main entry point for the index maintenance worker.
+
+    Designed to be invoked as a standalone process (e.g. Cloud Run Job).
+    Configure via environment variables:
+
+        MAINTENANCE_MODE: auto|full|cleanup_only|reindex_only|check (default: auto)
+        MAINTENANCE_SOFT_DELETE_THRESHOLD: int (default: 100)
+        MAINTENANCE_SKIP_VACUUM: true|false (default: false)
+        MAINTENANCE_MAX_DURATION: int seconds, 0=unlimited (default: 0)
+
+    Example Cloud Run Job configuration:
+        Container image: your-registry/orchestra:latest
+        Command: python -m orchestra.workers.index_maintenance
+        Env vars:
+            MAINTENANCE_MODE=full
+            MAINTENANCE_SKIP_VACUUM=true
+        Task timeout: 3h
+        Max retries: 0
+    """
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    logger.info("Index maintenance worker starting")
+    mode = os.environ.get("MAINTENANCE_MODE", "auto")
+    soft_delete_threshold = int(
+        os.environ.get("MAINTENANCE_SOFT_DELETE_THRESHOLD", "100"),
+    )
+    skip_vacuum = os.environ.get("MAINTENANCE_SKIP_VACUUM", "false").lower() == "true"
+    max_duration = int(os.environ.get("MAINTENANCE_MAX_DURATION", "0"))
+
+    logger.info(
+        f"Index maintenance worker starting "
+        f"(mode={mode}, threshold={soft_delete_threshold}, "
+        f"skip_vacuum={skip_vacuum}, max_duration={max_duration}s)",
+    )
 
     try:
         session = get_db_session()
-        metrics = run_index_maintenance(session, mode="auto")
+        metrics = run_index_maintenance(
+            session,
+            mode=mode,
+            soft_delete_threshold=soft_delete_threshold,
+            skip_vacuum=skip_vacuum,
+            max_duration_seconds=max_duration,
+        )
 
         if metrics["success"]:
             deleted = metrics.get("deletion_metrics", {}).get("total_deleted", 0)
