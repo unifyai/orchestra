@@ -927,24 +927,28 @@ def delete_project(
         )
         .first()
     )
-    try:
-        if project.name == CHAT_COMPLETIONS_PROJECT_NAME:
-            raise HTTPException(
-                status_code=403,
-                detail=f"The '{CHAT_COMPLETIONS_PROJECT_NAME}' project cannot be deleted.",
-            )
-        if (
-            project.name == PROD_TRAFFIC_PROJECT_NAME
-            and project.organization_id == orchestra_org.id
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
-            )
-        project_dao.delete(id=project.id)
+    if project.name == CHAT_COMPLETIONS_PROJECT_NAME:
+        raise HTTPException(
+            status_code=403,
+            detail=f"The '{CHAT_COMPLETIONS_PROJECT_NAME}' project cannot be deleted.",
+        )
+    if (
+        project.name == PROD_TRAFFIC_PROJECT_NAME
+        and orchestra_org
+        and project.organization_id == orchestra_org.id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
+        )
 
-    except:
-        raise not_found(f"Project {project.name}")
+    try:
+        project_dao.delete(id=project.id)
+    except ValueError:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete project '{project.name}'.",
+        )
 
     return {"info": "Project deleted successfully"}
 
