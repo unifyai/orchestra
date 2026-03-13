@@ -107,6 +107,94 @@ async def test_delete_project(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_delete_project_with_pending_embeddings(
+    client: AsyncClient,
+    dbsession,
+):
+    """Deleting a project with pending embedding queue items must succeed (200),
+    not fail with 404.  The queue items should be cancelled as part of Phase 0."""
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import EmbeddingQueue
+
+    project_name = "test-delete-pending-embeds"
+
+    # Set up: project -> log -> async embed (creates a 'pending' queue entry)
+    await _create_project(client, project_name)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"text_field": "some text to embed"},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="text_embed",
+        equation="embed({log:text_field}, async_embeddings=True)",
+        referenced_logs={"log": [log_id]},
+    )
+    assert response.status_code == 200
+
+    # Sanity: queue row exists and is pending
+    queue_row = dbsession.execute(
+        select(EmbeddingQueue).where(
+            EmbeddingQueue.ref_id == log_id,
+            EmbeddingQueue.key == "text_embed",
+        ),
+    ).scalar_one_or_none()
+    assert queue_row is not None, "Queue entry should exist"
+    assert queue_row.status == "pending"
+
+    # Delete the project -- this is the operation under test
+    response = await client.delete(
+        f"/v0/project/{project_name}",
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Expected 200 but got {response.status_code}: {response.json()}"
+    assert response.json()["info"] == "Project deleted successfully"
+
+    # Verify project is gone
+    response = await client.get(
+        "/v0/projects",
+        headers=HEADERS,
+    )
+    project_names = [p["name"] for p in response.json()]
+    assert project_name not in project_names
+
+
+@pytest.mark.anyio
+async def test_delete_protected_project_returns_403(client: AsyncClient):
+    """Deleting a protected project (chat_completions_project_name = 'Usage')
+    must return 403, not 404.  The bare except: was swallowing the HTTPException."""
+    from orchestra.settings import settings
+
+    protected_name = settings.chat_completions_project_name
+
+    # Create the project so it exists (otherwise we'd get a legitimate 404)
+    create_resp = await client.post(
+        "/v0/project",
+        json={"name": protected_name},
+        headers=HEADERS,
+    )
+    assert create_resp.status_code == 200, create_resp.json()
+
+    # Attempt to delete -- should be rejected with 403
+    response = await client.delete(
+        f"/v0/project/{protected_name}",
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 403
+    ), f"Expected 403 but got {response.status_code}: {response.json()}"
+    assert "cannot be deleted" in response.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_delete_nonexistent_project(client: AsyncClient):
     url = "/v0/project/nonexistent-project"
     response = await client.delete(url, headers=HEADERS)
