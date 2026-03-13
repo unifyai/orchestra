@@ -1235,6 +1235,7 @@ def _get_logs_query(
                     .where(
                         Embedding.key == lhs_key,
                         model_filter,
+                        Embedding.is_deleted == False,  # noqa: E712
                         Embedding.vector.isnot(None),
                         Embedding.ref_id.in_(select(filtered_event_ids_subq.c.id)),
                     )
