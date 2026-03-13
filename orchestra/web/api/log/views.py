@@ -5644,7 +5644,12 @@ def run_index_maintenance(
       but no soft deletes exist.
     - `check`: Dry run - just report metrics without making any changes.
 
-    **Recommended Cloud Scheduler Configuration (4 jobs):**
+    **Recommended Production Setup:**
+
+    Use Cloud Scheduler for short, time-bounded operations only (cleanup, check).
+    Use Cloud Run Jobs for long-running operations (reindex) — see below.
+
+    **Cloud Scheduler Jobs (3 jobs, all within 30m deadline):**
 
     1. **Health Check** (twice daily) - Quick monitoring
        - Cron: `0 8,20 * * *`
@@ -5661,10 +5666,16 @@ def run_index_maintenance(
        - Params: `mode=cleanup_only&max_duration=1500`
        - Attempt deadline: 30m, Max retries: 1
 
-    4. **Full Reindex** (weekly) - Optimize index structure
-       - Cron: `0 4 * * 0`
-       - Params: `mode=full&skip_vacuum=true&max_duration=9000`
-       - Attempt deadline: 180m (3 hours), Max retries: 0
+    **Cloud Run Job (weekly reindex):**
+
+    REINDEX CONCURRENTLY must NOT run under HTTP timeout pressure.
+    An interrupted REINDEX corrupts both old and new indexes, leaving
+    them invalid. Use a Cloud Run Job triggered by Cloud Scheduler:
+
+    - Cron: `0 4 * * 0`
+    - Container: `python -m orchestra.workers.index_maintenance`
+    - Env: `MAINTENANCE_MODE=full`, `MAINTENANCE_SKIP_VACUUM=true`
+    - Task timeout: 3h, Max retries: 0
 
     **Phases (in order):**
     1. Invalid index cleanup (always runs, handles failed CONCURRENTLY operations)
@@ -5672,8 +5683,10 @@ def run_index_maintenance(
     3. REINDEX CONCURRENTLY (if mode allows, keeps index usable during rebuild)
     4. VACUUM (if skip_vacuum=false and any work was done)
 
-    **WARNING:** Reindex can take 30+ minutes for large indexes (~6GB).
-    Recommended for low-traffic hours (2-4 AM UTC).
+    **WARNING:** Do not use `mode=auto` or `mode=full` with Cloud Scheduler.
+    These modes can trigger REINDEX which exceeds Cloud Scheduler's 30m
+    max deadline. Use `mode=cleanup_only` for scheduled HTTP calls and
+    Cloud Run Jobs for reindexing.
     """
     try:
         from orchestra.workers.index_maintenance import (
