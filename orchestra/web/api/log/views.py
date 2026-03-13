@@ -5644,7 +5644,12 @@ def run_index_maintenance(
       but no soft deletes exist.
     - `check`: Dry run - just report metrics without making any changes.
 
-    **Recommended Cloud Scheduler Configuration (4 jobs):**
+    **Recommended Production Setup:**
+
+    Use Cloud Scheduler for short, time-bounded operations only (cleanup, check).
+    Use Cloud Run Jobs for long-running operations (reindex) — see below.
+
+    **Cloud Scheduler Jobs (3 jobs, all within 30m deadline):**
 
     1. **Health Check** (twice daily) - Quick monitoring
        - Cron: `0 8,20 * * *`
@@ -5661,10 +5666,16 @@ def run_index_maintenance(
        - Params: `mode=cleanup_only&max_duration=1500`
        - Attempt deadline: 30m, Max retries: 1
 
-    4. **Full Reindex** (weekly) - Optimize index structure
-       - Cron: `0 4 * * 0`
-       - Params: `mode=full&skip_vacuum=true&max_duration=9000`
-       - Attempt deadline: 180m (3 hours), Max retries: 0
+    **Cloud Run Job (weekly reindex):**
+
+    REINDEX CONCURRENTLY must NOT run under HTTP timeout pressure.
+    An interrupted REINDEX corrupts both old and new indexes, leaving
+    them invalid. Use a Cloud Run Job triggered by Cloud Scheduler:
+
+    - Cron: `0 4 * * 0`
+    - Container: `python -m orchestra.workers.index_maintenance`
+    - Env: `MAINTENANCE_MODE=full`, `MAINTENANCE_SKIP_VACUUM=true`
+    - Task timeout: 3h, Max retries: 0
 
     **Phases (in order):**
     1. Invalid index cleanup (always runs, handles failed CONCURRENTLY operations)
@@ -5672,8 +5683,10 @@ def run_index_maintenance(
     3. REINDEX CONCURRENTLY (if mode allows, keeps index usable during rebuild)
     4. VACUUM (if skip_vacuum=false and any work was done)
 
-    **WARNING:** Reindex can take 30+ minutes for large indexes (~6GB).
-    Recommended for low-traffic hours (2-4 AM UTC).
+    **WARNING:** Do not use `mode=auto` or `mode=full` with Cloud Scheduler.
+    These modes can trigger REINDEX which exceeds Cloud Scheduler's 30m
+    max deadline. Use `mode=cleanup_only` for scheduled HTTP calls and
+    Cloud Run Jobs for reindexing.
     """
     try:
         from orchestra.workers.index_maintenance import (
@@ -5768,6 +5781,7 @@ def run_index_maintenance(
                                 "vector_ready": 4096,
                                 "inserting": 0,
                                 "failed": 0,
+                                "cancelled": 0,
                             },
                         },
                     },
@@ -5795,6 +5809,10 @@ def generate_pending_embeddings(
         description="If true, retry items with status='failed' instead of 'pending'. "
         "Failed items get retry_count reset to 0 and error_message cleared.",
     ),
+    dry_run: bool = Query(
+        False,
+        description="If true, return queue status counts only without processing anything.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -5815,6 +5833,7 @@ def generate_pending_embeddings(
     **Modes:**
     - `retry_failed=false` (default): Process items with status='pending'
     - `retry_failed=true`: Retry items with status='failed', resetting retry_count to 0
+    - `dry_run=true`: Report queue status counts only, no processing
 
     **Cloud Scheduler Configuration (2 parallel jobs for pending):**
     - Job 1: Schedule "0,30 * * * * *" (at :00 and :30 of each minute)
@@ -5829,7 +5848,18 @@ def generate_pending_embeddings(
     **TODO:** Migrate to Cloud Tasks for dynamic scaling based on queue depth.
     """
     try:
-        from orchestra.workers.embedding_generator import process_pending_embeddings
+        from orchestra.workers.embedding_generator import (
+            get_generation_queue_metrics,
+            process_pending_embeddings,
+        )
+
+        if dry_run:
+            return {
+                "message": "Dry run: queue status only",
+                "status": "success",
+                "dry_run": True,
+                "queue_metrics": get_generation_queue_metrics(session),
+            }
 
         # Process embeddings (generate vectors)
         # Uses bulk UPDATE for O(1) database operations instead of O(N)
@@ -5901,6 +5931,7 @@ def generate_pending_embeddings(
                                 "vector_ready": 38000,
                                 "inserting": 0,
                                 "failed": 0,
+                                "cancelled": 0,
                             },
                         },
                     },
@@ -5923,6 +5954,10 @@ def index_ready_embeddings(
         le=INSERTION_MAX_TIME_HARD_CAP,
         description="Maximum processing time in seconds. Default: 150s, Hard cap: 300s.",
     ),
+    dry_run: bool = Query(
+        False,
+        description="If true, return queue status counts only without processing anything.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -5940,6 +5975,9 @@ def index_ready_embeddings(
     4. DELETE successfully inserted items from queue
     5. On error: mark items as 'failed' with error message
 
+    **Modes:**
+    - `dry_run=true`: Report queue status counts only, no processing
+
     **Cloud Scheduler Configuration (1 serial job):**
     - Schedule: "*/3 * * * *" (every 3 minutes)
     - URL: POST /admin/index_ready_embeddings?max_items=12000&max_time_seconds=150
@@ -5950,7 +5988,18 @@ def index_ready_embeddings(
     can be dispatched based on queue depth.
     """
     try:
-        from orchestra.workers.embedding_inserter import process_ready_embeddings
+        from orchestra.workers.embedding_inserter import (
+            get_insertion_queue_metrics,
+            process_ready_embeddings,
+        )
+
+        if dry_run:
+            return {
+                "message": "Dry run: queue status only",
+                "status": "success",
+                "dry_run": True,
+                "queue_metrics": get_insertion_queue_metrics(session),
+            }
 
         # Process embeddings (bulk insert into index)
         # Uses dynamic chunk sizing based on max_items
