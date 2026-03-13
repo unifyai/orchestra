@@ -2005,6 +2005,7 @@ class EmbeddingQueue(Base):
     - inserting: Being processed by Stage 2 worker (bulk insert)
     - completed: Successfully processed (will be deleted from queue)
     - failed: Failed after max retries (kept for debugging)
+    - cancelled: Deliberately stopped (e.g. parent project deleted)
 
     TODO: Migrate Cloud Scheduler jobs to Cloud Tasks for dynamic scaling
     based on queue depth rather than fixed scheduling intervals.
@@ -2037,7 +2038,7 @@ class EmbeddingQueue(Base):
     __table_args__ = (
         UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
         sa.CheckConstraint(
-            "status IN ('pending', 'generating', 'vector_ready', 'inserting', 'completed', 'failed')",
+            "status IN ('pending', 'generating', 'vector_ready', 'inserting', 'completed', 'failed', 'cancelled')",
             name="chk_embedding_queue_status",
         ),
         Index("idx_embedding_queue_status_created", "status", "created_at"),
