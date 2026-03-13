@@ -1120,6 +1120,7 @@ class FieldType(Base):
             "context_id",
             name="uq_project_field_name_context_id",
         ),
+        Index("idx_field_type_context_id", "context_id"),
         sa.CheckConstraint(
             "char_length(description) <= 256",
             name="ck_field_type_description_len",
