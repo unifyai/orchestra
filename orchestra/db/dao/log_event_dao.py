@@ -440,7 +440,6 @@ class LogEventDAO:
         Finds all image/audio fields in LogEvent.data for the given log_event_ids
         and deletes the corresponding files from GCS.
         """
-        return
         if not log_event_ids:
             return
 
