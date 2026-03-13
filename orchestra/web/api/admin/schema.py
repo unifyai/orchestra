@@ -94,6 +94,7 @@ class OrganizationListItem(BaseModel):
     id: int
     name: str
     owner_id: str
+    owner_email: Optional[str] = None
     created_at: Optional[datetime.datetime]
     member_count: int
 
