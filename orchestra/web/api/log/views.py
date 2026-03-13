@@ -5796,6 +5796,10 @@ def generate_pending_embeddings(
         description="If true, retry items with status='failed' instead of 'pending'. "
         "Failed items get retry_count reset to 0 and error_message cleared.",
     ),
+    dry_run: bool = Query(
+        False,
+        description="If true, return queue status counts only without processing anything.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -5816,6 +5820,7 @@ def generate_pending_embeddings(
     **Modes:**
     - `retry_failed=false` (default): Process items with status='pending'
     - `retry_failed=true`: Retry items with status='failed', resetting retry_count to 0
+    - `dry_run=true`: Report queue status counts only, no processing
 
     **Cloud Scheduler Configuration (2 parallel jobs for pending):**
     - Job 1: Schedule "0,30 * * * * *" (at :00 and :30 of each minute)
@@ -5830,7 +5835,18 @@ def generate_pending_embeddings(
     **TODO:** Migrate to Cloud Tasks for dynamic scaling based on queue depth.
     """
     try:
-        from orchestra.workers.embedding_generator import process_pending_embeddings
+        from orchestra.workers.embedding_generator import (
+            get_generation_queue_metrics,
+            process_pending_embeddings,
+        )
+
+        if dry_run:
+            return {
+                "message": "Dry run: queue status only",
+                "status": "success",
+                "dry_run": True,
+                "queue_metrics": get_generation_queue_metrics(session),
+            }
 
         # Process embeddings (generate vectors)
         # Uses bulk UPDATE for O(1) database operations instead of O(N)
@@ -5925,6 +5941,10 @@ def index_ready_embeddings(
         le=INSERTION_MAX_TIME_HARD_CAP,
         description="Maximum processing time in seconds. Default: 150s, Hard cap: 300s.",
     ),
+    dry_run: bool = Query(
+        False,
+        description="If true, return queue status counts only without processing anything.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -5942,6 +5962,9 @@ def index_ready_embeddings(
     4. DELETE successfully inserted items from queue
     5. On error: mark items as 'failed' with error message
 
+    **Modes:**
+    - `dry_run=true`: Report queue status counts only, no processing
+
     **Cloud Scheduler Configuration (1 serial job):**
     - Schedule: "*/3 * * * *" (every 3 minutes)
     - URL: POST /admin/index_ready_embeddings?max_items=12000&max_time_seconds=150
@@ -5952,7 +5975,18 @@ def index_ready_embeddings(
     can be dispatched based on queue depth.
     """
     try:
-        from orchestra.workers.embedding_inserter import process_ready_embeddings
+        from orchestra.workers.embedding_inserter import (
+            get_insertion_queue_metrics,
+            process_ready_embeddings,
+        )
+
+        if dry_run:
+            return {
+                "message": "Dry run: queue status only",
+                "status": "success",
+                "dry_run": True,
+                "queue_metrics": get_insertion_queue_metrics(session),
+            }
 
         # Process embeddings (bulk insert into index)
         # Uses dynamic chunk sizing based on max_items
