@@ -108,10 +108,10 @@ class ReplicateService:
         duration: Optional[int] = None,
     ) -> Prediction:
         """
-        Creates a video animation prediction using wan-video/wan-2.5-i2v-fast model.
+        Creates a video animation prediction using wan-video/wan-2.5-i2v model.
         """
         try:
-            model_identifier = "wan-video/wan-2.5-i2v-fast"
+            model_identifier = "wan-video/wan-2.5-i2v"
             model_input: Dict[str, Any] = {
                 "image": image_url,
                 "audio": audio_url,
