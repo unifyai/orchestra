@@ -1,5 +1,5 @@
 import io
-from unittest.mock import ANY, MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -35,10 +35,8 @@ def mock_media_services_factory(fastapi_app):
     mock_prediction = MagicMock()
     mock_prediction.id = "video_pred_123"
     mock_prediction.status = "starting"
-    mock_prediction.model = "zsxkib/sonic"
-    mock_prediction.version = (
-        "a2aad29ea95f19747a5ea22ab14fc6594654506e5815f7f5ba4293e888d3e20f"
-    )
+    mock_prediction.model = "bytedance/omni-human-1.5"
+    mock_prediction.version = "bytedance/omni-human-1.5"
     mock_prediction.input = {"image": "http://example.com/image.png"}
     mock_prediction.output = None
     mock_prediction.error = None
@@ -333,7 +331,12 @@ async def test_edit_photo_invalid_input(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@patch(
+    "orchestra.web.api.assistant.views.urllib.request.urlopen",
+    side_effect=Exception("mocked"),
+)
 async def test_animate_video_with_urls_success(
+    mock_urlopen,
     client: AsyncClient,
     mock_media_services_factory,
     dbsession,
@@ -479,7 +482,12 @@ async def test_animate_video_with_files_success(
 
 
 @pytest.mark.anyio
+@patch(
+    "orchestra.web.api.assistant.views.urllib.request.urlopen",
+    side_effect=Exception("mocked"),
+)
 async def test_animate_video_fails_moderation_no_face(
+    mock_urlopen,
     client: AsyncClient,
     mock_media_services_factory,
 ):
@@ -518,7 +526,12 @@ async def test_animate_video_fails_moderation_no_face(
 
 
 @pytest.mark.anyio
+@patch(
+    "orchestra.web.api.assistant.views.urllib.request.urlopen",
+    side_effect=Exception("mocked"),
+)
 async def test_animate_video_fails_moderation_image_nsfw(
+    mock_urlopen,
     client: AsyncClient,
     mock_media_services_factory,
 ):
@@ -557,7 +570,12 @@ async def test_animate_video_fails_moderation_image_nsfw(
 
 
 @pytest.mark.anyio
+@patch(
+    "orchestra.web.api.assistant.views.urllib.request.urlopen",
+    side_effect=Exception("mocked"),
+)
 async def test_animate_video_fails_moderation_audio_nsfw(
+    mock_urlopen,
     client: AsyncClient,
     mock_media_services_factory,
 ):
@@ -603,7 +621,12 @@ async def test_animate_video_fails_moderation_audio_nsfw(
 
 
 @pytest.mark.anyio
+@patch(
+    "orchestra.web.api.assistant.views.urllib.request.urlopen",
+    side_effect=Exception("mocked"),
+)
 async def test_animate_video_fails_moderation_no_speech(
+    mock_urlopen,
     client: AsyncClient,
     mock_media_services_factory,
 ):
