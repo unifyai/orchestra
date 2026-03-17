@@ -221,6 +221,28 @@ class RoleDAO:
             .all(),
         )
 
+    def resolve_role_id(
+        self,
+        role_id: Optional[int] = None,
+        role_name: Optional[str] = None,
+    ) -> Optional[int]:
+        """
+        Resolve a role ID from either a direct ID or a system role name.
+
+        :param role_id: Explicit role ID (takes precedence if provided).
+        :param role_name: System role name to look up (used if role_id is None).
+        :return: The resolved role ID, or None if neither param is provided.
+        :raises ValueError: If role_name is given but no matching system role exists.
+        """
+        if role_id is not None:
+            return role_id
+        if role_name:
+            role = self.get_by_name(role_name, organization_id=None)
+            if not role:
+                raise ValueError(f"Role '{role_name}' not found")
+            return role.id
+        return None
+
     def has_permission(
         self,
         role_id: int,
