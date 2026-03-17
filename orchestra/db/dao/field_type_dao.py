@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import FieldType
 
+_UNSET_FIELD_UPDATE = object()
+
 
 class FieldTypeDAO:
     def __init__(self, session: Session):
@@ -385,6 +387,44 @@ class FieldTypeDAO:
             raise ValueError(f"Field type {field_name} does not exist")
 
         existing.mutable = mutable
+        self.session.commit()
+
+    def update_field(
+        self,
+        project_id: int,
+        field_name: str,
+        context_id: int,
+        *,
+        description: Optional[str] = _UNSET_FIELD_UPDATE,
+    ) -> None:
+        """Generic field metadata update entry point.
+
+        Only `description` updates are supported for now.
+        """
+        existing = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.field_name == field_name,
+                FieldType.context_id == context_id,
+            )
+            .first()
+        )
+
+        if not existing:
+            raise ValueError(
+                f"Field '{field_name}' does not exist in project {project_id}",
+            )
+
+        updated = False
+
+        if description is not _UNSET_FIELD_UPDATE:
+            existing.description = description
+            updated = True
+
+        if not updated:
+            raise ValueError("No supported field updates were provided")
+
         self.session.commit()
 
     def bulk_update_mutability(
