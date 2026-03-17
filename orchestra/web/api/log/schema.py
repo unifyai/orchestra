@@ -537,6 +537,28 @@ class DeleteFieldsRequest(BaseModel):
     )
 
 
+class UpdateFieldRequest(BaseModel):
+    project_name: str = Field(
+        description="Name of the project the field belongs to.",
+        example="eval-project",
+    )
+    context: Optional[str] = Field(
+        default="",
+        description="The context of the field to update.",
+        example="test-context",
+    )
+    field_name: str = Field(
+        description="The name of the field to update.",
+        example="score",
+    )
+    description: Optional[str] = Field(
+        ...,
+        max_length=256,
+        description="Field description. This is the only supported field update. Use null to clear the description.",
+        example="Human-readable score for this log entry",
+    )
+
+
 class JoinLogsRequest(BaseModel):
     pair_of_args: List[Dict[str, Any]] = Field(
         ...,

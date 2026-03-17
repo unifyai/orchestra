@@ -1614,6 +1614,88 @@ async def test_field_description_crud(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_update_field_endpoint_description_only(client: AsyncClient):
+    """Test updating and clearing field descriptions via update_field."""
+    project_name = "test-update-field-description"
+    await _create_project(client, project_name)
+
+    create_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "score": {
+                    "type": "float",
+                    "mutable": True,
+                    "description": "Original description",
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+
+    update_response = await client.patch(
+        "/v0/logs/update_field",
+        json={
+            "project_name": project_name,
+            "field_name": "score",
+            "description": "Updated description",
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    fields_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+
+    assert fields["score"]["description"] == "Updated description"
+    assert fields["score"]["data_type"] == "float"
+    assert fields["score"]["mutable"] is True
+
+    clear_response = await client.patch(
+        "/v0/logs/update_field",
+        json={
+            "project_name": project_name,
+            "field_name": "score",
+            "description": None,
+        },
+        headers=HEADERS,
+    )
+    assert clear_response.status_code == 200, clear_response.json()
+
+    fields_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    assert fields_response.json()["score"]["description"] is None
+
+
+@pytest.mark.anyio
+async def test_update_field_missing_field(client: AsyncClient):
+    """Test updating a missing field returns 404."""
+    project_name = "test-update-missing-field-description"
+    await _create_project(client, project_name)
+
+    response = await client.patch(
+        "/v0/logs/update_field",
+        json={
+            "project_name": project_name,
+            "field_name": "missing_field",
+            "description": "Does not exist",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 404, response.json()
+    assert "does not exist" in response.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_explicit_nested_type_in_get_fields(client: AsyncClient):
     """Test that get_fields returns explicit nested types correctly."""
     project_name = "test-get-fields-nested"
