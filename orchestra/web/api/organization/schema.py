@@ -129,6 +129,9 @@ class InviteUserRequest(BaseModel):
 
     email: str
     role_id: Optional[int] = None  # Defaults to Member role if not provided
+    role_name: Optional[str] = (
+        None  # Alternative to role_id; resolved to role_id by the server
+    )
     expires_in_days: int = 7  # Default 7 days
 
 
