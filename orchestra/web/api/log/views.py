@@ -60,6 +60,7 @@ from orchestra.web.api.log.schema import (
     QueryLogsPostBody,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
+    UpdateFieldRequest,
     UpdateLogRequest,
 )
 from orchestra.web.api.utils.helpers import CustomEncoder
@@ -5074,6 +5075,104 @@ def create_fields(
         "info": f"Fields created successfully. {'Backfilled ' + str(backfilled_count) + ' log entries with None values.' if request.backfill_logs and backfilled_count > 0 else ''}",
         "backfilled_count": backfilled_count if request.backfill_logs else 0,
     }
+
+
+@router.patch(
+    "/logs/update_field",
+    responses={
+        200: {
+            "description": "Field updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Field updated successfully.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project, context, or field not found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Field 'score' not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def update_field(
+    request_fastapi: Request,
+    request: UpdateFieldRequest,
+    session=Depends(get_db_session),
+):
+    """
+    Updates an existing field.
+
+    For now this is intentionally metadata-only and only supports updating the
+    field description. It does not modify log payloads, derived templates, field
+    names, mutability, or data types.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
+
+    if request.project_name == "Unity" and request.context == "Tasks":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot modify fields in the built-in Tasks table - it is immutable",
+        )
+
+    try:
+        user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project_name,
+            organization_id=organization_id,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project_name}' not found.",
+        )
+
+    context_name = request.context or ""
+    if request.context:
+        context_rows = context_dao.filter(project_id=project_id, name=context_name)
+        if not context_rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Context '{context_name}' not found.",
+            )
+        context_id = context_rows[0][0].id
+    else:
+        context_id = context_dao.get_or_create(
+            project_id=project_id,
+            name="",
+            description=None,
+            is_versioned=False,
+        )
+
+    try:
+        field_type_dao.update_field(
+            project_id=project_id,
+            field_name=request.field_name,
+            context_id=context_id,
+            description=request.description,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to update field description: {str(e)}",
+        )
+
+    return {"info": "Field updated successfully."}
 
 
 @router.delete(
