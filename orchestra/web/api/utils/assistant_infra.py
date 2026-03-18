@@ -14,12 +14,10 @@ from orchestra.db.models.orchestra_models import (
 )
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
-ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
-ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
-
-
 COMMS_URL_PREVIEW = os.environ.get("UNITY_COMMS_URL_PREVIEW")
+ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
+ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
 def _comms_url_for(deploy_env: str | None) -> str:
