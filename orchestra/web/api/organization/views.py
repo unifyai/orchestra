@@ -1704,7 +1704,10 @@ async def accept_invite(
 
         for assistant in org_assistants:
             try:
-                await trigger_contact_sync(assistant.agent_id)
+                await trigger_contact_sync(
+                    assistant.agent_id,
+                    deploy_env=assistant.deploy_env,
+                )
                 logger.info(
                     f"Triggered contact sync for assistant {assistant.agent_id}",
                 )

@@ -47,7 +47,6 @@ from orchestra.routines.assistant_contact_notifications import (
     send_notification_emails,
     set_last_notification_day,
 )
-from orchestra.settings import settings
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
@@ -296,6 +295,7 @@ async def _process_ba_grace_contacts(
     # If the billing account has been topped up, clear grace period.
     if ba.credits >= 0:
         assistant_ids_to_reawaken: Set[int] = set()
+        assistant_deploy_envs: Dict[int, str | None] = {}
         for contact in contacts:
             contact.status = "active"
             contact.grace_period_started_at = None
@@ -303,6 +303,11 @@ async def _process_ba_grace_contacts(
             set_last_notification_day(contact, 0)
             ar.restored_contacts += 1
             assistant_ids_to_reawaken.add(contact.assistant_id)
+            assistant_deploy_envs[contact.assistant_id] = (
+                contact.assistant.deploy_env
+                if getattr(contact, "assistant", None)
+                else None
+            )
 
         # If account was PAST_DUE, set it back to ACTIVE
         if ba.account_status in ("PAST_DUE", "SUSPENDED"):
@@ -315,7 +320,7 @@ async def _process_ba_grace_contacts(
 
                 await reawaken_assistant(
                     str(aid),
-                    is_staging=settings.is_staging,
+                    deploy_env=assistant_deploy_envs.get(aid),
                 )
             except Exception as e:
                 logger.warning(
@@ -361,6 +366,7 @@ async def _process_ba_grace_contacts(
 
     # --- Deprovision overdue contacts ---
     assistant_ids_to_reawaken: Set[int] = set()
+    assistant_deploy_envs: Dict[int, str | None] = {}
     had_deletions = False
 
     for contact in overdue_contacts:
@@ -370,6 +376,11 @@ async def _process_ba_grace_contacts(
 
             # 2. Track assistant for reawaken
             assistant_ids_to_reawaken.add(contact.assistant_id)
+            assistant_deploy_envs[contact.assistant_id] = (
+                contact.assistant.deploy_env
+                if getattr(contact, "assistant", None)
+                else None
+            )
 
             # 3. Soft-delete the contact
             contact.status = "deleted"
@@ -392,7 +403,7 @@ async def _process_ba_grace_contacts(
 
             await reawaken_assistant(
                 str(aid),
-                is_staging=settings.is_staging,
+                deploy_env=assistant_deploy_envs.get(aid),
             )
         except Exception as e:
             logger.warning(
