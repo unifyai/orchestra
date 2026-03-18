@@ -212,7 +212,7 @@ class TestCheckoutSessionEvent:
             "data": {
                 "object": {
                     "client_reference_id": user.id,
-                    "amount_total": 15000,
+                    "amount_total": 120000,
                     "customer": "cus_wh_elig",
                     "payment_intent": "pi_wh_elig",
                     "metadata": {},
@@ -223,7 +223,7 @@ class TestCheckoutSessionEvent:
         process_checkout_session_event(event, dbsession)
 
         total_spending = ba_dao.get_total_spending(ba.id)
-        assert float(total_spending) == 150.0
+        assert float(total_spending) == 1200.0
         assert total_spending >= MIN_SPEND_FOR_AUTO_RECHARGE
         assert ba_dao.can_enable_auto_recharge(ba.id)
 
