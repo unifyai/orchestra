@@ -58,6 +58,7 @@ class AssistantDAO:
         timezone: Optional[str] = None,
         organization_id: Optional[int] = None,
         is_local: bool = False,
+        deploy_env: str | None = None,
     ) -> Assistant:
         """
         Create a new Assistant.
@@ -97,6 +98,7 @@ class AssistantDAO:
             phone_country=phone_country,
             timezone=timezone,
             is_local=is_local,
+            deploy_env=deploy_env,
         )
         self.session.add(assistant)
         self.session.flush()
@@ -444,7 +446,7 @@ class AssistantDAO:
                 should_sync_bio,
                 should_sync_first_name,
                 should_sync_surname,
-            ]
+            ],
         )
         if needs_sync:
             from orchestra.services.contact_sync_service import ContactSyncService

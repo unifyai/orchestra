@@ -14,28 +14,54 @@ from orchestra.db.models.orchestra_models import (
 )
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
+COMMS_URL_PREVIEW = os.environ.get("UNITY_COMMS_URL_PREVIEW")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
+ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-async def create_phone_number(phone_country: str = "US", is_staging: bool = False):
+def _comms_url_for(deploy_env: str | None) -> str:
+    if deploy_env == "preview":
+        return COMMS_URL_PREVIEW or ""
+    return COMMS_URL or ""
+
+
+def _adapters_url_for(deploy_env: str | None) -> str:
+    if deploy_env == "preview":
+        return ADAPTERS_URL_PREVIEW or ""
+    return ADAPTERS_URL or ""
+
+
+def _env_suffix(deploy_env: str | None) -> str:
+    if deploy_env == "preview":
+        return "-preview"
+    is_staging = os.environ.get("STAGING", "False") == "True"
+    return "-staging" if is_staging else ""
+
+
+async def create_phone_number(
+    phone_country: str = "US",
+    deploy_env: str | None = None,
+):
     """
     Create a phone number for the user by making a POST request to the comms endpoint.
 
     Args:
         phone_country (str): The country code for phone number provisioning (e.g., "US", "GB").
-        is_staging (bool): Whether to create the phone number in staging or prod
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the phone creation endpoint
     """
-    voice_url = ADAPTERS_URL + "/twilio/call"
-    sms_url = ADAPTERS_URL + "/twilio/sms"
-    status_callback = ADAPTERS_URL + "/twilio/call-status"
+    comms_url = _comms_url_for(deploy_env)
+    adapters_url = _adapters_url_for(deploy_env)
+    voice_url = adapters_url + "/twilio/call"
+    sms_url = adapters_url + "/twilio/sms"
+    status_callback = adapters_url + "/twilio/call-status"
     async with httpx.AsyncClient(timeout=90.0) as client:
         try:
             response = await client.post(
-                f"{COMMS_URL}/phone/create",
+                f"{comms_url}/phone/create",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 json={
                     "voice_url": voice_url,
@@ -51,21 +77,25 @@ async def create_phone_number(phone_country: str = "US", is_staging: bool = Fals
             )
 
 
-async def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
+async def assign_whatsapp_sender(
+    user_whatsapp_number: str,
+    deploy_env: str | None = None,
+):
     """
     Create a WhatsApp sender by making a POST request to the comms endpoint.
 
     Args:
         user_whatsapp_number (str): The WhatsApp number to assign
-        is_staging (bool): Whether to create the WhatsApp sender in staging or prod
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the WhatsApp creation endpoint
     """
-    callback_url = ADAPTERS_URL + "/twilio/whatsapp"
+    comms_url = _comms_url_for(deploy_env)
+    callback_url = _adapters_url_for(deploy_env) + "/twilio/whatsapp"
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{COMMS_URL}/whatsapp/create",
+            f"{comms_url}/whatsapp/create",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={
                 "user_whatsapp_number": user_whatsapp_number,
@@ -76,7 +106,7 @@ async def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = F
         return response.json()
 
 
-async def delete_phone_number(phone_number: str):
+async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
     """
     Delete a phone number by making a DELETE request to the comms endpoint.
 
@@ -86,10 +116,11 @@ async def delete_phone_number(phone_number: str):
     Returns:
         JSON response from the phone deletion endpoint
     """
+    comms_url = _comms_url_for(deploy_env)
     async with httpx.AsyncClient() as client:
         response = await client.request(
             "DELETE",
-            f"{COMMS_URL}/phone/delete",
+            f"{comms_url}/phone/delete",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={"PhoneNumber": phone_number},
             timeout=20,
@@ -97,7 +128,12 @@ async def delete_phone_number(phone_number: str):
         return response.json()
 
 
-async def create_email(local: str, first_name: str, last_name: str):
+async def create_email(
+    local: str,
+    first_name: str,
+    last_name: str,
+    deploy_env: str | None = None,
+):
     """
     Create an email for the user by making a POST request to the UNIFY_COMMS_URL endpoint.
 
@@ -109,9 +145,10 @@ async def create_email(local: str, first_name: str, last_name: str):
     Returns:
         Response from the email creation endpoint
     """
+    comms_url = _comms_url_for(deploy_env)
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{COMMS_URL}/gmail/create",
+            f"{comms_url}/gmail/create",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={
                 "local": local,
@@ -123,7 +160,7 @@ async def create_email(local: str, first_name: str, last_name: str):
         return response.json()
 
 
-async def delete_email(email: str):
+async def delete_email(email: str, deploy_env: str | None = None):
     """
     Delete an email by making a DELETE request to the comms endpoint.
 
@@ -133,10 +170,11 @@ async def delete_email(email: str):
     Returns:
         JSON response from the email deletion endpoint
     """
+    comms_url = _comms_url_for(deploy_env)
     async with httpx.AsyncClient() as client:
         response = await client.request(
             "DELETE",
-            f"{COMMS_URL}/gmail/delete",
+            f"{comms_url}/gmail/delete",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={"primary_email": email},
             timeout=20,
@@ -144,51 +182,49 @@ async def delete_email(email: str):
         return response.json()
 
 
-async def watch_email(email: str, is_staging: bool = False):
+async def watch_email(email: str, deploy_env: str | None = None):
     """
     Watch an email by making a POST request to the comms endpoint.
 
     Args:
         email (str): The email to watch
-        is_staging (bool): Whether to watch the email in staging or prod
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the email watch endpoint
     """
+    comms_url = _comms_url_for(deploy_env)
     print(f"Watching email: {email}")
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{COMMS_URL}/gmail/watch",
+            f"{comms_url}/gmail/watch",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={
                 "primary_email": email,
-                "topic": (
-                    "gmail-notifications-staging"
-                    if is_staging
-                    else "gmail-notifications"
-                ),
+                "topic": f"gmail-notifications{_env_suffix(deploy_env)}",
             },
             timeout=20,
         )
         return response.json()
 
 
-async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
+async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     """
     Create a pubsub topic for the assistant by making a POST request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
-        is_staging (bool): Whether to create the topic in staging or prod
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the pubsub topic creation endpoint
     """
-    topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
+    comms_url = _comms_url_for(deploy_env)
+    topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{COMMS_URL}/infra/pubsub/topic",
+                f"{comms_url}/infra/pubsub/topic",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 data={"topic_name": topic_name},
                 timeout=10,
@@ -198,23 +234,24 @@ async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
             print("Pubsub topic creation timed out")
 
 
-async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
+async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     """
     Delete a pubsub topic for the assistant by making a DELETE request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
-        is_staging (bool): Whether to delete the topic in staging or prod
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
-    topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
+    comms_url = _comms_url_for(deploy_env)
+    topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.request(
                 "DELETE",
-                f"{COMMS_URL}/infra/pubsub/topic",
+                f"{comms_url}/infra/pubsub/topic",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 data={"topic_name": topic_name},
                 timeout=0.1,
@@ -227,14 +264,15 @@ async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
             return {"success": True, "timed_out": True}
 
 
-async def release_pool_vm(assistant_id: str):
+async def release_pool_vm(assistant_id: str, deploy_env: str | None = None):
     """Release any pool VM assigned to this assistant back to idle.
     Idempotent — no-ops if no VM is assigned.
     """
+    comms_url = _comms_url_for(deploy_env)
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{COMMS_URL}/infra/vm/pool/release",
+                f"{comms_url}/infra/vm/pool/release",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 json={"assistant_id": assistant_id},
                 timeout=0.1,
@@ -245,13 +283,14 @@ async def release_pool_vm(assistant_id: str):
         return {"success": True, "timed_out": True}
 
 
-async def delete_assistant_disk(assistant_id: str):
+async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None):
     """Delete an assistant's persistent disk (permanent unhire cleanup)."""
+    comms_url = _comms_url_for(deploy_env)
     try:
         async with httpx.AsyncClient() as client:
             response = await client.request(
                 "DELETE",
-                f"{COMMS_URL}/infra/vm/pool/disk/{assistant_id}",
+                f"{comms_url}/infra/vm/pool/disk/{assistant_id}",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 timeout=0.1,
             )
@@ -325,7 +364,11 @@ def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
     return job_names
 
 
-async def stop_jobs(assistant_id: str, session: Session):
+async def stop_jobs(
+    assistant_id: str,
+    session: Session,
+    deploy_env: str | None = None,
+):
     """
     Stop a job and release any assigned pool VM.
 
@@ -333,24 +376,25 @@ async def stop_jobs(assistant_id: str, session: Session):
         assistant_id: The assistant ID to stop jobs for
         session: SQLAlchemy database session
     """
+    comms_url = _comms_url_for(deploy_env)
     job_names = get_running_jobs(assistant_id, session)
     if len(job_names) > 0:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{COMMS_URL}/infra/job/stop",
+                f"{comms_url}/infra/job/stop",
                 data={"job_name": job_names[0]},
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 timeout=20,
             )
             response.raise_for_status()
 
-    await release_pool_vm(str(assistant_id))
+    await release_pool_vm(str(assistant_id), deploy_env=deploy_env)
 
     return {"success": True, "job_names": job_names}
 
 
-async def wake_up_assistant(assistant_id: str, is_staging: bool = False):
-    wake_up_url = ADAPTERS_URL + "/assistant/wakeup"
+async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
+    wake_up_url = _adapters_url_for(deploy_env) + "/assistant/wakeup"
     async with httpx.AsyncClient() as client:
         return await client.post(
             wake_up_url,
@@ -360,16 +404,16 @@ async def wake_up_assistant(assistant_id: str, is_staging: bool = False):
         )
 
 
-async def reawaken_assistant(assistant_id: str, is_staging: bool = False):
+async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
     """
     Triggers the assistant update webhook to reawaken or sync the assistant.
     Args:
         assistant_id (str): The ID of the assistant to reawaken.
-        is_staging (bool): Whether to use the staging or production webhook.
+        deploy_env: 'preview' for preview stack, None for native environment.
     Returns:
         The JSON response from the webhook.
     """
-    reawaken_url = ADAPTERS_URL + "/assistant/update"
+    reawaken_url = _adapters_url_for(deploy_env) + "/assistant/update"
     async with httpx.AsyncClient() as client:
         response = await client.post(
             reawaken_url,
@@ -384,18 +428,18 @@ async def reawaken_assistant(assistant_id: str, is_staging: bool = False):
 async def log_pre_hire_chat(
     assistant_id: str,
     messages: list,
-    is_staging: bool = False,
+    deploy_env: str | None = None,
 ):
     """
     Logs pre-hire chat messages for an assistant using the webhook.
     Args:
         assistant_id (str): The ID of the assistant.
         messages (list): A list of chat message dictionaries.
-        is_staging (bool): Whether to use the staging or production webhook.
+        deploy_env: 'preview' for preview stack, None for native environment.
     Returns:
         The JSON response from the webhook.
     """
-    log_pre_hire_chat_url = ADAPTERS_URL + "/unity/pre-hire"
+    log_pre_hire_chat_url = _adapters_url_for(deploy_env) + "/unity/pre-hire"
     payload = {"assistant_id": assistant_id, "body": messages}
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -411,7 +455,10 @@ async def log_pre_hire_chat(
         return {"status": "success"}
 
 
-async def trigger_contact_sync(assistant_id: int) -> dict:
+async def trigger_contact_sync(
+    assistant_id: int,
+    deploy_env: str | None = None,
+) -> dict:
     """
     Trigger contact sync for an assistant via the system-event webhook.
 
@@ -421,7 +468,7 @@ async def trigger_contact_sync(assistant_id: int) -> dict:
     Returns:
         JSON response from the webhook
     """
-    url = f"{ADAPTERS_URL}/unity/system-event"
+    url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
     async with httpx.AsyncClient() as client:
         response = await client.post(
             url,

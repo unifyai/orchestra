@@ -540,6 +540,39 @@ async def test_admin_update_assistant_both_fields(client: AsyncClient, dbsession
 
 
 @pytest.mark.anyio
+async def test_admin_update_assistant_deploy_env(client: AsyncClient, dbsession):
+    owner = await create_test_user(
+        client,
+        "admin_asst_env@test.com",
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "AdminEnv",
+            "surname": "Update",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    update_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"deploy_env": "preview"},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200
+    data = update_resp.json()
+    assert data["updated_fields"] == ["deploy_env"]
+
+    assistant_dao = AssistantDAO(dbsession)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    assert assistant.deploy_env == "preview"
+
+
+@pytest.mark.anyio
 async def test_admin_update_assistant_not_found(client: AsyncClient):
     """Test that 404 is returned when assistant_id doesn't exist."""
     update_resp = await client.patch(
