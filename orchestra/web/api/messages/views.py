@@ -26,12 +26,10 @@ router = APIRouter()
 admin_router = APIRouter()
 
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
+ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 MAX_ATTACHMENTS_PER_MESSAGE = 10
-
-
-ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 
 
 def _adapters_url_for_deploy_env(deploy_env: str | None) -> str | None:
