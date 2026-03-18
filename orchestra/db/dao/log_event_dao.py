@@ -1446,12 +1446,19 @@ class LogEventDAO:
                 resolved_ids,
             )
             filter_dict = str_filter_exp_to_dict(filter_expr)
+            filter_dict["embed_target_key"] = template.key
+
+            log_ids_subq = (
+                select(LogEvent.id.label("id"))
+                .where(LogEvent.id.in_(log_ids))
+                .subquery("recompute_log_ids")
+            )
 
             computed_values = _compute_expression(
                 filter_dict,
                 LogEvent,
                 self.session,
-                log_ids,
+                log_ids_subq,
             )
 
             if not computed_values:
@@ -1460,11 +1467,17 @@ class LogEventDAO:
             non_null_val = None
             updates_count = 0
 
+            import numpy as np
+
             for log_event_id, value in computed_values:
                 try:
-                    val = json.loads(json.dumps(value, cls=json_encoder))
-                    if val is not None:
-                        non_null_val = val
+                    if isinstance(value, np.ndarray):
+                        val = None
+                        non_null_val = value.tolist()
+                    else:
+                        val = json.loads(json.dumps(value, cls=json_encoder))
+                        if val is not None:
+                            non_null_val = val
 
                     stmt = (
                         update(LogEvent)
