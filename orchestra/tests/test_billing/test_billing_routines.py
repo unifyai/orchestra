@@ -1786,27 +1786,27 @@ class TestAutoRechargeEligibility:
         # Below threshold
         rec1 = Recharge(
             billing_account_id=ba.id,
-            quantity=50,
-            amount_usd=Decimal("50.00"),
+            quantity=500,
+            amount_usd=Decimal("500.00"),
             type="payment",
             status=RechargeStatus.PAID,
         )
         dbsession.add(rec1)
         dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 50.0
+        assert float(ba_dao.get_total_spending(ba.id)) == 500.0
         assert not ba_dao.can_enable_auto_recharge(ba.id)
 
         # Cross threshold
         rec2 = Recharge(
             billing_account_id=ba.id,
-            quantity=60,
-            amount_usd=Decimal("60.00"),
+            quantity=600,
+            amount_usd=Decimal("600.00"),
             type="auto",
             status=RechargeStatus.PAID,
         )
         dbsession.add(rec2)
         dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 110.0
+        assert float(ba_dao.get_total_spending(ba.id)) == 1100.0
         assert ba_dao.can_enable_auto_recharge(ba.id)
 
         # Promo should NOT count
@@ -1819,7 +1819,7 @@ class TestAutoRechargeEligibility:
         )
         dbsession.add(rec3)
         dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 110.0
+        assert float(ba_dao.get_total_spending(ba.id)) == 1100.0
 
         # PENDING should NOT count
         rec4 = Recharge(
@@ -1831,7 +1831,7 @@ class TestAutoRechargeEligibility:
         )
         dbsession.add(rec4)
         dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 110.0
+        assert float(ba_dao.get_total_spending(ba.id)) == 1100.0
 
     def test_existing_customer_unaffected(self, dbsession: Session):
         """Existing customers with auto-recharge enabled continue to work normally."""
