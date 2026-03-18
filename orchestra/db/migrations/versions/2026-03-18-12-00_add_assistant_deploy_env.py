@@ -1,8 +1,8 @@
 """Add deploy_env column to assistants.
 
-Allows staging Orchestra to store assistants that should route to either the
-staging or preview runtime stacks without requiring a separate preview
-Orchestra deployment.
+Nullable column: NULL means "native to this Orchestra instance" (production
+assistants on production Orchestra, staging assistants on staging Orchestra).
+Set to 'preview' to route the assistant to the preview runtime stack.
 
 Revision ID: add_assistant_deploy_env
 Revises: add_field_type_context_id_idx
@@ -24,8 +24,7 @@ def upgrade() -> None:
         sa.Column(
             "deploy_env",
             sa.String(),
-            nullable=False,
-            server_default="production",
+            nullable=True,
         ),
     )
 
