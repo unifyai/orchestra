@@ -998,8 +998,8 @@ class TestAutoRechargeEndpoints:
         assert data["qty"] == 50.0
         assert data["eligible"] is False
         assert data["total_spending"] == 0.0
-        assert data["minimum_spend_required"] == 100.0
-        assert data["remaining_spend_needed"] == 100.0
+        assert data["minimum_spend_required"] == 1000.0
+        assert data["remaining_spend_needed"] == 1000.0
 
     @pytest.mark.anyio
     async def test_get_eligible_after_spending(self, client, dbsession):

@@ -25,7 +25,7 @@ MIN_AUTORECHARGE_AMOUNT = decimal.Decimal("25")
 # can enable auto-recharge.  This is a fraud-prevention measure to stop
 # bot accounts from setting up very low, repeated automatic top-ups and
 # then disputing the charges.
-MIN_SPEND_FOR_AUTO_RECHARGE = decimal.Decimal("100")
+MIN_SPEND_FOR_AUTO_RECHARGE = decimal.Decimal("1000")
 
 # Valid account status values
 VALID_ACCOUNT_STATUSES = {"ACTIVE", "PAST_DUE", "SUSPENDED", "CLOSED"}
