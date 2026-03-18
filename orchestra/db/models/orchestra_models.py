@@ -1313,6 +1313,7 @@ class Assistant(Base):
     user_phone = Column(String, nullable=True)
     user_whatsapp_number = Column(String, nullable=True)
     assistant_whatsapp_number = Column(String, nullable=True)
+    deploy_env = Column(String, nullable=False, server_default="production")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     voice_id = sa.Column(
