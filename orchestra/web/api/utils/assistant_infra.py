@@ -18,22 +18,19 @@ ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def _preview_service_url(env_var_base: str, service_name: str) -> str:
-    override = os.environ.get(f"{env_var_base}_PREVIEW")
-    if override:
-        return override
-    return f"https://{service_name}-preview-721804302511.us-central1.run.app"
+COMMS_URL_PREVIEW = os.environ.get("UNITY_COMMS_URL_PREVIEW")
+ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 
 
 def _comms_url_for(deploy_env: str | None) -> str:
     if deploy_env == "preview":
-        return _preview_service_url("UNITY_COMMS_URL", "unity-comms-app")
+        return COMMS_URL_PREVIEW or ""
     return COMMS_URL or ""
 
 
 def _adapters_url_for(deploy_env: str | None) -> str:
     if deploy_env == "preview":
-        return _preview_service_url("UNITY_ADAPTERS_URL", "unity-adapters")
+        return ADAPTERS_URL_PREVIEW or ""
     return ADAPTERS_URL or ""
 
 
