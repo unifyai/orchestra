@@ -26,9 +26,16 @@ router = APIRouter()
 admin_router = APIRouter()
 
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
+ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 MAX_ATTACHMENTS_PER_MESSAGE = 10
+
+
+def _adapters_url_for_deploy_env(deploy_env: str | None) -> str | None:
+    if deploy_env == "preview":
+        return ADAPTERS_URL_PREVIEW
+    return ADAPTERS_URL
 
 
 def _generate_signed_url(gs_url: str) -> str | None:
@@ -72,10 +79,12 @@ async def _dispatch_to_adapters(
     assistant_id: int,
     api_message_id: str,
     body: str,
+    deploy_env: str | None = None,
     attachments: list[dict] | None = None,
     tags: list[str] | None = None,
 ) -> None:
-    if not ADAPTERS_URL:
+    adapters_url = _adapters_url_for_deploy_env(deploy_env)
+    if not adapters_url:
         logger.warning("UNITY_ADAPTERS_URL not set, skipping adapter dispatch")
         return
     payload: dict = {
@@ -89,7 +98,7 @@ async def _dispatch_to_adapters(
         payload["tags"] = tags
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{ADAPTERS_URL}/api/message",
+            f"{adapters_url}/api/message",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json=payload,
             timeout=30,
@@ -154,7 +163,8 @@ async def upload_attachment(
             detail="Assistant not found.",
         )
 
-    if not ADAPTERS_URL:
+    adapters_url = _adapters_url_for_deploy_env(assistant.deploy_env)
+    if not adapters_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Attachment upload service unavailable.",
@@ -163,7 +173,7 @@ async def upload_attachment(
     file_content = await file.read()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            f"{ADAPTERS_URL}/unify/attachment",
+            f"{adapters_url}/unify/attachment",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             files={
                 "file": (
@@ -233,6 +243,7 @@ async def send_message(
         assistant_id=body.assistant_id,
         api_message_id=api_message.id,
         body=body.message,
+        deploy_env=assistant.deploy_env,
         attachments=attachments_dicts,
         tags=body.tags,
     )
