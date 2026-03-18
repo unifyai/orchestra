@@ -87,7 +87,7 @@ async def test_create_assistant_success(client: AsyncClient):
     assert data["nationality"] == payload["nationality"]
     assert data["profile_photo"] == payload["profile_photo"]
     assert data["about"] == payload["about"]
-    assert data["deploy_env"] == "production"
+    assert data["deploy_env"] is None
     assert data["phone"] is None
     assert data["email"] is None
     assert isinstance(data.get("created_at"), str)
@@ -109,7 +109,7 @@ async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_
     assert resp.status_code == 200
     data = resp.json()["info"]
     assert data["is_local"] is True
-    assert data["deploy_env"] == "production"
+    assert data["deploy_env"] is None
     assert data["first_name"] == "LocalDev"
     mock_wake_up.assert_not_called()
 

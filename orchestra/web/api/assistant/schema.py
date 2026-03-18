@@ -8,14 +8,13 @@ from pydantic.generics import GenericModel
 T = TypeVar("T")
 
 VALID_TIMEZONES = available_timezones()
-VALID_DEPLOY_ENVS = {"production", "staging", "preview"}
 
 
 def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
     if v is None:
         return None
-    if v not in VALID_DEPLOY_ENVS:
-        raise ValueError("deploy_env must be one of production, staging, or preview.")
+    if v != "preview":
+        raise ValueError("deploy_env must be 'preview' or null.")
     return v
 
 
@@ -141,13 +140,13 @@ class AssistantCreate(BaseModel):
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
     )
-    deploy_env: Optional[Literal["production", "staging", "preview"]] = Field(
+    deploy_env: Optional[Literal["preview"]] = Field(
         None,
         description=(
-            "Deployment environment for this assistant's runtime resources. "
-            "Defaults to the current Orchestra deployment environment when omitted."
+            "Set to 'preview' to route this assistant to the preview runtime stack. "
+            "Leave null for native assistants (routed to this Orchestra's own environment)."
         ),
-        example="staging",
+        example=None,
     )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
@@ -205,7 +204,6 @@ class AssistantCreate(BaseModel):
                 "timezone": "America/New_York",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
-                "deploy_env": "staging",
             },
         }
 
@@ -360,7 +358,7 @@ class AssistantRead(AssistantCreate):
                 "agent_id": "12345",
                 "user_id": "123",
                 "organization_id": None,
-                "deploy_env": "staging",
+                "deploy_env": None,
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
@@ -664,9 +662,12 @@ class AssistantUpdate(BaseModel):
         description="Monthly spending limit in dollars. Set to null to remove the limit.",
         example=100.00,
     )
-    deploy_env: Optional[Literal["production", "staging", "preview"]] = Field(
+    deploy_env: Optional[Literal["preview"]] = Field(
         None,
-        description="Deployment environment for this assistant's runtime resources.",
+        description=(
+            "Set to 'preview' to route this assistant to the preview runtime stack. "
+            "Set to null to revert to native routing."
+        ),
         example="preview",
     )
 
@@ -1489,9 +1490,12 @@ class AdminUpdateAssistant(BaseModel):
         None,
         description="SSH private key for desktop filesystem sync.",
     )
-    deploy_env: Optional[Literal["production", "staging", "preview"]] = Field(
+    deploy_env: Optional[Literal["preview"]] = Field(
         None,
-        description="Deployment environment for this assistant's runtime resources.",
+        description=(
+            "Set to 'preview' to route this assistant to the preview runtime stack. "
+            "Set to null to revert to native routing."
+        ),
         example="preview",
     )
 

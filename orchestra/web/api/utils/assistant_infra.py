@@ -18,76 +18,42 @@ ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def _current_deploy_env() -> str:
-    return "staging" if os.environ.get("STAGING", "False") == "True" else "production"
-
-
-def _normalize_deploy_env(deploy_env: str | None) -> str:
-    if deploy_env in {"production", "staging", "preview"}:
-        return deploy_env
-    return _current_deploy_env()
-
-
-def _env_suffix(deploy_env: str) -> str:
-    return "" if deploy_env == "production" else f"-{deploy_env}"
-
-
-def _cloud_run_url(service_name: str) -> str:
-    return f"https://{service_name}-721804302511.us-central1.run.app"
-
-
-def _service_url(
-    *,
-    current_url: str | None,
-    env_var_base: str,
-    service_name: str,
-    deploy_env: str | None,
-) -> str:
-    normalized_env = _normalize_deploy_env(deploy_env)
-    current_env = _current_deploy_env()
-    if normalized_env == current_env and current_url:
-        return current_url
-
-    override = os.environ.get(f"{env_var_base}_{normalized_env.upper()}")
+def _preview_service_url(env_var_base: str, service_name: str) -> str:
+    override = os.environ.get(f"{env_var_base}_PREVIEW")
     if override:
         return override
-
-    target_service = (
-        service_name
-        if normalized_env == "production"
-        else f"{service_name}-{normalized_env}"
-    )
-    return _cloud_run_url(target_service)
+    return f"https://{service_name}-preview-721804302511.us-central1.run.app"
 
 
 def _comms_url_for(deploy_env: str | None) -> str:
-    return _service_url(
-        current_url=COMMS_URL,
-        env_var_base="UNITY_COMMS_URL",
-        service_name="unity-comms-app",
-        deploy_env=deploy_env,
-    )
+    if deploy_env == "preview":
+        return _preview_service_url("UNITY_COMMS_URL", "unity-comms-app")
+    return COMMS_URL or ""
 
 
 def _adapters_url_for(deploy_env: str | None) -> str:
-    return _service_url(
-        current_url=ADAPTERS_URL,
-        env_var_base="UNITY_ADAPTERS_URL",
-        service_name="unity-adapters",
-        deploy_env=deploy_env,
-    )
+    if deploy_env == "preview":
+        return _preview_service_url("UNITY_ADAPTERS_URL", "unity-adapters")
+    return ADAPTERS_URL or ""
+
+
+def _env_suffix(deploy_env: str | None) -> str:
+    if deploy_env == "preview":
+        return "-preview"
+    is_staging = os.environ.get("STAGING", "False") == "True"
+    return "-staging" if is_staging else ""
 
 
 async def create_phone_number(
     phone_country: str = "US",
-    deploy_env: str = "production",
+    deploy_env: str | None = None,
 ):
     """
     Create a phone number for the user by making a POST request to the comms endpoint.
 
     Args:
         phone_country (str): The country code for phone number provisioning (e.g., "US", "GB").
-        deploy_env (str): Target deployment environment for the provisioned resources
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the phone creation endpoint
@@ -118,14 +84,14 @@ async def create_phone_number(
 
 async def assign_whatsapp_sender(
     user_whatsapp_number: str,
-    deploy_env: str = "production",
+    deploy_env: str | None = None,
 ):
     """
     Create a WhatsApp sender by making a POST request to the comms endpoint.
 
     Args:
         user_whatsapp_number (str): The WhatsApp number to assign
-        deploy_env (str): Target deployment environment for the provisioned resources
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the WhatsApp creation endpoint
@@ -145,7 +111,7 @@ async def assign_whatsapp_sender(
         return response.json()
 
 
-async def delete_phone_number(phone_number: str, deploy_env: str = "production"):
+async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
     """
     Delete a phone number by making a DELETE request to the comms endpoint.
 
@@ -171,7 +137,7 @@ async def create_email(
     local: str,
     first_name: str,
     last_name: str,
-    deploy_env: str = "production",
+    deploy_env: str | None = None,
 ):
     """
     Create an email for the user by making a POST request to the UNIFY_COMMS_URL endpoint.
@@ -199,7 +165,7 @@ async def create_email(
         return response.json()
 
 
-async def delete_email(email: str, deploy_env: str = "production"):
+async def delete_email(email: str, deploy_env: str | None = None):
     """
     Delete an email by making a DELETE request to the comms endpoint.
 
@@ -221,19 +187,18 @@ async def delete_email(email: str, deploy_env: str = "production"):
         return response.json()
 
 
-async def watch_email(email: str, deploy_env: str = "production"):
+async def watch_email(email: str, deploy_env: str | None = None):
     """
     Watch an email by making a POST request to the comms endpoint.
 
     Args:
         email (str): The email to watch
-        deploy_env (str): Target deployment environment for the provisioned resources
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the email watch endpoint
     """
-    normalized_env = _normalize_deploy_env(deploy_env)
-    comms_url = _comms_url_for(normalized_env)
+    comms_url = _comms_url_for(deploy_env)
     print(f"Watching email: {email}")
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -241,27 +206,26 @@ async def watch_email(email: str, deploy_env: str = "production"):
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={
                 "primary_email": email,
-                "topic": f"gmail-notifications{_env_suffix(normalized_env)}",
+                "topic": f"gmail-notifications{_env_suffix(deploy_env)}",
             },
             timeout=20,
         )
         return response.json()
 
 
-async def create_pubsub_topic(assistant_id: str, deploy_env: str = "production"):
+async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     """
     Create a pubsub topic for the assistant by making a POST request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
-        deploy_env (str): Target deployment environment for the topic
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the pubsub topic creation endpoint
     """
-    normalized_env = _normalize_deploy_env(deploy_env)
-    comms_url = _comms_url_for(normalized_env)
-    topic_name = f"unity-{assistant_id}{_env_suffix(normalized_env)}"
+    comms_url = _comms_url_for(deploy_env)
+    topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -275,20 +239,19 @@ async def create_pubsub_topic(assistant_id: str, deploy_env: str = "production")
             print("Pubsub topic creation timed out")
 
 
-async def delete_pubsub_topic(assistant_id: str, deploy_env: str = "production"):
+async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     """
     Delete a pubsub topic for the assistant by making a DELETE request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
-        deploy_env (str): Target deployment environment for the topic
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
-    normalized_env = _normalize_deploy_env(deploy_env)
-    comms_url = _comms_url_for(normalized_env)
-    topic_name = f"unity-{assistant_id}{_env_suffix(normalized_env)}"
+    comms_url = _comms_url_for(deploy_env)
+    topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.request(
@@ -306,7 +269,7 @@ async def delete_pubsub_topic(assistant_id: str, deploy_env: str = "production")
             return {"success": True, "timed_out": True}
 
 
-async def release_pool_vm(assistant_id: str, deploy_env: str = "production"):
+async def release_pool_vm(assistant_id: str, deploy_env: str | None = None):
     """Release any pool VM assigned to this assistant back to idle.
     Idempotent — no-ops if no VM is assigned.
     """
@@ -325,7 +288,7 @@ async def release_pool_vm(assistant_id: str, deploy_env: str = "production"):
         return {"success": True, "timed_out": True}
 
 
-async def delete_assistant_disk(assistant_id: str, deploy_env: str = "production"):
+async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None):
     """Delete an assistant's persistent disk (permanent unhire cleanup)."""
     comms_url = _comms_url_for(deploy_env)
     try:
@@ -409,7 +372,7 @@ def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
 async def stop_jobs(
     assistant_id: str,
     session: Session,
-    deploy_env: str = "production",
+    deploy_env: str | None = None,
 ):
     """
     Stop a job and release any assigned pool VM.
@@ -435,7 +398,7 @@ async def stop_jobs(
     return {"success": True, "job_names": job_names}
 
 
-async def wake_up_assistant(assistant_id: str, deploy_env: str = "production"):
+async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
     wake_up_url = _adapters_url_for(deploy_env) + "/assistant/wakeup"
     async with httpx.AsyncClient() as client:
         return await client.post(
@@ -446,12 +409,12 @@ async def wake_up_assistant(assistant_id: str, deploy_env: str = "production"):
         )
 
 
-async def reawaken_assistant(assistant_id: str, deploy_env: str = "production"):
+async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
     """
     Triggers the assistant update webhook to reawaken or sync the assistant.
     Args:
         assistant_id (str): The ID of the assistant to reawaken.
-        deploy_env (str): Target deployment environment for the assistant webhook.
+        deploy_env: 'preview' for preview stack, None for native environment.
     Returns:
         The JSON response from the webhook.
     """
@@ -470,14 +433,14 @@ async def reawaken_assistant(assistant_id: str, deploy_env: str = "production"):
 async def log_pre_hire_chat(
     assistant_id: str,
     messages: list,
-    deploy_env: str = "production",
+    deploy_env: str | None = None,
 ):
     """
     Logs pre-hire chat messages for an assistant using the webhook.
     Args:
         assistant_id (str): The ID of the assistant.
         messages (list): A list of chat message dictionaries.
-        deploy_env (str): Target deployment environment for the assistant webhook.
+        deploy_env: 'preview' for preview stack, None for native environment.
     Returns:
         The JSON response from the webhook.
     """
@@ -499,7 +462,7 @@ async def log_pre_hire_chat(
 
 async def trigger_contact_sync(
     assistant_id: int,
-    deploy_env: str = "production",
+    deploy_env: str | None = None,
 ) -> dict:
     """
     Trigger contact sync for an assistant via the system-event webhook.

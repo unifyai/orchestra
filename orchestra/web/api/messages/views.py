@@ -31,26 +31,15 @@ ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 MAX_ATTACHMENTS_PER_MESSAGE = 10
 
 
-def _current_deploy_env() -> str:
-    return "staging" if os.environ.get("STAGING", "False") == "True" else "production"
-
-
 def _adapters_url_for_deploy_env(deploy_env: str | None) -> str | None:
-    normalized_env = deploy_env or _current_deploy_env()
-    current_env = _current_deploy_env()
-    if normalized_env == current_env:
+    if deploy_env != "preview":
         return ADAPTERS_URL
 
-    override = os.environ.get(f"UNITY_ADAPTERS_URL_{normalized_env.upper()}")
+    override = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
     if override:
         return override
 
-    service_name = (
-        "unity-adapters"
-        if normalized_env == "production"
-        else f"unity-adapters-{normalized_env}"
-    )
-    return f"https://{service_name}-721804302511.us-central1.run.app"
+    return "https://unity-adapters-preview-721804302511.us-central1.run.app"
 
 
 def _generate_signed_url(gs_url: str) -> str | None:

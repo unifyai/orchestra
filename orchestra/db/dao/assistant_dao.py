@@ -74,11 +74,6 @@ class AssistantDAO:
         if timezone is not None and timezone not in VALID_TIMEZONES:
             raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
 
-        if deploy_env is None:
-            from orchestra.settings import settings
-
-            deploy_env = "staging" if settings.is_staging else "production"
-
         assistant = Assistant(
             user_id=user_id,
             organization_id=organization_id,

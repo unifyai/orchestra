@@ -116,14 +116,6 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     return raw_phone
 
 
-def _default_assistant_deploy_env() -> str:
-    return "staging" if settings.is_staging else "production"
-
-
-def _assistant_deploy_env(value: Optional[str]) -> str:
-    return value or _default_assistant_deploy_env()
-
-
 router = APIRouter()
 admin_router = APIRouter()
 demo_router = APIRouter()
@@ -190,7 +182,7 @@ def _build_assistant_read(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
         organization_id=a.organization_id,
-        deploy_env=_assistant_deploy_env(a.deploy_env),
+        deploy_env=a.deploy_env,
         first_name=a.first_name,
         surname=a.surname,
         age=a.age,
@@ -389,7 +381,7 @@ async def create_assistant(
             timezone=assistant_in.timezone,
             organization_id=organization_id,
             is_local=assistant_in.is_local or False,
-            deploy_env=_assistant_deploy_env(assistant_in.deploy_env),
+            deploy_env=assistant_in.deploy_env,
         )
 
         # For org assistants, grant Owner role to creator
@@ -514,7 +506,7 @@ async def create_assistant(
                 current_infra_step = "create_pubsub_topic"
                 pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
-                    deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                    deploy_env=assistant.deploy_env,
                 )
                 if "detail" in pubsub_response:
                     raise Exception(
@@ -573,7 +565,7 @@ async def create_assistant(
                     try:
                         await delete_pubsub_topic(
                             str(assistant_id),
-                            deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                            deploy_env=assistant.deploy_env,
                         )
                     except Exception as e:
                         rollback_errors.append(
@@ -664,7 +656,7 @@ async def create_assistant(
     if not assistant_in.is_local:
         response = await wake_up_assistant(
             assistant.agent_id,
-            deploy_env=_assistant_deploy_env(assistant.deploy_env),
+            deploy_env=assistant.deploy_env,
         )
         if response.status_code != 200:
             logging.error(f"Failed to wake up assistant: {response.text}")
@@ -685,7 +677,7 @@ async def create_assistant(
             await log_pre_hire_chat(
                 assistant_id=str(assistant.agent_id),
                 messages=chat_messages,
-                deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                deploy_env=assistant.deploy_env,
             )
         except Exception as e_log:
             # We don't rollback the whole assistant creation for a logging failure,
@@ -952,12 +944,12 @@ async def delete_assistant_contact(
             if contact_type == "phone" and contact.contact_value:
                 await delete_phone_number(
                     contact.contact_value,
-                    deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                    deploy_env=assistant.deploy_env,
                 )
             elif contact_type == "email" and contact.contact_value:
                 await delete_email(
                     contact.contact_value,
-                    deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                    deploy_env=assistant.deploy_env,
                 )
             # WhatsApp: no external infra deletion needed
 
@@ -975,7 +967,7 @@ async def delete_assistant_contact(
         try:
             await reawaken_assistant(
                 str(updated_assistant.agent_id),
-                deploy_env=_assistant_deploy_env(updated_assistant.deploy_env),
+                deploy_env=updated_assistant.deploy_env,
             )
         except Exception as e:
             # Log the error but don't fail the request, as the main action succeeded
@@ -1131,7 +1123,7 @@ async def create_assistant_contact(
             phone_country = contact_request.phone_country or "US"
             phone_response = await create_phone_number(
                 phone_country=phone_country,
-                deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                deploy_env=assistant.deploy_env,
             )
             if "detail" in phone_response:
                 raise Exception(
@@ -1150,7 +1142,7 @@ async def create_assistant_contact(
                 contact_request.email_local,
                 contact_request.first_name or "",
                 contact_request.last_name or "",
-                deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                deploy_env=assistant.deploy_env,
             )
             if "detail" in email_response:
                 raise Exception(
@@ -1162,7 +1154,7 @@ async def create_assistant_contact(
             await asyncio.sleep(10)
             watch_response = await watch_email(
                 created_value,
-                deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                deploy_env=assistant.deploy_env,
             )
             if "detail" in watch_response:
                 raise Exception(
@@ -1177,7 +1169,7 @@ async def create_assistant_contact(
                 )
             whatsapp_response = await assign_whatsapp_sender(
                 contact_request.user_whatsapp_number,
-                deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                deploy_env=assistant.deploy_env,
             )
             created_value = whatsapp_response.get("whatsapp_number")
             user_value = contact_request.user_whatsapp_number
@@ -1244,12 +1236,12 @@ async def create_assistant_contact(
             if contact_type == "phone":
                 await delete_phone_number(
                     created_value,
-                    deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                    deploy_env=assistant.deploy_env,
                 )
             elif contact_type == "email":
                 await delete_email(
                     created_value,
-                    deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                    deploy_env=assistant.deploy_env,
                 )
             # WhatsApp: no explicit deprovisioning needed
         except Exception as rollback_error:
@@ -1266,7 +1258,7 @@ async def create_assistant_contact(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=_assistant_deploy_env(assistant.deploy_env),
+            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -1428,7 +1420,7 @@ async def update_assistant_contact(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=_assistant_deploy_env(assistant.deploy_env),
+            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -1517,7 +1509,7 @@ async def delete_assistant(
             response = await stop_jobs(
                 assistant_id,
                 session,
-                deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                deploy_env=assistant.deploy_env,
             )
             print(f"JOB STOPPED: {response['job_names']}")
         except Exception as e:
@@ -1589,7 +1581,7 @@ async def delete_assistant(
                 try:
                     await delete_assistant_disk(
                         str(assistant_id),
-                        deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                        deploy_env=assistant.deploy_env,
                     )
                 except Exception as e:
                     logging.error(f"Failed to delete assistant disk: {str(e)}")
@@ -1645,8 +1637,7 @@ async def delete_assistant(
                 cleanup_counts = await asyncio.to_thread(
                     bucket_service.delete_all_assistant_data,
                     assistant_id,
-                    is_staging=_assistant_deploy_env(assistant.deploy_env)
-                    != "production",
+                    is_staging=settings.is_staging,
                 )
                 total = sum(cleanup_counts.values())
                 if total > 0:
@@ -1667,7 +1658,7 @@ async def delete_assistant(
             try:
                 await delete_pubsub_topic(
                     str(assistant_id),
-                    deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                    deploy_env=assistant.deploy_env,
                 )
             except Exception as e:
                 cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
@@ -1680,13 +1671,13 @@ async def delete_assistant(
                     if ac.contact_type == "phone" and ac.contact_value:
                         await delete_phone_number(
                             ac.contact_value,
-                            deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                            deploy_env=assistant.deploy_env,
                         )
                         print(f"PHONE DELETED: {ac.contact_value}")
                     elif ac.contact_type == "email" and ac.contact_value:
                         await delete_email(
                             ac.contact_value,
-                            deploy_env=_assistant_deploy_env(assistant.deploy_env),
+                            deploy_env=assistant.deploy_env,
                         )
                         print(f"EMAIL DELETED: {ac.contact_value}")
                 except Exception as e:
@@ -4994,7 +4985,7 @@ async def create_demo_assistant(
             monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),
             # Link to demo metadata
             demo_id=demo_meta.id,
-            deploy_env=_assistant_deploy_env(source_assistant.deploy_env),
+            deploy_env=source_assistant.deploy_env,
         )
         session.add(demo_assistant)
         session.flush()  # Get the agent_id
@@ -5006,7 +4997,7 @@ async def create_demo_assistant(
         try:
             phone_response = await create_phone_number(
                 phone_country=phone_country,
-                deploy_env=_assistant_deploy_env(demo_assistant.deploy_env),
+                deploy_env=demo_assistant.deploy_env,
             )
             if "detail" in phone_response:
                 raise Exception(f"Phone creation failed: {phone_response['detail']}")
@@ -5030,7 +5021,7 @@ async def create_demo_assistant(
                     email_local,
                     demo_create.first_name,
                     demo_create.surname,
-                    deploy_env=_assistant_deploy_env(demo_assistant.deploy_env),
+                    deploy_env=demo_assistant.deploy_env,
                 )
                 if "detail" in email_response:
                     raise Exception(
@@ -5043,7 +5034,7 @@ async def create_demo_assistant(
                 await asyncio.sleep(10)
                 watch_response = await watch_email(
                     demo_email,
-                    deploy_env=_assistant_deploy_env(demo_assistant.deploy_env),
+                    deploy_env=demo_assistant.deploy_env,
                 )
                 if "detail" in watch_response:
                     logging.warning(
@@ -5058,7 +5049,7 @@ async def create_demo_assistant(
         try:
             await create_pubsub_topic(
                 str(demo_assistant.agent_id),
-                deploy_env=_assistant_deploy_env(demo_assistant.deploy_env),
+                deploy_env=demo_assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
@@ -5091,7 +5082,7 @@ async def create_demo_assistant(
         try:
             await wake_up_assistant(
                 str(demo_assistant.agent_id),
-                deploy_env=_assistant_deploy_env(demo_assistant.deploy_env),
+                deploy_env=demo_assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(f"Failed to wake up demo assistant: {e}")
