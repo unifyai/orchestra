@@ -1161,10 +1161,6 @@ class VideoAnimateRequest(BaseModel):
         None,
         description="Random seed for reproducible results. Leave blank for a random seed.",
     )
-    duration: Optional[int] = Field(
-        None,
-        description="Duration of the generated video. Defaults to 5 sec.",
-    )
 
     class Config:
         schema_extra = {

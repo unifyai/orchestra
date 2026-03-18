@@ -100,27 +100,31 @@ class ReplicateService:
                 detail=f"Request to Replicate API failed: {e}",
             )
 
+    # Default prompt for OmniHuman 1.5 optimized for natural talking-head animation.
+    # Structure follows the recommended format for the model's documentation.
+    _OMNI_HUMAN_DEFAULT_PROMPT = (
+        "A steady medium close-up shot. The person looks directly at the camera with a calm, "
+        "friendly expression and talks naturally. Subtle head movements and gentle facial "
+        "expressions accompany the speech, with natural eye blinks and slight eyebrow raises "
+        "for emphasis."
+    )
+
     def create_video_animation(
         self,
         image_url: str,
         audio_url: str,
         seed: Optional[int] = None,
-        duration: Optional[int] = None,
     ) -> Prediction:
         """
-        Creates a video animation prediction using wan-video/wan-2.5-i2v model.
+        Creates a video animation prediction using bytedance/omni-human-1.5 (OmniHuman 1.5).
+        Video duration is derived from audio length by the model.
         """
         try:
-            model_identifier = "wan-video/wan-2.5-i2v"
+            model_identifier = "bytedance/omni-human-1.5"
             model_input: Dict[str, Any] = {
                 "image": image_url,
                 "audio": audio_url,
-                "prompt": "A speaking person",
-                "duration": (
-                    duration
-                    if duration is not None
-                    else settings.default_video_duration
-                ),
+                "prompt": self._OMNI_HUMAN_DEFAULT_PROMPT,
             }
             if seed is not None:
                 model_input["seed"] = seed
