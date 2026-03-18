@@ -2978,3 +2978,91 @@ async def test_derived_logs_reports_failures_for_invalid_ids(client: AsyncClient
     assert set(not_found) == set(
         fake_ids,
     ), f"Expected not_found to contain {fake_ids}, but got {not_found}"
+
+
+@pytest.mark.anyio
+async def test_recompute_derived_on_create(client: AsyncClient):
+    """
+    Verify the ``recompute_derived`` flag on POST /v0/logs.
+
+    1. Create a derived template (``{log:base_value} * 10``).
+    2. Create new logs with ``recompute_derived=True`` — derived values
+       should be computed inline.
+    3. Create new logs with ``recompute_derived=False`` (default) — derived
+       values should NOT be present.
+    """
+    project_name = "test_recompute_derived_on_create"
+    await _create_project(client, project_name, user=1)
+
+    # Seed one log so the derived template has something to reference
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"base_value": 1},
+    )
+    assert response.status_code == 200
+    seed_id = response.json()["log_event_ids"][0]
+
+    # Create derived template with a filter_expr so an ActiveDerivedLog is stored
+    key = "derived_value"
+    equation = "{log:base_value} * 10"
+    referenced_logs = {"log": {"filter_expr": "True"}}
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200, response.json()
+
+    # --- Case 1: recompute_derived=True ---
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [{"base_value": 5}],
+            "recompute_derived": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    created_id_with = response.json()["log_event_ids"][0]
+
+    # Fetch and assert derived value is populated
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}&from_ids={created_id_with}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    derived_entries = logs[0].get("derived_entries", {})
+    assert (
+        derived_entries.get(key) == 50
+    ), f"Expected derived_value == 50, got {derived_entries.get(key)}"
+
+    # --- Case 2: recompute_derived=False (default) ---
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [{"base_value": 7}],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    created_id_without = response.json()["log_event_ids"][0]
+
+    # Fetch and assert derived value is NOT present
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}&from_ids={created_id_without}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    derived_entries = logs[0].get("derived_entries", {})
+    assert (
+        derived_entries.get(key) is None
+    ), f"Expected derived_value to be absent, got {derived_entries.get(key)}"
