@@ -3249,3 +3249,189 @@ async def test_recompute_derived_on_create_async_embedding(
     assert (
         derived_entries[key] is None
     ), f"Derived key '{key}' should be null (async embed not yet computed)"
+
+
+@pytest.mark.anyio
+async def test_recompute_derived_on_create_image_embedding(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Verify that ``recompute_derived=True`` on POST /v0/logs handles
+    ``embed_image()`` equations: image embeddings are computed and stored
+    in the Embedding table under the correct key (not just the JSONB null marker).
+
+    Before the fix, ``recompute_derived_logs`` in the DAO wrote the null marker
+    to JSONB but never persisted the vector to the Embedding table because
+    ``_handle_embed_image_jsonb`` (unlike ``_handle_embed_jsonb``) does not
+    store embeddings internally — it only returns them.
+    """
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project_name = "test_recompute_image_embed"
+    context_name = "img_ctx"
+    await _create_project(client, project_name, user=1)
+
+    # 1) Seed one base log with an image so we can create the derived template
+    response = await _create_image_log(
+        client,
+        project_name,
+        context_name,
+        "cat.png",
+        additional_entries={"label": "cat"},
+        image_col_name="screenshot",
+    )
+    assert response.status_code == 200, response.text
+    seed_id = response.json()["log_event_ids"][0]
+
+    await wait_for_gcs_images(
+        client,
+        project_name,
+        context_name,
+        image_col_name="screenshot",
+    )
+
+    # 2) Create the derived template with embed_image()
+    key = "screenshot_vec"
+    equation = "embed_image({log:screenshot})"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        {"log": [seed_id]},
+        context=context_name,
+    )
+    assert response.status_code == 200, response.text
+
+    # Verify seed embedding was stored by the /logs/derived handler
+    seed_emb = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == seed_id,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert seed_emb is not None, "Seed embedding should exist after /logs/derived"
+
+    # 3) Create a NEW log with an image and recompute_derived=True
+    response = await _create_image_log(
+        client,
+        project_name,
+        context_name,
+        "dog.png",
+        additional_entries={"label": "dog"},
+        image_col_name="screenshot",
+    )
+    assert response.status_code == 200, response.text
+    new_id = response.json()["log_event_ids"][0]
+
+    await wait_for_gcs_images(
+        client,
+        project_name,
+        context_name,
+        image_col_name="screenshot",
+    )
+
+    # Now trigger recompute via a second create with recompute_derived=True
+    # We re-create so the recompute picks up the image log we just created.
+    # Actually, we need to create the log WITH recompute_derived=True directly.
+    # Let's use a raw POST instead of the helper.
+    img_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+        "sample_datasets",
+        "dog.png",
+    )
+    import cv2
+
+    success, buffer = cv2.imencode(".png", cv2.imread(img_path))
+    assert success, f"Failed to encode image at {img_path}"
+    img_b64 = base64.b64encode(buffer).decode("utf-8")
+
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": context_name,
+            "entries": [
+                {
+                    "screenshot": f"data:image/png;base64,{img_b64}",
+                    "label": "dog2",
+                },
+            ],
+            "recompute_derived": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    recompute_id = response.json()["log_event_ids"][0]
+
+    # Wait for the image to be available in GCS
+    await wait_for_gcs_images(
+        client,
+        project_name,
+        context_name,
+        image_col_name="screenshot",
+    )
+
+    # 4) Assert: Embedding was stored in the Embedding table
+    dbsession.expire_all()
+    recompute_emb = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == recompute_id,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert recompute_emb is not None, (
+        f"Embedding should exist for log {recompute_id} under key '{key}'. "
+        "Before the fix, embed_image() vectors were computed but never persisted "
+        "to the Embedding table by recompute_derived_logs."
+    )
+    assert recompute_emb.vector is not None, "Embedding vector should be populated"
+
+    # 5) Assert: JSONB has the null marker (vectors live in Embedding table, not JSONB)
+    fetch_resp = await client.get(
+        f"/v0/logs?project_name={project_name}&context={context_name}&from_ids={recompute_id}",
+        headers=HEADERS,
+    )
+    assert fetch_resp.status_code == 200
+    logs = fetch_resp.json()["logs"]
+    assert len(logs) == 1
+    derived_entries = logs[0].get("derived_entries", {})
+    assert (
+        key in derived_entries
+    ), f"Derived key '{key}' should exist in JSONB as null marker"
+
+    # 6) Create a log WITHOUT recompute_derived — no embedding should be created
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": context_name,
+            "entries": [
+                {
+                    "screenshot": f"data:image/png;base64,{img_b64}",
+                    "label": "dog3",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    no_recompute_id = response.json()["log_event_ids"][0]
+
+    dbsession.expire_all()
+    no_emb = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == no_recompute_id,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert no_emb is None, (
+        f"Embedding should NOT exist for log {no_recompute_id} "
+        "(recompute_derived=False)"
+    )
