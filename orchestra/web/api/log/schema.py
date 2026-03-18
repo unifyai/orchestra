@@ -199,6 +199,12 @@ class CreateLogConfig(BaseModel):
             ],
         },
     )
+    recompute_derived: bool = Field(
+        default=False,
+        description="If True, recompute derived columns for the newly created logs "
+        "using active ActiveDerivedLog templates. Suitable for small batches; "
+        "for large ingestion workflows, leave False and rely on periodic backfill.",
+    )
 
 
 class CreateDerivedEntriesConfig(BaseModel):
@@ -534,6 +540,28 @@ class DeleteFieldsRequest(BaseModel):
     fields: List[str] = Field(
         description="List of field names to delete.",
         example=["score", "response"],
+    )
+
+
+class UpdateFieldRequest(BaseModel):
+    project_name: str = Field(
+        description="Name of the project the field belongs to.",
+        example="eval-project",
+    )
+    context: Optional[str] = Field(
+        default="",
+        description="The context of the field to update.",
+        example="test-context",
+    )
+    field_name: str = Field(
+        description="The name of the field to update.",
+        example="score",
+    )
+    description: Optional[str] = Field(
+        ...,
+        max_length=256,
+        description="Field description. This is the only supported field update. Use null to clear the description.",
+        example="Human-readable score for this log entry",
     )
 
 

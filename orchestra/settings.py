@@ -277,10 +277,10 @@ class Settings(BaseSettings):
         0.05  # /img. See https://replicate.com/black-forest-labs/flux-1.1-pro
     )
     video_generation_cost: float = (
-        0.12  # /s. See https://replicate.com/wan-video/wan-2.5-i2v
+        0.20  # /s. See https://replicate.com/bytedance/omni-human-1.5
     )
     default_video_duration: int = (
-        5  # Default. See https://replicate.com/wan-video/wan-2.5-i2v
+        5  # Fallback when client does not send duration (billing only)
     )
     replicate_api_key: Optional[str] = None  # Populated by model_config below
 

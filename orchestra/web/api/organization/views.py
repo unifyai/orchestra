@@ -1282,19 +1282,44 @@ async def invite_user_to_organization(
                 detail="User is already a member of this organization",
             )
 
+    # Resolve role_id from request (supports both role_id and role_name)
+    try:
+        resolved_role_id = role_dao.resolve_role_id(
+            role_id=invite_request.role_id,
+            role_name=invite_request.role_name,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
     # Check for existing invite
     existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
     if existing_invite:
-        # Refresh expiry and resend the email
+        # Refresh expiry and update role if specified
         existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
             days=invite_request.expires_in_days,
         )
+        if resolved_role_id and resolved_role_id != existing_invite.role_id:
+            role = role_dao.get(resolved_role_id)
+            if not role:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Role with id {resolved_role_id} not found",
+                )
+            if role.name == "Owner":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot assign Owner role via invite. Use ownership transfer instead.",
+                )
+            existing_invite.role_id = resolved_role_id
         session.commit()
         await _send_invite_email(existing_invite, org, user_dao, user_id)
         return _build_invite_response(existing_invite, org, role_dao, user_dao)
 
     # Determine role_id (default to Member role)
-    role_id = invite_request.role_id
+    role_id = resolved_role_id
     if not role_id:
         member_role = role_dao.get_by_name("Member", organization_id=None)
         if not member_role:
@@ -2468,12 +2493,37 @@ async def admin_invite_user(
                 detail="User is already a member of this organization",
             )
 
+    # Resolve role_id from request (supports both role_id and role_name)
+    try:
+        resolved_role_id = role_dao.resolve_role_id(
+            role_id=invite_request.role_id,
+            role_name=invite_request.role_name,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
     # Check for existing invite – refresh if found
     existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
     if existing_invite:
         existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
             days=invite_request.expires_in_days,
         )
+        if resolved_role_id and resolved_role_id != existing_invite.role_id:
+            role = role_dao.get(resolved_role_id)
+            if not role:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Role with id {resolved_role_id} not found",
+                )
+            if role.name == "Owner":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot assign Owner role via invite. Use ownership transfer instead.",
+                )
+            existing_invite.role_id = resolved_role_id
         session.commit()
         # Use the org owner as the "inviter" for the email
         await _send_invite_email(existing_invite, org, user_dao, org.owner_id)
@@ -2483,7 +2533,7 @@ async def admin_invite_user(
         }
 
     # Determine role_id (default to Member)
-    role_id = invite_request.role_id
+    role_id = resolved_role_id
     if not role_id:
         member_role = role_dao.get_by_name("Member", organization_id=None)
         if not member_role:

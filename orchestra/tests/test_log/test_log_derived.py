@@ -2978,3 +2978,274 @@ async def test_derived_logs_reports_failures_for_invalid_ids(client: AsyncClient
     assert set(not_found) == set(
         fake_ids,
     ), f"Expected not_found to contain {fake_ids}, but got {not_found}"
+
+
+@pytest.mark.anyio
+async def test_recompute_derived_on_create(client: AsyncClient):
+    """
+    Verify the ``recompute_derived`` flag on POST /v0/logs.
+
+    1. Create a derived template (``{log:base_value} * 10``).
+    2. Create new logs with ``recompute_derived=True`` — derived values
+       should be computed inline.
+    3. Create new logs with ``recompute_derived=False`` (default) — derived
+       values should NOT be present.
+    """
+    project_name = "test_recompute_derived_on_create"
+    await _create_project(client, project_name, user=1)
+
+    # Seed one log so the derived template has something to reference
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"base_value": 1},
+    )
+    assert response.status_code == 200
+    seed_id = response.json()["log_event_ids"][0]
+
+    # Create derived template with a filter_expr so an ActiveDerivedLog is stored
+    key = "derived_value"
+    equation = "{log:base_value} * 10"
+    referenced_logs = {"log": {"filter_expr": "True"}}
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200, response.json()
+
+    # --- Case 1: recompute_derived=True ---
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [{"base_value": 5}],
+            "recompute_derived": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    created_id_with = response.json()["log_event_ids"][0]
+
+    # Fetch and assert derived value is populated
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}&from_ids={created_id_with}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    derived_entries = logs[0].get("derived_entries", {})
+    assert (
+        derived_entries.get(key) == 50
+    ), f"Expected derived_value == 50, got {derived_entries.get(key)}"
+
+    # --- Case 2: recompute_derived=False (default) ---
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [{"base_value": 7}],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    created_id_without = response.json()["log_event_ids"][0]
+
+    # Fetch and assert derived value is NOT present
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}&from_ids={created_id_without}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    derived_entries = logs[0].get("derived_entries", {})
+    assert (
+        derived_entries.get(key) is None
+    ), f"Expected derived_value to be absent, got {derived_entries.get(key)}"
+
+
+@pytest.mark.anyio
+async def test_recompute_derived_on_create_sync_embedding(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Verify that ``recompute_derived=True`` on POST /v0/logs handles sync
+    ``embed()`` equations: embeddings are generated immediately and stored in
+    the Embedding table under the correct key.
+    """
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project_name = "test_recompute_sync_embed"
+    await _create_project(client, project_name, user=1)
+
+    # 1) Seed one base log so we can create the derived template
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"desc": "a cute little cat"},
+    )
+    assert response.status_code == 200
+    seed_id = response.json()["log_event_ids"][0]
+
+    # 2) Create the derived template (sync embed, derived=True)
+    key = "desc_vec"
+    equation = "embed({log:desc})"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        {"log": [seed_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 3) Create NEW logs with recompute_derived=True
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [{"desc": "a friendly dog"}],
+            "recompute_derived": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    new_id_with = response.json()["log_event_ids"][0]
+
+    # Assert: embedding exists in Embedding table under the correct key
+    embedding = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == new_id_with,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert (
+        embedding is not None
+    ), f"Embedding should exist for log {new_id_with} under key '{key}'"
+    assert embedding.vector is not None, "Embedding vector should be populated"
+
+    # 4) Create NEW logs WITHOUT recompute_derived (default False)
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [{"desc": "a wooden chair"}],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    new_id_without = response.json()["log_event_ids"][0]
+
+    # Assert: NO embedding for this log
+    embedding_none = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == new_id_without,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert (
+        embedding_none is None
+    ), f"Embedding should NOT exist for log {new_id_without} (recompute_derived=False)"
+
+
+@pytest.mark.anyio
+async def test_recompute_derived_on_create_async_embedding(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Verify that ``recompute_derived=True`` on POST /v0/logs handles async
+    ``embed(..., async_embeddings=True)`` equations: entries are queued into
+    EmbeddingQueue (not computed inline) and JSONB gets a null marker.
+    """
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
+
+    project_name = "test_recompute_async_embed"
+    await _create_project(client, project_name, user=1)
+
+    # 1) Seed one base log for the derived template
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"desc": "a cute little cat"},
+    )
+    assert response.status_code == 200
+    seed_id = response.json()["log_event_ids"][0]
+
+    # 2) Create the derived template (async embed, derived=True)
+    key = "desc_vec"
+    equation = "embed({log:desc}, async_embeddings=True)"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        {"log": [seed_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 3) Create NEW logs with recompute_derived=True
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [{"desc": "a friendly dog"}],
+            "recompute_derived": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    new_id = response.json()["log_event_ids"][0]
+
+    # Assert: embedding is NOT yet in the Embedding table (async = queued)
+    embedding = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == new_id,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert (
+        embedding is None
+    ), "Embedding should NOT exist yet for async embed (should be queued)"
+
+    # Assert: entry was added to EmbeddingQueue under the correct key
+    queue_entry = dbsession.execute(
+        select(EmbeddingQueue).where(
+            EmbeddingQueue.ref_id == new_id,
+            EmbeddingQueue.key == key,
+        ),
+    ).scalar_one_or_none()
+    assert (
+        queue_entry is not None
+    ), f"EmbeddingQueue entry should exist for log {new_id} under key '{key}'"
+    assert (
+        queue_entry.status == "pending"
+    ), f"Queue entry should be pending, got '{queue_entry.status}'"
+
+    # Assert: JSONB has the null marker for the derived key
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}&from_ids={new_id}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    derived_entries = logs[0].get("derived_entries", {})
+    assert (
+        key in derived_entries
+    ), f"Derived key '{key}' should exist in JSONB (as null marker)"
+    assert (
+        derived_entries[key] is None
+    ), f"Derived key '{key}' should be null (async embed not yet computed)"
