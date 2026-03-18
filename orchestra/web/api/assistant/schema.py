@@ -8,6 +8,15 @@ from pydantic.generics import GenericModel
 T = TypeVar("T")
 
 VALID_TIMEZONES = available_timezones()
+VALID_DEPLOY_ENVS = {"production", "staging", "preview"}
+
+
+def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    if v not in VALID_DEPLOY_ENVS:
+        raise ValueError("deploy_env must be one of production, staging, or preview.")
+    return v
 
 
 class InfoResponse(GenericModel, Generic[T]):
@@ -132,6 +141,14 @@ class AssistantCreate(BaseModel):
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
     )
+    deploy_env: Optional[Literal["production", "staging", "preview"]] = Field(
+        None,
+        description=(
+            "Deployment environment for this assistant's runtime resources. "
+            "Defaults to the current Orchestra deployment environment when omitted."
+        ),
+        example="staging",
+    )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
         description="A list of chat messages from the pre-hire conversation to be logged.",
@@ -148,6 +165,11 @@ class AssistantCreate(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
+
+    @field_validator("deploy_env")
+    @classmethod
+    def validate_deploy_env(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_deploy_env(v)
 
     @model_validator(mode="after")
     def check_voice_fields(cls, self):
@@ -183,6 +205,7 @@ class AssistantCreate(BaseModel):
                 "timezone": "America/New_York",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
+                "deploy_env": "staging",
             },
         }
 
@@ -337,6 +360,7 @@ class AssistantRead(AssistantCreate):
                 "agent_id": "12345",
                 "user_id": "123",
                 "organization_id": None,
+                "deploy_env": "staging",
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
@@ -640,6 +664,11 @@ class AssistantUpdate(BaseModel):
         description="Monthly spending limit in dollars. Set to null to remove the limit.",
         example=100.00,
     )
+    deploy_env: Optional[Literal["production", "staging", "preview"]] = Field(
+        None,
+        description="Deployment environment for this assistant's runtime resources.",
+        example="preview",
+    )
 
     @field_validator("timezone")
     @classmethod
@@ -647,6 +676,11 @@ class AssistantUpdate(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
+
+    @field_validator("deploy_env")
+    @classmethod
+    def validate_update_deploy_env(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_deploy_env(v)
 
     @model_validator(mode="after")
     def check_voice_fields_on_update(cls, self):
@@ -1455,6 +1489,11 @@ class AdminUpdateAssistant(BaseModel):
         None,
         description="SSH private key for desktop filesystem sync.",
     )
+    deploy_env: Optional[Literal["production", "staging", "preview"]] = Field(
+        None,
+        description="Deployment environment for this assistant's runtime resources.",
+        example="preview",
+    )
 
     @field_validator("timezone")
     @classmethod
@@ -1462,6 +1501,11 @@ class AdminUpdateAssistant(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
+
+    @field_validator("deploy_env")
+    @classmethod
+    def validate_admin_deploy_env(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_deploy_env(v)
 
 
 class AdminUpdateAssistantResponse(BaseModel):
