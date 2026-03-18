@@ -1469,11 +1469,28 @@ class LogEventDAO:
 
             import numpy as np
 
+            from orchestra.db.models.orchestra_models import Embedding
+            from orchestra.web.api.log.python2SQL.helpers import (
+                DEFAULT_IMAGE_EMBEDDING_MODEL,
+            )
+
+            is_image_embedding = "embed_image(" in template.equation
+            embedding_objects: list = []
+
             for log_event_id, value in computed_values:
                 try:
                     if isinstance(value, np.ndarray):
                         val = None
                         non_null_val = value.tolist()
+                        if is_image_embedding:
+                            embedding_objects.append(
+                                Embedding(
+                                    ref_id=log_event_id,
+                                    key=template.key,
+                                    model=DEFAULT_IMAGE_EMBEDDING_MODEL,
+                                    vector=value,
+                                ),
+                            )
                     else:
                         val = json.loads(json.dumps(value, cls=json_encoder))
                         if val is not None:
@@ -1496,6 +1513,9 @@ class LogEventDAO:
                         f"Failed to recompute derived log for log_event_id={log_event_id}: {e}",
                     )
                     continue
+
+            if embedding_objects:
+                self.session.bulk_save_objects(embedding_objects)
 
             self.session.commit()
 
