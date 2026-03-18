@@ -5,6 +5,8 @@ from zoneinfo import available_timezones
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from pydantic.generics import GenericModel
 
+from orchestra.settings import settings
+
 T = TypeVar("T")
 
 VALID_TIMEZONES = available_timezones()
@@ -15,6 +17,8 @@ def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
         return None
     if v != "preview":
         raise ValueError("deploy_env must be 'preview' or null.")
+    if not settings.is_staging:
+        raise ValueError("deploy_env='preview' is only supported on staging.")
     return v
 
 
