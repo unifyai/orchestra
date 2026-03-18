@@ -133,6 +133,72 @@ from orchestra.db.dao.sibling_context_cleanup import (
     get_assistants_sibling_context_info as _get_assistants_sibling_context_info,
 )
 
+
+def _recompute_derived_for_logs(
+    *,
+    session,
+    project_id: int,
+    context_id: int,
+    log_ids: list,
+    entry_keys: set,
+    derived_log_dao,
+    field_type_dao,
+):
+    """Recompute derived columns for the given log IDs.
+
+    Finds ActiveDerivedLog templates whose ``referenced_keys`` overlap with
+    *entry_keys* and calls ``recompute_derived_logs`` for each template,
+    scoped to *log_ids*.  Used by both the create and update handlers.
+    """
+    if not entry_keys or not log_ids:
+        return
+
+    try:
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        key_conditions = [
+            ActiveDerivedLog.referenced_keys.op("@>")(cast([key], JSONB))
+            for key in entry_keys
+        ]
+
+        dependent_templates = (
+            session.query(ActiveDerivedLog)
+            .filter(
+                ActiveDerivedLog.project_id == project_id,
+                ActiveDerivedLog.context_id == context_id,
+                ActiveDerivedLog.is_active == True,
+                or_(*key_conditions),
+            )
+            .all()
+        )
+
+        processed_template_ids: set = set()
+
+        for template in dependent_templates:
+            if template.id in processed_template_ids:
+                continue
+            processed_template_ids.add(template.id)
+
+            try:
+                derived_log_dao.recompute_derived_logs(
+                    template=template,
+                    log_ids=log_ids,
+                    json_encoder=CustomEncoder,
+                    field_type_dao=field_type_dao,
+                )
+            except Exception as template_error:
+                logging.warning(
+                    f"Failed to recompute derived logs for template "
+                    f"'{template.key}': {template_error}",
+                )
+    except Exception as ripple_error:
+        logging.warning(
+            f"Error in derived recomputation for project {project_id}: "
+            f"{ripple_error}",
+        )
+
+
 ###########################
 # endpoints
 ###########################
@@ -291,6 +357,29 @@ def create_logs(
         if not result.get("log_event_ids") and result.get("failed"):
             first_error = result["failed"][0].get("error", "Log creation failed")
             raise HTTPException(status_code=400, detail=first_error)
+
+        # Opt-in derived column recomputation for the newly created logs.
+        if request.recompute_derived and result.get("log_event_ids"):
+            entries_list = (
+                request.entries
+                if isinstance(request.entries, list)
+                else [request.entries]
+            )
+            entry_keys: set = set()
+            for entry in entries_list:
+                if isinstance(entry, dict):
+                    entry_keys.update(entry.keys())
+
+            derived_log_dao = LogEventDAO(session, context_dao)
+            _recompute_derived_for_logs(
+                session=session,
+                project_id=project_id,
+                context_id=context_id,
+                log_ids=result["log_event_ids"],
+                entry_keys=entry_keys,
+                derived_log_dao=derived_log_dao,
+                field_type_dao=field_type_dao,
+            )
 
         return {
             "info": "Logs created successfully!",
@@ -2368,68 +2457,16 @@ def _update_logs(
         updated_ids = {
             (k, le_id) for (k, le_id) in updated_ids if le_id in successful_update_ids
         }
-        try:
-            event_ids = [value for (_, value) in updated_ids]
-
-            # Ripple Effect for derived logs using indexed referenced_keys (JSONB mode)
-            if updated_entry_keys:  # Only process if there are modified keys
-                try:
-                    from sqlalchemy import cast
-                    from sqlalchemy.dialects.postgresql import JSONB
-
-                    # Build OR conditions for all modified keys at once
-                    key_conditions = [
-                        ActiveDerivedLog.referenced_keys.op("@>")(
-                            cast([key], JSONB),
-                        )
-                        for key in updated_entry_keys
-                    ]
-
-                    # Single batch query to find ALL templates referencing ANY modified key
-                    dependent_templates = (
-                        session.query(ActiveDerivedLog)
-                        .filter(
-                            ActiveDerivedLog.project_id == project_id,
-                            ActiveDerivedLog.context_id == ctx_id,
-                            ActiveDerivedLog.is_active == True,
-                            or_(*key_conditions),
-                        )
-                        .all()
-                    )
-
-                    # Track processed templates to avoid duplicates
-                    processed_template_ids: Set[int] = set()
-
-                    for template in dependent_templates:
-                        # Skip if already processed (multiple modified keys may reference same template)
-                        if template.id in processed_template_ids:
-                            continue
-                        processed_template_ids.add(template.id)
-
-                        # Recompute derived values for affected logs
-                        try:
-                            derived_log_dao.recompute_derived_logs(
-                                template=template,
-                                log_ids=event_ids,
-                                json_encoder=CustomEncoder,
-                                field_type_dao=field_type_dao,
-                            )
-                        except Exception as template_error:
-                            # Log error but don't fail the update
-                            logging.warning(
-                                f"Failed to recompute JSONB derived logs for template "
-                                f"'{template.key}': {template_error}",
-                            )
-                except Exception as ripple_error:
-                    # Ripple effect is best-effort; log error but don't fail update
-                    logging.warning(
-                        f"Error in JSONB ripple effect for project {project_id}: {ripple_error}",
-                    )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error recomputing derived logs for project id {project_id}: {e}",
-            )
+        event_ids = [value for (_, value) in updated_ids]
+        _recompute_derived_for_logs(
+            session=session,
+            project_id=project_id,
+            context_id=ctx_id,
+            log_ids=event_ids,
+            entry_keys=updated_entry_keys,
+            derived_log_dao=derived_log_dao,
+            field_type_dao=field_type_dao,
+        )
 
     # Return response with modified_keys for derived log recomputation
     return {
