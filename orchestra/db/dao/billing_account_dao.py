@@ -71,6 +71,25 @@ class BillingAccountDAO:
             .first()
         )
 
+    def get_for_update(self, billing_account_id: int) -> Optional[BillingAccount]:
+        """
+        Get a billing account by ID, acquiring a ``FOR UPDATE`` row lock.
+
+        Use this when you intend to read-then-write a mutable field
+        (e.g. ``credits``, ``account_status``). The lock prevents
+        concurrent transactions from reading the same row until this
+        transaction commits or rolls back, eliminating lost-update races.
+
+        :param billing_account_id: BillingAccount ID.
+        :return: BillingAccount object or None.
+        """
+        return (
+            self.session.query(BillingAccount)
+            .filter(BillingAccount.id == billing_account_id)
+            .with_for_update()
+            .first()
+        )
+
     def get_by_stripe_customer_id(
         self,
         stripe_customer_id: str,
@@ -161,11 +180,14 @@ class BillingAccountDAO:
         """
         Add credits to a billing account.
 
+        Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
+        when multiple transactions add/deduct credits concurrently.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to add.
         :return: New credit balance, or None if not found.
         """
-        ba = self.get(billing_account_id)
+        ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
@@ -181,11 +203,14 @@ class BillingAccountDAO:
         """
         Deduct credits from a billing account.
 
+        Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
+        when multiple transactions add/deduct credits concurrently.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to deduct.
         :return: New credit balance, or None if not found.
         """
-        ba = self.get(billing_account_id)
+        ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
@@ -439,12 +464,15 @@ class BillingAccountDAO:
         Adds credits to the account and creates a ``PAID`` promo
         :class:`Recharge` record so the account has billing history.
 
+        Acquires a ``FOR UPDATE`` row lock so the credit addition is
+        atomic with respect to concurrent deductions.
+
         :param billing_account_id: BillingAccount ID.
         :param credit_amount: Amount of credits to grant.
         :return: The created Recharge record.
         :raises ValueError: If the billing account is not found.
         """
-        ba = self.get(billing_account_id)
+        ba = self.get_for_update(billing_account_id)
         if ba is None:
             raise ValueError(
                 f"BillingAccount {billing_account_id} not found.",
