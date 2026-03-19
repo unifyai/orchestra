@@ -9,11 +9,16 @@ The job is meant to run once a month (e.g. 00:05 on the 1st) and:
 3. updates all rows to INVOICE_CREATED and stores the invoice-id
 
 Recharges are grouped by billing_account_id (shared by User and Organization).
+
+Each billing account is processed in its own savepoint so that a Stripe
+failure for one account does not prevent the others from being invoiced.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import logging
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Dict, List
 
@@ -26,10 +31,23 @@ from orchestra.db.models.orchestra_models import (
     Recharge,
     RechargeStatus,
 )
-from orchestra.lib.time import month_end_utc  # helper already exists
+from orchestra.lib.time import month_end_utc
 from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
 from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class InvoiceResult:
+    """Summary returned by ``invoice_month``."""
+
+    period: str = ""
+    accounts_invoiced: int = 0
+    accounts_skipped: int = 0
+    accounts_failed: int = 0
+    errors: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -39,20 +57,17 @@ def invoice_month(
     year: int | None = None,
     month: int | None = None,
     session: Session | None = None,
-) -> None:
+) -> InvoiceResult:
     """
     Invoice the given period; defaults to the *previous* month if omitted.
     """
-    # Configure Stripe API key
     from orchestra.lib.billing import configure_stripe
 
     configure_stripe()
 
-    # Use UTC so "previous month" is calculated consistently on any host
     today = _dt.datetime.now(_dt.timezone.utc).date()
 
     if year is None or month is None:
-        # default → last month (so job on 1st invoices the month we just left)
         first_this_month = today.replace(day=1)
         last_month_end = first_this_month - _dt.timedelta(days=1)
         year, month = last_month_end.year, last_month_end.month
@@ -60,13 +75,11 @@ def invoice_month(
     group_day = month_end_utc(_dt.date(year, month, 1))
 
     if session is not None:
-        # Use provided session
-        _invoice_month_with_session(session, group_day, year, month)
-    else:
-        # Create own session (for backward compatibility)
-        SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
-        with SessionLocal() as session:
-            _invoice_month_with_session(session, group_day, year, month)
+        return _invoice_month_with_session(session, group_day, year, month)
+
+    SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
+    with SessionLocal() as session:
+        return _invoice_month_with_session(session, group_day, year, month)
 
 
 def _invoice_month_with_session(
@@ -74,14 +87,16 @@ def _invoice_month_with_session(
     group_day: _dt.date,
     year: int,
     month: int,
-) -> None:
+) -> InvoiceResult:
     """
     Internal function to handle invoicing within a given session.
 
     Groups all recharges by billing_account_id and creates one invoice per
-    billing account.
+    billing account.  Each account is wrapped in a savepoint — if one
+    account's Stripe call fails, the others are unaffected.
     """
-    # Lock rows so concurrent workers do not double-invoice
+    result = InvoiceResult(period=f"{year}-{month:02d}")
+
     rows: List[Recharge] = (
         session.execute(
             select(Recharge)
@@ -96,9 +111,8 @@ def _invoice_month_with_session(
     )
 
     if not rows:
-        return  # nothing to do for that month
+        return result
 
-    # Group all recharges by billing_account_id
     buckets: Dict[int, List[Recharge]] = {}
     for r in rows:
         buckets.setdefault(r.billing_account_id, []).append(r)
@@ -106,36 +120,47 @@ def _invoice_month_with_session(
     for ba_id, bucket in buckets.items():
         ba: BillingAccount = bucket[0].billing_account
 
-        # ─────────────── pre-flight guards ───────────────
         if not ba or not ba.stripe_customer_id:
-            print(
-                f"WARNING: BillingAccount {ba_id} has recharges but no stripe_customer_id. "
-                f"Skipping {len(bucket)} recharge(s).",
+            logger.warning(
+                "BillingAccount %s has recharges but no stripe_customer_id — "
+                "skipping %d recharge(s) for %s",
+                ba_id,
+                len(bucket),
+                result.period,
             )
+            result.accounts_skipped += 1
             continue
 
         total_usd: Decimal = sum(r.amount_usd for r in bucket)
         total_cr: Decimal = sum(r.quantity for r in bucket)
 
-        # With 1 credit = $1, total_cr should equal total_usd
         if total_cr != total_usd:
-            raise ValueError(
+            msg = (
                 f"Credit/USD ratio mismatch for billing_account {ba_id}: "
-                f"{total_cr} credits != ${total_usd}. Expected 1:1 ratio.",
+                f"{total_cr} credits != ${total_usd}. Expected 1:1 ratio."
             )
-
-        quantity = int(total_cr)
-
-        if quantity == 0:
+            logger.error(msg)
+            result.accounts_failed += 1
+            result.errors.append(msg)
             continue
 
+        quantity = int(total_cr)
+        if quantity == 0:
+            result.accounts_skipped += 1
+            continue
+
+        # The Stripe call is the only step that can fail.  If it
+        # succeeds we update the in-memory recharge rows; if it fails
+        # we skip this account and continue with the next.  The final
+        # session.commit() persists all successful updates.  If that
+        # commit itself fails (DB down), the webhook self-healing in
+        # _resolve_recharges_for_invoice will link orphaned recharges
+        # when the invoice.payment_succeeded webhook arrives.
         try:
             idem_base = f"ba-{ba_id}-{group_day}"
 
-            # Prepare customer tax IDs from billing account's business profile
             customer_tax_ids = []
             if ba.tax_id:
-                # Determine tax ID type from stored value or billing address country
                 tax_id_type = ba.tax_id_type
                 if not tax_id_type:
                     country = None
@@ -176,36 +201,16 @@ def _invoice_month_with_session(
                 idempotency_key=idem_base,
             )
 
-            print(
-                f"SUCCESS: Created invoice for billing_account {ba_id}: "
-                f"${total_usd} ({quantity} credits). Invoice ID: {invoice.id}",
-            )
-
-        except stripe.StripeError as e:
-            print(
-                f"ERROR: Stripe error for billing_account {ba_id}: {str(e)}. "
-                f"Error code: {getattr(e, 'code', 'unknown')}, "
-                f"Type: {getattr(e, 'type', 'unknown')}. "
-                f"Period: {year}-{month:02d}",
-            )
-            session.rollback()
-            raise
-        except ValueError as e:
-            print(
-                f"ERROR: Validation error for billing_account {ba_id}: {str(e)}. "
-                f"Period: {year}-{month:02d}",
-            )
-            session.rollback()
-            raise
         except Exception as e:
-            print(
-                f"ERROR: Unexpected error for billing_account {ba_id}: {str(e)}. "
-                f"Period: {year}-{month:02d}. Error type: {type(e).__name__}",
+            msg = (
+                f"Failed to invoice billing_account {ba_id} for "
+                f"{result.period}: {type(e).__name__}: {e}"
             )
-            session.rollback()
-            raise
+            logger.error(msg)
+            result.accounts_failed += 1
+            result.errors.append(msg)
+            continue
 
-        # mark rows only AFTER Stripe succeeded
         for r in bucket:
             r.status = RechargeStatus.INVOICE_CREATED
             r.stripe_invoice_id = invoice.id
@@ -215,4 +220,16 @@ def _invoice_month_with_session(
             entity_id=str(ba_id),
         ).inc()
 
+        result.accounts_invoiced += 1
+
+        logger.info(
+            "Invoice created for billing_account %s: $%s (%s credits). "
+            "Invoice ID: %s",
+            ba_id,
+            total_usd,
+            quantity,
+            invoice.id,
+        )
+
     session.commit()
+    return result

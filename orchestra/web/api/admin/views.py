@@ -489,6 +489,22 @@ def update_autorecharge(  # noqa: WPS211
 
     if enable:
         ba_dao = BillingAccountDAO(session)
+        if ba.account_status in ("PAST_DUE", "SUSPENDED", "CLOSED"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot enable auto-recharge: account is "
+                    f"{ba.account_status}. Resolve outstanding invoices first."
+                ),
+            )
+        if ba_dao.has_unpaid_auto_recharges(ba.id):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot enable auto-recharge: account has unpaid "
+                    "auto-recharge invoices. Wait until they are resolved."
+                ),
+            )
         if not ba_dao.can_enable_auto_recharge(ba.id):
             total_spending = float(ba_dao.get_total_spending(ba.id))
             min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)

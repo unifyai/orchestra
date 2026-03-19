@@ -161,6 +161,34 @@ class BucketService:
         """
         return f"{assistant_id}/{media_type}/{filename}"
 
+    _MIME_EXT_OVERRIDES = {
+        "audio/mpeg": "mp3",
+        "audio/mp4": "m4a",
+        "audio/x-m4a": "m4a",
+        "audio/aac": "aac",
+        "audio/x-aac": "aac",
+        "audio/wav": "wav",
+        "audio/x-wav": "wav",
+        "audio/mp3": "mp3",
+    }
+
+    @classmethod
+    def _extension_from_content_type(
+        cls,
+        content_type: str,
+        fallback: str = "bin",
+    ) -> str:
+        """Return a file extension for *content_type*, without a leading dot."""
+        if not content_type:
+            return fallback
+        ct = content_type.lower().strip()
+        if ct in cls._MIME_EXT_OVERRIDES:
+            return cls._MIME_EXT_OVERRIDES[ct]
+        ext = mimetypes.guess_extension(ct, strict=False)
+        if ext:
+            return ext.lstrip(".")
+        return ct.split("/")[-1] if "/" in ct else fallback
+
     def _generate_unique_filename(self, content: bytes, extension: str = "") -> str:
         """Generate a unique filename using content hash, UUID, and an optional extension."""
         content_hash = hashlib.md5(content).hexdigest()
@@ -462,16 +490,7 @@ class BucketService:
             Exception: If upload or URL signing fails.
         """
         try:
-            extension = (
-                content_type.split("/")[-1]
-                if content_type and "/" in content_type
-                else "bin"
-            )
-            if "audio" in (content_type or ""):
-                extension = (
-                    content_type.split("/")[-1] if "/" in content_type else "wav"
-                )
-
+            extension = self._extension_from_content_type(content_type)
             file_name = self._generate_unique_filename(file_content)
             object_path = f"tmp/{file_name}.{extension}"
 

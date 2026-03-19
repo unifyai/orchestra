@@ -1816,7 +1816,7 @@ google-auth = ">=2.14.1,<3.0.0"
 googleapis-common-protos = ">=1.56.2,<2.0.0"
 grpcio = [
     {version = ">=1.75.1,<2.0.0", optional = true, markers = "python_version >= \"3.14\" and extra == \"grpc\""},
-    {version = ">=1.49.1,<2.0.0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
+    {version = ">=1.49.1,<2.0.0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\" and python_version < \"3.14\""},
 ]
 grpcio-status = [
     {version = ">=1.75.1,<2.0.0", optional = true, markers = "python_version >= \"3.14\" and extra == \"grpc\""},
@@ -2083,11 +2083,11 @@ google-auth = ">=2.14.1,<2.24.0 || >2.24.0,<2.25.0 || >2.25.0,<3.0.0"
 grpc-google-iam-v1 = ">=0.14.0,<1.0.0"
 grpcio = [
     {version = ">=1.75.1,<2.0.0", markers = "python_version >= \"3.14\""},
-    {version = ">=1.33.2,<2.0.0", markers = "python_version < \"3.14\""},
+    {version = ">=1.33.2,<2.0.0"},
 ]
 proto-plus = [
     {version = ">=1.25.0,<2.0.0", markers = "python_version >= \"3.13\""},
-    {version = ">=1.22.3,<2.0.0", markers = "python_version < \"3.13\""},
+    {version = ">=1.22.3,<2.0.0"},
 ]
 protobuf = ">=3.20.2,<4.21.0 || >4.21.0,<4.21.1 || >4.21.1,<4.21.2 || >4.21.2,<4.21.3 || >4.21.3,<4.21.4 || >4.21.4,<4.21.5 || >4.21.5,<7.0.0"
 
@@ -3485,6 +3485,18 @@ files = [
     {file = "multidict-6.7.0-cp39-cp39-win_arm64.whl", hash = "sha256:6bdce131e14b04fd34a809b6380dbfd826065c3e2fe8a50dbae659fa0c390546"},
     {file = "multidict-6.7.0-py3-none-any.whl", hash = "sha256:394fc5c42a333c9ffc3e421a4c85e08580d990e08b99f6bf35b4132114c5dcb3"},
     {file = "multidict-6.7.0.tar.gz", hash = "sha256:c6e99d9a65ca282e578dfea819cfa9c0a62b2499d8677392e09feaf305e9e6f5"},
+]
+
+[[package]]
+name = "mutagen"
+version = "1.47.0"
+description = "read and write audio tags for many formats"
+optional = false
+python-versions = ">=3.7"
+groups = ["main"]
+files = [
+    {file = "mutagen-1.47.0-py3-none-any.whl", hash = "sha256:edd96f50c5907a9539d8e5bba7245f62c9f520aef333d13392a79a4f70aca719"},
+    {file = "mutagen-1.47.0.tar.gz", hash = "sha256:719fadef0a978c31b4cf3c956261b3c58b6948b32023078a2117b1de09f0fc99"},
 ]
 
 [[package]]
@@ -7054,4 +7066,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "643599fd1ad1330925e036a1b0ce7c4f7c90d389f48b9ea35937a0a7ad91b033"
+content-hash = "70fc0d7a53c4625e750af5ec4c2c1cdfa537ad86233ee41d449480021f7db0df"

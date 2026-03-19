@@ -160,6 +160,169 @@ async def test_resend_pending_invite(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
+async def test_resend_invite_updates_role(client: AsyncClient, dbsession):
+    """Test that resending an invite with a different role updates the role."""
+    owner = await create_test_user(client, "resend_role_owner@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Resend Role Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Get role IDs
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    # Send first invite with default (Member) role
+    invite1_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "resend_role_user@test.com"},
+        headers=owner["headers"],
+    )
+    assert invite1_response.status_code == status.HTTP_201_CREATED
+    assert invite1_response.json()["role_name"] == "Member"
+    original_token = invite1_response.json()["token"]
+
+    # Resend invite with Admin role
+    invite2_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "resend_role_user@test.com", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    assert invite2_response.status_code == status.HTTP_201_CREATED
+    assert invite2_response.json()["role_name"] == "Admin"
+    assert invite2_response.json()["token"] == original_token
+
+    # Resend again with Viewer role
+    invite3_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "resend_role_user@test.com", "role_id": viewer_role.id},
+        headers=owner["headers"],
+    )
+    assert invite3_response.status_code == status.HTTP_201_CREATED
+    assert invite3_response.json()["role_name"] == "Viewer"
+    assert invite3_response.json()["token"] == original_token
+
+
+@pytest.mark.anyio
+async def test_resend_invite_cannot_set_owner_role(client: AsyncClient, dbsession):
+    """Test that resending an invite cannot change the role to Owner."""
+    owner = await create_test_user(client, "resend_owner_role@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Resend Owner Role Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Get Owner role
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    # Send first invite
+    await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "resend_owner_target@test.com"},
+        headers=owner["headers"],
+    )
+
+    # Try to resend with Owner role
+    response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "resend_owner_target@test.com", "role_id": owner_role.id},
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Owner role" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_invite_with_role_name(client: AsyncClient, dbsession):
+    """Test inviting a user using role_name instead of role_id."""
+    owner = await create_test_user(client, "role_name_owner@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Role Name Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Invite with role_name
+    invite_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "role_name_user@test.com", "role_name": "Admin"},
+        headers=owner["headers"],
+    )
+    assert invite_response.status_code == status.HTTP_201_CREATED
+    assert invite_response.json()["role_name"] == "Admin"
+
+
+@pytest.mark.anyio
+async def test_invite_with_invalid_role_name(client: AsyncClient, dbsession):
+    """Test inviting with an invalid role_name returns an error."""
+    owner = await create_test_user(client, "bad_role_name_owner@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Bad Role Name Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Invite with non-existent role_name
+    invite_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={"email": "bad_role_user@test.com", "role_name": "SuperAdmin"},
+        headers=owner["headers"],
+    )
+    assert invite_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "not found" in invite_response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_invite_role_id_takes_precedence_over_role_name(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that role_id takes precedence when both role_id and role_name are provided."""
+    owner = await create_test_user(client, "precedence_owner@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Precedence Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Get Viewer role
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    # Send invite with both role_id (Viewer) and role_name (Admin)
+    invite_response = await client.post(
+        f"/v0/organizations/{org_id}/invites",
+        json={
+            "email": "precedence_user@test.com",
+            "role_id": viewer_role.id,
+            "role_name": "Admin",
+        },
+        headers=owner["headers"],
+    )
+    assert invite_response.status_code == status.HTTP_201_CREATED
+    assert invite_response.json()["role_name"] == "Viewer"
+
+
+@pytest.mark.anyio
 async def test_list_organization_invites(client: AsyncClient, dbsession):
     """Test listing organization invites."""
     owner = await create_test_user(client, "list_inv_owner@test.com")
