@@ -1096,10 +1096,12 @@ class TestBillingGuard:
         ba = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
         dbsession.commit()
 
-        suspend_past_due_accounts(session=dbsession)
+        result = suspend_past_due_accounts(session=dbsession)
 
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
+        assert result.accounts_suspended == 1
+        assert result.accounts_failed == 0
 
     def test_suspends_past_due_with_negative_credits(self, dbsession: Session):
         """PAST_DUE + negative credits → SUSPENDED."""
@@ -1108,10 +1110,11 @@ class TestBillingGuard:
         ba = make_billing_account(dbsession, credits=-5.0, account_status="PAST_DUE")
         dbsession.commit()
 
-        suspend_past_due_accounts(session=dbsession)
+        result = suspend_past_due_accounts(session=dbsession)
 
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
+        assert result.accounts_suspended == 1
 
     def test_skips_past_due_with_positive_credits(self, dbsession: Session):
         """PAST_DUE + positive credits → stays PAST_DUE (still has credits)."""
@@ -1120,10 +1123,11 @@ class TestBillingGuard:
         ba = make_billing_account(dbsession, credits=10, account_status="PAST_DUE")
         dbsession.commit()
 
-        suspend_past_due_accounts(session=dbsession)
+        result = suspend_past_due_accounts(session=dbsession)
 
         dbsession.refresh(ba)
         assert ba.account_status == "PAST_DUE"
+        assert result.accounts_suspended == 0
 
     def test_skips_active_accounts(self, dbsession: Session):
         """ACTIVE accounts are never suspended, even with zero credits."""
@@ -1132,10 +1136,11 @@ class TestBillingGuard:
         ba = make_billing_account(dbsession, credits=0, account_status="ACTIVE")
         dbsession.commit()
 
-        suspend_past_due_accounts(session=dbsession)
+        result = suspend_past_due_accounts(session=dbsession)
 
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
+        assert result.accounts_suspended == 0
 
     def test_already_suspended_stays_suspended(self, dbsession: Session):
         """Already-SUSPENDED accounts are not re-processed."""
@@ -1144,10 +1149,11 @@ class TestBillingGuard:
         ba = make_billing_account(dbsession, credits=0, account_status="SUSPENDED")
         dbsession.commit()
 
-        suspend_past_due_accounts(session=dbsession)
+        result = suspend_past_due_accounts(session=dbsession)
 
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
+        assert result.accounts_suspended == 0
 
     def test_suspends_multiple_accounts(self, dbsession: Session):
         """Multiple PAST_DUE + zero-credit accounts are all suspended."""
@@ -1162,7 +1168,7 @@ class TestBillingGuard:
         )  # has credits
         dbsession.commit()
 
-        suspend_past_due_accounts(session=dbsession)
+        result = suspend_past_due_accounts(session=dbsession)
 
         dbsession.refresh(ba1)
         dbsession.refresh(ba2)
@@ -1170,6 +1176,7 @@ class TestBillingGuard:
         assert ba1.account_status == "SUSPENDED"
         assert ba2.account_status == "SUSPENDED"
         assert ba3.account_status == "PAST_DUE"  # not suspended — has credits
+        assert result.accounts_suspended == 2
 
     def test_guard_is_idempotent(self, dbsession: Session):
         """Running the guard twice produces the same result."""
@@ -1178,14 +1185,35 @@ class TestBillingGuard:
         ba = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
         dbsession.commit()
 
-        suspend_past_due_accounts(session=dbsession)
+        result1 = suspend_past_due_accounts(session=dbsession)
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
+        assert result1.accounts_suspended == 1
 
-        # Running again should be a no-op
-        suspend_past_due_accounts(session=dbsession)
+        result2 = suspend_past_due_accounts(session=dbsession)
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
+        assert result2.accounts_suspended == 0
+
+    def test_disables_autorecharge_on_suspension(self, dbsession: Session):
+        """Suspended accounts have auto-recharge disabled."""
+        from orchestra.routines.billing_guard import suspend_past_due_accounts
+
+        ba = make_billing_account(
+            dbsession,
+            credits=0,
+            account_status="PAST_DUE",
+        )
+        ba.autorecharge = True
+        ba.autorecharge_threshold = Decimal("10")
+        ba.autorecharge_qty = Decimal("50")
+        dbsession.commit()
+
+        suspend_past_due_accounts(session=dbsession)
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        assert ba.autorecharge is False
 
 
 # ============================================================================
