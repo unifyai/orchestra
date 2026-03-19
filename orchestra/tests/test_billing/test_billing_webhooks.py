@@ -714,6 +714,320 @@ class TestWebhookIdempotency:
 
 
 # ============================================================================
+# Dispute Handling
+# ============================================================================
+
+
+class TestDisputeCreated:
+    """Tests for charge.dispute.created webhook handling."""
+
+    def test_direct_purchase_dispute_suspends_and_deducts(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Dispute on a direct credit purchase deducts credits, suspends
+        the account, and disables auto-recharge."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {
+                        "user_id": "dp_dispute_user",
+                        "credits_purchased": "80",
+                    },
+                    "invoice": "in_dp_dispute",
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "dp_dispute_user",
+            credits=100,
+            stripe_customer_id="cus_dp_dispute",
+        )
+        ba.autorecharge = True
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("80"),
+            amount_usd=Decimal("80"),
+            status=RechargeStatus.PAID,
+            transaction_id="in_dp_dispute",
+            type="payment",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_dp_dispute",
+            "type": "charge.dispute.created",
+            "data": {
+                "object": {
+                    "id": "ch_dp_dispute",
+                    "payment_intent": "pi_dp_dispute",
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        assert ba.autorecharge is False
+        assert float(ba.credits) == 20  # 100 - 80
+
+    def test_invoice_dispute_suspends_and_deducts(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Dispute on a monthly invoice deducts credits, marks recharges
+        DISPUTED, suspends the account, and disables auto-recharge."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {},
+                    "invoice": "in_inv_dispute",
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "inv_dispute_user",
+            credits=200,
+            stripe_customer_id="cus_inv_dispute",
+        )
+        ba.autorecharge = True
+        r1 = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.PAID,
+            stripe_invoice_id="in_inv_dispute",
+            type="auto",
+        )
+        r2 = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("30"),
+            amount_usd=Decimal("30"),
+            status=RechargeStatus.PAID,
+            stripe_invoice_id="in_inv_dispute",
+            type="auto",
+        )
+        dbsession.add_all([r1, r2])
+        dbsession.commit()
+
+        event = {
+            "id": "evt_inv_dispute",
+            "type": "charge.dispute.created",
+            "data": {
+                "object": {
+                    "id": "ch_inv_dispute",
+                    "payment_intent": "pi_inv_dispute",
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        assert ba.autorecharge is False
+        assert float(ba.credits) == 120  # 200 - (50 + 30)
+
+        dbsession.refresh(r1)
+        dbsession.refresh(r2)
+        assert r1.status == RechargeStatus.DISPUTED
+        assert r2.status == RechargeStatus.DISPUTED
+
+    def test_missing_payment_intent_logs_and_succeeds(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Dispute event with no payment_intent returns 200 without crashing."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(retrieve=lambda pi_id: {}),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        event = {
+            "id": "evt_no_pi_dispute",
+            "type": "charge.dispute.created",
+            "data": {
+                "object": {
+                    "id": "ch_no_pi",
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+
+class TestDisputeClosed:
+    """Tests for charge.dispute.closed webhook handling."""
+
+    def test_won_dispute_restores_credits_and_status(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """When a dispute is won, credits are re-granted and the account
+        is restored to ACTIVE (if no other failed recharges exist)."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {
+                        "user_id": "won_dispute_user",
+                        "credits_purchased": "60",
+                    },
+                    "invoice": "in_won_dispute",
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "won_dispute_user",
+            credits=40,
+            stripe_customer_id="cus_won_dispute",
+        )
+        ba.account_status = "SUSPENDED"
+        ba.autorecharge = False
+        r = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("60"),
+            amount_usd=Decimal("60"),
+            status=RechargeStatus.DISPUTED,
+            stripe_invoice_id="in_won_dispute",
+            type="payment",
+        )
+        dbsession.add(r)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_won_dispute",
+            "type": "charge.dispute.closed",
+            "data": {
+                "object": {
+                    "id": "dp_won",
+                    "status": "won",
+                    "payment_intent": "pi_won_dispute",
+                    "amount": 6000,
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+        assert float(ba.credits) == 100  # 40 + 60
+
+        dbsession.refresh(r)
+        assert r.status == RechargeStatus.PAID
+
+    def test_won_dispute_does_not_restore_if_other_failed_recharges(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """When a dispute is won but there are other FAILED recharges,
+        the account stays SUSPENDED."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {
+                        "user_id": "won_other_user",
+                        "credits_purchased": "60",
+                    },
+                    "invoice": "in_won_other",
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "won_other_user",
+            credits=40,
+            stripe_customer_id="cus_won_other",
+        )
+        ba.account_status = "SUSPENDED"
+        # The disputed recharge
+        r_disputed = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("60"),
+            amount_usd=Decimal("60"),
+            status=RechargeStatus.DISPUTED,
+            stripe_invoice_id="in_won_other",
+            type="payment",
+        )
+        # Another FAILED recharge from a separate issue
+        r_failed = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("30"),
+            amount_usd=Decimal("30"),
+            status=RechargeStatus.FAILED,
+            stripe_invoice_id="in_other_failed",
+            type="auto",
+        )
+        dbsession.add_all([r_disputed, r_failed])
+        dbsession.commit()
+
+        event = {
+            "id": "evt_won_other",
+            "type": "charge.dispute.closed",
+            "data": {
+                "object": {
+                    "id": "dp_won_other",
+                    "status": "won",
+                    "payment_intent": "pi_won_other",
+                    "amount": 6000,
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"  # stays suspended
+        assert float(ba.credits) == 100  # credits still re-granted
+
+        dbsession.refresh(r_disputed)
+        assert r_disputed.status == RechargeStatus.PAID
+
+
+# ============================================================================
 # handle_event_core Dispatch
 # ============================================================================
 
