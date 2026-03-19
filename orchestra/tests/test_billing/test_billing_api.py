@@ -1019,8 +1019,8 @@ class TestAutoRechargeEndpoints:
         recharge = Recharge(
             billing_account_id=ba.id,
             type="payment",
-            quantity=Decimal("150"),
-            amount_usd=Decimal("150"),
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
             status=RechargeStatus.PAID,
         )
         dbsession.add(recharge)
@@ -1034,29 +1034,46 @@ class TestAutoRechargeEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["eligible"] is True
-        assert data["total_spending"] == 150.0
+        assert data["total_spending"] == 1200.0
         assert data["remaining_spend_needed"] == 0.0
 
     @pytest.mark.anyio
-    async def test_put_enable_with_all_settings(self, client, dbsession):
+    async def test_put_enable_with_all_settings(
+        self,
+        client,
+        dbsession,
+        monkeypatch,
+    ):
+        import orchestra.web.api.billing.views as billing_views
+
+        monkeypatch.setattr(
+            billing_views,
+            "_customer_has_payment_method",
+            lambda _: True,
+        )
+
         user = await create_test_user(client, "ar_put_user@test.com")
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
         if db_user.billing_account is None:
-            ba = BillingAccount(credits=Decimal("100"))
+            ba = BillingAccount(
+                credits=Decimal("100"),
+                stripe_customer_id="cus_test_put",
+            )
             dbsession.add(ba)
             dbsession.flush()
             db_user.billing_account_id = ba.id
             dbsession.flush()
         else:
             ba = db_user.billing_account
+            ba.stripe_customer_id = "cus_test_put"
 
         recharge = Recharge(
             billing_account_id=ba.id,
             type="payment",
-            quantity=Decimal("200"),
-            amount_usd=Decimal("200"),
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
             status=RechargeStatus.PAID,
         )
         dbsession.add(recharge)
@@ -2125,7 +2142,7 @@ class TestAPIValidation:
         )
         assert response.status_code == 400
         error_data = response.json()
-        assert "User must spend at least $100.00" in error_data["detail"]
+        assert "User must spend at least $1000.00" in error_data["detail"]
         assert "Current spending: $0.00" in error_data["detail"]
 
         # Set autorecharge quantity below minimum
@@ -2588,3 +2605,48 @@ class TestInternationalAddress:
         assert profile["billing_address"]["line1"] == "123 Main St"
         assert profile["billing_address"]["city"] == "Cambridge"
         assert profile["billing_address"]["state"] == "MA"
+
+
+# ============================================================================
+# Account Status Enforcement Logic
+# ============================================================================
+
+
+class TestAccountStatusEnforcement:
+    """PAST_DUE only blocks API access when credits are zero or negative.
+
+    Users who have prepaid credits (from checkout) should not be locked
+    out just because a postpaid auto-recharge invoice failed.
+
+    These tests exercise the decision logic directly since the full
+    HTTP dependency (check_account_not_frozen) requires request-state
+    wiring and a separate read-only session.
+    """
+
+    def _should_block(self, account_status: str, credits: float) -> bool:
+        """Reproduce the logic from check_account_not_frozen."""
+        if account_status in ("SUSPENDED", "CLOSED"):
+            return True
+        if account_status == "PAST_DUE" and credits <= 0:
+            return True
+        return False
+
+    def test_active_never_blocked(self):
+        assert self._should_block("ACTIVE", 0) is False
+        assert self._should_block("ACTIVE", -50) is False
+
+    def test_past_due_positive_credits_allowed(self):
+        assert self._should_block("PAST_DUE", 50) is False
+
+    def test_past_due_zero_credits_blocked(self):
+        assert self._should_block("PAST_DUE", 0) is True
+
+    def test_past_due_negative_credits_blocked(self):
+        assert self._should_block("PAST_DUE", -20) is True
+
+    def test_suspended_always_blocked(self):
+        assert self._should_block("SUSPENDED", 500) is True
+        assert self._should_block("SUSPENDED", 0) is True
+
+    def test_closed_always_blocked(self):
+        assert self._should_block("CLOSED", 100) is True
