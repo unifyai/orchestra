@@ -489,6 +489,23 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
 
     # ── failure ──────────────────────────────────────────────────────────
     if event["type"] in ("invoice.payment_failed", "invoice.payment_action_required"):
+        # Disable auto-recharge on the *first* failure, not just the
+        # final one.  This prevents new postpaid credits from being
+        # granted while Stripe is retrying the existing invoice.
+        if billing_account_ids:
+            (
+                session.query(BillingAccount)
+                .filter(BillingAccount.id.in_(ba_ids_subq))
+                .update({"autorecharge": False}, synchronize_session=False)
+            )
+            logger.info(
+                {
+                    "message": "Auto-recharge disabled due to payment failure",
+                    "invoice_id": invoice_id,
+                    "billing_account_ids": list(billing_account_ids),
+                },
+            )
+
         final = data["status"] in ("past_due", "uncollectible")
         if final:
             (

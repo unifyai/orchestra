@@ -1207,6 +1207,146 @@ class TestAutoRechargeEndpoints:
         assert response.status_code == 200
         assert response.json()["enabled"] is False
 
+    @pytest.mark.anyio
+    async def test_put_enable_blocked_with_unpaid_invoices(self, client, dbsession):
+        """Cannot re-enable auto-recharge while INVOICE_CREATED recharges exist."""
+        user = await create_test_user(client, "ar_unpaid@test.com")
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        if db_user.billing_account is None:
+            ba = BillingAccount(
+                credits=Decimal("200"),
+                stripe_customer_id="cus_ar_unpaid",
+            )
+            dbsession.add(ba)
+            dbsession.flush()
+            db_user.billing_account_id = ba.id
+            dbsession.flush()
+        else:
+            ba = db_user.billing_account
+            ba.stripe_customer_id = "cus_ar_unpaid"
+
+        # Enough spending to pass the threshold
+        paid = Recharge(
+            billing_account_id=ba.id,
+            type="payment",
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
+            status=RechargeStatus.PAID,
+        )
+        # An unpaid auto-recharge invoice
+        unpaid = Recharge(
+            billing_account_id=ba.id,
+            type="auto",
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_unpaid_test",
+        )
+        dbsession.add_all([paid, unpaid])
+        dbsession.commit()
+
+        response = await client.put(
+            "/v0/billing/auto-recharge",
+            json={"enabled": True, "threshold": 10.0, "qty": 50.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 400
+        assert "unpaid" in response.json()["detail"].lower()
+
+    @pytest.mark.anyio
+    async def test_put_enable_blocked_when_past_due(self, client, dbsession):
+        """Cannot enable auto-recharge when account is PAST_DUE."""
+        user = await create_test_user(client, "ar_pastdue@test.com")
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        if db_user.billing_account is None:
+            ba = BillingAccount(
+                credits=Decimal("200"),
+                account_status="PAST_DUE",
+                stripe_customer_id="cus_ar_pastdue",
+            )
+            dbsession.add(ba)
+            dbsession.flush()
+            db_user.billing_account_id = ba.id
+            dbsession.flush()
+        else:
+            ba = db_user.billing_account
+            ba.credits = Decimal("200")
+            ba.account_status = "PAST_DUE"
+            ba.stripe_customer_id = "cus_ar_pastdue"
+        dbsession.commit()
+
+        response = await client.put(
+            "/v0/billing/auto-recharge",
+            json={"enabled": True, "threshold": 10.0, "qty": 50.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 400
+        assert "past due" in response.json()["detail"].lower()
+
+    @pytest.mark.anyio
+    async def test_put_enable_allowed_after_invoice_paid(
+        self,
+        client,
+        dbsession,
+        monkeypatch,
+    ):
+        """Can re-enable auto-recharge once all invoices are paid."""
+        import orchestra.web.api.billing.views as billing_views
+
+        monkeypatch.setattr(
+            billing_views,
+            "_customer_has_payment_method",
+            lambda _: True,
+        )
+
+        user = await create_test_user(client, "ar_paid@test.com")
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        if db_user.billing_account is None:
+            ba = BillingAccount(
+                credits=Decimal("200"),
+                stripe_customer_id="cus_ar_paid",
+            )
+            dbsession.add(ba)
+            dbsession.flush()
+            db_user.billing_account_id = ba.id
+            dbsession.flush()
+        else:
+            ba = db_user.billing_account
+            ba.stripe_customer_id = "cus_ar_paid"
+
+        # Enough spending + all recharges PAID (no outstanding debt)
+        r1 = Recharge(
+            billing_account_id=ba.id,
+            type="payment",
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
+            status=RechargeStatus.PAID,
+        )
+        r2 = Recharge(
+            billing_account_id=ba.id,
+            type="auto",
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.PAID,
+            stripe_invoice_id="in_paid_test",
+        )
+        dbsession.add_all([r1, r2])
+        dbsession.commit()
+
+        response = await client.put(
+            "/v0/billing/auto-recharge",
+            json={"enabled": True, "threshold": 10.0, "qty": 50.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True
+
 
 # ============================================================================
 # Organization Billing Permissions
