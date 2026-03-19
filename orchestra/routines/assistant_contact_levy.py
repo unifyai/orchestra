@@ -408,13 +408,12 @@ def _process_billing_account(
         and ba.stripe_customer_id
         and ba.credits <= ba.autorecharge_threshold
     ):
-        queue_auto_recharge(
+        ar.auto_recharge_triggered = queue_auto_recharge(
             session,
             ba,
             int(ba.autorecharge_qty),
             entity_label=f"billing_account {ba.id}",
         )
-        ar.auto_recharge_triggered = True
 
     # Mark PAST_DUE if credits went negative
     if ba.credits < 0 and ba.account_status == "ACTIVE":

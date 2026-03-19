@@ -136,7 +136,7 @@ def deduct_credits(
             .first()
         )
         if ba:
-            queue_auto_recharge(
+            recharged = queue_auto_recharge(
                 session,
                 ba,
                 int(billing_entity.autorecharge_qty),
@@ -146,8 +146,8 @@ def deduct_credits(
                     else f"org {billing_entity.entity_id}"
                 ),
             )
-            # Re-read balance after auto-recharge added credits
-            new_balance = ba.credits
+            if recharged:
+                new_balance = ba.credits
 
     session.commit()
 
