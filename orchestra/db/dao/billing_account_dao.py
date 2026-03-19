@@ -25,7 +25,7 @@ MIN_AUTORECHARGE_AMOUNT = decimal.Decimal("25")
 # can enable auto-recharge.  This is a fraud-prevention measure to stop
 # bot accounts from setting up very low, repeated automatic top-ups and
 # then disputing the charges.
-MIN_SPEND_FOR_AUTO_RECHARGE = decimal.Decimal("100")
+MIN_SPEND_FOR_AUTO_RECHARGE = decimal.Decimal("1000")
 
 # Valid account status values
 VALID_ACCOUNT_STATUSES = {"ACTIVE", "PAST_DUE", "SUSPENDED", "CLOSED"}
@@ -68,6 +68,25 @@ class BillingAccountDAO:
         return (
             self.session.query(BillingAccount)
             .filter(BillingAccount.id == billing_account_id)
+            .first()
+        )
+
+    def get_for_update(self, billing_account_id: int) -> Optional[BillingAccount]:
+        """
+        Get a billing account by ID, acquiring a ``FOR UPDATE`` row lock.
+
+        Use this when you intend to read-then-write a mutable field
+        (e.g. ``credits``, ``account_status``). The lock prevents
+        concurrent transactions from reading the same row until this
+        transaction commits or rolls back, eliminating lost-update races.
+
+        :param billing_account_id: BillingAccount ID.
+        :return: BillingAccount object or None.
+        """
+        return (
+            self.session.query(BillingAccount)
+            .filter(BillingAccount.id == billing_account_id)
+            .with_for_update()
             .first()
         )
 
@@ -161,11 +180,14 @@ class BillingAccountDAO:
         """
         Add credits to a billing account.
 
+        Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
+        when multiple transactions add/deduct credits concurrently.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to add.
         :return: New credit balance, or None if not found.
         """
-        ba = self.get(billing_account_id)
+        ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
@@ -181,11 +203,14 @@ class BillingAccountDAO:
         """
         Deduct credits from a billing account.
 
+        Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
+        when multiple transactions add/deduct credits concurrently.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to deduct.
         :return: New credit balance, or None if not found.
         """
-        ba = self.get(billing_account_id)
+        ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
@@ -361,6 +386,27 @@ class BillingAccountDAO:
         total = self.get_total_spending(billing_account_id)
         return total >= MIN_SPEND_FOR_AUTO_RECHARGE
 
+    def has_unpaid_auto_recharges(self, billing_account_id: int) -> bool:
+        """Return True if the account has auto-recharge credits that
+        have been invoiced but not yet paid (``INVOICE_CREATED``) or
+        that failed collection (``FAILED``).
+
+        This is used to prevent re-enabling auto-recharge while the
+        account has outstanding debt from a previous auto-recharge cycle.
+        """
+        return (
+            self.session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == billing_account_id,
+                Recharge.type == "auto",
+                Recharge.status.in_(
+                    [RechargeStatus.INVOICE_CREATED, RechargeStatus.FAILED],
+                ),
+            )
+            .first()
+            is not None
+        )
+
     # =========================================================================
     # BILLING PROFILE
     # =========================================================================
@@ -418,12 +464,15 @@ class BillingAccountDAO:
         Adds credits to the account and creates a ``PAID`` promo
         :class:`Recharge` record so the account has billing history.
 
+        Acquires a ``FOR UPDATE`` row lock so the credit addition is
+        atomic with respect to concurrent deductions.
+
         :param billing_account_id: BillingAccount ID.
         :param credit_amount: Amount of credits to grant.
         :return: The created Recharge record.
         :raises ValueError: If the billing account is not found.
         """
-        ba = self.get(billing_account_id)
+        ba = self.get_for_update(billing_account_id)
         if ba is None:
             raise ValueError(
                 f"BillingAccount {billing_account_id} not found.",

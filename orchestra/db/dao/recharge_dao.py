@@ -107,13 +107,15 @@ class RechargeDAO:
         """
         Update the status of a recharge.
 
+        Does **not** commit — the caller is responsible for committing
+        or rolling back the transaction.
+
         :param recharge_id: id of the recharge.
         :param status: new status of the recharge.
         """
         self.session.execute(
             update(Recharge).where(Recharge.id == recharge_id).values(status=status),
         )
-        self.session.commit()
 
     def get_recharge_by_id(self, recharge_id: int) -> Recharge:
         """

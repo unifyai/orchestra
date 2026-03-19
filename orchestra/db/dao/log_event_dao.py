@@ -1446,12 +1446,36 @@ class LogEventDAO:
                 resolved_ids,
             )
             filter_dict = str_filter_exp_to_dict(filter_expr)
+            filter_dict["embed_target_key"] = template.key
+
+            from orchestra.db.models.orchestra_models import Embedding
+
+            is_embedding_equation = (
+                "embed(" in template.equation or "embed_image(" in template.equation
+            )
+            if is_embedding_equation:
+                self.session.execute(
+                    update(Embedding)
+                    .where(
+                        Embedding.ref_id.in_(log_ids),
+                        Embedding.key == template.key,
+                        Embedding.is_deleted == False,  # noqa: E712
+                    )
+                    .values(is_deleted=True),
+                )
+                self.session.flush()
+
+            log_ids_subq = (
+                select(LogEvent.id.label("id"))
+                .where(LogEvent.id.in_(log_ids))
+                .subquery("recompute_log_ids")
+            )
 
             computed_values = _compute_expression(
                 filter_dict,
                 LogEvent,
                 self.session,
-                log_ids,
+                log_ids_subq,
             )
 
             if not computed_values:
@@ -1460,11 +1484,33 @@ class LogEventDAO:
             non_null_val = None
             updates_count = 0
 
+            import numpy as np
+
+            from orchestra.web.api.log.python2SQL.helpers import (
+                DEFAULT_IMAGE_EMBEDDING_MODEL,
+            )
+
+            is_image_embedding = "embed_image(" in template.equation
+            embedding_objects: list = []
+
             for log_event_id, value in computed_values:
                 try:
-                    val = json.loads(json.dumps(value, cls=json_encoder))
-                    if val is not None:
-                        non_null_val = val
+                    if isinstance(value, np.ndarray):
+                        val = None
+                        non_null_val = value.tolist()
+                        if is_image_embedding:
+                            embedding_objects.append(
+                                Embedding(
+                                    ref_id=log_event_id,
+                                    key=template.key,
+                                    model=DEFAULT_IMAGE_EMBEDDING_MODEL,
+                                    vector=value,
+                                ),
+                            )
+                    else:
+                        val = json.loads(json.dumps(value, cls=json_encoder))
+                        if val is not None:
+                            non_null_val = val
 
                     stmt = (
                         update(LogEvent)
@@ -1483,6 +1529,9 @@ class LogEventDAO:
                         f"Failed to recompute derived log for log_event_id={log_event_id}: {e}",
                     )
                     continue
+
+            if embedding_objects:
+                self.session.bulk_save_objects(embedding_objects)
 
             self.session.commit()
 
