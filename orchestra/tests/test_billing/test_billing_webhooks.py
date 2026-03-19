@@ -575,8 +575,12 @@ class TestInvoicePaymentFailedVoidsCredits:
         assert ba.account_status == "PAST_DUE"
         assert float(ba.credits) == 40  # 100 - 60 voided despite void failure
 
-    def test_intermediate_failure_does_not_void_credits(self, dbsession):
-        """Non-final failures (Stripe still retrying) leave credits intact."""
+    def test_intermediate_failure_disables_autorecharge_but_keeps_credits(
+        self,
+        dbsession,
+    ):
+        """Non-final failures (Stripe still retrying) leave credits intact
+        but disable auto-recharge to prevent compounding debt."""
         from orchestra.web.api.webhooks.stripe import process_invoice_event
 
         user, ba = make_user_with_billing(
@@ -585,6 +589,9 @@ class TestInvoicePaymentFailedVoidsCredits:
             credits=100,
             stripe_customer_id="cus_retry",
         )
+        ba.autorecharge = True
+        ba.autorecharge_threshold = Decimal("10")
+        ba.autorecharge_qty = Decimal("50")
 
         rec = Recharge(
             billing_account_id=ba.id,
@@ -618,6 +625,7 @@ class TestInvoicePaymentFailedVoidsCredits:
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"  # not degraded
         assert float(ba.credits) == 100  # credits intact
+        assert ba.autorecharge is False  # disabled to prevent compounding
 
 
 # ============================================================================
