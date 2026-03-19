@@ -227,6 +227,146 @@ class TestCheckoutSessionEvent:
         assert total_spending >= MIN_SPEND_FOR_AUTO_RECHARGE
         assert ba_dao.can_enable_auto_recharge(ba.id)
 
+    def test_user_checkout_restores_past_due_to_active(self, dbsession, monkeypatch):
+        """PAST_DUE user buying credits is restored to ACTIVE when balance goes positive."""
+        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_restore_user",
+            credits=-10,
+            stripe_customer_id="cus_wh_restore",
+            account_status="PAST_DUE",
+        )
+        dbsession.commit()
+
+        event = {
+            "id": "evt_restore_user",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": user.id,
+                    "amount_total": 5000,
+                    "customer": "cus_wh_restore",
+                    "payment_intent": "pi_wh_restore",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = process_checkout_session_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 40.0
+        assert ba.account_status == "ACTIVE"
+
+    def test_user_checkout_stays_past_due_if_still_negative(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """PAST_DUE user whose checkout doesn't cover the deficit stays PAST_DUE."""
+        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_still_pd",
+            credits=-100,
+            stripe_customer_id="cus_wh_still_pd",
+            account_status="PAST_DUE",
+        )
+        dbsession.commit()
+
+        event = {
+            "id": "evt_still_pd",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": user.id,
+                    "amount_total": 5000,
+                    "customer": "cus_wh_still_pd",
+                    "payment_intent": "pi_still_pd",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = process_checkout_session_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == -50.0
+        assert ba.account_status == "PAST_DUE"
+
+    def test_org_checkout_restores_past_due_to_active(self, dbsession, monkeypatch):
+        """PAST_DUE org buying credits is restored to ACTIVE."""
+        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+        org, org_ba = make_org_with_billing(
+            dbsession,
+            name="Restore Org",
+            stripe_customer_id="cus_wh_org_restore",
+            credits=-5,
+        )
+        org_ba.account_status = "PAST_DUE"
+        dbsession.commit()
+
+        event = {
+            "id": "evt_org_restore",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": None,
+                    "amount_total": 10000,
+                    "customer": "cus_wh_org_restore",
+                    "payment_intent": "pi_org_restore",
+                    "metadata": {"organization_id": str(org.id)},
+                },
+            },
+        }
+
+        response = process_checkout_session_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(org_ba)
+        assert float(org_ba.credits) == 95.0
+        assert org_ba.account_status == "ACTIVE"
+
+    def test_active_account_stays_active_after_checkout(self, dbsession, monkeypatch):
+        """Already-ACTIVE account stays ACTIVE (no status change)."""
+        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_already_active",
+            credits=10,
+            stripe_customer_id="cus_wh_active",
+            account_status="ACTIVE",
+        )
+        dbsession.commit()
+
+        event = {
+            "id": "evt_stay_active",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": user.id,
+                    "amount_total": 2000,
+                    "customer": "cus_wh_active",
+                    "payment_intent": "pi_stay_active",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = process_checkout_session_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 30.0
+        assert ba.account_status == "ACTIVE"
+
 
 # ============================================================================
 # Invoice Events
