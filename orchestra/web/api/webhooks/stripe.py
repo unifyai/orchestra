@@ -354,6 +354,73 @@ def process_checkout_session_event(
 
 
 # ──────────────────────────────────────────────────────────────────────────
+
+
+def _resolve_recharges_for_invoice(
+    session: Session,
+    invoice_id: str,
+    metadata: Dict,
+) -> list[Recharge]:
+    """Find recharges for an invoice, self-healing if the invoicer's DB
+    commit failed but the Stripe invoice was created.
+
+    1. Look up recharges already linked to this ``invoice_id``.
+    2. If none found, use the invoice metadata (``billing_account_id`` +
+       ``invoice_group``) to find orphaned PENDING_INVOICE recharges and
+       link them — making the system self-healing without reconciliation.
+    """
+    recharges = session.query(Recharge).filter_by(stripe_invoice_id=invoice_id).all()
+    if recharges:
+        return recharges
+
+    ba_id_str = metadata.get("billing_account_id")
+    invoice_group_str = metadata.get("invoice_group")
+    if not ba_id_str or not invoice_group_str:
+        return []
+
+    try:
+        import datetime as _dt
+
+        ba_id = int(ba_id_str)
+        invoice_group = _dt.date.fromisoformat(invoice_group_str)
+    except (ValueError, TypeError):
+        logger.warning(
+            {
+                "message": "Could not parse invoice metadata for self-heal",
+                "invoice_id": invoice_id,
+                "billing_account_id": ba_id_str,
+                "invoice_group": invoice_group_str,
+            },
+        )
+        return []
+
+    orphans = (
+        session.query(Recharge)
+        .filter(
+            Recharge.billing_account_id == ba_id,
+            Recharge.status == RechargeStatus.PENDING_INVOICE,
+            Recharge.invoice_group == invoice_group,
+        )
+        .all()
+    )
+
+    if orphans:
+        for r in orphans:
+            r.stripe_invoice_id = invoice_id
+            r.status = RechargeStatus.INVOICE_CREATED
+        session.flush()
+        logger.info(
+            {
+                "message": "Self-healed orphaned recharges — linked to invoice",
+                "invoice_id": invoice_id,
+                "billing_account_id": ba_id,
+                "recharges_linked": len(orphans),
+            },
+        )
+
+    return orphans
+
+
 def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D401
     """Business logic for *invoice.* events coming from Stripe webhooks."""
     data = event["data"]["object"]
@@ -373,22 +440,22 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
     )
     session.flush()
 
-    # Get recharges for this invoice
-    recharges = session.query(Recharge).filter_by(stripe_invoice_id=invoice_id).all()
+    invoice_metadata = data.get("metadata", {})
+    recharges = _resolve_recharges_for_invoice(
+        session,
+        invoice_id,
+        invoice_metadata,
+    )
 
-    # Collect billing account IDs
-    billing_account_ids = set()
-    for recharge in recharges:
-        billing_account_ids.add(recharge.billing_account_id)
+    billing_account_ids = {r.billing_account_id for r in recharges}
 
-    # Build subquery for billing account updates
     ba_ids_subq = (
         select(Recharge.billing_account_id)
         .where(Recharge.stripe_invoice_id == invoice_id)
         .scalar_subquery()
     )
 
-    # success
+    # ── success ──────────────────────────────────────────────────────────
     if event["type"] == "invoice.payment_succeeded":
         (
             session.query(Recharge)
@@ -396,7 +463,6 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             .update({"status": RechargeStatus.PAID}, synchronize_session=False)
         )
 
-        # Update billing account statuses to ACTIVE
         if billing_account_ids:
             (
                 session.query(BillingAccount)
@@ -404,7 +470,6 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                 .update({"account_status": "ACTIVE"}, synchronize_session=False)
             )
 
-        # Phase 4: clear grace period on contacts for all affected billing accounts
         for ba_id in billing_account_ids:
             ba = session.query(BillingAccount).filter_by(id=ba_id).first()
             if ba:
@@ -422,7 +487,7 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
         )
         return Response(status_code=200)
 
-    # failure
+    # ── failure ──────────────────────────────────────────────────────────
     if event["type"] in ("invoice.payment_failed", "invoice.payment_action_required"):
         final = data["status"] in ("past_due", "uncollectible")
         if final:
@@ -432,7 +497,30 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                 .update({"status": RechargeStatus.FAILED}, synchronize_session=False)
             )
 
-            # Update billing account statuses to PAST_DUE
+            # Void the credits that were granted on auto-recharge but
+            # never paid for.  This is safe because:
+            #  • The recharges record exactly how many credits were loaned.
+            #  • Deducting them may push the balance negative, which is
+            #    the desired signal for PAST_DUE / eventual SUSPENDED.
+            from decimal import Decimal as _Decimal
+
+            for ba_id in billing_account_ids:
+                unpaid = sum(
+                    r.quantity for r in recharges if r.billing_account_id == ba_id
+                )
+                if unpaid:
+                    ba = session.query(BillingAccount).filter_by(id=ba_id).first()
+                    if ba:
+                        ba.credits = ba.credits - _Decimal(str(unpaid))
+                        logger.info(
+                            {
+                                "message": "Voided unpaid auto-recharge credits",
+                                "billing_account_id": ba_id,
+                                "credits_voided": float(unpaid),
+                                "new_balance": float(ba.credits),
+                            },
+                        )
+
             if billing_account_ids:
                 (
                     session.query(BillingAccount)
@@ -448,8 +536,9 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             INVOICE_FAILED_TOTAL.labels(billing_account_id=str(ba_id)).inc()
         logger.info(
             {
-                "message": "Invoice marked FAILED",
+                "message": "Invoice payment failed",
                 "invoice_id": invoice_id,
+                "final": final,
                 "billing_account_ids": list(billing_account_ids),
             },
         )
