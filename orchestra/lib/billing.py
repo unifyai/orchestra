@@ -210,6 +210,53 @@ def queue_auto_recharge(
         )
         return False
 
+    # Verify the customer still has a valid payment method before
+    # creating an InvoiceItem that will inevitably fail at collection.
+    try:
+        configure_stripe()
+        customer = stripe.Customer.retrieve(
+            billing_account.stripe_customer_id,
+            expand=["invoice_settings.default_payment_method"],
+        )
+        has_pm = bool(
+            (
+                customer.invoice_settings
+                and customer.invoice_settings.default_payment_method
+            )
+            or customer.default_source,
+        )
+        if not has_pm:
+            logger.warning(
+                {
+                    "message": "Auto-recharge skipped: no payment method on file",
+                    "billing_account_id": billing_account.id,
+                    "stripe_customer_id": billing_account.stripe_customer_id,
+                    "entity": entity_label,
+                },
+            )
+            billing_account.autorecharge = False
+            return False
+    except stripe.InvalidRequestError:
+        logger.warning(
+            {
+                "message": "Auto-recharge skipped: Stripe customer not found or deleted",
+                "billing_account_id": billing_account.id,
+                "stripe_customer_id": billing_account.stripe_customer_id,
+                "entity": entity_label,
+            },
+        )
+        billing_account.autorecharge = False
+        return False
+    except stripe.StripeError as e:
+        logger.warning(
+            {
+                "message": "Auto-recharge skipped: Stripe API error checking payment method",
+                "billing_account_id": billing_account.id,
+                "error": str(e),
+            },
+        )
+        return False
+
     now = datetime.now(timezone.utc)
     invoice_group = month_end_utc(now)
 

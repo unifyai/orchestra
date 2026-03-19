@@ -220,7 +220,8 @@ def process_checkout_session_event(
                 )
                 session.add(checkout_recharge)
 
-                session.flush()  # persist credit update before refresh in maybe_clear_grace_period
+                session.flush()
+
                 logger.info(
                     {
                         "message": "Organization credited",
@@ -229,8 +230,21 @@ def process_checkout_session_event(
                     },
                 )
 
-                # Phase 4: clear grace period on contacts if credits restored
                 AssistantContactDAO(session).maybe_clear_grace_period(ba)
+
+                # Self-heal: restore PAST_DUE → ACTIVE if credits are now
+                # positive.  Runs AFTER maybe_clear_grace_period (which
+                # refreshes ba from DB and may itself restore status when
+                # there are grace-period contacts).
+                if ba.account_status == "PAST_DUE" and ba.credits > 0:
+                    ba.account_status = "ACTIVE"
+                    logger.info(
+                        {
+                            "message": "Organization restored to ACTIVE after checkout",
+                            "organization_id": organization_id,
+                            "credits": float(ba.credits),
+                        },
+                    )
 
             # Handle user checkout (personal billing)
             elif user_id:
@@ -292,7 +306,8 @@ def process_checkout_session_event(
                 )
                 session.add(checkout_recharge)
 
-                session.flush()  # persist credit update before refresh in maybe_clear_grace_period
+                session.flush()
+
                 logger.info(
                     {
                         "message": "User credited",
@@ -301,8 +316,17 @@ def process_checkout_session_event(
                     },
                 )
 
-                # Phase 4: clear grace period on contacts if credits restored
                 AssistantContactDAO(session).maybe_clear_grace_period(ba)
+
+                if ba.account_status == "PAST_DUE" and ba.credits > 0:
+                    ba.account_status = "ACTIVE"
+                    logger.info(
+                        {
+                            "message": "User restored to ACTIVE after checkout",
+                            "user_id": user_id,
+                            "credits": float(ba.credits),
+                        },
+                    )
 
             else:
                 logger.error(

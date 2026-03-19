@@ -23,6 +23,7 @@ class GuardResult:
     """Summary of a billing-guard run."""
 
     accounts_suspended: int = 0
+    accounts_healed_past_due: int = 0
     accounts_failed: int = 0
     failed_ids: List[int] = field(default_factory=list)
 
@@ -48,6 +49,43 @@ def suspend_past_due_accounts(
 def _suspend_accounts_in_session(session: Session) -> GuardResult:
     result = GuardResult()
 
+    # ── Self-heal: ACTIVE accounts with negative credits → PAST_DUE ──
+    # This catches cases where a webhook was missed or a levy pushed
+    # credits negative without the status being updated.
+    active_negative = (
+        session.query(BillingAccount)
+        .filter(
+            BillingAccount.account_status == "ACTIVE",
+            BillingAccount.credits < 0,
+        )
+        .all()
+    )
+
+    for ba in active_negative:
+        try:
+            ba.account_status = "PAST_DUE"
+            session.commit()
+
+            result.accounts_healed_past_due += 1
+            logger.warning(
+                {
+                    "message": "Self-healed ACTIVE account with negative credits to PAST_DUE",
+                    "billing_account_id": ba.id,
+                    "credits": float(ba.credits),
+                },
+            )
+        except Exception:
+            session.rollback()
+            result.accounts_failed += 1
+            result.failed_ids.append(ba.id)
+            logger.exception(
+                {
+                    "message": "Failed to heal ACTIVE negative-balance account",
+                    "billing_account_id": ba.id,
+                },
+            )
+
+    # ── PAST_DUE + zero/negative credits → SUSPENDED ─────────────────
     accounts_to_suspend = (
         session.query(BillingAccount)
         .filter(
@@ -88,6 +126,7 @@ def _suspend_accounts_in_session(session: Session) -> GuardResult:
         {
             "message": "Billing-guard run complete",
             "accounts_suspended": result.accounts_suspended,
+            "accounts_healed_past_due": result.accounts_healed_past_due,
             "accounts_failed": result.accounts_failed,
         },
     )
