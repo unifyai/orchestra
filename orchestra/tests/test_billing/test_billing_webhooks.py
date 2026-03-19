@@ -383,13 +383,25 @@ class TestInvoiceSelfHealing:
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
 
-    def test_self_heal_links_orphaned_recharges_on_failure(self, dbsession):
+    def test_self_heal_links_orphaned_recharges_on_failure(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
         """payment_failed for unknown invoice_id resolves via metadata
         and voids credits."""
         import datetime as _dt
 
+        import orchestra.web.api.webhooks.stripe as wh_mod
         from orchestra.lib.time import month_end_utc
         from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        voided = []
+        mock_stripe = SimpleNamespace(
+            Invoice=SimpleNamespace(void_invoice=lambda iid: voided.append(iid)),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
 
         user, ba = make_user_with_billing(
             dbsession,
@@ -436,14 +448,27 @@ class TestInvoiceSelfHealing:
         dbsession.refresh(ba)
         assert ba.account_status == "PAST_DUE"
         assert float(ba.credits) == 30  # 80 - 50 voided
+        assert voided == ["in_orphan_fail"]
 
 
 class TestInvoicePaymentFailedVoidsCredits:
     """When an invoice payment definitively fails, the postpaid credits
     that were granted during auto-recharge should be voided."""
 
-    def test_final_failure_voids_credits_and_marks_past_due(self, dbsession):
+    def test_final_failure_voids_credits_and_marks_past_due(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        import orchestra.web.api.webhooks.stripe as wh_mod
         from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        voided = []
+        mock_stripe = SimpleNamespace(
+            Invoice=SimpleNamespace(void_invoice=lambda iid: voided.append(iid)),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
 
         user, ba = make_user_with_billing(
             dbsession,
@@ -494,6 +519,61 @@ class TestInvoicePaymentFailedVoidsCredits:
         dbsession.refresh(ba)
         assert ba.account_status == "PAST_DUE"
         assert float(ba.credits) == 40  # 120 - (50 + 30) voided
+        assert voided == ["in_void_test"]
+
+    def test_void_stripe_error_is_non_fatal(self, dbsession, monkeypatch):
+        """If Stripe void fails, credits are still voided and the webhook
+        succeeds — the void is best-effort."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        def raise_stripe_error(iid):
+            raise Exception("Stripe API down")
+
+        mock_stripe = SimpleNamespace(
+            Invoice=SimpleNamespace(void_invoice=raise_stripe_error),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_void_err",
+            credits=100,
+            stripe_customer_id="cus_void_err",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("60"),
+            amount_usd=Decimal("60.00"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_void_err_test",
+            type="auto",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_void_err",
+            "type": "invoice.payment_failed",
+            "data": {
+                "object": {
+                    "id": "in_void_err_test",
+                    "status": "uncollectible",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = process_invoice_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.FAILED
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "PAST_DUE"
+        assert float(ba.credits) == 40  # 100 - 60 voided despite void failure
 
     def test_intermediate_failure_does_not_void_credits(self, dbsession):
         """Non-final failures (Stripe still retrying) leave credits intact."""

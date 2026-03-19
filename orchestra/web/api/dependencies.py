@@ -157,7 +157,7 @@ def check_account_not_frozen(request: Request):
 
             if ba.account_status in ("SUSPENDED", "CLOSED"):
                 raise account_frozen
-            if ba.account_status == "PAST_DUE":
+            if ba.account_status == "PAST_DUE" and ba.credits <= 0:
                 raise account_suspended
 
     except Exception as e:
