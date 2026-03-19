@@ -1255,7 +1255,7 @@ class TestMonthlyInvoicer:
         r2 = self._make_recharge(dbsession, ba, quantity=30)
         dbsession.flush()
 
-        invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
+        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
 
         from orchestra.db.models.orchestra_models import RechargeStatus
 
@@ -1266,6 +1266,8 @@ class TestMonthlyInvoicer:
         assert r1.stripe_invoice_id == "in_test_agg"
         assert r2.stripe_invoice_id == "in_test_agg"
         assert len(calls["invoice"]) == 1
+        assert result.accounts_invoiced == 1
+        assert result.accounts_failed == 0
 
     def test_skips_account_without_stripe_customer(
         self,
@@ -1295,14 +1297,15 @@ class TestMonthlyInvoicer:
         r = self._make_recharge(dbsession, ba, quantity=50)
         dbsession.flush()
 
-        invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
+        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
 
         from orchestra.db.models.orchestra_models import RechargeStatus
 
         dbsession.refresh(r)
-        # Should remain PENDING — not invoiced because no Stripe customer
         assert r.status == RechargeStatus.PENDING_INVOICE
         assert len(calls["invoice"]) == 0
+        assert result.accounts_skipped == 1
+        assert result.accounts_invoiced == 0
 
     def test_handles_multiple_billing_accounts(
         self,
@@ -1337,7 +1340,7 @@ class TestMonthlyInvoicer:
         r2 = self._make_recharge(dbsession, ba2, quantity=60)
         dbsession.flush()
 
-        invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
+        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
 
         from orchestra.db.models.orchestra_models import RechargeStatus
 
@@ -1347,6 +1350,54 @@ class TestMonthlyInvoicer:
         assert r2.status == RechargeStatus.INVOICE_CREATED
         assert r1.stripe_invoice_id != r2.stripe_invoice_id
         assert invoice_counter["n"] == 2
+        assert result.accounts_invoiced == 2
+
+    def test_stripe_failure_isolates_to_one_account(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """A Stripe error for one account does not prevent others from invoicing."""
+        import datetime as _dt
+        from types import SimpleNamespace
+
+        from orchestra.routines import monthly_invoicer as invoicer_mod
+
+        call_count = {"n": 0}
+
+        def _inv_create(**kw):
+            call_count["n"] += 1
+            if kw["customer"] == "cus_fail":
+                raise Exception("Simulated Stripe failure")
+            return SimpleNamespace(id=f"in_ok_{call_count['n']}")
+
+        dummy_stripe = SimpleNamespace(
+            InvoiceItem=SimpleNamespace(create=lambda **kw: None),
+            Invoice=SimpleNamespace(create=_inv_create),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
+
+        ba_fail = make_billing_account(dbsession, stripe_customer_id="cus_fail")
+        ba_ok = make_billing_account(dbsession, stripe_customer_id="cus_ok")
+        make_user(dbsession, "inv_fail", ba_fail)
+        make_user(dbsession, "inv_ok", ba_ok)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        r_fail = self._make_recharge(dbsession, ba_fail, quantity=40)
+        r_ok = self._make_recharge(dbsession, ba_ok, quantity=60)
+        dbsession.flush()
+
+        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
+
+        from orchestra.db.models.orchestra_models import RechargeStatus
+
+        dbsession.refresh(r_fail)
+        dbsession.refresh(r_ok)
+        assert r_fail.status == RechargeStatus.PENDING_INVOICE
+        assert r_ok.status == RechargeStatus.INVOICE_CREATED
+        assert result.accounts_invoiced == 1
+        assert result.accounts_failed == 1
+        assert len(result.errors) == 1
 
     def test_no_pending_rows_is_noop(self, dbsession: Session, monkeypatch):
         """Invoicer does nothing when there are no PENDING_INVOICE rows."""
@@ -1367,9 +1418,10 @@ class TestMonthlyInvoicer:
         monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
 
         now = _dt.datetime.now(_dt.timezone.utc)
-        invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
+        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
 
         assert len(calls["invoice"]) == 0
+        assert result.accounts_invoiced == 0
 
     def test_includes_tax_id_in_invoice(self, dbsession: Session, monkeypatch):
         """Invoicer includes customer_tax_ids when billing account has tax_id."""

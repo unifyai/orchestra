@@ -322,6 +322,225 @@ class TestInvoiceEvent:
 
 
 # ============================================================================
+# Invoice Self-Healing & Credit Voiding
+# ============================================================================
+
+
+class TestInvoiceSelfHealing:
+    """When the invoicer's DB commit fails but the Stripe invoice was created,
+    the webhook should self-heal by finding orphaned PENDING_INVOICE recharges
+    via invoice metadata."""
+
+    def test_self_heal_links_orphaned_recharges_on_success(self, dbsession):
+        """payment_succeeded for unknown invoice_id resolves via metadata."""
+        import datetime as _dt
+
+        from orchestra.lib.time import month_end_utc
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_heal_user",
+            credits=100,
+            stripe_customer_id="cus_heal",
+        )
+        now = _dt.datetime.now(_dt.timezone.utc)
+        invoice_group = month_end_utc(now)
+
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50.00"),
+            status=RechargeStatus.PENDING_INVOICE,
+            invoice_group=invoice_group,
+            type="auto",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_heal_ok",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_orphan_123",
+                    "status": "paid",
+                    "metadata": {
+                        "billing_account_id": str(ba.id),
+                        "invoice_group": str(invoice_group),
+                    },
+                },
+            },
+        }
+
+        response = process_invoice_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.PAID
+        assert rec.stripe_invoice_id == "in_orphan_123"
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+
+    def test_self_heal_links_orphaned_recharges_on_failure(self, dbsession):
+        """payment_failed for unknown invoice_id resolves via metadata
+        and voids credits."""
+        import datetime as _dt
+
+        from orchestra.lib.time import month_end_utc
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_heal_fail",
+            credits=80,
+            stripe_customer_id="cus_heal_f",
+        )
+        now = _dt.datetime.now(_dt.timezone.utc)
+        invoice_group = month_end_utc(now)
+
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50.00"),
+            status=RechargeStatus.PENDING_INVOICE,
+            invoice_group=invoice_group,
+            type="auto",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_heal_fail",
+            "type": "invoice.payment_failed",
+            "data": {
+                "object": {
+                    "id": "in_orphan_fail",
+                    "status": "past_due",
+                    "metadata": {
+                        "billing_account_id": str(ba.id),
+                        "invoice_group": str(invoice_group),
+                    },
+                },
+            },
+        }
+
+        response = process_invoice_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.FAILED
+        assert rec.stripe_invoice_id == "in_orphan_fail"
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "PAST_DUE"
+        assert float(ba.credits) == 30  # 80 - 50 voided
+
+
+class TestInvoicePaymentFailedVoidsCredits:
+    """When an invoice payment definitively fails, the postpaid credits
+    that were granted during auto-recharge should be voided."""
+
+    def test_final_failure_voids_credits_and_marks_past_due(self, dbsession):
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_void_user",
+            credits=120,
+            stripe_customer_id="cus_void",
+        )
+
+        r1 = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50.00"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_void_test",
+            type="auto",
+        )
+        r2 = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("30"),
+            amount_usd=Decimal("30.00"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_void_test",
+            type="auto",
+        )
+        dbsession.add_all([r1, r2])
+        dbsession.commit()
+
+        event = {
+            "id": "evt_void_final",
+            "type": "invoice.payment_failed",
+            "data": {
+                "object": {
+                    "id": "in_void_test",
+                    "status": "uncollectible",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = process_invoice_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(r1)
+        dbsession.refresh(r2)
+        assert r1.status == RechargeStatus.FAILED
+        assert r2.status == RechargeStatus.FAILED
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "PAST_DUE"
+        assert float(ba.credits) == 40  # 120 - (50 + 30) voided
+
+    def test_intermediate_failure_does_not_void_credits(self, dbsession):
+        """Non-final failures (Stripe still retrying) leave credits intact."""
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wh_retry_user",
+            credits=100,
+            stripe_customer_id="cus_retry",
+        )
+
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50.00"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_retry_test",
+            type="auto",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_retry_1",
+            "type": "invoice.payment_failed",
+            "data": {
+                "object": {
+                    "id": "in_retry_test",
+                    "status": "open",
+                    "metadata": {},
+                },
+            },
+        }
+
+        response = process_invoice_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.INVOICE_CREATED  # unchanged
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"  # not degraded
+        assert float(ba.credits) == 100  # credits intact
+
+
+# ============================================================================
 # Webhook Idempotency (via HTTP endpoint)
 # ============================================================================
 
