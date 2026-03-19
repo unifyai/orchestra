@@ -246,6 +246,51 @@ class TestCredits:
 
 
 # ============================================================================
+# Credit Locking
+# ============================================================================
+
+
+class TestCreditLocking:
+    """Tests for row-level locking via FOR UPDATE."""
+
+    def test_get_for_update_returns_account(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        user_dao = UserDAO(dbsession)
+        user = user_dao.get_user_with_id("user1")
+        ba = ba_dao.get_for_update(user.billing_account_id)
+        assert ba is not None
+        assert ba.id == user.billing_account_id
+
+    def test_get_for_update_returns_none_for_missing(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        ba = ba_dao.get_for_update(999999)
+        assert ba is None
+
+    def test_deduct_allows_negative(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        user_dao = UserDAO(dbsession)
+        user = user_dao.get_user_with_id("user1")
+
+        initial = ba_dao.get_credits(user.billing_account_id)
+        new_balance = ba_dao.deduct_credits(
+            user.billing_account_id,
+            float(initial) + 1,
+        )
+        assert new_balance < 0
+
+    def test_add_then_deduct_is_consistent(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        user_dao = UserDAO(dbsession)
+        user = user_dao.get_user_with_id("user1")
+
+        initial = ba_dao.get_credits(user.billing_account_id)
+        ba_dao.add_credits(user.billing_account_id, 50)
+        ba_dao.deduct_credits(user.billing_account_id, 30)
+        final = ba_dao.get_credits(user.billing_account_id)
+        assert final == initial + Decimal("50") - Decimal("30")
+
+
+# ============================================================================
 # Billing Entity
 # ============================================================================
 
