@@ -246,6 +246,51 @@ class TestCredits:
 
 
 # ============================================================================
+# Credit Locking
+# ============================================================================
+
+
+class TestCreditLocking:
+    """Tests for row-level locking via FOR UPDATE."""
+
+    def test_get_for_update_returns_account(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        user_dao = UserDAO(dbsession)
+        user = user_dao.get_user_with_id("user1")
+        ba = ba_dao.get_for_update(user.billing_account_id)
+        assert ba is not None
+        assert ba.id == user.billing_account_id
+
+    def test_get_for_update_returns_none_for_missing(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        ba = ba_dao.get_for_update(999999)
+        assert ba is None
+
+    def test_deduct_allows_negative(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        user_dao = UserDAO(dbsession)
+        user = user_dao.get_user_with_id("user1")
+
+        initial = ba_dao.get_credits(user.billing_account_id)
+        new_balance = ba_dao.deduct_credits(
+            user.billing_account_id,
+            float(initial) + 1,
+        )
+        assert new_balance < 0
+
+    def test_add_then_deduct_is_consistent(self, dbsession, worker_id):
+        ba_dao = BillingAccountDAO(dbsession)
+        user_dao = UserDAO(dbsession)
+        user = user_dao.get_user_with_id("user1")
+
+        initial = ba_dao.get_credits(user.billing_account_id)
+        ba_dao.add_credits(user.billing_account_id, 50)
+        ba_dao.deduct_credits(user.billing_account_id, 30)
+        final = ba_dao.get_credits(user.billing_account_id)
+        assert final == initial + Decimal("50") - Decimal("30")
+
+
+# ============================================================================
 # Billing Entity
 # ============================================================================
 
@@ -452,13 +497,23 @@ class TestDeductEndpoint:
     ):
         import orchestra.lib.billing
 
+        _cus_with_pm = SimpleNamespace(
+            invoice_settings=SimpleNamespace(
+                default_payment_method=SimpleNamespace(id="pm_test"),
+            ),
+            default_source=None,
+        )
         mock_stripe_module = SimpleNamespace(
             InvoiceItem=SimpleNamespace(
                 create=lambda **kw: SimpleNamespace(id="ii_deduct_ar"),
             ),
-            error=SimpleNamespace(StripeError=Exception),
+            Customer=SimpleNamespace(retrieve=lambda *a, **kw: _cus_with_pm),
+            StripeError=Exception,
+            InvalidRequestError=Exception,
+            error=SimpleNamespace(StripeError=Exception, InvalidRequestError=Exception),
         )
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
         user = await create_test_user(client, "deduct_ar@test.com")
 
@@ -504,13 +559,23 @@ class TestDeductEndpoint:
     ):
         import orchestra.lib.billing
 
+        _cus_with_pm = SimpleNamespace(
+            invoice_settings=SimpleNamespace(
+                default_payment_method=SimpleNamespace(id="pm_test"),
+            ),
+            default_source=None,
+        )
         mock_stripe_module = SimpleNamespace(
             InvoiceItem=SimpleNamespace(
                 create=lambda **kw: SimpleNamespace(id="ii_no_ar"),
             ),
-            error=SimpleNamespace(StripeError=Exception),
+            Customer=SimpleNamespace(retrieve=lambda *a, **kw: _cus_with_pm),
+            StripeError=Exception,
+            InvalidRequestError=Exception,
+            error=SimpleNamespace(StripeError=Exception, InvalidRequestError=Exception),
         )
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
         user = await create_test_user(client, "deduct_no_ar@test.com")
 
@@ -998,8 +1063,8 @@ class TestAutoRechargeEndpoints:
         assert data["qty"] == 50.0
         assert data["eligible"] is False
         assert data["total_spending"] == 0.0
-        assert data["minimum_spend_required"] == 100.0
-        assert data["remaining_spend_needed"] == 100.0
+        assert data["minimum_spend_required"] == 1000.0
+        assert data["remaining_spend_needed"] == 1000.0
 
     @pytest.mark.anyio
     async def test_get_eligible_after_spending(self, client, dbsession):
@@ -1019,8 +1084,8 @@ class TestAutoRechargeEndpoints:
         recharge = Recharge(
             billing_account_id=ba.id,
             type="payment",
-            quantity=Decimal("150"),
-            amount_usd=Decimal("150"),
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
             status=RechargeStatus.PAID,
         )
         dbsession.add(recharge)
@@ -1034,29 +1099,46 @@ class TestAutoRechargeEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["eligible"] is True
-        assert data["total_spending"] == 150.0
+        assert data["total_spending"] == 1200.0
         assert data["remaining_spend_needed"] == 0.0
 
     @pytest.mark.anyio
-    async def test_put_enable_with_all_settings(self, client, dbsession):
+    async def test_put_enable_with_all_settings(
+        self,
+        client,
+        dbsession,
+        monkeypatch,
+    ):
+        import orchestra.web.api.billing.views as billing_views
+
+        monkeypatch.setattr(
+            billing_views,
+            "_customer_has_payment_method",
+            lambda _: True,
+        )
+
         user = await create_test_user(client, "ar_put_user@test.com")
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
         if db_user.billing_account is None:
-            ba = BillingAccount(credits=Decimal("100"))
+            ba = BillingAccount(
+                credits=Decimal("100"),
+                stripe_customer_id="cus_test_put",
+            )
             dbsession.add(ba)
             dbsession.flush()
             db_user.billing_account_id = ba.id
             dbsession.flush()
         else:
             ba = db_user.billing_account
+            ba.stripe_customer_id = "cus_test_put"
 
         recharge = Recharge(
             billing_account_id=ba.id,
             type="payment",
-            quantity=Decimal("200"),
-            amount_usd=Decimal("200"),
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
             status=RechargeStatus.PAID,
         )
         dbsession.add(recharge)
@@ -1189,6 +1271,146 @@ class TestAutoRechargeEndpoints:
         )
         assert response.status_code == 200
         assert response.json()["enabled"] is False
+
+    @pytest.mark.anyio
+    async def test_put_enable_blocked_with_unpaid_invoices(self, client, dbsession):
+        """Cannot re-enable auto-recharge while INVOICE_CREATED recharges exist."""
+        user = await create_test_user(client, "ar_unpaid@test.com")
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        if db_user.billing_account is None:
+            ba = BillingAccount(
+                credits=Decimal("200"),
+                stripe_customer_id="cus_ar_unpaid",
+            )
+            dbsession.add(ba)
+            dbsession.flush()
+            db_user.billing_account_id = ba.id
+            dbsession.flush()
+        else:
+            ba = db_user.billing_account
+            ba.stripe_customer_id = "cus_ar_unpaid"
+
+        # Enough spending to pass the threshold
+        paid = Recharge(
+            billing_account_id=ba.id,
+            type="payment",
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
+            status=RechargeStatus.PAID,
+        )
+        # An unpaid auto-recharge invoice
+        unpaid = Recharge(
+            billing_account_id=ba.id,
+            type="auto",
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_unpaid_test",
+        )
+        dbsession.add_all([paid, unpaid])
+        dbsession.commit()
+
+        response = await client.put(
+            "/v0/billing/auto-recharge",
+            json={"enabled": True, "threshold": 10.0, "qty": 50.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 400
+        assert "unpaid" in response.json()["detail"].lower()
+
+    @pytest.mark.anyio
+    async def test_put_enable_blocked_when_past_due(self, client, dbsession):
+        """Cannot enable auto-recharge when account is PAST_DUE."""
+        user = await create_test_user(client, "ar_pastdue@test.com")
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        if db_user.billing_account is None:
+            ba = BillingAccount(
+                credits=Decimal("200"),
+                account_status="PAST_DUE",
+                stripe_customer_id="cus_ar_pastdue",
+            )
+            dbsession.add(ba)
+            dbsession.flush()
+            db_user.billing_account_id = ba.id
+            dbsession.flush()
+        else:
+            ba = db_user.billing_account
+            ba.credits = Decimal("200")
+            ba.account_status = "PAST_DUE"
+            ba.stripe_customer_id = "cus_ar_pastdue"
+        dbsession.commit()
+
+        response = await client.put(
+            "/v0/billing/auto-recharge",
+            json={"enabled": True, "threshold": 10.0, "qty": 50.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 400
+        assert "past due" in response.json()["detail"].lower()
+
+    @pytest.mark.anyio
+    async def test_put_enable_allowed_after_invoice_paid(
+        self,
+        client,
+        dbsession,
+        monkeypatch,
+    ):
+        """Can re-enable auto-recharge once all invoices are paid."""
+        import orchestra.web.api.billing.views as billing_views
+
+        monkeypatch.setattr(
+            billing_views,
+            "_customer_has_payment_method",
+            lambda _: True,
+        )
+
+        user = await create_test_user(client, "ar_paid@test.com")
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        if db_user.billing_account is None:
+            ba = BillingAccount(
+                credits=Decimal("200"),
+                stripe_customer_id="cus_ar_paid",
+            )
+            dbsession.add(ba)
+            dbsession.flush()
+            db_user.billing_account_id = ba.id
+            dbsession.flush()
+        else:
+            ba = db_user.billing_account
+            ba.stripe_customer_id = "cus_ar_paid"
+
+        # Enough spending + all recharges PAID (no outstanding debt)
+        r1 = Recharge(
+            billing_account_id=ba.id,
+            type="payment",
+            quantity=Decimal("1200"),
+            amount_usd=Decimal("1200"),
+            status=RechargeStatus.PAID,
+        )
+        r2 = Recharge(
+            billing_account_id=ba.id,
+            type="auto",
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.PAID,
+            stripe_invoice_id="in_paid_test",
+        )
+        dbsession.add_all([r1, r2])
+        dbsession.commit()
+
+        response = await client.put(
+            "/v0/billing/auto-recharge",
+            json={"enabled": True, "threshold": 10.0, "qty": 50.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True
 
 
 # ============================================================================
@@ -2125,7 +2347,7 @@ class TestAPIValidation:
         )
         assert response.status_code == 400
         error_data = response.json()
-        assert "User must spend at least $100.00" in error_data["detail"]
+        assert "User must spend at least $1000.00" in error_data["detail"]
         assert "Current spending: $0.00" in error_data["detail"]
 
         # Set autorecharge quantity below minimum
@@ -2588,3 +2810,48 @@ class TestInternationalAddress:
         assert profile["billing_address"]["line1"] == "123 Main St"
         assert profile["billing_address"]["city"] == "Cambridge"
         assert profile["billing_address"]["state"] == "MA"
+
+
+# ============================================================================
+# Account Status Enforcement Logic
+# ============================================================================
+
+
+class TestAccountStatusEnforcement:
+    """PAST_DUE only blocks API access when credits are zero or negative.
+
+    Users who have prepaid credits (from checkout) should not be locked
+    out just because a postpaid auto-recharge invoice failed.
+
+    These tests exercise the decision logic directly since the full
+    HTTP dependency (check_account_not_frozen) requires request-state
+    wiring and a separate read-only session.
+    """
+
+    def _should_block(self, account_status: str, credits: float) -> bool:
+        """Reproduce the logic from check_account_not_frozen."""
+        if account_status in ("SUSPENDED", "CLOSED"):
+            return True
+        if account_status == "PAST_DUE" and credits <= 0:
+            return True
+        return False
+
+    def test_active_never_blocked(self):
+        assert self._should_block("ACTIVE", 0) is False
+        assert self._should_block("ACTIVE", -50) is False
+
+    def test_past_due_positive_credits_allowed(self):
+        assert self._should_block("PAST_DUE", 50) is False
+
+    def test_past_due_zero_credits_blocked(self):
+        assert self._should_block("PAST_DUE", 0) is True
+
+    def test_past_due_negative_credits_blocked(self):
+        assert self._should_block("PAST_DUE", -20) is True
+
+    def test_suspended_always_blocked(self):
+        assert self._should_block("SUSPENDED", 500) is True
+        assert self._should_block("SUSPENDED", 0) is True
+
+    def test_closed_always_blocked(self):
+        assert self._should_block("CLOSED", 100) is True

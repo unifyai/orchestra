@@ -591,6 +591,17 @@ def get_auto_recharge(
     min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
     has_pm = _customer_has_payment_method(ba.stripe_customer_id)
 
+    blocked_reason = None
+    if not ba.autorecharge:
+        if ba.account_status in ("PAST_DUE", "SUSPENDED", "CLOSED"):
+            blocked_reason = "account_status"
+        elif ba_dao.has_unpaid_auto_recharges(ba.id):
+            blocked_reason = "unpaid_invoice"
+        elif not can_enable:
+            blocked_reason = "spending"
+        elif not has_pm:
+            blocked_reason = "payment_method"
+
     return AutoRechargeResponse(
         enabled=ba.autorecharge,
         threshold=float(ba.autorecharge_threshold),
@@ -601,6 +612,7 @@ def get_auto_recharge(
         minimum_spend_required=min_required,
         remaining_spend_needed=max(0.0, min_required - total_spending),
         has_payment_method=has_pm,
+        blocked_reason=blocked_reason,
     )
 
 
@@ -646,6 +658,24 @@ def update_auto_recharge(
 
     # --- Eligibility check when enabling ---------------------------------
     if body.enabled and not ba.autorecharge:
+        if ba.account_status in ("PAST_DUE", "SUSPENDED", "CLOSED"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Auto-recharge cannot be enabled while your account "
+                    f"is {ba.account_status.replace('_', ' ').lower()}. "
+                    "Please resolve any outstanding invoices first."
+                ),
+            )
+        if ba_dao.has_unpaid_auto_recharges(ba.id):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Auto-recharge cannot be enabled while you have an "
+                    "outstanding unpaid invoice. It will be available "
+                    "once your invoice is paid."
+                ),
+            )
         if not ba_dao.can_enable_auto_recharge(ba.id):
             total_spending = float(ba_dao.get_total_spending(ba.id))
             min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)

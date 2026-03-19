@@ -199,6 +199,12 @@ class CreateLogConfig(BaseModel):
             ],
         },
     )
+    recompute_derived: bool = Field(
+        default=False,
+        description="If True, recompute derived columns for the newly created logs "
+        "using active ActiveDerivedLog templates. Suitable for small batches; "
+        "for large ingestion workflows, leave False and rely on periodic backfill.",
+    )
 
 
 class CreateDerivedEntriesConfig(BaseModel):
