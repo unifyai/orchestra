@@ -190,18 +190,29 @@ def queue_auto_recharge(
     billing_account: BillingAccount,
     credits: int,
     entity_label: str = "",
-) -> None:
+) -> bool:
     """
-    Queue an auto-recharge for a billing account AND create Stripe invoice item.
+    Create a Stripe InvoiceItem then record an auto-recharge.
 
-    Unified function for both user and organization auto-recharge.
+    The InvoiceItem is created **first** so that credits are only granted
+    when the billable artifact exists on Stripe.  If InvoiceItem creation
+    fails (network error, invalid customer, etc.), no credits are granted
+    and no recharge record is written — preventing revenue leakage.
 
-    Args:
-        session: Database session.
-        billing_account: BillingAccount to recharge.
-        credits: Number of credits to recharge.
-        entity_label: Label for logging (e.g. "user abc" or "org 42").
+    Returns True if the recharge was queued, False if skipped or failed.
     """
+    if not billing_account.stripe_customer_id:
+        logger.warning(
+            "Auto-recharge skipped for billing_account %s (%s): "
+            "no stripe_customer_id",
+            billing_account.id,
+            entity_label,
+        )
+        return False
+
+    now = datetime.now(timezone.utc)
+    invoice_group = month_end_utc(now)
+
     logger.info(
         "Queueing auto-recharge – %s, BillingAccount: %s, Credits: %s, "
         "Stripe Customer ID: %s",
@@ -211,85 +222,94 @@ def queue_auto_recharge(
         billing_account.stripe_customer_id,
     )
 
-    now = datetime.now(timezone.utc)
-    invoice_group = month_end_utc(now)
+    # Step 1: Create the Stripe InvoiceItem BEFORE any DB changes.
+    # If this fails the function returns False and the caller's session
+    # is left untouched — no free credits.
+    try:
+        configure_stripe()
 
-    recharge = Recharge(
-        billing_account_id=billing_account.id,
-        type=RECHARGE_TYPE_AUTO,
-        quantity=Decimal(credits),
-        amount_usd=Decimal(credits),  # 1 credit = $1
-        invoice_group=invoice_group,
-        status=RechargeStatus.PENDING_INVOICE,
-    )
+        invoice_item = stripe.InvoiceItem.create(
+            customer=billing_account.stripe_customer_id,
+            amount=int(credits * 100),
+            currency="usd",
+            description=f"{credits} credits (auto-recharge)",
+            metadata={
+                "recharge_type": "auto",
+                "billing_account_id": str(billing_account.id),
+                "invoice_group": str(invoice_group),
+            },
+        )
 
-    session.add(recharge)
-
-    # Credit the billing account immediately (pay-now, invoice-later model).
-    # The monthly invoicer will bill the customer at month-end; if the
-    # invoice payment fails, the account will be marked PAST_DUE.
-    billing_account.credits = billing_account.credits + Decimal(credits)
-
-    logger.info(
-        "Auto-recharge record created for billing_account %s: "
-        "$%.2f (%s credits), Invoice group: %s. "
-        "Credits added immediately (new balance: %s)",
-        billing_account.id,
-        credits,
-        credits,
-        invoice_group,
-        billing_account.credits,
-    )
-
-    # Create Stripe invoice item if billing account has Stripe customer ID
-    if billing_account.stripe_customer_id:
         logger.info(
-            "Creating Stripe invoice item for billing_account %s",
+            "Stripe InvoiceItem created: %s for billing_account %s",
+            invoice_item.id,
             billing_account.id,
         )
 
+    except stripe.StripeError as e:
+        logger.error(
+            "Stripe error creating InvoiceItem for billing_account %s (%s): "
+            "%s — credits NOT granted",
+            billing_account.id,
+            entity_label,
+            e,
+        )
+        return False
+
+    except Exception as e:
+        logger.error(
+            "Unexpected error creating InvoiceItem for billing_account %s (%s): "
+            "%s — credits NOT granted",
+            billing_account.id,
+            entity_label,
+            e,
+        )
+        return False
+
+    # Step 2: Record the recharge in the DB and grant credits.
+    # The InvoiceItem already exists on Stripe at this point.  If the DB
+    # write fails we best-effort delete the InvoiceItem to avoid orphans.
+    try:
+        recharge = Recharge(
+            billing_account_id=billing_account.id,
+            type=RECHARGE_TYPE_AUTO,
+            quantity=Decimal(credits),
+            amount_usd=Decimal(credits),
+            invoice_group=invoice_group,
+            status=RechargeStatus.PENDING_INVOICE,
+        )
+        session.add(recharge)
+        billing_account.credits = billing_account.credits + Decimal(credits)
+
+        logger.info(
+            "Auto-recharge recorded for billing_account %s: "
+            "$%.2f (%s credits), group: %s, new balance: %s",
+            billing_account.id,
+            credits,
+            credits,
+            invoice_group,
+            billing_account.credits,
+        )
+    except Exception as e:
+        logger.error(
+            "DB error after InvoiceItem %s created for billing_account %s: %s "
+            "— attempting cleanup",
+            invoice_item.id,
+            billing_account.id,
+            e,
+        )
         try:
-            configure_stripe()
-
-            invoice_item = stripe.InvoiceItem.create(
-                customer=billing_account.stripe_customer_id,
-                amount=int(credits * 100),  # Convert to cents
-                currency="usd",
-                description=f"{credits} credits (auto-recharge)",
-                metadata={
-                    "recharge_type": "auto",
-                    "billing_account_id": str(billing_account.id),
-                    "invoice_group": str(invoice_group),
-                },
-            )
-
-            logger.info(
-                "Stripe invoice item created – Invoice Item ID: %s",
+            stripe.InvoiceItem.delete(invoice_item.id)
+            logger.info("Cleaned up orphaned InvoiceItem %s", invoice_item.id)
+        except Exception as cleanup_err:
+            logger.error(
+                "Failed to clean up InvoiceItem %s: %s",
                 invoice_item.id,
+                cleanup_err,
             )
+        return False
 
-        except stripe.StripeError as e:
-            logger.error(
-                "Stripe error during auto-recharge for billing_account %s: " "%s – %s",
-                billing_account.id,
-                type(e).__name__,
-                e,
-            )
-
-        except Exception as e:
-            logger.error(
-                "Unexpected error during auto-recharge for billing_account %s: "
-                "%s – %s",
-                billing_account.id,
-                type(e).__name__,
-                e,
-            )
-    else:
-        logger.warning(
-            "BillingAccount %s has no Stripe customer ID – "
-            "skipping Stripe invoice item creation",
-            billing_account.id,
-        )
+    return True
 
 
 # =========================================================================
