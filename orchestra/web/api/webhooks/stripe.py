@@ -649,87 +649,51 @@ def _resolve_billing_account_from_metadata(
 
 
 def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D401
-    """Business logic for *charge.* events coming from Stripe webhooks."""
+    """Business logic for *charge.* events coming from Stripe webhooks.
+
+    Covers refunds, disputes, and dispute closures.  The idempotency
+    guard follows the same insert-early pattern used by checkout and
+    invoice handlers: the ``WebhookLog`` row is added to the session
+    and flushed before processing starts.  On success the final
+    ``session.commit()`` persists both the log and any data changes.
+    On failure a ``session.rollback()`` removes the log so Stripe can
+    retry the event delivery.
+    """
     billing_account_dao = BillingAccountDAO(session)
     recharge_dao = RechargeDAO(session)
-    webhook_log_dao = WebhookLogDAO(session)
 
     event_type = event.get("type")
     event_id = event.get("id")
     data_object = event.get("data", {}).get("object", {})
 
-    # idempotency guard
-    if webhook_log_dao.event_exists(event_id):
+    # ── Idempotency guard ────────────────────────────────────────────
+    if session.query(WebhookLog).filter_by(event_id=event_id).first():
         return Response(status_code=200)
 
+    session.add(
+        WebhookLog(
+            id=str(uuid.uuid4()),
+            event_id=event_id,
+            event_type=event_type,
+        ),
+    )
+    session.flush()
+
+    # ── Refund ────────────────────────────────────────────────────────
     if event_type in ("charge.refunded", "charge.refund.updated"):
         payment_intent_id = data_object.get("payment_intent")
+        if not payment_intent_id:
+            logger.warning(
+                {
+                    "message": "Refund event has no payment_intent — skipping",
+                    "event_id": event_id,
+                },
+            )
+            session.commit()
+            return Response(status_code=200)
+
         try:
             payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-            pi_metadata = payment_intent.get("metadata", {})
-            try:
-                credits_original = float(
-                    pi_metadata.get("credits_purchased", 0),
-                )
-            except Exception as e:
-                logger.error(
-                    {
-                        "message": "Invalid credits_purchased data",
-                        "payment_intent_id": payment_intent_id,
-                        "error": str(e),
-                    },
-                )
-                credits_original = 0
-            total_charge_cents = data_object.get("amount")
-            total_refunded_cents = data_object.get("amount_refunded", 0)
-
-            if credits_original and total_charge_cents:
-                fraction = total_refunded_cents / float(total_charge_cents)
-                credits_to_remove = credits_original * fraction
-                try:
-                    # Update recharge status if we have an invoice
-                    invoice_id = data_object.get("invoice")
-                    if invoice_id:
-                        refund_status = (
-                            "refunded" if fraction == 1.0 else "partially_refunded"
-                        )
-                        recharge = recharge_dao.get_recharge_by_transaction_id(
-                            invoice_id,
-                        )
-                        if recharge:
-                            recharge_dao.update_recharge_status(
-                                recharge.id,
-                                refund_status,
-                            )
-
-                    # Resolve the correct billing account (org or user)
-                    ba = _resolve_billing_account_from_metadata(session, pi_metadata)
-                    if ba:
-                        billing_account_dao.deduct_credits(ba.id, credits_to_remove)
-                        logger.info(
-                            {
-                                "message": "Billing account debited due to refund",
-                                "billing_account_id": ba.id,
-                                "credits_removed": credits_to_remove,
-                                "refund_fraction": fraction,
-                            },
-                        )
-                    else:
-                        logger.error(
-                            {
-                                "message": "Could not resolve billing account for refund",
-                                "payment_intent_id": payment_intent_id,
-                                "metadata": pi_metadata,
-                            },
-                        )
-                except Exception as e:
-                    logger.error(
-                        {
-                            "message": "Failed to debit billing account on refund",
-                            "payment_intent_id": payment_intent_id,
-                            "error": str(e),
-                        },
-                    )
         except stripe.StripeError as e:
             logger.error(
                 {
@@ -738,7 +702,65 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     "error": str(e),
                 },
             )
+            session.rollback()
+            raise
 
+        pi_metadata = payment_intent.get("metadata", {})
+        try:
+            credits_original = float(
+                pi_metadata.get("credits_purchased", 0),
+            )
+        except Exception as e:
+            logger.error(
+                {
+                    "message": "Invalid credits_purchased data",
+                    "payment_intent_id": payment_intent_id,
+                    "error": str(e),
+                },
+            )
+            credits_original = 0
+
+        total_charge_cents = data_object.get("amount")
+        total_refunded_cents = data_object.get("amount_refunded", 0)
+
+        if credits_original and total_charge_cents:
+            fraction = total_refunded_cents / float(total_charge_cents)
+            credits_to_remove = credits_original * fraction
+
+            invoice_id = data_object.get("invoice")
+            if invoice_id:
+                recharge = (
+                    session.query(Recharge)
+                    .filter_by(stripe_invoice_id=invoice_id)
+                    .first()
+                )
+                if recharge and fraction >= 1.0:
+                    recharge_dao.update_recharge_status(
+                        recharge.id,
+                        RechargeStatus.FAILED,
+                    )
+
+            ba = _resolve_billing_account_from_metadata(session, pi_metadata)
+            if ba:
+                billing_account_dao.deduct_credits(ba.id, credits_to_remove)
+                logger.info(
+                    {
+                        "message": "Billing account debited due to refund",
+                        "billing_account_id": ba.id,
+                        "credits_removed": credits_to_remove,
+                        "refund_fraction": fraction,
+                    },
+                )
+            else:
+                logger.error(
+                    {
+                        "message": "Could not resolve billing account for refund",
+                        "payment_intent_id": payment_intent_id,
+                        "metadata": pi_metadata,
+                    },
+                )
+
+    # ── Dispute created / funds withdrawn ─────────────────────────────
     elif event_type in ("charge.dispute.created", "charge.dispute.funds_withdrawn"):
         payment_intent_id = data_object.get("payment_intent")
         if not payment_intent_id:
@@ -748,136 +770,11 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     "event_id": event_id,
                 },
             )
-            webhook_log_dao.create_webhook_log(event_id, event_type)
+            session.commit()
             return Response(status_code=200)
 
         try:
             payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-            invoice_id = payment_intent.get("invoice")
-            pi_metadata = payment_intent.get("metadata", {})
-
-            try:
-                credits_original = float(
-                    pi_metadata.get("credits_purchased", 0),
-                )
-            except Exception as e:
-                logger.error(
-                    {
-                        "message": "Invalid credits_purchased on dispute event",
-                        "payment_intent_id": payment_intent_id,
-                        "error": str(e),
-                    },
-                )
-                credits_original = 0
-
-            def _suspend_ba_for_dispute(ba: BillingAccount) -> None:
-                """Suspend and disable auto-recharge on a disputed account."""
-                ba.account_status = "SUSPENDED"
-                ba.autorecharge = False
-
-            # Direct credit purchase (metadata has user_id or organization_id)
-            if credits_original > 0:
-                try:
-                    if invoice_id:
-                        recharge = recharge_dao.get_recharge_by_transaction_id(
-                            invoice_id,
-                        )
-                        if recharge:
-                            recharge_dao.update_recharge_status(
-                                recharge.id,
-                                RechargeStatus.DISPUTED,
-                            )
-
-                    ba = _resolve_billing_account_from_metadata(session, pi_metadata)
-                    if ba:
-                        billing_account_dao.deduct_credits(ba.id, credits_original)
-                        _suspend_ba_for_dispute(ba)
-                        session.commit()
-
-                        logger.info(
-                            {
-                                "message": "Billing account debited and suspended due to dispute",
-                                "billing_account_id": ba.id,
-                                "credits_removed": credits_original,
-                            },
-                        )
-                    else:
-                        logger.error(
-                            {
-                                "message": "Could not resolve billing account for dispute",
-                                "payment_intent_id": payment_intent_id,
-                                "metadata": pi_metadata,
-                            },
-                        )
-                except Exception as e:
-                    session.rollback()
-                    logger.error(
-                        {
-                            "message": "Failed to debit and suspend on dispute",
-                            "payment_intent_id": payment_intent_id,
-                            "error": str(e),
-                        },
-                    )
-
-            elif invoice_id:
-                # Monthly invoice dispute (lookup recharges by invoice ID)
-                try:
-                    recharges = (
-                        session.query(Recharge)
-                        .filter_by(stripe_invoice_id=invoice_id)
-                        .all()
-                    )
-
-                    if recharges:
-                        total_credits = sum(float(r.quantity) for r in recharges)
-                        ba_id = recharges[0].billing_account_id
-
-                        session.query(Recharge).filter_by(
-                            stripe_invoice_id=invoice_id,
-                        ).update(
-                            {"status": RechargeStatus.DISPUTED},
-                            synchronize_session=False,
-                        )
-
-                        billing_account_dao.deduct_credits(ba_id, total_credits)
-
-                        ba = session.query(BillingAccount).filter_by(id=ba_id).first()
-                        if ba:
-                            _suspend_ba_for_dispute(ba)
-                        session.commit()
-
-                        logger.info(
-                            {
-                                "message": "Billing account debited and suspended due to dispute",
-                                "billing_account_id": ba_id,
-                                "credits_removed": total_credits,
-                                "invoice_id": invoice_id,
-                                "recharges_updated": len(recharges),
-                            },
-                        )
-                    else:
-                        logger.warning(
-                            {
-                                "message": "No recharges found for disputed invoice",
-                                "invoice_id": invoice_id,
-                            },
-                        )
-                except Exception as e:
-                    session.rollback()
-                    logger.error(
-                        {
-                            "message": "Failed to handle monthly invoice dispute",
-                            "invoice_id": invoice_id,
-                            "error": str(e),
-                        },
-                    )
-            else:
-                logger.warning(
-                    {
-                        "message": "Dispute event missing metadata and invoice_id",
-                        "payment_intent_id": payment_intent_id,
-                    },
-                )
         except stripe.StripeError as e:
             logger.error(
                 {
@@ -886,7 +783,111 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     "error": str(e),
                 },
             )
+            session.rollback()
+            raise
 
+        invoice_id = payment_intent.get("invoice")
+        pi_metadata = payment_intent.get("metadata", {})
+
+        try:
+            credits_original = float(
+                pi_metadata.get("credits_purchased", 0),
+            )
+        except Exception as e:
+            logger.error(
+                {
+                    "message": "Invalid credits_purchased on dispute event",
+                    "payment_intent_id": payment_intent_id,
+                    "error": str(e),
+                },
+            )
+            credits_original = 0
+
+        def _suspend_ba_for_dispute(ba: BillingAccount) -> None:
+            ba.account_status = "SUSPENDED"
+            ba.autorecharge = False
+
+        if credits_original > 0:
+            if invoice_id:
+                recharge = (
+                    session.query(Recharge)
+                    .filter_by(stripe_invoice_id=invoice_id)
+                    .first()
+                )
+                if recharge:
+                    recharge_dao.update_recharge_status(
+                        recharge.id,
+                        RechargeStatus.DISPUTED,
+                    )
+
+            ba = _resolve_billing_account_from_metadata(session, pi_metadata)
+            if ba:
+                billing_account_dao.deduct_credits(ba.id, credits_original)
+                _suspend_ba_for_dispute(ba)
+
+                logger.info(
+                    {
+                        "message": "Billing account debited and suspended due to dispute",
+                        "billing_account_id": ba.id,
+                        "credits_removed": credits_original,
+                    },
+                )
+            else:
+                logger.error(
+                    {
+                        "message": "Could not resolve billing account for dispute",
+                        "payment_intent_id": payment_intent_id,
+                        "metadata": pi_metadata,
+                    },
+                )
+
+        elif invoice_id:
+            recharges = (
+                session.query(Recharge).filter_by(stripe_invoice_id=invoice_id).all()
+            )
+
+            if recharges:
+                total_credits = sum(float(r.quantity) for r in recharges)
+                ba_id = recharges[0].billing_account_id
+
+                session.query(Recharge).filter_by(
+                    stripe_invoice_id=invoice_id,
+                ).update(
+                    {"status": RechargeStatus.DISPUTED},
+                    synchronize_session=False,
+                )
+
+                billing_account_dao.deduct_credits(ba_id, total_credits)
+
+                ba = session.query(BillingAccount).filter_by(id=ba_id).first()
+                if ba:
+                    _suspend_ba_for_dispute(ba)
+
+                logger.info(
+                    {
+                        "message": "Billing account debited and suspended due to dispute",
+                        "billing_account_id": ba_id,
+                        "credits_removed": total_credits,
+                        "invoice_id": invoice_id,
+                        "recharges_updated": len(recharges),
+                    },
+                )
+            else:
+                logger.warning(
+                    {
+                        "message": "No recharges found for disputed invoice",
+                        "invoice_id": invoice_id,
+                    },
+                )
+        else:
+            logger.warning(
+                {
+                    "message": "Dispute event missing metadata and invoice_id",
+                    "payment_intent_id": payment_intent_id,
+                },
+            )
+
+    # ── Dispute closed ────────────────────────────────────────────────
     elif event_type == "charge.dispute.closed":
         dispute_status = data_object.get("status")
         payment_intent_id = data_object.get("payment_intent")
@@ -895,49 +896,79 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
         if dispute_status == "won" and payment_intent_id:
             try:
                 payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-                pi_metadata = payment_intent.get("metadata", {})
-                invoice_id = payment_intent.get("invoice")
+            except stripe.StripeError as e:
+                logger.error(
+                    {
+                        "message": "Failed to process won dispute",
+                        "payment_intent_id": payment_intent_id,
+                        "error": str(e),
+                    },
+                )
+                session.rollback()
+                raise
 
-                try:
-                    credits_original = float(
-                        pi_metadata.get("credits_purchased", 0),
+            pi_metadata = payment_intent.get("metadata", {})
+            invoice_id = payment_intent.get("invoice")
+
+            try:
+                credits_original = float(
+                    pi_metadata.get("credits_purchased", 0),
+                )
+            except Exception:
+                credits_original = 0
+
+            ba = _resolve_billing_account_from_metadata(session, pi_metadata)
+            if not ba and invoice_id:
+                recharges = (
+                    session.query(Recharge)
+                    .filter_by(stripe_invoice_id=invoice_id)
+                    .all()
+                )
+                if recharges:
+                    credits_original = sum(float(r.quantity) for r in recharges)
+                    ba = (
+                        session.query(BillingAccount)
+                        .filter_by(id=recharges[0].billing_account_id)
+                        .first()
                     )
-                except Exception:
-                    credits_original = 0
 
-                ba = _resolve_billing_account_from_metadata(session, pi_metadata)
-                if not ba and invoice_id:
-                    recharges = (
-                        session.query(Recharge)
-                        .filter_by(stripe_invoice_id=invoice_id)
-                        .all()
+            if ba and credits_original > 0:
+                from decimal import Decimal
+
+                ba.credits = ba.credits + Decimal(str(credits_original))
+
+                if invoice_id:
+                    session.query(Recharge).filter_by(
+                        stripe_invoice_id=invoice_id,
+                        status=RechargeStatus.DISPUTED,
+                    ).update(
+                        {"status": RechargeStatus.PAID},
+                        synchronize_session=False,
                     )
-                    if recharges:
-                        credits_original = sum(float(r.quantity) for r in recharges)
-                        ba = (
-                            session.query(BillingAccount)
-                            .filter_by(id=recharges[0].billing_account_id)
-                            .first()
-                        )
 
-                if ba and credits_original > 0:
-                    from decimal import Decimal
+                has_other_failed = (
+                    session.query(Recharge)
+                    .filter(
+                        Recharge.billing_account_id == ba.id,
+                        Recharge.status == RechargeStatus.FAILED,
+                    )
+                    .first()
+                    is not None
+                )
+                if ba.account_status == "SUSPENDED" and not has_other_failed:
+                    ba.account_status = "ACTIVE"
 
-                    ba.credits = ba.credits + Decimal(str(credits_original))
-
-                    if invoice_id:
-                        session.query(Recharge).filter_by(
-                            stripe_invoice_id=invoice_id,
-                            status=RechargeStatus.DISPUTED,
-                        ).update(
-                            {"status": RechargeStatus.PAID},
-                            synchronize_session=False,
-                        )
-
-                    # Only restore to ACTIVE if there are no other unpaid
-                    # obligations (e.g., FAILED recharges from a separate
-                    # invoice).  Otherwise the account stays SUSPENDED /
-                    # PAST_DUE for the unrelated debt.
+                logger.info(
+                    {
+                        "message": "Dispute won — credits re-credited",
+                        "billing_account_id": ba.id,
+                        "credits_restored": credits_original,
+                        "account_status": ba.account_status,
+                        "dispute_status": dispute_status,
+                    },
+                )
+            elif ba:
+                if ba.account_status == "SUSPENDED":
                     has_other_failed = (
                         session.query(Recharge)
                         .filter(
@@ -947,54 +978,20 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                         .first()
                         is not None
                     )
-                    if ba.account_status == "SUSPENDED" and not has_other_failed:
+                    if not has_other_failed:
                         ba.account_status = "ACTIVE"
-
-                    session.commit()
-
-                    logger.info(
-                        {
-                            "message": "Dispute won — credits re-credited",
-                            "billing_account_id": ba.id,
-                            "credits_restored": credits_original,
-                            "account_status": ba.account_status,
-                            "dispute_status": dispute_status,
-                        },
-                    )
-                elif ba:
-                    if ba.account_status == "SUSPENDED":
-                        has_other_failed = (
-                            session.query(Recharge)
-                            .filter(
-                                Recharge.billing_account_id == ba.id,
-                                Recharge.status == RechargeStatus.FAILED,
-                            )
-                            .first()
-                            is not None
-                        )
-                        if not has_other_failed:
-                            ba.account_status = "ACTIVE"
-                            session.commit()
-                    logger.info(
-                        {
-                            "message": "Dispute won — account evaluated (no credits to re-credit)",
-                            "billing_account_id": ba.id,
-                            "account_status": ba.account_status,
-                        },
-                    )
-                else:
-                    logger.warning(
-                        {
-                            "message": "Dispute won but could not resolve billing account",
-                            "payment_intent_id": payment_intent_id,
-                        },
-                    )
-            except stripe.StripeError as e:
-                logger.error(
+                logger.info(
                     {
-                        "message": "Failed to process won dispute",
+                        "message": "Dispute won — account evaluated (no credits to re-credit)",
+                        "billing_account_id": ba.id,
+                        "account_status": ba.account_status,
+                    },
+                )
+            else:
+                logger.warning(
+                    {
+                        "message": "Dispute won but could not resolve billing account",
                         "payment_intent_id": payment_intent_id,
-                        "error": str(e),
                     },
                 )
         elif dispute_status == "lost":
@@ -1015,8 +1012,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                 },
             )
 
-    # Log the event for idempotency
-    webhook_log_dao.create_webhook_log(event_id, event_type)
+    session.commit()
     return Response(status_code=200)
 
 
