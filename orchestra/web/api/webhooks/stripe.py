@@ -521,6 +521,27 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                             },
                         )
 
+            # Void the Stripe invoice so the debt is considered settled
+            # via credit deduction.  Without this, Stripe could later
+            # collect the invoice (user updates card, pays hosted page)
+            # and the user would be double-charged.
+            try:
+                stripe.Invoice.void_invoice(invoice_id)
+                logger.info(
+                    {
+                        "message": "Voided Stripe invoice after credit deduction",
+                        "invoice_id": invoice_id,
+                    },
+                )
+            except stripe.StripeError as void_err:
+                logger.warning(
+                    {
+                        "message": "Could not void Stripe invoice (non-fatal)",
+                        "invoice_id": invoice_id,
+                        "error": str(void_err),
+                    },
+                )
+
             if billing_account_ids:
                 (
                     session.query(BillingAccount)
