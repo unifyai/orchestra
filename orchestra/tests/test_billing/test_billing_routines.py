@@ -1129,8 +1129,8 @@ class TestBillingGuard:
         assert ba.account_status == "PAST_DUE"
         assert result.accounts_suspended == 0
 
-    def test_skips_active_accounts(self, dbsession: Session):
-        """ACTIVE accounts are never suspended, even with zero credits."""
+    def test_skips_active_accounts_with_zero_credits(self, dbsession: Session):
+        """ACTIVE accounts with zero credits are left alone (no negative balance)."""
         from orchestra.routines.billing_guard import suspend_past_due_accounts
 
         ba = make_billing_account(dbsession, credits=0, account_status="ACTIVE")
@@ -1141,6 +1141,22 @@ class TestBillingGuard:
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
         assert result.accounts_suspended == 0
+        assert result.accounts_healed_past_due == 0
+
+    def test_heals_active_with_negative_credits(self, dbsession: Session):
+        """ACTIVE account with negative credits is healed → PAST_DUE → SUSPENDED
+        in a single guard run (both loops apply)."""
+        from orchestra.routines.billing_guard import suspend_past_due_accounts
+
+        ba = make_billing_account(dbsession, credits=-5, account_status="ACTIVE")
+        dbsession.commit()
+
+        result = suspend_past_due_accounts(session=dbsession)
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        assert result.accounts_healed_past_due == 1
+        assert result.accounts_suspended == 1
 
     def test_already_suspended_stays_suspended(self, dbsession: Session):
         """Already-SUSPENDED accounts are not re-processed."""
@@ -1537,6 +1553,53 @@ class TestMonthlyInvoicer:
 # ============================================================================
 
 
+def _mock_customer_with_pm():
+    """Return a mock Stripe Customer that has a default payment method."""
+    return SimpleNamespace(
+        invoice_settings=SimpleNamespace(
+            default_payment_method=SimpleNamespace(id="pm_test"),
+        ),
+        default_source=None,
+    )
+
+
+def _mock_customer_without_pm():
+    """Return a mock Stripe Customer with no payment method."""
+    return SimpleNamespace(
+        invoice_settings=SimpleNamespace(default_payment_method=None),
+        default_source=None,
+    )
+
+
+def _make_stripe_mock(
+    *,
+    invoice_item_create=None,
+    invoice_item_delete=None,
+    customer_retrieve=None,
+    stripe_error_cls=Exception,
+    invalid_request_cls=None,
+):
+    """Build a ``SimpleNamespace`` that quacks like the ``stripe`` module."""
+    if invoice_item_create is None:
+        invoice_item_create = lambda **kw: SimpleNamespace(id="ii_test")
+    if customer_retrieve is None:
+        customer_retrieve = lambda *a, **kw: _mock_customer_with_pm()
+    ii_ns = {"create": invoice_item_create}
+    if invoice_item_delete is not None:
+        ii_ns["delete"] = invoice_item_delete
+    invalid = invalid_request_cls or stripe_error_cls
+    return SimpleNamespace(
+        InvoiceItem=SimpleNamespace(**ii_ns),
+        Customer=SimpleNamespace(retrieve=customer_retrieve),
+        StripeError=stripe_error_cls,
+        InvalidRequestError=invalid,
+        error=SimpleNamespace(
+            StripeError=stripe_error_cls,
+            InvalidRequestError=invalid,
+        ),
+    )
+
+
 class TestAutoRechargeQueuing:
     """Tests for the queue_auto_recharge function."""
 
@@ -1544,13 +1607,7 @@ class TestAutoRechargeQueuing:
         """queue_auto_recharge creates a PENDING_INVOICE recharge record."""
         import orchestra.lib.billing
 
-        mock_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(
-                create=lambda **kw: SimpleNamespace(id="ii_test"),
-            ),
-            StripeError=Exception,
-            error=SimpleNamespace(StripeError=Exception),
-        )
+        mock_stripe = _make_stripe_mock()
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
@@ -1580,13 +1637,7 @@ class TestAutoRechargeQueuing:
         """Auto-recharges are grouped by month-end date."""
         import orchestra.lib.billing
 
-        mock_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(
-                create=lambda **kw: SimpleNamespace(id="ii_grp"),
-            ),
-            StripeError=Exception,
-            error=SimpleNamespace(StripeError=Exception),
-        )
+        mock_stripe = _make_stripe_mock()
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
@@ -1630,11 +1681,7 @@ class TestAutoRechargeQueuing:
                 amount=kwargs["amount"],
             )
 
-        mock_stripe_module = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=mock_create),
-            StripeError=Exception,
-            error=SimpleNamespace(StripeError=Exception, InvalidRequestError=Exception),
-        )
+        mock_stripe_module = _make_stripe_mock(invoice_item_create=mock_create)
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
@@ -1671,12 +1718,8 @@ class TestAutoRechargeQueuing:
         import orchestra.lib.billing
 
         calls = []
-        mock_stripe_module = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(
-                create=lambda **kw: calls.append(kw) or None,
-            ),
-            StripeError=Exception,
-            error=SimpleNamespace(StripeError=Exception),
+        mock_stripe_module = _make_stripe_mock(
+            invoice_item_create=lambda **kw: calls.append(kw) or None,
         )
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
@@ -1711,17 +1754,11 @@ class TestAutoRechargeQueuing:
                 super().__init__(message)
                 self.param = param
 
-        mock_stripe_module = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(
-                create=lambda **kw: (_ for _ in ()).throw(
-                    MockStripeError("Customer not found"),
-                ),
+        mock_stripe_module = _make_stripe_mock(
+            invoice_item_create=lambda **kw: (_ for _ in ()).throw(
+                MockStripeError("Customer not found"),
             ),
-            StripeError=MockStripeError,
-            error=SimpleNamespace(
-                StripeError=MockStripeError,
-                InvalidRequestError=MockStripeError,
-            ),
+            stripe_error_cls=MockStripeError,
         )
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
@@ -1750,13 +1787,7 @@ class TestAutoRechargeQueuing:
         """queue_auto_recharge adds credits to the billing account right away."""
         import orchestra.lib.billing
 
-        mock_stripe_module = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(
-                create=lambda **kw: SimpleNamespace(id="ii_test"),
-            ),
-            StripeError=Exception,
-            error=SimpleNamespace(StripeError=Exception),
-        )
+        mock_stripe_module = _make_stripe_mock()
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
@@ -1784,13 +1815,7 @@ class TestAutoRechargeQueuing:
         """Auto-recharge can bring a negative balance back to positive."""
         import orchestra.lib.billing
 
-        mock_stripe_module = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(
-                create=lambda **kw: SimpleNamespace(id="ii_test_neg"),
-            ),
-            StripeError=Exception,
-            error=SimpleNamespace(StripeError=Exception),
-        )
+        mock_stripe_module = _make_stripe_mock()
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
@@ -1827,10 +1852,9 @@ class TestAutoRechargeQueuing:
         def mock_delete(item_id):
             deleted_items.append(item_id)
 
-        mock_stripe_module = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=mock_create, delete=mock_delete),
-            StripeError=Exception,
-            error=SimpleNamespace(StripeError=Exception),
+        mock_stripe_module = _make_stripe_mock(
+            invoice_item_create=mock_create,
+            invoice_item_delete=mock_delete,
         )
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
         monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
@@ -1863,6 +1887,122 @@ class TestAutoRechargeQueuing:
         assert deleted_items[0] == "ii_cleanup_test"
         dbsession.refresh(ba)
         assert float(ba.credits) == 5
+
+    def test_no_payment_method_skips_and_disables(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """No payment method → auto-recharge skipped and disabled."""
+        import orchestra.lib.billing
+
+        ii_calls = []
+        mock_stripe_module = _make_stripe_mock(
+            invoice_item_create=lambda **kw: ii_calls.append(kw),
+            customer_retrieve=lambda *a, **kw: _mock_customer_without_pm(),
+        )
+        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
+
+        ba = make_billing_account(
+            dbsession,
+            credits=50,
+            stripe_customer_id="cus_no_pm",
+            autorecharge=True,
+            autorecharge_threshold=10,
+            autorecharge_qty=50,
+        )
+        make_user(dbsession, "no_pm_user", ba)
+        dbsession.commit()
+
+        result = queue_auto_recharge(dbsession, ba, 50)
+        dbsession.commit()
+
+        assert result is False
+        assert ba.autorecharge is False
+        assert len(ii_calls) == 0
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 50
+
+    def test_deleted_customer_skips_and_disables(self, dbsession: Session, monkeypatch):
+        """Deleted Stripe customer → auto-recharge skipped and disabled."""
+        import orchestra.lib.billing
+
+        class MockInvalidRequest(Exception):
+            pass
+
+        def boom(*a, **kw):
+            raise MockInvalidRequest("No such customer")
+
+        mock_stripe_module = _make_stripe_mock(
+            customer_retrieve=boom,
+            invalid_request_cls=MockInvalidRequest,
+        )
+        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
+
+        ba = make_billing_account(
+            dbsession,
+            credits=50,
+            stripe_customer_id="cus_deleted",
+            autorecharge=True,
+            autorecharge_threshold=10,
+            autorecharge_qty=50,
+        )
+        make_user(dbsession, "deleted_cus_user", ba)
+        dbsession.commit()
+
+        result = queue_auto_recharge(dbsession, ba, 50)
+        dbsession.commit()
+
+        assert result is False
+        assert ba.autorecharge is False
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 50
+
+    def test_stripe_api_error_on_retrieve_skips_but_keeps_enabled(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """Transient Stripe API error on customer retrieve → skip but don't disable."""
+        import orchestra.lib.billing
+
+        class MockStripeError(Exception):
+            pass
+
+        class MockInvalidRequest(MockStripeError):
+            pass
+
+        def boom(*a, **kw):
+            raise MockStripeError("Service unavailable")
+
+        mock_stripe_module = _make_stripe_mock(
+            customer_retrieve=boom,
+            stripe_error_cls=MockStripeError,
+            invalid_request_cls=MockInvalidRequest,
+        )
+        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
+
+        ba = make_billing_account(
+            dbsession,
+            credits=50,
+            stripe_customer_id="cus_api_err",
+            autorecharge=True,
+            autorecharge_threshold=10,
+            autorecharge_qty=50,
+        )
+        make_user(dbsession, "api_err_user", ba)
+        dbsession.commit()
+
+        result = queue_auto_recharge(dbsession, ba, 50)
+        dbsession.commit()
+
+        assert result is False
+        assert ba.autorecharge is True
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 50
 
 
 # ============================================================================

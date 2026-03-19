@@ -452,13 +452,23 @@ class TestDeductEndpoint:
     ):
         import orchestra.lib.billing
 
+        _cus_with_pm = SimpleNamespace(
+            invoice_settings=SimpleNamespace(
+                default_payment_method=SimpleNamespace(id="pm_test"),
+            ),
+            default_source=None,
+        )
         mock_stripe_module = SimpleNamespace(
             InvoiceItem=SimpleNamespace(
                 create=lambda **kw: SimpleNamespace(id="ii_deduct_ar"),
             ),
-            error=SimpleNamespace(StripeError=Exception),
+            Customer=SimpleNamespace(retrieve=lambda *a, **kw: _cus_with_pm),
+            StripeError=Exception,
+            InvalidRequestError=Exception,
+            error=SimpleNamespace(StripeError=Exception, InvalidRequestError=Exception),
         )
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
         user = await create_test_user(client, "deduct_ar@test.com")
 
@@ -504,13 +514,23 @@ class TestDeductEndpoint:
     ):
         import orchestra.lib.billing
 
+        _cus_with_pm = SimpleNamespace(
+            invoice_settings=SimpleNamespace(
+                default_payment_method=SimpleNamespace(id="pm_test"),
+            ),
+            default_source=None,
+        )
         mock_stripe_module = SimpleNamespace(
             InvoiceItem=SimpleNamespace(
                 create=lambda **kw: SimpleNamespace(id="ii_no_ar"),
             ),
-            error=SimpleNamespace(StripeError=Exception),
+            Customer=SimpleNamespace(retrieve=lambda *a, **kw: _cus_with_pm),
+            StripeError=Exception,
+            InvalidRequestError=Exception,
+            error=SimpleNamespace(StripeError=Exception, InvalidRequestError=Exception),
         )
         monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
 
         user = await create_test_user(client, "deduct_no_ar@test.com")
 
