@@ -905,7 +905,7 @@ class TestDisputeCreated:
             quantity=Decimal("80"),
             amount_usd=Decimal("80"),
             status=RechargeStatus.PAID,
-            transaction_id="in_dp_dispute",
+            stripe_invoice_id="in_dp_dispute",
             type="payment",
         )
         dbsession.add(rec)
@@ -929,6 +929,9 @@ class TestDisputeCreated:
         assert ba.account_status == "SUSPENDED"
         assert ba.autorecharge is False
         assert float(ba.credits) == 20  # 100 - 80
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.DISPUTED
 
     def test_invoice_dispute_suspends_and_deducts(
         self,
@@ -1173,6 +1176,313 @@ class TestDisputeClosed:
 
         dbsession.refresh(r_disputed)
         assert r_disputed.status == RechargeStatus.PAID
+
+
+# ============================================================================
+# Refund Events
+# ============================================================================
+
+
+class TestRefundEvent:
+    """Tests for charge.refunded webhook handling."""
+
+    def test_full_refund_deducts_credits_and_marks_failed(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Full refund deducts all credits and marks recharge FAILED."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {
+                        "user_id": "refund_user",
+                        "credits_purchased": "50",
+                    },
+                    "invoice": None,
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "refund_user",
+            credits=80,
+            stripe_customer_id="cus_refund",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.PAID,
+            stripe_invoice_id="in_refund",
+            type="payment",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_full_refund",
+            "type": "charge.refunded",
+            "data": {
+                "object": {
+                    "id": "ch_refund",
+                    "payment_intent": "pi_refund",
+                    "amount": 5000,
+                    "amount_refunded": 5000,
+                    "invoice": "in_refund",
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 30  # 80 - 50
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.FAILED
+
+    def test_partial_refund_deducts_proportional_credits(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Partial refund deducts proportional credits; recharge stays PAID."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {
+                        "user_id": "partial_refund_user",
+                        "credits_purchased": "100",
+                    },
+                    "invoice": None,
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "partial_refund_user",
+            credits=150,
+            stripe_customer_id="cus_partial_refund",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("100"),
+            amount_usd=Decimal("100"),
+            status=RechargeStatus.PAID,
+            stripe_invoice_id="in_partial_refund",
+            type="payment",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_partial_refund",
+            "type": "charge.refunded",
+            "data": {
+                "object": {
+                    "id": "ch_partial_refund",
+                    "payment_intent": "pi_partial_refund",
+                    "amount": 10000,
+                    "amount_refunded": 5000,
+                    "invoice": "in_partial_refund",
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 100  # 150 - (100 * 0.5)
+
+        dbsession.refresh(rec)
+        assert rec.status == RechargeStatus.PAID
+
+    def test_stripe_error_on_refund_reraises(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Stripe API error during refund processing re-raises so Stripe
+        can retry delivery (the rollback removes the WebhookLog in
+        production; the test fixture's nested transaction prevents
+        verifying that here)."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        class MockStripeError(Exception):
+            pass
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: (_ for _ in ()).throw(
+                    MockStripeError("API unavailable"),
+                ),
+            ),
+            StripeError=MockStripeError,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        event = {
+            "id": "evt_refund_stripe_err",
+            "type": "charge.refunded",
+            "data": {
+                "object": {
+                    "id": "ch_stripe_err",
+                    "payment_intent": "pi_stripe_err",
+                    "amount": 5000,
+                    "amount_refunded": 5000,
+                },
+            },
+        }
+
+        with pytest.raises(MockStripeError):
+            process_charge_event(event, dbsession)
+
+    def test_missing_payment_intent_on_refund_succeeds(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Refund event with no payment_intent returns 200 without crashing."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(retrieve=lambda pi_id: {}),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        event = {
+            "id": "evt_refund_no_pi",
+            "type": "charge.refunded",
+            "data": {
+                "object": {
+                    "id": "ch_no_pi_refund",
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+
+class TestChargeIdempotency:
+    """Tests that the charge handler idempotency guard works correctly."""
+
+    def test_duplicate_charge_event_is_skipped(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Second delivery of the same charge event is a no-op."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        call_count = {"n": 0}
+
+        def counting_retrieve(pi_id):
+            call_count["n"] += 1
+            return {
+                "metadata": {
+                    "user_id": "idem_user",
+                    "credits_purchased": "50",
+                },
+                "invoice": None,
+            }
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(retrieve=counting_retrieve),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "idem_user",
+            credits=100,
+            stripe_customer_id="cus_idem",
+        )
+        dbsession.commit()
+
+        event = {
+            "id": "evt_idem_charge",
+            "type": "charge.refunded",
+            "data": {
+                "object": {
+                    "id": "ch_idem",
+                    "payment_intent": "pi_idem",
+                    "amount": 5000,
+                    "amount_refunded": 5000,
+                },
+            },
+        }
+
+        r1 = process_charge_event(event, dbsession)
+        assert r1.status_code == 200
+        assert call_count["n"] == 1
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 50  # 100 - 50
+
+        r2 = process_charge_event(event, dbsession)
+        assert r2.status_code == 200
+        assert call_count["n"] == 1  # Stripe NOT called again
+
+        dbsession.refresh(ba)
+        assert float(ba.credits) == 50  # unchanged
+
+    def test_dispute_stripe_error_reraises(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Stripe API error during dispute processing re-raises so Stripe
+        can retry."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        class MockStripeError(Exception):
+            pass
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: (_ for _ in ()).throw(
+                    MockStripeError("timeout"),
+                ),
+            ),
+            StripeError=MockStripeError,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        event = {
+            "id": "evt_dispute_stripe_err",
+            "type": "charge.dispute.created",
+            "data": {
+                "object": {
+                    "id": "dp_stripe_err",
+                    "payment_intent": "pi_dispute_err",
+                },
+            },
+        }
+
+        with pytest.raises(MockStripeError):
+            process_charge_event(event, dbsession)
 
 
 # ============================================================================
