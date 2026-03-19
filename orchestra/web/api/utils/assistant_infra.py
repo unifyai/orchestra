@@ -227,11 +227,13 @@ async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
                 f"{comms_url}/infra/pubsub/topic",
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 data={"topic_name": topic_name},
-                timeout=10,
+                timeout=30,
             )
             return response.json()
         except httpx.TimeoutException:
-            print("Pubsub topic creation timed out")
+            raise Exception(
+                "Pubsub topic creation timed out - comms service may be cold starting",
+            )
 
 
 async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
