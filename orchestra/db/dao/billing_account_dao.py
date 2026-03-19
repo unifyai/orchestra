@@ -361,6 +361,27 @@ class BillingAccountDAO:
         total = self.get_total_spending(billing_account_id)
         return total >= MIN_SPEND_FOR_AUTO_RECHARGE
 
+    def has_unpaid_auto_recharges(self, billing_account_id: int) -> bool:
+        """Return True if the account has auto-recharge credits that
+        have been invoiced but not yet paid (``INVOICE_CREATED``) or
+        that failed collection (``FAILED``).
+
+        This is used to prevent re-enabling auto-recharge while the
+        account has outstanding debt from a previous auto-recharge cycle.
+        """
+        return (
+            self.session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == billing_account_id,
+                Recharge.type == "auto",
+                Recharge.status.in_(
+                    [RechargeStatus.INVOICE_CREATED, RechargeStatus.FAILED],
+                ),
+            )
+            .first()
+            is not None
+        )
+
     # =========================================================================
     # BILLING PROFILE
     # =========================================================================
