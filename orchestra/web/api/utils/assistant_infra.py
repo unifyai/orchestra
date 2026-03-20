@@ -3,15 +3,6 @@ import os
 from typing import List
 
 import httpx
-from sqlalchemy import and_
-from sqlalchemy.orm import Session
-
-from orchestra.db.models.orchestra_models import (
-    Context,
-    LogEvent,
-    LogEventContext,
-    Project,
-)
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 COMMS_URL_PREVIEW = os.environ.get("UNITY_COMMS_URL_PREVIEW")
@@ -315,60 +306,48 @@ async def get_social_platforms_costs():
         return response.json()
 
 
-def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
+async def get_running_jobs(
+    assistant_id: str,
+    deploy_env: str | None = None,
+) -> List[str]:
     """
-    Get running jobs for the assistant by querying the database directly.
+    Get running jobs for the assistant by querying K8s via the comms service.
 
     Args:
         assistant_id: The assistant ID to find running jobs for
-        session: SQLAlchemy database session
+        deploy_env: 'preview' for preview stack, None for native environment.
 
     Returns:
         List of job names that are currently running for this assistant
     """
-    # Find the AssistantJobs project and startup_events context
-    project = session.query(Project).filter(Project.name == "AssistantJobs").first()
-    if not project:
+    comms_url = _comms_url_for(deploy_env)
+    if not comms_url or not ADMIN_KEY:
         return []
 
-    context = (
-        session.query(Context)
-        .filter(
-            and_(
-                Context.project_id == project.id,
-                Context.name == "startup_events",
-            ),
-        )
-        .first()
-    )
-    if not context:
+    try:
+        label = str(assistant_id).lower().replace("_", "-")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{comms_url}/infra/jobs",
+                params={"label_selector": f"app=unity,assistant-id={label}"},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                return []
+            data = response.json()
+    except Exception:
         return []
 
-    # Query LogEvent entries where assistant_id matches and running is True
-    log_events = (
-        session.query(LogEvent)
-        .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-        .filter(
-            and_(
-                LogEventContext.context_id == context.id,
-                LogEvent.data["assistant_id"].astext == str(assistant_id),
-                LogEvent.data["running"].astext == "true",
-            ),
-        )
-        .all()
-    )
-
-    job_names = [
-        log_event.data.get("job_name")
-        for log_event in log_events
-        if log_event.data.get("job_name")
+    return [
+        job["job_name"]
+        for job in data.get("jobs", [])
+        if job.get("status") == "Running"
     ]
-    return job_names
 
 
 async def stop_jobs(
     assistant_id: str,
-    session: Session,
     deploy_env: str | None = None,
 ):
     """
@@ -376,10 +355,10 @@ async def stop_jobs(
 
     Args:
         assistant_id: The assistant ID to stop jobs for
-        session: SQLAlchemy database session
+        deploy_env: 'preview' for preview stack, None for native environment.
     """
     comms_url = _comms_url_for(deploy_env)
-    job_names = get_running_jobs(assistant_id, session)
+    job_names = await get_running_jobs(assistant_id, deploy_env)
     if len(job_names) > 0:
         async with httpx.AsyncClient() as client:
             response = await client.post(
