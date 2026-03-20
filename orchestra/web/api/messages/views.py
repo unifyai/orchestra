@@ -29,8 +29,6 @@ ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
-MAX_ATTACHMENTS_PER_MESSAGE = 10
-
 
 def _adapters_url_for_deploy_env(deploy_env: str | None) -> str | None:
     if deploy_env == "preview":
@@ -219,12 +217,6 @@ async def send_message(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
-        )
-
-    if len(body.attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.",
         )
 
     attachments_dicts = [att.model_dump(exclude_none=True) for att in body.attachments]
