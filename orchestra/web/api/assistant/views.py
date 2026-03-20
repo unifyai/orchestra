@@ -1512,7 +1512,6 @@ async def delete_assistant(
         try:
             response = await stop_jobs(
                 assistant_id,
-                session,
                 deploy_env=assistant.deploy_env,
             )
             print(f"JOB STOPPED: {response['job_names']}")
@@ -3968,16 +3967,15 @@ def cancel_animation_prediction(
         },
     },
 )
-def admin_get_assistant_status(
+async def admin_get_assistant_status(
     assistant_id: str,
     request: Request,
-    session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantStatus]:
     """
     Get the live status of an assistant's dedicated service.
     """
     try:
-        job_names = get_running_jobs(assistant_id, session)
+        job_names = await get_running_jobs(assistant_id)
         if len(job_names) > 0:
             return InfoResponse(
                 info=AssistantStatus(running=True, job_name=job_names[0]),
