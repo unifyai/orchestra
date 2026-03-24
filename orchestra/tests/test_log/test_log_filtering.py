@@ -1786,6 +1786,35 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
         ("num_tokens(s) == 2", {"s": "hello"}, True),  # 5 bytes -> ceil(1.25)=2
         ("num_tokens(n) == 1", {"n": 123}, True),  # '123' -> 3 bytes -> ceil(0.75)=1
         ("num_tokens(zh) == 2", {"zh": "世界"}, True),  # 6 bytes -> ceil(1.5)=2
+        # duration_seconds: HH:MM:SS string -> total seconds
+        (
+            "duration_seconds(travel_time) > 600",
+            {"travel_time": "00:11:00"},
+            True,
+        ),
+        (
+            "duration_seconds(travel_time) == 660",
+            {"travel_time": "00:11:00"},
+            True,
+        ),
+        # duration_seconds: ISO 8601 duration
+        (
+            "duration_seconds(d) == 3600",
+            {"d": "PT1H"},
+            True,
+        ),
+        # duration_seconds: garbage -> null, comparison with number is false
+        (
+            "duration_seconds(d) > 0",
+            {"d": "garbage"},
+            False,
+        ),
+        # duration: compare two durations
+        (
+            "duration(a) > duration(b)",
+            {"a": "00:11:00", "b": "00:10:00"},
+            True,
+        ),
     ],
 )
 async def test_log_filter_helper_w_arithmetic(
