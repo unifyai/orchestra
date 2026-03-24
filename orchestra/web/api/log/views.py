@@ -45,6 +45,7 @@ from orchestra.db.models.orchestra_models import (
     Embedding,
     LogEvent,
     LogEventContext,
+    Project,
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
@@ -5586,6 +5587,20 @@ def update_active_derived_logs(
                         pending_by_template[t.id] = -1
                     scopes_scanned += 1
 
+            # Bulk-fetch project and context names for readable output
+            project_ids = {t.project_id for t in active_templates}
+            context_ids = {t.context_id for t in active_templates}
+            project_names = dict(
+                session.query(Project.id, Project.name)
+                .filter(Project.id.in_(project_ids))
+                .all(),
+            )
+            context_names = dict(
+                session.query(Context.id, Context.name)
+                .filter(Context.id.in_(context_ids))
+                .all(),
+            )
+
             # Build response — only include templates with pending > 0
             templates_with_pending = []
             total_pending = 0
@@ -5604,7 +5619,9 @@ def update_active_derived_logs(
                         {
                             "id": template.id,
                             "project_id": template.project_id,
+                            "project_name": project_names.get(template.project_id),
                             "context_id": template.context_id,
+                            "context_name": context_names.get(template.context_id),
                             "key": template.key,
                             "equation": template.equation,
                             "pending_logs": pending,
