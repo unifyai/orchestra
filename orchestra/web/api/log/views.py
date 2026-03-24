@@ -5461,20 +5461,41 @@ def update_active_derived_logs(
                 "templates": [],
             }
 
+        def _is_embedding_template(template):
+            return "embed(" in template.equation or "embed_image(" in template.equation
+
         def _build_pending_query(template):
-            """Build the query for logs missing the derived key."""
-            q = (
-                session.query(LogEvent.id)
-                .join(
-                    LogEventContext,
-                    LogEventContext.log_event_id == LogEvent.id,
+            """Build the query for logs missing the derived key.
+
+            For embedding templates, checks the Embedding table (where vectors
+            actually live) instead of data JSONB. The /logs/derived +
+            generate_pending_embeddings flow writes to Embedding without
+            touching log_event.data, so data ? key is the wrong signal.
+            """
+            is_emb = _is_embedding_template(template)
+            q = session.query(LogEvent.id).join(
+                LogEventContext,
+                LogEventContext.log_event_id == LogEvent.id,
+            )
+            if is_emb:
+                q = q.outerjoin(
+                    Embedding,
+                    and_(
+                        Embedding.ref_id == LogEvent.id,
+                        Embedding.key == template.key,
+                        Embedding.is_deleted == False,  # noqa: E712
+                    ),
+                ).filter(
+                    LogEvent.project_id == template.project_id,
+                    LogEventContext.context_id == template.context_id,
+                    Embedding.id.is_(None),
                 )
-                .filter(
+            else:
+                q = q.filter(
                     LogEvent.project_id == template.project_id,
                     LogEventContext.context_id == template.context_id,
                     ~LogEvent.data.has_key(template.key),
                 )
-            )
 
             if template.filter_expression:
                 field_types = field_type_dao.get_field_types(
@@ -5525,10 +5546,8 @@ def update_active_derived_logs(
             return q
 
         # --- dry_run mode: return metrics only ---
-        # Uses ONE query per (project_id, context_id) scope with conditional
-        # aggregation to count how many logs have each derived key.
-        # This avoids O(templates) individual queries — instead it's
-        # O(unique_scopes) queries, each scanning the scope once.
+        # Non-embedding templates: batched conditional aggregation on data ? key
+        # Embedding templates: check Embedding table (where vectors live)
         if dry_run:
             from collections import defaultdict
 
@@ -5538,16 +5557,20 @@ def update_active_derived_logs(
 
             dry_run_timed_out = False
 
-            # Group templates by scope
-            scope_templates: dict[tuple, list] = defaultdict(list)
+            # Split and group templates by scope
+            scope_non_emb: dict[tuple, list] = defaultdict(list)
+            scope_emb: dict[tuple, list] = defaultdict(list)
             for t in active_templates:
-                scope_templates[(t.project_id, t.context_id)].append(t)
+                scope_key = (t.project_id, t.context_id)
+                if _is_embedding_template(t):
+                    scope_emb[scope_key].append(t)
+                else:
+                    scope_non_emb[scope_key].append(t)
 
-            # For each scope, run ONE query with conditional aggregation
-            # to get total count + per-key has_key counts in a single scan.
             pending_by_template: dict[int, int] = {}
-            scopes_scanned = 0
-            for (project_id, context_id), templates in scope_templates.items():
+
+            # 1) Non-embedding: batched conditional aggregation on data ? key
+            for (project_id, context_id), templates in scope_non_emb.items():
                 if time.time() - start_time >= max_time_seconds:
                     dry_run_timed_out = True
                     break
@@ -5578,14 +5601,65 @@ def update_active_derived_logs(
                     for i, t in enumerate(templates):
                         has_count = row[i + 1] or 0
                         pending_by_template[t.id] = total - has_count
-                    scopes_scanned += 1
                 except Exception as e:
                     logging.warning(
-                        f"Error in dry_run for scope ({project_id}, {context_id}): {e}",
+                        f"Error in dry_run for non-emb scope "
+                        f"({project_id}, {context_id}): {e}",
                     )
                     for t in templates:
                         pending_by_template[t.id] = -1
-                    scopes_scanned += 1
+
+            # 2) Embedding: check Embedding table per scope
+            #    One query per scope gets total logs + per-key embedding counts.
+            for (project_id, context_id), templates in scope_emb.items():
+                if time.time() - start_time >= max_time_seconds:
+                    dry_run_timed_out = True
+                    break
+                try:
+                    total = (
+                        session.query(sa_func.count(LogEvent.id))
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == LogEvent.id,
+                        )
+                        .filter(
+                            LogEvent.project_id == project_id,
+                            LogEventContext.context_id == context_id,
+                        )
+                        .scalar()
+                    ) or 0
+
+                    emb_keys = [t.key for t in templates]
+                    emb_counts = dict(
+                        session.query(
+                            Embedding.key,
+                            sa_func.count(sa_func.distinct(Embedding.ref_id)),
+                        )
+                        .join(LogEvent, LogEvent.id == Embedding.ref_id)
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == LogEvent.id,
+                        )
+                        .filter(
+                            LogEvent.project_id == project_id,
+                            LogEventContext.context_id == context_id,
+                            Embedding.key.in_(emb_keys),
+                            Embedding.is_deleted == False,  # noqa: E712
+                        )
+                        .group_by(Embedding.key)
+                        .all(),
+                    )
+
+                    for t in templates:
+                        has_count = emb_counts.get(t.key, 0)
+                        pending_by_template[t.id] = total - has_count
+                except Exception as e:
+                    logging.warning(
+                        f"Error in dry_run for emb scope "
+                        f"({project_id}, {context_id}): {e}",
+                    )
+                    for t in templates:
+                        pending_by_template[t.id] = -1
 
             # Bulk-fetch project and context names for readable output
             project_ids = {t.project_id for t in active_templates}
@@ -5625,6 +5699,7 @@ def update_active_derived_logs(
                             "key": template.key,
                             "equation": template.equation,
                             "pending_logs": pending,
+                            "is_embedding": _is_embedding_template(template),
                             "has_filter_expression": template.filter_expression
                             is not None,
                         },
