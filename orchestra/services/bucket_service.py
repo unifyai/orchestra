@@ -50,16 +50,11 @@ class BucketService:
         self.bucket = self.storage_client.bucket(self.bucket_name)
 
         # -----------------------------------------------------------------
-        # Assistant media bucket (renamed from hired_assistants_images)
-        # Env var: ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME
-        # Fallback: ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME (deprecated)
+        # Assistant media bucket
         # -----------------------------------------------------------------
         self.assistant_media_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME",
-            os.getenv(
-                "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
-                f"assistant-media-{"staging" if settings.is_staging else "production"}",
-            ),
+            f"assistant-media-{"staging" if settings.is_staging else "production"}",
         )
         if not self.assistant_media_bucket_name:
             raise ValueError(
@@ -71,32 +66,22 @@ class BucketService:
         )
 
         # -----------------------------------------------------------------
-        # Message attachments bucket (renamed from unify-message-attachments)
-        # Env var: ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME
-        # Fallback: ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME (deprecated)
+        # Message attachments bucket
         # -----------------------------------------------------------------
         self.message_attachments_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
-            os.getenv(
-                "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME",
-                f"assistant-message-attachments-{"staging" if settings.is_staging else "production"}",
-            ),
+            f"assistant-message-attachments-{"staging" if settings.is_staging else "production"}",
         )
         self.message_attachments_bucket = self.storage_client.bucket(
             self.message_attachments_bucket_name,
         )
 
         # -----------------------------------------------------------------
-        # Call recordings bucket (renamed from unity-call-recordings)
-        # Env var: ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME
-        # Fallback: ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME (deprecated)
+        # Call recordings bucket
         # -----------------------------------------------------------------
         self.call_recordings_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
-            os.getenv(
-                "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME",
-                f"assistant-call-recordings-{"staging" if settings.is_staging else "production"}",
-            ),
+            f"assistant-call-recordings-{"staging" if settings.is_staging else "production"}",
         )
         self.call_recordings_bucket = self.storage_client.bucket(
             self.call_recordings_bucket_name,
@@ -123,17 +108,6 @@ class BucketService:
             "assistant-media-presets",
         )
         self.presets_bucket = self.storage_client.bucket(self.presets_bucket_name)
-
-        # -----------------------------------------------------------------
-        # Backward-compatible aliases (deprecated, will be removed)
-        # These allow existing callers / tests to keep working during migration.
-        # -----------------------------------------------------------------
-        self.assistant_images_bucket_name = self.assistant_media_bucket_name
-        self.assistant_images_bucket = self.assistant_media_bucket
-        self.unify_attachments_bucket_name = self.message_attachments_bucket_name
-        self.unify_attachments_bucket = self.message_attachments_bucket
-        self.recordings_bucket_name = self.call_recordings_bucket_name
-        self.recordings_bucket = self.call_recordings_bucket
 
     # -----------------------------------------------------------------
     #                          Path helpers
