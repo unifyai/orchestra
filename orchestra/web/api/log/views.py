@@ -5524,17 +5524,76 @@ def update_active_derived_logs(
             return q
 
         # --- dry_run mode: return metrics only ---
+        # NOTE: Counting logs missing a JSONB key uses NOT (data ? 'key')
+        # which CANNOT use the GIN index and triggers a sequential scan.
+        # To avoid per-template full-table scans, we batch-count all logs
+        # per (project_id, context_id) once, then estimate pending counts
+        # by subtracting logs that DO have the key (which CAN use GIN).
         if dry_run:
+            from sqlalchemy import func as sa_func
+
+            # 1) Get total log counts per (project_id, context_id) in one query
+            scope_keys = {(t.project_id, t.context_id) for t in active_templates}
+            total_counts: dict = {}
+            dry_run_timed_out = False
+            for project_id, context_id in scope_keys:
+                if time.time() - start_time >= max_time_seconds:
+                    dry_run_timed_out = True
+                    break
+                try:
+                    total = (
+                        session.query(sa_func.count(LogEvent.id))
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == LogEvent.id,
+                        )
+                        .filter(
+                            LogEvent.project_id == project_id,
+                            LogEventContext.context_id == context_id,
+                        )
+                        .scalar()
+                    )
+                    total_counts[(project_id, context_id)] = total or 0
+                except Exception:
+                    total_counts[(project_id, context_id)] = -1
+
+            # 2) For each template, count logs that HAVE the key (GIN-friendly)
+            #    and subtract from total to get pending count.
             template_metrics = []
+            templates_scanned = 0
             total_pending = 0
             for template in active_templates:
-                try:
-                    pending_count = _build_pending_query(template).count()
-                except Exception as e:
-                    logging.warning(
-                        f"Error counting pending logs for template {template.id}: {e}",
-                    )
+                if time.time() - start_time >= max_time_seconds:
+                    dry_run_timed_out = True
+                    break
+                scope_total = total_counts.get(
+                    (template.project_id, template.context_id),
+                    -1,
+                )
+                if scope_total < 0:
                     pending_count = -1
+                else:
+                    try:
+                        has_key_count = (
+                            session.query(sa_func.count(LogEvent.id))
+                            .join(
+                                LogEventContext,
+                                LogEventContext.log_event_id == LogEvent.id,
+                            )
+                            .filter(
+                                LogEvent.project_id == template.project_id,
+                                LogEventContext.context_id == template.context_id,
+                                LogEvent.data.has_key(template.key),
+                            )
+                            .scalar()
+                        ) or 0
+                        pending_count = scope_total - has_key_count
+                    except Exception as e:
+                        logging.warning(
+                            f"Error counting for template {template.id}: {e}",
+                        )
+                        pending_count = -1
+
                 template_metrics.append(
                     {
                         "id": template.id,
@@ -5543,15 +5602,20 @@ def update_active_derived_logs(
                         "key": template.key,
                         "equation": template.equation,
                         "pending_logs": pending_count,
+                        "has_filter_expression": template.filter_expression is not None,
                     },
                 )
+                templates_scanned += 1
                 if pending_count > 0:
                     total_pending += pending_count
 
             return {
                 "dry_run": True,
                 "total_templates": len(active_templates),
+                "templates_scanned": templates_scanned,
+                "templates_remaining": len(active_templates) - templates_scanned,
                 "total_pending_logs": total_pending,
+                "timed_out": dry_run_timed_out,
                 "elapsed_seconds": round(time.time() - start_time, 2),
                 "templates": template_metrics,
             }
