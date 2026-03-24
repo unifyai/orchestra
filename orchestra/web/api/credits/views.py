@@ -77,11 +77,11 @@ def get_credits(
             },
         },
         400: {
-            "description": "Invalid request or insufficient credits",
+            "description": "Invalid request (billing not set up)",
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Insufficient credits. Available: 5.0, requested: 10.0",
+                        "detail": "Billing is not set up",
                     },
                 },
             },
@@ -96,8 +96,10 @@ def deduct_credits(
     """
     Deducts credits from the user's account.
 
-    The amount must be positive and cannot exceed the user's available credits.
-    This endpoint can only deduct credits, not add them.
+    The amount must be positive. The balance is allowed to go negative so
+    that the spending-limit hook (which checks ``credit_balance <= 0``)
+    will correctly block subsequent LLM calls. If auto-recharge is
+    configured, it is triggered after the deduction.
     \f
     :param request_fastapi: FastAPI request object.
     :param request: Request body containing the amount to deduct.
@@ -115,12 +117,6 @@ def deduct_credits(
         raise HTTPException(status_code=400, detail="Billing is not set up")
 
     current_credits = float(billing_entity.credits)
-
-    if request.amount > current_credits:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient credits. Available: {current_credits}, requested: {request.amount}",
-        )
 
     new_balance = billing_deduct_credits(
         session,
