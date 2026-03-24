@@ -426,6 +426,8 @@ def _build_sql_query(
         "embed",
         "embed_image",
         "phash",
+        "duration",
+        "duration_seconds",
         "BASE",
         "jsonb_build_array",
         "jsonb_build_object",
