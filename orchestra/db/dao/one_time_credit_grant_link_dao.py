@@ -33,7 +33,7 @@ class OneTimeCreditGrantLinkDAO:
         self,
         expires_at: datetime.datetime,
         credit_amount: Optional[float] = None,
-        max_claims: int = 1,
+        max_claims: Optional[int] = 1,
         name: Optional[str] = None,
     ) -> OneTimeCreditGrantLink:
         if credit_amount is None:
@@ -76,6 +76,8 @@ class OneTimeCreditGrantLinkDAO:
         return self.session.execute(query).scalar_one()
 
     def is_fully_redeemed(self, link: OneTimeCreditGrantLink) -> bool:
+        if link.max_claims is None:
+            return False
         return self.get_claim_count(link.id) >= link.max_claims
 
     def has_user_claimed_link(self, link_id: str, user_id: str) -> bool:
