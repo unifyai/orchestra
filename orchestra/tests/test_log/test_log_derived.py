@@ -3741,3 +3741,152 @@ async def test_recompute_derived_on_update_async_embedding(
     assert (
         derived_entries[key] is None
     ), f"Derived key '{key}' should be null (async embed not yet computed)"
+
+
+@pytest.mark.anyio
+async def test_derived_entry_duration_functions(client: AsyncClient):
+    """
+    Test duration() and duration_seconds() functions in derived log entries.
+
+    Verifies that:
+    1. duration() casts string fields to interval (timedelta)
+    2. duration_seconds() extracts total seconds as a float
+    3. HH:MM:SS strings (normally inferred as time) are treated as durations
+    4. ISO 8601 duration strings are handled
+    5. Garbage / null-ish values ("", "None", "NULL") safely return null
+    6. Mixed-type (Any) fields work correctly
+    """
+    project_name = "test_derived_duration_functions"
+    await _create_project(client, project_name)
+
+    # --- Group A: HH:MM:SS strings (field typed as time) ---
+    time_logs = [
+        {
+            "entries": {
+                "dur/travel_time": "00:11:00",
+                "dur/name": "eleven_minutes",
+            },
+        },
+        {
+            "entries": {
+                "dur/travel_time": "2:30:00",
+                "dur/name": "two_and_half_hours",
+            },
+        },
+    ]
+
+    time_log_ids = []
+    for log_data in time_logs:
+        response = await client.post(
+            "/v0/logs",
+            json={"project_name": project_name, "entries": log_data["entries"]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        time_log_ids.append(response.json()["log_event_ids"][0])
+
+    # --- Group B: ISO duration (field typed as timedelta) ---
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"dur/iso_period": "P1DT2H", "dur/name": "iso_duration"},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    iso_log_id = response.json()["log_event_ids"][0]
+
+    # --- Group C: garbage / null-ish values (field typed as str) ---
+    garbage_logs = [
+        {"entries": {"dur/raw": "", "dur/name": "empty_string"}},
+        {"entries": {"dur/raw": "None", "dur/name": "none_string"}},
+        {"entries": {"dur/raw": "NULL", "dur/name": "null_string"}},
+        {"entries": {"dur/raw": "garbage", "dur/name": "garbage_value"}},
+    ]
+
+    garbage_log_ids = []
+    for log_data in garbage_logs:
+        response = await client.post(
+            "/v0/logs",
+            json={"project_name": project_name, "entries": log_data["entries"]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        garbage_log_ids.append(response.json()["log_event_ids"][0])
+
+    # 1. duration() on HH:MM:SS strings (time-typed field)
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="travel_duration",
+        equation="duration({log:dur/travel_time})",
+        referenced_logs={"log": time_log_ids},
+    )
+    assert response.status_code == 200, response.text
+
+    # 2. duration_seconds() on HH:MM:SS strings
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="travel_seconds",
+        equation="duration_seconds({log:dur/travel_time})",
+        referenced_logs={"log": time_log_ids},
+    )
+    assert response.status_code == 200, response.text
+
+    # 3. duration_seconds() on ISO duration (timedelta-typed field)
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="iso_seconds",
+        equation="duration_seconds({log:dur/iso_period})",
+        referenced_logs={"log": [iso_log_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    # 4. duration() on garbage / null-ish strings (str-typed field)
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="raw_duration",
+        equation="duration({log:dur/raw})",
+        referenced_logs={"log": garbage_log_ids},
+    )
+    assert response.status_code == 200, response.text
+
+    # 5. duration_seconds() on garbage / null-ish strings
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="raw_seconds",
+        equation="duration_seconds({log:dur/raw})",
+        referenced_logs={"log": garbage_log_ids},
+    )
+    assert response.status_code == 200, response.text
+
+    # Fetch and verify all logs
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    logs = response.json()["logs"]
+
+    for log in logs:
+        name = log["entries"].get("dur/name")
+
+        if name == "eleven_minutes":
+            assert log["derived_entries"]["travel_duration"] == "PT11M"
+            assert log["derived_entries"]["travel_seconds"] == 660.0
+
+        elif name == "two_and_half_hours":
+            assert log["derived_entries"]["travel_duration"] == "PT2H30M"
+            assert log["derived_entries"]["travel_seconds"] == 9000.0
+
+        elif name == "iso_duration":
+            assert log["derived_entries"]["iso_seconds"] == 93600.0
+
+        elif name in ("empty_string", "none_string", "null_string", "garbage_value"):
+            assert log["derived_entries"]["raw_duration"] is None
+            assert log["derived_entries"]["raw_seconds"] is None

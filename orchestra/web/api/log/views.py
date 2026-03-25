@@ -45,6 +45,7 @@ from orchestra.db.models.orchestra_models import (
     Embedding,
     LogEvent,
     LogEventContext,
+    Project,
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
@@ -5363,6 +5364,16 @@ def delete_fields(
 # Admin endpoints
 ######################
 
+# Derived Log Backfill (update_active_derived_logs cron)
+# Non-embedding derived logs are pure SQL (JSONB concat), ~500-1000 logs/sec.
+# Sync embedding templates are the bottleneck (~15-20s per 2048-item API batch).
+# max_time_seconds is the real safety net for slow embedding templates,
+# so max_logs can be generous for the common fast path.
+DERIVED_DEFAULT_MAX_LOGS = 10000
+DERIVED_MAX_LOGS_HARD_CAP = 50000
+DERIVED_DEFAULT_MAX_TIME = 240  # 4 min, fits within 4m30s deadline
+DERIVED_MAX_TIME_HARD_CAP = 300
+
 
 @admin_router.post(
     "/update_active_derived_logs",
@@ -5372,7 +5383,12 @@ def delete_fields(
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Processed 5 templates and created 42 derived logs",
+                        "total_templates_processed": 5,
+                        "total_templates_skipped": 2,
+                        "total_derived_logs_created": 42,
+                        "timed_out": False,
+                        "cap_reached": False,
+                        "elapsed_seconds": 12.34,
                     },
                 },
             },
@@ -5390,20 +5406,48 @@ def delete_fields(
     },
 )
 def update_active_derived_logs(
+    max_logs: int = Query(
+        DERIVED_DEFAULT_MAX_LOGS,
+        le=DERIVED_MAX_LOGS_HARD_CAP,
+        description="Maximum total logs to process across all templates. "
+        f"Default: {DERIVED_DEFAULT_MAX_LOGS}, Hard cap: {DERIVED_MAX_LOGS_HARD_CAP}.",
+    ),
+    max_time_seconds: int = Query(
+        DERIVED_DEFAULT_MAX_TIME,
+        le=DERIVED_MAX_TIME_HARD_CAP,
+        description="Maximum processing time in seconds. "
+        f"Default: {DERIVED_DEFAULT_MAX_TIME}s, Hard cap: {DERIVED_MAX_TIME_HARD_CAP}s.",
+    ),
+    dry_run: bool = Query(
+        False,
+        description="If true, return per-template pending log counts without processing.",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """
-    Admin endpoint to process active derived logs and create new derived logs
-    for new log events that match the filter criteria.
-    This endpoint  is designed to be calledby internal processes (e.g., Cloud Scheduler) or administrators.
+    Backfill missing derived logs for active templates.
+
+    Iterates all active ``ActiveDerivedLog`` templates and finds logs that are
+    missing the derived key. For each template, computes and writes derived
+    values via ``recompute_derived_logs``.
+
+    **Modes:**
+    - ``dry_run=true``: Return per-template pending log counts only, no processing.
+    - Default: Process up to ``max_logs`` logs within ``max_time_seconds``.
+
+    **Cloud Scheduler Configuration:**
+    - Schedule: ``*/5 * * * *`` (every 5 minutes)
+    - URL: ``POST /admin/update_active_derived_logs?max_logs=10000&max_time_seconds=240``
+    - Attempt deadline: 4m30s (270s)
     """
-    # Instantiate DAOs with shared session
+    import time
+
+    start_time = time.time()
     field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
 
     try:
-        # Get all active templates
         active_templates = (
             session.query(ActiveDerivedLog)
             .filter(ActiveDerivedLog.is_active == True)
@@ -5411,106 +5455,345 @@ def update_active_derived_logs(
         )
 
         if not active_templates:
-            return {"info": "No active templates found"}
+            return {
+                "total_templates": 0,
+                "total_pending_logs": 0,
+                "templates": [],
+            }
 
-        # Materialize active derived log templates (JSONB mode)
-        derived_log_dao = LogEventDAO(session, context_dao)
-        total_derived_logs_created = 0
+        def _is_embedding_template(template):
+            return "embed(" in template.equation or "embed_image(" in template.equation
 
-        for template in active_templates:
-            try:
-                # Get log events in this template's project/context that don't have the field
-                new_log_events_query = (
-                    session.query(LogEvent.id)
-                    .join(
-                        LogEventContext,
-                        LogEventContext.log_event_id == LogEvent.id,
-                    )
-                    .filter(
-                        LogEvent.project_id == template.project_id,
-                        LogEventContext.context_id == template.context_id,
-                        # Use JSONB '?' operator: NOT (data ? 'key')
-                        ~LogEvent.data.has_key(template.key),
-                    )
+        def _build_pending_query(template):
+            """Build the query for logs missing the derived key.
+
+            For embedding templates, checks the Embedding table (where vectors
+            actually live) instead of data JSONB. The /logs/derived +
+            generate_pending_embeddings flow writes to Embedding without
+            touching log_event.data, so data ? key is the wrong signal.
+            """
+            is_emb = _is_embedding_template(template)
+            q = session.query(LogEvent.id).join(
+                LogEventContext,
+                LogEventContext.log_event_id == LogEvent.id,
+            )
+            if is_emb:
+                q = q.outerjoin(
+                    Embedding,
+                    and_(
+                        Embedding.ref_id == LogEvent.id,
+                        Embedding.key == template.key,
+                        Embedding.is_deleted == False,  # noqa: E712
+                    ),
+                ).filter(
+                    LogEvent.project_id == template.project_id,
+                    LogEventContext.context_id == template.context_id,
+                    Embedding.id.is_(None),
+                )
+            else:
+                q = q.filter(
+                    LogEvent.project_id == template.project_id,
+                    LogEventContext.context_id == template.context_id,
+                    ~LogEvent.data.has_key(template.key),
                 )
 
-                # Apply filter expression if present
-                if template.filter_expression:
-                    field_types = field_type_dao.get_field_types(
-                        template.project_id,
-                        context_id=template.context_id,
+            if template.filter_expression:
+                field_types = field_type_dao.get_field_types(
+                    template.project_id,
+                    context_id=template.context_id,
+                )
+
+                for alias, filter_config in template.filter_expression.items():
+                    if (
+                        isinstance(filter_config, dict)
+                        and "filter_expr" in filter_config
+                        and filter_config["filter_expr"]
+                    ):
+                        try:
+                            filter_dict = str_filter_exp_to_dict(
+                                filter_config["filter_expr"],
+                                field_names=list(field_types.keys()),
+                            )
+                            condition = build_sql_query(
+                                filter_dict,
+                                LogEvent,
+                                session,
+                                log_event_ids=q.subquery(),
+                            )
+
+                            if isinstance(condition, Subquery):
+                                q = session.query(
+                                    LogEvent.id,
+                                ).filter(
+                                    LogEvent.id.in_(
+                                        select(q.subquery().c.id),
+                                    ),
+                                    exists(
+                                        select(1)
+                                        .select_from(condition)
+                                        .where(
+                                            and_(
+                                                condition.c.log_event_id == LogEvent.id,
+                                                condition.c.value.is_(True),
+                                            ),
+                                        ),
+                                    ),
+                                )
+                        except Exception as filter_error:
+                            logging.warning(
+                                f"Failed to apply filter for template '{template.key}': {filter_error}",
+                            )
+            return q
+
+        # --- dry_run mode: return metrics only ---
+        # Non-embedding templates: batched conditional aggregation on data ? key
+        # Embedding templates: check Embedding table (where vectors live)
+        if dry_run:
+            from collections import defaultdict
+
+            from sqlalchemy import case
+            from sqlalchemy import func as sa_func
+            from sqlalchemy import literal
+
+            dry_run_timed_out = False
+
+            # Split and group templates by scope
+            scope_non_emb: dict[tuple, list] = defaultdict(list)
+            scope_emb: dict[tuple, list] = defaultdict(list)
+            for t in active_templates:
+                scope_key = (t.project_id, t.context_id)
+                if _is_embedding_template(t):
+                    scope_emb[scope_key].append(t)
+                else:
+                    scope_non_emb[scope_key].append(t)
+
+            pending_by_template: dict[int, int] = {}
+
+            # 1) Non-embedding: batched conditional aggregation on data ? key
+            for (project_id, context_id), templates in scope_non_emb.items():
+                if time.time() - start_time >= max_time_seconds:
+                    dry_run_timed_out = True
+                    break
+                try:
+                    cols = [sa_func.count(LogEvent.id).label("total")]
+                    for t in templates:
+                        cols.append(
+                            sa_func.sum(
+                                case(
+                                    (LogEvent.data.has_key(t.key), literal(1)),
+                                    else_=literal(0),
+                                ),
+                            ).label(f"has_{t.id}"),
+                        )
+                    row = (
+                        session.query(*cols)
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == LogEvent.id,
+                        )
+                        .filter(
+                            LogEvent.project_id == project_id,
+                            LogEventContext.context_id == context_id,
+                        )
+                        .one()
+                    )
+                    total = row[0] or 0
+                    for i, t in enumerate(templates):
+                        has_count = row[i + 1] or 0
+                        pending_by_template[t.id] = total - has_count
+                except Exception as e:
+                    logging.warning(
+                        f"Error in dry_run for non-emb scope "
+                        f"({project_id}, {context_id}): {e}",
+                    )
+                    for t in templates:
+                        pending_by_template[t.id] = -1
+
+            # 2) Embedding: check Embedding table per scope
+            #    One query per scope gets total logs + per-key embedding counts.
+            for (project_id, context_id), templates in scope_emb.items():
+                if time.time() - start_time >= max_time_seconds:
+                    dry_run_timed_out = True
+                    break
+                try:
+                    total = (
+                        session.query(sa_func.count(LogEvent.id))
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == LogEvent.id,
+                        )
+                        .filter(
+                            LogEvent.project_id == project_id,
+                            LogEventContext.context_id == context_id,
+                        )
+                        .scalar()
+                    ) or 0
+
+                    emb_keys = [t.key for t in templates]
+                    emb_counts = dict(
+                        session.query(
+                            Embedding.key,
+                            sa_func.count(sa_func.distinct(Embedding.ref_id)),
+                        )
+                        .join(LogEvent, LogEvent.id == Embedding.ref_id)
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == LogEvent.id,
+                        )
+                        .filter(
+                            LogEvent.project_id == project_id,
+                            LogEventContext.context_id == context_id,
+                            Embedding.key.in_(emb_keys),
+                            Embedding.is_deleted == False,  # noqa: E712
+                        )
+                        .group_by(Embedding.key)
+                        .all(),
                     )
 
-                    for alias, filter_config in template.filter_expression.items():
-                        if (
-                            isinstance(filter_config, dict)
-                            and "filter_expr" in filter_config
-                            and filter_config["filter_expr"]
-                        ):
-                            try:
-                                filter_dict = str_filter_exp_to_dict(
-                                    filter_config["filter_expr"],
-                                    field_names=list(field_types.keys()),
-                                )
-                                condition = build_sql_query(
-                                    filter_dict,
-                                    LogEvent,
-                                    session,
-                                    log_event_ids=new_log_events_query.subquery(),
-                                )
+                    for t in templates:
+                        has_count = emb_counts.get(t.key, 0)
+                        pending_by_template[t.id] = total - has_count
+                except Exception as e:
+                    logging.warning(
+                        f"Error in dry_run for emb scope "
+                        f"({project_id}, {context_id}): {e}",
+                    )
+                    for t in templates:
+                        pending_by_template[t.id] = -1
 
-                                if isinstance(condition, Subquery):
-                                    new_log_events_query = session.query(
-                                        LogEvent.id,
-                                    ).filter(
-                                        LogEvent.id.in_(
-                                            select(
-                                                new_log_events_query.subquery().c.id,
-                                            ),
-                                        ),
-                                        exists(
-                                            select(1)
-                                            .select_from(condition)
-                                            .where(
-                                                and_(
-                                                    condition.c.log_event_id
-                                                    == LogEvent.id,
-                                                    condition.c.value.is_(True),
-                                                ),
-                                            ),
-                                        ),
-                                    )
-                            except Exception as filter_error:
-                                logging.warning(
-                                    f"Failed to apply filter for template '{template.key}': {filter_error}",
-                                )
+            # Bulk-fetch project and context names for readable output
+            project_ids = {t.project_id for t in active_templates}
+            context_ids = {t.context_id for t in active_templates}
+            project_names = dict(
+                session.query(Project.id, Project.name)
+                .filter(Project.id.in_(project_ids))
+                .all(),
+            )
+            context_names = dict(
+                session.query(Context.id, Context.name)
+                .filter(Context.id.in_(context_ids))
+                .all(),
+            )
 
-                # Get the log event IDs
-                matching_log_events = new_log_events_query.all()
+            # Build response — only include templates with pending > 0
+            templates_with_pending = []
+            total_pending = 0
+            templates_scanned = len(pending_by_template)
+            templates_zero = 0
+            templates_error = 0
+            for template in active_templates:
+                pending = pending_by_template.get(template.id)
+                if pending is None:
+                    continue
+                if pending == -1:
+                    templates_error += 1
+                elif pending > 0:
+                    total_pending += pending
+                    templates_with_pending.append(
+                        {
+                            "id": template.id,
+                            "project_id": template.project_id,
+                            "project_name": project_names.get(template.project_id),
+                            "context_id": template.context_id,
+                            "context_name": context_names.get(template.context_id),
+                            "key": template.key,
+                            "equation": template.equation,
+                            "pending_logs": pending,
+                            "is_embedding": _is_embedding_template(template),
+                            "has_filter_expression": template.filter_expression
+                            is not None,
+                        },
+                    )
+                else:
+                    templates_zero += 1
+
+            return {
+                "dry_run": True,
+                "total_templates": len(active_templates),
+                "templates_scanned": templates_scanned,
+                "templates_remaining": len(active_templates) - templates_scanned,
+                "templates_with_pending": len(templates_with_pending),
+                "templates_zero": templates_zero,
+                "templates_error": templates_error,
+                "total_pending_logs": total_pending,
+                "timed_out": dry_run_timed_out,
+                "elapsed_seconds": round(time.time() - start_time, 2),
+                "templates": templates_with_pending,
+            }
+
+        # --- Processing mode ---
+        derived_log_dao = LogEventDAO(session, context_dao)
+        total_logs_processed = 0
+        templates_processed = []
+        templates_skipped = 0
+        timed_out = False
+        cap_reached = False
+
+        for template in active_templates:
+            elapsed = time.time() - start_time
+            if elapsed >= max_time_seconds:
+                timed_out = True
+                break
+            if total_logs_processed >= max_logs:
+                cap_reached = True
+                break
+
+            try:
+                remaining = max_logs - total_logs_processed
+                pending_query = _build_pending_query(template)
+                matching_log_events = pending_query.limit(remaining).all()
                 matching_log_event_ids = [row[0] for row in matching_log_events]
 
                 if not matching_log_event_ids:
+                    templates_processed.append(
+                        {
+                            "id": template.id,
+                            "key": template.key,
+                            "logs_processed": 0,
+                            "logs_matched": 0,
+                        },
+                    )
                     continue
 
-                # Recompute derived values for these log events
                 count = derived_log_dao.recompute_derived_logs(
                     template=template,
                     log_ids=matching_log_event_ids,
                     json_encoder=CustomEncoder,
                     field_type_dao=field_type_dao,
                 )
-                total_derived_logs_created += count
+                total_logs_processed += count
+                templates_processed.append(
+                    {
+                        "id": template.id,
+                        "key": template.key,
+                        "logs_processed": count,
+                        "logs_matched": len(matching_log_event_ids),
+                    },
+                )
 
             except Exception as template_error:
                 logging.warning(
                     f"Error processing template {template.id}: {template_error}",
                 )
+                templates_processed.append(
+                    {
+                        "id": template.id,
+                        "key": template.key,
+                        "error": str(template_error),
+                    },
+                )
                 continue
 
-        session.commit()
+        templates_skipped = len(active_templates) - len(templates_processed)
 
         return {
-            "info": f"Created {total_derived_logs_created} new derived logs",
+            "total_templates_processed": len(templates_processed),
+            "total_templates_skipped": templates_skipped,
+            "total_derived_logs_created": total_logs_processed,
+            "timed_out": timed_out,
+            "cap_reached": cap_reached,
+            "elapsed_seconds": round(time.time() - start_time, 2),
+            "templates_processed": templates_processed,
         }
 
     except Exception as e:

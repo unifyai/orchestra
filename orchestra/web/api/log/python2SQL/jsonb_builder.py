@@ -1440,6 +1440,7 @@ def _handle_functions_jsonb(
     - Type checking: type() returns JSONB type name
     - Aggregations: mean(), sum(), var(), std(), min(), max(), median(), mode()
     - Date/time: date(), time(), now(), round_timestamp()
+    - Duration: duration(), duration_seconds()
     - Math: round(), abs()
     - Text: num_tokens() for token counting
 
@@ -2020,6 +2021,22 @@ def _handle_functions_jsonb(
                 cast(func.octet_length(cast(expr, Text)), Float) * literal(0.25),
             ),
             Float,
+        )
+
+    # --- Duration Functions ---
+    if operand in ["duration", "duration_seconds"]:
+        return _handle_duration_function_jsonb(
+            operand,
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope,
+            is_vector,
+            project_id,
+            context_id,
+            query_context=query_context,
         )
 
     # --- Date/Time Functions ---
@@ -2688,6 +2705,77 @@ def _handle_date_function_jsonb(
     raise NotImplementedError(
         f"Date function {operand} not fully implemented for JSONB",
     )
+
+
+def _handle_duration_function_jsonb(
+    operand,
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope,
+    is_vector,
+    project_id,
+    context_id,
+    query_context=None,
+):
+    """
+    Handle duration functions (duration, duration_seconds) for JSONB.
+
+    duration(x)  -> casts x to PostgreSQL INTERVAL (timedelta)
+    duration_seconds(x) -> extracts total seconds as float from the interval
+
+    Accepts str, time, or timedelta inputs. Invalid/garbage values
+    (including "", "None", "NULL") safely return NULL via safe_cast_to_interval.
+    """
+    from .core import _build_sql_query
+
+    rhs_dict = filter_dict.get("rhs")
+
+    expr = _build_sql_query(
+        rhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    if isinstance(expr, Subquery):
+        val_col, val_type = _select_value(
+            expr,
+            session,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+        interval_expr = cast_expr(val_col, val_type, "timedelta")
+
+        if operand == "duration_seconds":
+            result_expr = cast(func.extract("epoch", interval_expr), Float)
+            result_type = "float"
+        else:
+            result_expr = interval_expr
+            result_type = "timedelta"
+
+        return build_result_subquery(
+            base_subq=expr,
+            value_expr=result_expr,
+            result_type=result_type,
+            prefix=f"{operand}_result",
+        )
+
+    inferred_type = _infer_expression_type(expr, session, project_id, context_id)
+    interval_expr = cast_expr(expr, inferred_type, "timedelta")
+
+    if operand == "duration_seconds":
+        return cast(func.extract("epoch", interval_expr), Float)
+    return interval_expr
 
 
 def _wrap_expression_as_subquery(
