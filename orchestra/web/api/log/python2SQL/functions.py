@@ -138,7 +138,8 @@ def _handle_functions(
     """
     Handles function-based operations ('len', 'str', 'type', 'round', 'round_timestamp',
     'exists', 'version', 'isNone', 'time', 'date', 'now', 'mean', 'sum', 'var', 'std',
-    'min', 'max', 'median', 'mode', 'embed') in the filter dictionary.
+    'min', 'max', 'median', 'mode', 'embed', 'duration', 'duration_seconds') in the
+    filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.

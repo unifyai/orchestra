@@ -207,7 +207,7 @@ jobs:
         GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.gcp-auth.outputs.credentials_file_path }}
         ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
-        ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
+        ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
         # OpenAI API key (used for embeddings in log search)
         ORCHESTRA_OPENAI_API_KEY: ${{ secrets.ORCHESTRA_OPENAI_API_KEY }}
         # Orchestra-specific configuration

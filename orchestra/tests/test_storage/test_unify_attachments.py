@@ -56,90 +56,6 @@ class TestBucketServiceBucketNaming:
                         == "assistant-call-recordings-production"
                     )
 
-    def test_fallback_to_legacy_env_vars(self):
-        """BucketService falls back to legacy env var names."""
-        from orchestra.services.bucket_service import BucketService
-
-        with patch.dict(
-            os.environ,
-            {
-                "GOOGLE_APPLICATION_CREDENTIALS": "/fake/path",
-                "GCP_PROJECT_ID": "test-project",
-                "ORCHESTRA_GCP_BUCKET_NAME": "test-bucket",
-                "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME": "hired_assistants_images",
-                "ORCHESTRA_GCP_UNIFY_ATTACHMENTS_BUCKET_NAME": "unify-message-attachments",
-                "ORCHESTRA_GCP_RECORDINGS_BUCKET_NAME": "unity-call-recordings",
-            },
-            clear=False,
-        ):
-            # Remove new env vars if set
-            for key in [
-                "ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME",
-                "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
-                "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
-            ]:
-                os.environ.pop(key, None)
-
-            with patch("orchestra.services.bucket_service.service_account"):
-                with patch(
-                    "orchestra.services.bucket_service.storage.Client",
-                ) as mock_client:
-                    mock_client.return_value = MagicMock()
-                    service = BucketService()
-
-                    assert (
-                        service.assistant_media_bucket_name == "hired_assistants_images"
-                    )
-                    assert (
-                        service.message_attachments_bucket_name
-                        == "unify-message-attachments"
-                    )
-                    assert (
-                        service.call_recordings_bucket_name == "unity-call-recordings"
-                    )
-
-    def test_backward_compatible_aliases_exist(self):
-        """Deprecated aliases still point to the correct buckets."""
-        from orchestra.services.bucket_service import BucketService
-
-        with patch.dict(
-            os.environ,
-            {
-                "GOOGLE_APPLICATION_CREDENTIALS": "/fake/path",
-                "GCP_PROJECT_ID": "test-project",
-                "ORCHESTRA_GCP_BUCKET_NAME": "test-bucket",
-            },
-        ):
-            with patch("orchestra.services.bucket_service.service_account"):
-                with patch(
-                    "orchestra.services.bucket_service.storage.Client",
-                ) as mock_client:
-                    mock_client.return_value = MagicMock()
-                    service = BucketService()
-
-                    # Aliases match new names
-                    assert (
-                        service.assistant_images_bucket_name
-                        == service.assistant_media_bucket_name
-                    )
-                    assert (
-                        service.assistant_images_bucket
-                        is service.assistant_media_bucket
-                    )
-                    assert (
-                        service.unify_attachments_bucket_name
-                        == service.message_attachments_bucket_name
-                    )
-                    assert (
-                        service.unify_attachments_bucket
-                        is service.message_attachments_bucket
-                    )
-                    assert (
-                        service.recordings_bucket_name
-                        == service.call_recordings_bucket_name
-                    )
-                    assert service.recordings_bucket is service.call_recordings_bucket
-
     def test_presets_bucket_configured(self):
         """Presets bucket is configured with its own env var."""
         from orchestra.services.bucket_service import BucketService
@@ -500,13 +416,6 @@ class TestBucketServiceAttachmentCleanup:
                     )
                     assert service.message_attachments_bucket is not None
 
-                    # Backward-compat alias
-                    assert (
-                        service.unify_attachments_bucket_name
-                        == service.message_attachments_bucket_name
-                    )
-                    assert service.unify_attachments_bucket is not None
-
 
 # =============================================================================
 # BucketService - delete_all_assistant_data
@@ -769,16 +678,6 @@ class TestStorageEndpointsAttachmentsBucket:
         )
         assert bucket == "assistant-message-attachments"
         assert path == "42/uuid_document.pdf"
-
-    def test_gcs_url_parsing_for_legacy_bucket_name(self):
-        """parse_gcs_url still works with old unify-message-attachments name."""
-        from orchestra.web.api.utils.gcp import parse_gcs_url
-
-        bucket, path = parse_gcs_url(
-            "gs://unify-message-attachments/12345/uuid_document.pdf",
-        )
-        assert bucket == "unify-message-attachments"
-        assert path == "12345/uuid_document.pdf"
 
     def test_gcs_url_parsing_assistant_centric_path(self):
         """parse_gcs_url handles new assistant-centric nested paths."""
