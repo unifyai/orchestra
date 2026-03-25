@@ -10,14 +10,7 @@ from zoneinfo import available_timezones
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import (
-    RECHARGE_TYPE_PROMO,
-    Assistant,
-    BillingAccount,
-    Recharge,
-    RechargeStatus,
-    User,
-)
+from orchestra.db.models.orchestra_models import Assistant, BillingAccount, User
 from orchestra.web.api.utils.http_responses import not_found
 
 if TYPE_CHECKING:
@@ -62,7 +55,7 @@ class UserDAO:
         image: Optional[str] = None,
         timezone: Optional[str] = None,
         phone_number: Optional[str] = None,
-        credits: Optional[float] = None,
+        credits: float = 0,
     ) -> User:
         """
         Create a new user with an associated BillingAccount.
@@ -75,13 +68,9 @@ class UserDAO:
         :param image: Profile image URL.
         :param timezone: IANA timezone string.
         :param phone_number: Phone number (will be validated and formatted).
-        :param credits: Initial credit balance. Defaults to settings.signup_credit_grant.
+        :param credits: Initial credit balance (default 0).
         :return: The created User instance.
         """
-        if credits is None:
-            from orchestra.settings import settings
-
-            credits = settings.signup_credit_grant
         if timezone is not None and timezone not in VALID_TIMEZONES:
             raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
 
@@ -116,17 +105,6 @@ class UserDAO:
             store_prompts=True,
         )
         self.session.add(user)
-
-        if credits > 0:
-            recharge = Recharge(
-                billing_account_id=billing_account.id,
-                type=RECHARGE_TYPE_PROMO,
-                quantity=Decimal(str(credits)),
-                amount_usd=Decimal("0"),
-                status=RechargeStatus.PAID,
-            )
-            self.session.add(recharge)
-
         return user
 
     def filter(

@@ -90,30 +90,41 @@ class CreditGrantClaimResponse(BaseModel):
 
 
 class CreditGrantLinkClaimRequest(BaseModel):
-    """Request to claim a one-time credit grant link."""
+    """Request to claim a credit grant link."""
 
     token: str
 
 
 class CreditGrantLinkCreateRequest(BaseModel):
-    """Request to create a one-time credit grant link."""
+    """Request to create a credit grant link."""
 
     expires_in_days: int = 7
     credit_amount: Optional[float] = None  # Defaults to assistant_creation_cost
+    max_claims: int = 1
+    name: Optional[str] = None
+
+
+class CreditGrantLinkClaimDetail(BaseModel):
+    """A single claim record within a credit grant link."""
+
+    user_id: str
+    organization_id: Optional[int] = None
+    claimed_at: Optional[datetime] = None
+    claimed_by_email: Optional[str] = None
+    claimed_for_org: Optional[str] = None
 
 
 class CreditGrantLinkResponse(BaseModel):
-    """Response containing one-time credit grant link details."""
+    """Response containing credit grant link details."""
 
     id: str
     token: str
+    name: Optional[str] = None
     expires_at: datetime
-    claimed_at: Optional[datetime] = None
-    user_id: Optional[str] = None
-    organization_id: Optional[int] = None
-    claimed_by_email: Optional[str] = None
-    claimed_for_org: Optional[str] = None  # org name, if claimed for an org
-    credit_amount: float  # Amount of credits granted when claimed
+    credit_amount: float
+    max_claims: int = 1
+    claim_count: int = 0
+    claims: list[CreditGrantLinkClaimDetail] = []
 
 
 class OnboardingStatusResponse(BaseModel):
