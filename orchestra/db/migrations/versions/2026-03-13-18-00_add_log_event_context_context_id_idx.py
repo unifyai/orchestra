@@ -24,6 +24,7 @@ def upgrade() -> None:
         "log_event_context",
         ["context_id"],
         unique=False,
+        if_not_exists=True,
     )
 
 
