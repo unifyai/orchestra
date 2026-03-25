@@ -1516,25 +1516,75 @@ class AssistantContactCost(Base):
 
 class OneTimeCreditGrantLink(Base):
     """
-    One-time links that grant credits when claimed.
+    Credit grant links that award credits when claimed.
 
-    Each link can only be claimed once.  Credits are applied to the billing
-    account that corresponds to the claimer's active workspace:
+    A link can be single-use (max_claims=1, the default) or multi-use
+    (max_claims>1) so that it can be shared on social media or with a
+    group of prospective users.
+
+    Credits are applied to the billing account that corresponds to the
+    claimer's active workspace:
     - Personal API key → user's BillingAccount
     - Organization API key → organization's BillingAccount
 
     Guards:
-    - Per-link: a link can only be claimed once (user_id / claimed_at).
-    - Per-user: a user can only benefit from one link ever.
-    - Per-org: an organization can only benefit from one link ever.
+    - Per-link budget: number of claims must stay below max_claims.
+    - Per-user lifetime: a user can only benefit from one link ever.
+    - Per-org lifetime: an organization can only benefit from one link ever.
     """
 
     __tablename__ = "one_time_credit_grant_link"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     token = Column(String, unique=True, index=True, nullable=False)
+    name = Column(
+        String,
+        nullable=True,
+        comment="Optional admin-facing label (e.g. outreach channel or campaign)",
+    )
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
-    user_id = Column(String, ForeignKey("user.id"), nullable=True, index=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    credit_amount = Column(
+        Float,
+        nullable=False,
+        default=10.0,
+        comment="Amount of credits to grant per claim",
+    )
+    max_claims = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+        comment="Maximum number of distinct users/orgs that can redeem this link",
+    )
+
+    claims = relationship(
+        "CreditGrantLinkClaim",
+        back_populates="link",
+        cascade="all, delete-orphan",
+    )
+
+
+class CreditGrantLinkClaim(Base):
+    """
+    Records an individual claim against a credit grant link.
+
+    Each row represents one user (or org) successfully redeeming a link.
+    """
+
+    __tablename__ = "credit_grant_link_claim"
+    __table_args__ = (
+        UniqueConstraint("link_id", "user_id", name="uq_claim_link_user"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    link_id = Column(
+        String,
+        ForeignKey("one_time_credit_grant_link.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(String, ForeignKey("user.id"), nullable=False, index=True)
     organization_id = Column(
         Integer,
         ForeignKey("organization.id"),
@@ -1542,14 +1592,13 @@ class OneTimeCreditGrantLink(Base):
         index=True,
         comment="Organization that received the credits (NULL = personal claim)",
     )
-    claimed_at = Column(TIMESTAMP(timezone=True), nullable=True)
-    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
-    credit_amount = Column(
-        Float,
+    claimed_at = Column(
+        TIMESTAMP(timezone=True),
         nullable=False,
-        default=10.0,
-        comment="Amount of credits to grant when link is claimed",
+        server_default=func.now(),
     )
+
+    link = relationship("OneTimeCreditGrantLink", back_populates="claims")
 
 
 class OnboardingStatus(Base):
