@@ -122,20 +122,22 @@ def get_assistant_hiring_limit(
 
     account_age_days = (now - created_at).days if created_at else 0
 
-    # Get total spend (sum of all recharges)
-    # Note: This is a simplified check. In production, you might want to
-    # cache this value or use a more efficient query.
-    from orchestra.db.dao.user_dao import UserDAO
+    from orchestra.db.models.orchestra_models import (
+        RECHARGE_TYPE_PROMO,
+        Recharge,
+    )
 
-    user_dao = UserDAO(session)
-    user_record = user_dao.get_user_with_id(user_id)
     total_spend = 0.0
-
-    if user_record:
-        # Get recharges to calculate total spend
-        from orchestra.db.models.orchestra_models import Recharge
-
-        recharges = session.query(Recharge).filter(Recharge.user_id == user_id).all()
+    ba_id = session.query(User.billing_account_id).filter(User.id == user_id).scalar()
+    if ba_id is not None:
+        recharges = (
+            session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba_id,
+                Recharge.type != RECHARGE_TYPE_PROMO,
+            )
+            .all()
+        )
         total_spend = sum(
             float(r.quantity) for r in recharges if r.quantity and r.quantity > 0
         )

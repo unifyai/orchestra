@@ -186,18 +186,31 @@ class TestCredits:
         assert math.isclose(updated.json()["credits"], initial_credits - deduct_amount)
 
     @pytest.mark.anyio
-    async def test_deduct_credits_insufficient_funds(self, client: AsyncClient):
+    async def test_deduct_credits_exceeding_balance_goes_negative(
+        self,
+        client: AsyncClient,
+    ):
+        """Deducting more than the balance should succeed and drive the
+        balance negative so that the spending-limit hook blocks further
+        LLM calls."""
         credits_response = await client.get("/v0/credits", headers=HEADERS)
         assert credits_response.status_code == status.HTTP_200_OK
         current_credits = credits_response.json()["credits"]
 
+        overshoot = 10.0
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,
-            json={"amount": current_credits + 1000000},
+            json={"amount": current_credits + overshoot},
         )
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "Insufficient credits" in response.json()["detail"]
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["previous_credits"] == current_credits
+        assert data["deducted"] == current_credits + overshoot
+        assert math.isclose(data["current_credits"], -overshoot)
+
+        updated = await client.get("/v0/credits", headers=HEADERS)
+        assert math.isclose(updated.json()["credits"], -overshoot)
 
     @pytest.mark.anyio
     async def test_deduct_credits_zero_amount(self, client: AsyncClient):
@@ -640,6 +653,136 @@ class TestDeductEndpoint:
             .first()
         )
         assert recharge is None
+
+    @pytest.mark.anyio
+    async def test_deduct_allows_negative_balance(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        """Deducting more than the available balance should succeed and
+        result in a negative credit balance rather than being rejected."""
+        user = await create_test_user(client, "deduct_negative@test.com")
+
+        user_dao = UserDAO(dbsession)
+        user_obj = user_dao.get_user_with_id(user["id"])
+
+        ba = user_obj.billing_account
+        ba.credits = Decimal("0.50")
+        ba.autorecharge = False
+        dbsession.commit()
+
+        response = await client.post(
+            "/v0/credits/deduct",
+            json={"amount": 5.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["previous_credits"] == 0.5
+        assert data["deducted"] == 5.0
+        assert math.isclose(data["current_credits"], -4.5)
+
+        dbsession.expire_all()
+        assert float(user_obj.billing_account.credits) == -4.5
+
+    @pytest.mark.anyio
+    async def test_negative_balance_triggers_auto_recharge(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """When a deduction drives the balance negative and auto-recharge
+        is enabled, auto-recharge should fire and bring the balance back up."""
+        import orchestra.lib.billing
+
+        _cus_with_pm = SimpleNamespace(
+            invoice_settings=SimpleNamespace(
+                default_payment_method=SimpleNamespace(id="pm_test"),
+            ),
+            default_source=None,
+        )
+        mock_stripe_module = SimpleNamespace(
+            InvoiceItem=SimpleNamespace(
+                create=lambda **kw: SimpleNamespace(id="ii_neg_ar"),
+            ),
+            Customer=SimpleNamespace(retrieve=lambda *a, **kw: _cus_with_pm),
+            StripeError=Exception,
+            InvalidRequestError=Exception,
+            error=SimpleNamespace(StripeError=Exception, InvalidRequestError=Exception),
+        )
+        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
+
+        user = await create_test_user(client, "deduct_neg_ar@test.com")
+
+        user_dao = UserDAO(dbsession)
+        user_obj = user_dao.get_user_with_id(user["id"])
+
+        ba = user_obj.billing_account
+        ba.credits = Decimal("2")
+        ba.autorecharge = True
+        ba.autorecharge_threshold = Decimal("10")
+        ba.autorecharge_qty = Decimal("50")
+        ba.stripe_customer_id = "cus_neg_ar"
+        dbsession.commit()
+
+        response = await client.post(
+            "/v0/credits/deduct",
+            json={"amount": 5.0},
+            headers=user["headers"],
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["previous_credits"] == 2.0
+        assert data["deducted"] == 5.0
+        # 2 - 5 = -3, then auto-recharge adds 50 → 47
+        assert data["current_credits"] == 47.0
+
+        dbsession.expire_all()
+        recharge = (
+            dbsession.query(Recharge)
+            .filter_by(billing_account_id=ba.id, type="auto")
+            .first()
+        )
+        assert recharge is not None
+        assert recharge.quantity == Decimal("50")
+
+    @pytest.mark.anyio
+    async def test_residual_balance_deduction_succeeds(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        """Regression test for the Vantage bug: a tiny residual balance
+        (e.g. $0.004) must not prevent deductions from going through.
+        The balance should go negative so the spending-limit hook blocks
+        subsequent calls."""
+        user = await create_test_user(client, "deduct_residual@test.com")
+
+        user_dao = UserDAO(dbsession)
+        user_obj = user_dao.get_user_with_id(user["id"])
+
+        ba = user_obj.billing_account
+        ba.credits = Decimal("0.004128")
+        ba.autorecharge = False
+        dbsession.commit()
+
+        response = await client.post(
+            "/v0/credits/deduct",
+            json={"amount": 0.069576},
+            headers=user["headers"],
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["current_credits"] < 0
+
+        dbsession.expire_all()
+        assert float(user_obj.billing_account.credits) < 0
 
 
 # ============================================================================

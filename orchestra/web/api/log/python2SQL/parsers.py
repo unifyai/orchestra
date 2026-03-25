@@ -99,7 +99,7 @@ def _tokenize(s):
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
             "FUNC",
-            r"(?<!\w)(?:len|exists|version|str(?=\()|isNone|time|date|now|max|min|sum|mean|median|mode|var|std|count)(?!\w)",
+            r"(?<!\w)(?:len|exists|version|str(?=\()|isNone|time|date|now|max|min|sum|mean|median|mode|var|std|count|duration_seconds|duration)(?!\w)",
         ),
         ("BASEFUNC", r"(?<!\w)BASE(?!\w)"),
         # 6) Operators. Note we catch 'not in', 'is not' first:
@@ -637,6 +637,8 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             "mode",
             "count",
             "phash",
+            "duration",
+            "duration_seconds",
         ):
             if func_name == "count":
                 func_name = "len"
