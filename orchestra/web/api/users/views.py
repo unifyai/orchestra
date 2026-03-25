@@ -35,6 +35,7 @@ from orchestra.web.api.users.schema import (
     AccountDeletionResponse,
     CanDeleteAccountResponse,
     CreditGrantClaimResponse,
+    CreditGrantLinkClaimDetail,
     CreditGrantLinkClaimRequest,
     CreditGrantLinkCreateRequest,
     CreditGrantLinkResponse,
@@ -951,7 +952,7 @@ def claim_credit_grant_link(
     session: Session = Depends(get_db_session),
 ):
     """
-    Claim a one-time credit grant link.
+    Claim a credit grant link.
 
     Credits are applied to the billing account that corresponds to the
     caller's active workspace:
@@ -959,9 +960,9 @@ def claim_credit_grant_link(
     - Organization API key → organization's BillingAccount
 
     Guards:
-    - Per-link: each link can only be claimed once.
-    - Per-user: each user can only benefit from one link ever.
-    - Per-org: each organization can only benefit from one link ever.
+    - Per-link budget: number of claims must stay below max_claims.
+    - Per-user lifetime: a user can only benefit from one link ever.
+    - Per-org lifetime: an organization can only benefit from one link ever.
     """
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
     from orchestra.db.dao.organization_dao import OrganizationDAO
@@ -981,15 +982,15 @@ def claim_credit_grant_link(
     if not link:
         raise not_found("Credit grant link token")
 
-    # --- Per-user guard: user can only benefit from one link ever ---
+    # --- Per-user lifetime guard ---
     if token_dao.has_user_claimed_any_link(user_id):
         return CreditGrantClaimResponse(
-            message="You have already benefited from a one-time credit grant link. "
+            message="You have already benefited from a credit grant link. "
             "This link was not consumed, and no new credits were awarded.",
             credits_granted=None,
         )
 
-    # --- Per-org guard: org can only benefit from one link ever ---
+    # --- Per-org lifetime guard ---
     org_instance = None
     if organization_id:
         org_dao = OrganizationDAO(session)
@@ -1000,50 +1001,48 @@ def claim_credit_grant_link(
         if token_dao.has_org_claimed_any_link(organization_id):
             return CreditGrantClaimResponse(
                 message=f"The organization '{org_instance.name}' has already benefited "
-                "from a one-time credit grant link. "
+                "from a credit grant link. "
                 "This link was not consumed, and no new credits were awarded.",
                 credits_granted=None,
             )
 
-    # --- Per-link guard: link can only be claimed once ---
-    if link.user_id is not None:
-        if link.user_id != user_instance.id:
-            raise HTTPException(
-                status_code=400,
-                detail="This link has already been claimed by another user.",
-            )
-        # Edge case: same user, already claimed this specific link
+    # --- Per-link budget guard ---
+    if token_dao.is_fully_redeemed(link):
+        raise HTTPException(
+            status_code=400,
+            detail="This link has reached its redemption limit.",
+        )
+
+    # --- Same user already claimed this specific link ---
+    if token_dao.has_user_claimed_link(link.id, user_instance.id):
         return CreditGrantClaimResponse(
             message="You already claimed this specific link.",
             credits_granted=None,
         )
 
-    # Check if link has expired
+    # --- Expiry check ---
     if link.expires_at < datetime.datetime.now(datetime.timezone.utc):
         raise HTTPException(status_code=400, detail="This link has expired.")
 
     try:
-        # Claim the link
-        claimed_link = token_dao.claim_link(
+        claim = token_dao.claim_link(
             payload.token,
             user_instance.id,
             organization_id=organization_id,
         )
-        if not claimed_link:
+        if not claim:
             session.rollback()
             raise HTTPException(
                 status_code=400,
                 detail="Failed to claim link. It may be invalid, expired, or "
-                "already claimed by another user.",
+                "has reached its redemption limit.",
             )
 
-        # Determine which billing account receives the credits
         credit_amount = float(link.credit_amount)
         credited_to = "personal"
         ba_dao = BillingAccountDAO(session)
 
         if org_instance:
-            # Organization claim — credit the org's billing account
             ba = org_instance.billing_account
             if ba is None:
                 ba = ba_dao.create()
@@ -1052,7 +1051,6 @@ def claim_credit_grant_link(
             ba_dao.apply_credit_grant(ba.id, credit_amount)
             credited_to = org_instance.name
         else:
-            # Personal claim — credit the user's billing account
             ba = user_instance.billing_account
             if ba is None:
                 ba = ba_dao.create()
@@ -1092,14 +1090,17 @@ def create_credit_grant_link(
     session: Session = Depends(get_db_session),
 ):
     """
-    Create a one-time credit grant link.
+    Create a credit grant link.
 
     When a user claims this link, they receive the specified credit_amount.
     If credit_amount is not provided, defaults to assistant_creation_cost.
+    Set max_claims > 1 to allow the link to be shared with multiple users.
     """
     token_dao = OneTimeCreditGrantLinkDAO(session)
     if payload.expires_in_days <= 0:
         raise HTTPException(status_code=400, detail="Expiration days must be positive.")
+    if payload.max_claims < 1:
+        raise HTTPException(status_code=400, detail="max_claims must be at least 1.")
 
     expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
         days=payload.expires_in_days,
@@ -1107,17 +1108,19 @@ def create_credit_grant_link(
     link = token_dao.create(
         expires_at=expires_at,
         credit_amount=payload.credit_amount,
+        max_claims=payload.max_claims,
+        name=payload.name,
     )
     session.commit()
     session.refresh(link)
     return CreditGrantLinkResponse(
         id=link.id,
         token=link.token,
+        name=link.name,
         expires_at=link.expires_at,
-        claimed_at=link.claimed_at,
-        user_id=link.user_id,
-        organization_id=link.organization_id,
         credit_amount=link.credit_amount,
+        max_claims=link.max_claims,
+        claim_count=len(link.claims),
     )
 
 
@@ -1134,48 +1137,68 @@ def list_credit_grant_links(
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ):
-    """List all one-time credit grant links."""
+    """List all credit grant links with their claim details."""
     from orchestra.db.dao.organization_dao import OrganizationDAO
 
     token_dao = OneTimeCreditGrantLinkDAO(session)
     links = token_dao.list_links(limit=limit, offset=offset)
 
-    # Batch-resolve emails for claimed links
-    user_ids = {link.user_id for link in links if link.user_id}
+    # Collect all user_ids and org_ids from claims across all links
+    all_user_ids: set = set()
+    all_org_ids: set = set()
+    for link in links:
+        for claim in link.claims:
+            all_user_ids.add(claim.user_id)
+            if claim.organization_id:
+                all_org_ids.add(claim.organization_id)
+
+    # Batch-resolve emails
     email_map: dict = {}
-    if user_ids:
+    if all_user_ids:
         user_dao = UserDAO(session)
-        for uid in user_ids:
+        for uid in all_user_ids:
             row = user_dao.get_by_id(uid)
             if row:
                 email_map[uid] = row[0].email
 
-    # Batch-resolve org names for org claims
-    org_ids = {link.organization_id for link in links if link.organization_id}
+    # Batch-resolve org names
     org_name_map: dict = {}
-    if org_ids:
+    if all_org_ids:
         org_dao = OrganizationDAO(session)
-        for oid in org_ids:
+        for oid in all_org_ids:
             org = org_dao.get(oid)
             if org:
                 org_name_map[oid] = org.name
 
-    return [
-        CreditGrantLinkResponse(
-            id=link.id,
-            token=link.token,
-            expires_at=link.expires_at,
-            claimed_at=link.claimed_at,
-            user_id=link.user_id,
-            organization_id=link.organization_id,
-            claimed_by_email=email_map.get(link.user_id) if link.user_id else None,
-            claimed_for_org=(
-                org_name_map.get(link.organization_id) if link.organization_id else None
+    result = []
+    for link in links:
+        claim_details = [
+            CreditGrantLinkClaimDetail(
+                user_id=claim.user_id,
+                organization_id=claim.organization_id,
+                claimed_at=claim.claimed_at,
+                claimed_by_email=email_map.get(claim.user_id),
+                claimed_for_org=(
+                    org_name_map.get(claim.organization_id)
+                    if claim.organization_id
+                    else None
+                ),
+            )
+            for claim in link.claims
+        ]
+        result.append(
+            CreditGrantLinkResponse(
+                id=link.id,
+                token=link.token,
+                name=link.name,
+                expires_at=link.expires_at,
+                credit_amount=link.credit_amount,
+                max_claims=link.max_claims,
+                claim_count=len(link.claims),
+                claims=claim_details,
             ),
-            credit_amount=link.credit_amount,
         )
-        for link in links
-    ]
+    return result
 
 
 @admin_router.delete("/credit-grant-link/{link_id}", status_code=204)
