@@ -718,7 +718,7 @@ async def test_multi_claim_link_same_user_cannot_double_claim(client: AsyncClien
 
 @pytest.mark.anyio
 async def test_create_link_validates_max_claims(client: AsyncClient):
-    """max_claims must be at least 1."""
+    """max_claims must be at least 1 when provided; None is allowed (unlimited)."""
     resp = await client.post(
         "/v0/admin/credit-grant-link",
         json={"expires_in_days": 1, "max_claims": 0},
@@ -726,6 +726,15 @@ async def test_create_link_validates_max_claims(client: AsyncClient):
     )
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
     assert "max_claims" in resp.json()["detail"]
+
+    # None is valid (unlimited)
+    resp_none = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 1, "max_claims": None},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp_none.status_code == status.HTTP_201_CREATED
+    assert resp_none.json()["max_claims"] is None
 
 
 @pytest.mark.anyio
@@ -794,3 +803,45 @@ async def test_multi_claim_link_admin_list_shows_all_claims(client: AsyncClient)
     claim_emails = {c["claimed_by_email"] for c in found["claims"]}
     assert "list_multi_a@example.com" in claim_emails
     assert "list_multi_b@example.com" in claim_emails
+
+
+# ===========================================================================
+# Unlimited link tests (max_claims=None)
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_unlimited_link_accepts_many_claims(client: AsyncClient):
+    """
+    A link with max_claims=None can be claimed by an arbitrary number of users
+    without hitting a redemption limit.
+    """
+    users = []
+    for i in range(5):
+        u = await create_test_user(client, f"unlimited_{i}@example.com")
+        users.append(u)
+
+    link_resp = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"expires_in_days": 30, "credit_amount": 10.0, "max_claims": None},
+        headers=ADMIN_HEADERS,
+    )
+    assert link_resp.status_code == status.HTTP_201_CREATED
+    link_data = link_resp.json()
+    assert link_data["max_claims"] is None
+    token = link_data["token"]
+
+    for user in users:
+        resp = await client.post(
+            "/v0/user/claim-credit-grant-link",
+            json={"token": token},
+            headers=user["headers"],
+        )
+        assert resp.status_code == 200
+        assert resp.json()["credits_granted"] == 10.0
+
+    list_resp = await client.get("/v0/admin/credit-grant-link", headers=ADMIN_HEADERS)
+    found = next((l for l in list_resp.json() if l["token"] == token), None)
+    assert found is not None
+    assert found["claim_count"] == 5
+    assert found["max_claims"] is None
