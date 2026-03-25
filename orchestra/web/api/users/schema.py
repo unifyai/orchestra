@@ -100,7 +100,7 @@ class CreditGrantLinkCreateRequest(BaseModel):
 
     expires_in_days: int = 7
     credit_amount: Optional[float] = None  # Defaults to assistant_creation_cost
-    max_claims: int = 1
+    max_claims: Optional[int] = 1  # None = unlimited
     name: Optional[str] = None
 
 
@@ -122,7 +122,7 @@ class CreditGrantLinkResponse(BaseModel):
     name: Optional[str] = None
     expires_at: datetime
     credit_amount: float
-    max_claims: int = 1
+    max_claims: Optional[int] = 1  # None = unlimited
     claim_count: int = 0
     claims: list[CreditGrantLinkClaimDetail] = []
 
