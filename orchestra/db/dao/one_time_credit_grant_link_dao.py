@@ -1,47 +1,41 @@
-"""DAO for managing one-time credit grant links."""
+"""DAO for managing credit grant links and their claims."""
 
 import datetime
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import OneTimeCreditGrantLink
+from orchestra.db.models.orchestra_models import (
+    CreditGrantLinkClaim,
+    OneTimeCreditGrantLink,
+)
 from orchestra.settings import settings
 
 
 class OneTimeCreditGrantLinkDAO:
     """
-    DAO for managing one-time credit grant links.
+    DAO for credit grant links.
 
-    These links grant a specified amount of credits when claimed by a user.
-    Each link can only be claimed once, and each user can only benefit from
-    one link ever.
+    Links can be single-use (max_claims=1) or multi-use (max_claims>1).
+    Individual redemptions are tracked in the ``credit_grant_link_claim`` table.
     """
 
     def __init__(self, session: Session):
         self.session = session
 
-    def generate_token(self) -> str:
+    @staticmethod
+    def generate_token() -> str:
         return str(uuid.uuid4())
 
     def create(
         self,
         expires_at: datetime.datetime,
         credit_amount: Optional[float] = None,
+        max_claims: int = 1,
+        name: Optional[str] = None,
     ) -> OneTimeCreditGrantLink:
-        """
-        Create a new one-time credit grant link.
-
-        Args:
-            expires_at: When the link expires
-            credit_amount: Amount of credits to grant when claimed.
-                          Defaults to settings.assistant_creation_cost.
-
-        Returns:
-            The created link
-        """
         if credit_amount is None:
             credit_amount = float(settings.assistant_creation_cost)
 
@@ -50,67 +44,132 @@ class OneTimeCreditGrantLinkDAO:
             token=token,
             expires_at=expires_at,
             credit_amount=credit_amount,
+            max_claims=max_claims,
+            name=name or None,
         )
         self.session.add(link)
         return link
 
     def get_by_token(self, token: str) -> Optional[OneTimeCreditGrantLink]:
-        """Get a link by its token."""
         query = select(OneTimeCreditGrantLink).where(
             OneTimeCreditGrantLink.token == token,
         )
         return self.session.execute(query).scalar_one_or_none()
 
     def get_by_id(self, link_id: str) -> Optional[OneTimeCreditGrantLink]:
-        """Get a link by its ID."""
         query = select(OneTimeCreditGrantLink).where(
             OneTimeCreditGrantLink.id == link_id,
         )
         return self.session.execute(query).scalar_one_or_none()
+
+    # ------------------------------------------------------------------
+    # Claim operations
+    # ------------------------------------------------------------------
+
+    def get_claim_count(self, link_id: str) -> int:
+        """Return the number of claims for a given link."""
+        query = (
+            select(func.count())
+            .select_from(CreditGrantLinkClaim)
+            .where(CreditGrantLinkClaim.link_id == link_id)
+        )
+        return self.session.execute(query).scalar_one()
+
+    def is_fully_redeemed(self, link: OneTimeCreditGrantLink) -> bool:
+        return self.get_claim_count(link.id) >= link.max_claims
+
+    def has_user_claimed_link(self, link_id: str, user_id: str) -> bool:
+        """Check if a specific user has already claimed a specific link."""
+        query = (
+            select(CreditGrantLinkClaim.id)
+            .where(
+                CreditGrantLinkClaim.link_id == link_id,
+                CreditGrantLinkClaim.user_id == user_id,
+            )
+            .limit(1)
+        )
+        return self.session.execute(query).scalar_one_or_none() is not None
+
+    def has_user_claimed_any_link(self, user_id: str) -> bool:
+        """Check if a user has already claimed any credit grant link."""
+        query = (
+            select(CreditGrantLinkClaim.id)
+            .where(CreditGrantLinkClaim.user_id == user_id)
+            .limit(1)
+        )
+        return self.session.execute(query).scalar_one_or_none() is not None
+
+    def has_org_claimed_any_link(self, organization_id: int) -> bool:
+        """Check if an organization has already received credits from any link."""
+        query = (
+            select(CreditGrantLinkClaim.id)
+            .where(CreditGrantLinkClaim.organization_id == organization_id)
+            .limit(1)
+        )
+        return self.session.execute(query).scalar_one_or_none() is not None
 
     def claim_link(
         self,
         token: str,
         user_id: str,
         organization_id: Optional[int] = None,
-    ) -> Optional[OneTimeCreditGrantLink]:
+    ) -> Optional[CreditGrantLinkClaim]:
         """
-        Claim a link for a user (personal) or an organization.
+        Record a claim against a link.
 
-        Args:
-            token: The link token
-            user_id: ID of the user claiming the link
-            organization_id: If claiming on behalf of an org, the org ID
-
-        Returns:
-            The claimed link, or None if invalid/expired/already claimed
+        Returns the new CreditGrantLinkClaim on success, or None if the link
+        is invalid, expired, or fully redeemed.
         """
         link = self.get_by_token(token)
-        if link:
-            if link.user_id is not None:  # Already claimed
-                return None
-            if link.expires_at < datetime.datetime.now(
-                datetime.timezone.utc,
-            ):  # Expired
-                return None
+        if not link:
+            return None
+        if link.expires_at < datetime.datetime.now(datetime.timezone.utc):
+            return None
+        if self.is_fully_redeemed(link):
+            return None
 
-            link.user_id = user_id
-            link.organization_id = organization_id
-            link.claimed_at = datetime.datetime.now(datetime.timezone.utc)
-            return link
-        return None
+        claim = CreditGrantLinkClaim(
+            link_id=link.id,
+            user_id=user_id,
+            organization_id=organization_id,
+            claimed_at=datetime.datetime.now(datetime.timezone.utc),
+        )
+        self.session.add(claim)
+        return claim
+
+    # ------------------------------------------------------------------
+    # Querying
+    # ------------------------------------------------------------------
 
     def list_links(
         self,
         limit: int = 100,
         offset: int = 0,
     ) -> List[OneTimeCreditGrantLink]:
-        """List all links, ordered by creation date (newest first)."""
         query = (
             select(OneTimeCreditGrantLink)
             .limit(limit)
             .offset(offset)
             .order_by(OneTimeCreditGrantLink.created_at.desc())
+        )
+        return list(self.session.execute(query).scalars().all())
+
+    def get_claims_for_link(
+        self,
+        link_id: str,
+    ) -> List[CreditGrantLinkClaim]:
+        query = (
+            select(CreditGrantLinkClaim)
+            .where(CreditGrantLinkClaim.link_id == link_id)
+            .order_by(CreditGrantLinkClaim.claimed_at.desc())
+        )
+        return list(self.session.execute(query).scalars().all())
+
+    def get_claims_for_user(self, user_id: str) -> List[CreditGrantLinkClaim]:
+        query = (
+            select(CreditGrantLinkClaim)
+            .where(CreditGrantLinkClaim.user_id == user_id)
+            .order_by(CreditGrantLinkClaim.claimed_at.desc())
         )
         return list(self.session.execute(query).scalars().all())
 
@@ -122,44 +181,19 @@ class OneTimeCreditGrantLinkDAO:
             return True
         return False
 
-    def has_user_claimed_any_link(self, user_id: str) -> bool:
-        """Check if a user has already claimed any credit grant link."""
-        query = (
-            select(OneTimeCreditGrantLink.id)
-            .where(
-                OneTimeCreditGrantLink.user_id == user_id,
-            )
-            .limit(1)
-        )
-        return self.session.execute(query).scalar_one_or_none() is not None
-
-    def has_org_claimed_any_link(self, organization_id: int) -> bool:
-        """Check if an organization has already received credits from any link."""
-        query = (
-            select(OneTimeCreditGrantLink.id)
-            .where(
-                OneTimeCreditGrantLink.organization_id == organization_id,
-            )
-            .limit(1)
-        )
-        return self.session.execute(query).scalar_one_or_none() is not None
-
-    def get_links_for_user(self, user_id: str) -> List[OneTimeCreditGrantLink]:
-        """Get all links claimed by a specific user."""
-        query = (
-            select(OneTimeCreditGrantLink)
-            .where(OneTimeCreditGrantLink.user_id == user_id)
-            .order_by(OneTimeCreditGrantLink.claimed_at.desc())
-        )
-        return list(self.session.execute(query).scalars().all())
-
     def delete_expired_links(self) -> int:
-        """Delete expired and unclaimed links. Returns the number deleted."""
+        """Delete expired links that have no claims. Returns the number deleted."""
         now_utc = datetime.datetime.now(datetime.timezone.utc)
+        has_claims = (
+            select(CreditGrantLinkClaim.id)
+            .where(CreditGrantLinkClaim.link_id == OneTimeCreditGrantLink.id)
+            .correlate(OneTimeCreditGrantLink)
+            .exists()
+        )
         stmt = (
             delete(OneTimeCreditGrantLink)
             .where(OneTimeCreditGrantLink.expires_at < now_utc)
-            .where(OneTimeCreditGrantLink.user_id.is_(None))
+            .where(~has_claims)
         )
         result = self.session.execute(stmt)
         return result.rowcount
