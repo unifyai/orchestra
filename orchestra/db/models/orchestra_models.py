@@ -1518,9 +1518,9 @@ class OneTimeCreditGrantLink(Base):
     """
     Credit grant links that award credits when claimed.
 
-    A link can be single-use (max_claims=1, the default) or multi-use
-    (max_claims>1) so that it can be shared on social media or with a
-    group of prospective users.
+    A link can be single-use (max_claims=1, the default), multi-use
+    (max_claims>1), or unlimited (max_claims=NULL) so that it can be
+    shared on social media or with a group of prospective users.
 
     Credits are applied to the billing account that corresponds to the
     claimer's active workspace:
@@ -1528,7 +1528,7 @@ class OneTimeCreditGrantLink(Base):
     - Organization API key → organization's BillingAccount
 
     Guards:
-    - Per-link budget: number of claims must stay below max_claims.
+    - Per-link budget: number of claims must stay below max_claims (if set).
     - Per-user lifetime: a user can only benefit from one link ever.
     - Per-org lifetime: an organization can only benefit from one link ever.
     """
@@ -1552,10 +1552,10 @@ class OneTimeCreditGrantLink(Base):
     )
     max_claims = Column(
         Integer,
-        nullable=False,
+        nullable=True,
         default=1,
         server_default=text("1"),
-        comment="Maximum number of distinct users/orgs that can redeem this link",
+        comment="Maximum number of claims allowed (NULL = unlimited)",
     )
 
     claims = relationship(
