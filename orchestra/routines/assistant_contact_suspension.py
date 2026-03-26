@@ -268,9 +268,21 @@ async def _suspend_in_session(session: Session) -> SuspensionResult:
             result.deletion_emails_sent,
         )
 
-    except Exception:
+    except Exception as _susp_err:
         session.rollback()
         logger.exception("Suspension routine failed – rolled back.")
+        try:
+            from orchestra.routines.billing_notifications import (
+                notify_billing_event_failure,
+            )
+
+            notify_billing_event_failure(
+                "contact_suspension",
+                error=str(_susp_err),
+                context_id="suspension_routine",
+            )
+        except Exception:
+            logger.warning("Failed to send billing event notification", exc_info=True)
         raise
 
     return result
@@ -395,6 +407,22 @@ async def _process_ba_grace_contacts(
             )
             logger.error(error_msg, exc_info=True)
             ar.errors.append(error_msg)
+            try:
+                from orchestra.routines.billing_notifications import (
+                    notify_billing_event_failure,
+                )
+
+                notify_billing_event_failure(
+                    "contact_deprovisioning",
+                    error=str(e),
+                    context_id=f"contact_{contact.id}",
+                    billing_account_id=ba.id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to send billing event notification",
+                    exc_info=True,
+                )
 
     # 4. Reawaken affected assistants
     for aid in assistant_ids_to_reawaken:
