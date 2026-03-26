@@ -271,7 +271,7 @@ class Settings(BaseSettings):
 
     # Signup credit grant (free credits for new users)
     signup_credit_grant: float = float(
-        os.environ.get("SIGNUP_CREDIT_GRANT", "25"),
+        os.environ.get("SIGNUP_CREDIT_GRANT", "50"),
     )
 
     # Assistant creation
