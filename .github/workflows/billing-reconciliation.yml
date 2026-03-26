@@ -1,0 +1,109 @@
+name: Billing Reconciliation
+
+on:
+  schedule:
+    # Daily at 6:00 AM UTC
+  - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      auto_fix:
+        description: 'Auto-fix tier (none/safe/moderate/all)'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+        - 'none'
+        - 'safe'
+        - 'moderate'
+        - 'all'
+      lookback_days:
+        description: 'How many days back to scan Stripe invoices'
+        required: false
+        default: '30'
+
+jobs:
+  reconcile_production:
+    name: Reconcile Production (live Stripe)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run billing reconciliation
+      run: |
+        AUTO_FIX="${{ github.event.inputs.auto_fix || 'none' }}"
+        LOOKBACK="${{ github.event.inputs.lookback_days || '30' }}"
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/billing/reconcile?auto_fix=${AUTO_FIX}&lookback_days=${LOOKBACK}" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Billing reconciliation failed with status $http_code"
+          exit 1
+        fi
+
+        # Parse results
+        stripe_mode=$(echo "$body" | jq -r '.stripe_mode // "unknown"')
+        total=$(echo "$body" | jq -r '.total_discrepancies // 0')
+        critical=$(echo "$body" | jq -r '.critical // 0')
+        warnings=$(echo "$body" | jq -r '.warnings // 0')
+        auto_fixed=$(echo "$body" | jq -r '.auto_fixed // 0')
+        accounts=$(echo "$body" | jq -r '.accounts_checked // 0')
+        recharges=$(echo "$body" | jq -r '.recharges_checked // 0')
+        invoices=$(echo "$body" | jq -r '.invoices_checked // 0')
+
+        echo "::notice::Stripe mode: $stripe_mode | Auto-fix tier: $AUTO_FIX"
+        echo "::notice::Checked: $accounts accounts, $recharges recharges, $invoices invoices"
+        echo "::notice::Discrepancies: $total total ($critical critical, $warnings warnings, $auto_fixed auto-fixed)"
+
+        if [ "$critical" -gt 0 ]; then
+          echo "::error::$critical CRITICAL discrepancies found — manual review required"
+          echo "$body" | jq '.discrepancies[] | select(.severity == "critical")'
+          exit 1
+        fi
+
+  reconcile_staging:
+    name: Reconcile Staging (test Stripe)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run billing reconciliation
+      run: |
+        AUTO_FIX="${{ github.event.inputs.auto_fix || 'none' }}"
+        LOOKBACK="${{ github.event.inputs.lookback_days || '30' }}"
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.staging.internal.saas.unify.ai/v0/admin/billing/reconcile?auto_fix=${AUTO_FIX}&lookback_days=${LOOKBACK}" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Billing reconciliation (staging) failed with status $http_code"
+          exit 1
+        fi
+
+        # Parse results
+        stripe_mode=$(echo "$body" | jq -r '.stripe_mode // "unknown"')
+        total=$(echo "$body" | jq -r '.total_discrepancies // 0')
+        critical=$(echo "$body" | jq -r '.critical // 0')
+        warnings=$(echo "$body" | jq -r '.warnings // 0')
+        accounts=$(echo "$body" | jq -r '.accounts_checked // 0')
+
+        echo "::notice::Stripe mode: $stripe_mode"
+        echo "::notice::Checked: $accounts accounts"
+        echo "::notice::Discrepancies: $total total ($critical critical, $warnings warnings)"
+
+        if [ "$critical" -gt 0 ]; then
+          echo "::warning::$critical CRITICAL discrepancies found in staging"
+          echo "$body" | jq '.discrepancies[] | select(.severity == "critical")'
+        fi

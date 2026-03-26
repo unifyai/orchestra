@@ -711,6 +711,16 @@ def trigger_assistant_contact_levy(
         }
 
     except Exception as e:
+        try:
+            from orchestra.routines.billing_notifications import notify_failure
+
+            notify_failure("Contact Levy", str(e))
+        except Exception:
+            import logging
+
+            logger = logging.getLogger(__name__)
+
+            logger.warning("Failed to send failure notification", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Resource levy failed: {str(e)}",
@@ -755,9 +765,168 @@ async def trigger_assistant_contact_suspension(
         }
 
     except Exception as e:
+        try:
+            from orchestra.routines.billing_notifications import notify_failure
+
+            notify_failure("Contact Suspension", str(e))
+        except Exception:
+            import logging
+
+            logger = logging.getLogger(__name__)
+
+            logger.warning("Failed to send failure notification", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Resource suspension failed: {str(e)}",
+        )
+
+
+@router.post("/billing/reconcile")
+def trigger_billing_reconciliation(
+    auto_fix: str = "none",
+    lookback_days: int = 30,
+    stale_hours: int = 48,
+    notify: bool = True,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Run Stripe ↔ DB billing reconciliation.
+
+    Compares the authoritative Stripe state with the Orchestra database
+    and reports discrepancies.  Uses the configured ``STRIPE_SECRET_KEY``
+    — staging instances reconcile against Stripe test mode, production
+    against live mode.
+
+    Args:
+        auto_fix: Fix tier — ``"none"`` (default), ``"safe"``,
+            ``"moderate"``, or ``"all"``.  See module docstring for the
+            mapping of checks to tiers.
+        lookback_days: How far back to scan Stripe invoices (default 30).
+        stale_hours: Recharges pending longer than this are checked
+            against Stripe (default 48).
+        notify: If True, send a Discord notification with the results.
+
+    Designed to be called by Cloud Scheduler / GitHub Actions daily.
+    """
+    try:
+        from orchestra.routines.billing_reconciliation import reconcile
+
+        result = reconcile(
+            session=session,
+            auto_fix=auto_fix,
+            lookback_days=lookback_days,
+            stale_hours=stale_hours,
+        )
+
+        if notify:
+            try:
+                from orchestra.routines.billing_notifications import (
+                    notify_reconciliation,
+                )
+
+                notify_reconciliation(result)
+            except Exception:
+                import logging
+
+                logger = logging.getLogger(__name__)
+
+                logger.warning(
+                    "Failed to send reconciliation Discord notification",
+                    exc_info=True,
+                )
+
+        return {
+            "status": "success",
+            **result.to_dict(),
+        }
+
+    except RuntimeError as e:
+        if "Stripe is not configured" in str(e):
+            return {
+                "status": "skipped",
+                "message": "Stripe is not configured on this server.",
+            }
+        if notify:
+            try:
+                from orchestra.routines.billing_notifications import notify_failure
+
+                notify_failure("Reconciliation", str(e))
+            except Exception:
+                logger.warning("Failed to send failure notification", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Billing reconciliation failed: {str(e)}",
+        )
+    except Exception as e:
+        if notify:
+            try:
+                from orchestra.routines.billing_notifications import notify_failure
+
+                notify_failure("Reconciliation", str(e))
+            except Exception:
+                logger.warning("Failed to send failure notification", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Billing reconciliation failed: {str(e)}",
+        )
+
+
+@router.post("/billing/health")
+def trigger_billing_health(
+    lookback_hours: int = 24,
+    notify: bool = True,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Run billing health snapshot.
+
+    Computes aggregate billing metrics from the database — account
+    status distribution, recharge activity, at-risk accounts, and
+    operational health indicators.  DB-only, no Stripe API calls.
+
+    Args:
+        lookback_hours: Time window for recharge activity (default 24).
+        notify: If True, send a Discord notification with the results.
+    """
+    try:
+        from orchestra.routines.billing_health import check_health
+
+        report = check_health(
+            session=session,
+            lookback_hours=lookback_hours,
+        )
+
+        if notify:
+            try:
+                from orchestra.routines.billing_notifications import notify_health
+
+                notify_health(report)
+            except Exception:
+                logger.warning(
+                    "Failed to send health Discord notification",
+                    exc_info=True,
+                )
+
+        return {
+            "status": "success",
+            **report.to_dict(),
+        }
+
+    except Exception as e:
+        if notify:
+            try:
+                from orchestra.routines.billing_notifications import notify_failure
+
+                notify_failure("Health Check", str(e))
+            except Exception:
+                import logging
+
+                logger = logging.getLogger(__name__)
+
+                logger.warning("Failed to send failure notification", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Billing health check failed: {str(e)}",
         )
 
 
