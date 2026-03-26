@@ -316,7 +316,8 @@ def create_recharge_model(
     at = datetime.now(timezone.utc)
 
     # Credit the billing account
-    ba.credits += Decimal(str(new_recharge_object.quantity))
+    ba_dao = BillingAccountDAO(session)
+    ba_dao.add_credits(ba.id, float(new_recharge_object.quantity))
 
     # Calculate amount_usd and invoice_group
     amount_usd = new_recharge_object.quantity
