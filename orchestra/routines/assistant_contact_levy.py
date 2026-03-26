@@ -306,7 +306,7 @@ def _levy_in_session(
                 if account_result.marked_past_due:
                     _send_day1_notification(session, account_result)
 
-            except Exception:
+            except Exception as _levy_err:
                 session.rollback()
                 result.accounts_failed += 1
                 logger.exception(
@@ -316,6 +316,22 @@ def _levy_in_session(
                         "billing_month": billing_month,
                     },
                 )
+                try:
+                    from orchestra.routines.billing_notifications import (
+                        notify_billing_event_failure,
+                    )
+
+                    notify_billing_event_failure(
+                        "contact_levy",
+                        error=str(_levy_err),
+                        context_id=f"ba_{ba_id}_{billing_month}",
+                        billing_account_id=ba_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to send billing event notification",
+                        exc_info=True,
+                    )
 
         logger.info(
             {

@@ -371,6 +371,21 @@ def process_checkout_session_event(
                 },
             )
             session.rollback()
+            try:
+                from orchestra.routines.billing_notifications import (
+                    notify_billing_event_failure,
+                )
+
+                notify_billing_event_failure(
+                    "webhook_checkout",
+                    error=str(e),
+                    context_id=event_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to send billing event notification",
+                    exc_info=True,
+                )
             raise
 
     session.commit()
@@ -703,6 +718,21 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                 },
             )
             session.rollback()
+            try:
+                from orchestra.routines.billing_notifications import (
+                    notify_billing_event_failure,
+                )
+
+                notify_billing_event_failure(
+                    "webhook_refund",
+                    error=str(e),
+                    context_id=event_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to send billing event notification",
+                    exc_info=True,
+                )
             raise
 
         pi_metadata = payment_intent.get("metadata", {})
