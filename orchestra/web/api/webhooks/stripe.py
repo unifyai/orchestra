@@ -558,22 +558,21 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             #  • The recharges record exactly how many credits were loaned.
             #  • Deducting them may push the balance negative, which is
             #    the desired signal for PAST_DUE / eventual SUSPENDED.
-            from decimal import Decimal as _Decimal
+            ba_dao = BillingAccountDAO(session)
 
             for ba_id in billing_account_ids:
                 unpaid = sum(
                     r.quantity for r in recharges if r.billing_account_id == ba_id
                 )
                 if unpaid:
-                    ba = session.query(BillingAccount).filter_by(id=ba_id).first()
-                    if ba:
-                        ba.credits = ba.credits - _Decimal(str(unpaid))
+                    new_balance = ba_dao.deduct_credits(ba_id, float(unpaid))
+                    if new_balance is not None:
                         logger.info(
                             {
                                 "message": "Voided unpaid auto-recharge credits",
                                 "billing_account_id": ba_id,
                                 "credits_voided": float(unpaid),
-                                "new_balance": float(ba.credits),
+                                "new_balance": float(new_balance),
                             },
                         )
 
@@ -963,9 +962,8 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     )
 
             if ba and credits_original > 0:
-                from decimal import Decimal
-
-                ba.credits = ba.credits + Decimal(str(credits_original))
+                ba_dao = BillingAccountDAO(session)
+                ba_dao.add_credits(ba.id, credits_original)
 
                 if invoice_id:
                     session.query(Recharge).filter_by(

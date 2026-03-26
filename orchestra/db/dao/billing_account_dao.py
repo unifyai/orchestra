@@ -183,16 +183,27 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
+        Balance transitions are tracked automatically — a billing event
+        is published after the session commits if the balance crossed
+        zero in either direction.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to add.
         :return: New credit balance, or None if not found.
         """
+        from orchestra.lib.billing_events import (
+            track_balance_after,
+            track_balance_before,
+        )
+
         ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
+        track_balance_before(self.session, billing_account_id, ba.credits)
         new_credits = ba.credits + decimal.Decimal(str(quantity))
         ba.credits = new_credits
+        track_balance_after(self.session, billing_account_id, new_credits)
         return new_credits
 
     def deduct_credits(
@@ -206,14 +217,24 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
+        Balance transitions are tracked automatically — a billing event
+        is published after the session commits if the balance crossed
+        zero in either direction.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to deduct.
         :return: New credit balance, or None if not found.
         """
+        from orchestra.lib.billing_events import (
+            track_balance_after,
+            track_balance_before,
+        )
+
         ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
+        track_balance_before(self.session, billing_account_id, ba.credits)
         new_credits = ba.credits - decimal.Decimal(str(quantity))
 
         if new_credits < 0:
@@ -223,6 +244,7 @@ class BillingAccountDAO:
             )
 
         ba.credits = new_credits
+        track_balance_after(self.session, billing_account_id, new_credits)
         return new_credits
 
     # =========================================================================
@@ -467,18 +489,29 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock so the credit addition is
         atomic with respect to concurrent deductions.
 
+        Balance transitions are tracked automatically — a billing event
+        is published after the session commits if the balance crossed
+        zero in either direction.
+
         :param billing_account_id: BillingAccount ID.
         :param credit_amount: Amount of credits to grant.
         :return: The created Recharge record.
         :raises ValueError: If the billing account is not found.
         """
+        from orchestra.lib.billing_events import (
+            track_balance_after,
+            track_balance_before,
+        )
+
         ba = self.get_for_update(billing_account_id)
         if ba is None:
             raise ValueError(
                 f"BillingAccount {billing_account_id} not found.",
             )
 
+        track_balance_before(self.session, billing_account_id, ba.credits)
         ba.credits = ba.credits + decimal.Decimal(str(credit_amount))
+        track_balance_after(self.session, billing_account_id, ba.credits)
 
         recharge = Recharge(
             billing_account_id=billing_account_id,
