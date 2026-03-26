@@ -301,6 +301,19 @@ def queue_auto_recharge(
             entity_label,
             e,
         )
+        try:
+            from orchestra.routines.billing_notifications import (
+                notify_billing_event_failure,
+            )
+
+            notify_billing_event_failure(
+                "auto_recharge",
+                error=str(e),
+                context_id=f"ba_{billing_account.id}",
+                billing_account_id=billing_account.id,
+            )
+        except Exception:
+            logger.warning("Failed to send billing event notification", exc_info=True)
         return False
 
     except Exception as e:
@@ -311,6 +324,19 @@ def queue_auto_recharge(
             entity_label,
             e,
         )
+        try:
+            from orchestra.routines.billing_notifications import (
+                notify_billing_event_failure,
+            )
+
+            notify_billing_event_failure(
+                "auto_recharge",
+                error=str(e),
+                context_id=f"ba_{billing_account.id}",
+                billing_account_id=billing_account.id,
+            )
+        except Exception:
+            logger.warning("Failed to send billing event notification", exc_info=True)
         return False
 
     # Step 2: Record the recharge in the DB and grant credits.
@@ -354,6 +380,19 @@ def queue_auto_recharge(
                 invoice_item.id,
                 cleanup_err,
             )
+        try:
+            from orchestra.routines.billing_notifications import (
+                notify_billing_event_failure,
+            )
+
+            notify_billing_event_failure(
+                "auto_recharge_db",
+                error=str(e),
+                context_id=f"ba_{billing_account.id}",
+                billing_account_id=billing_account.id,
+            )
+        except Exception:
+            logger.warning("Failed to send billing event notification", exc_info=True)
         return False
 
     return True
