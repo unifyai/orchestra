@@ -90,8 +90,14 @@ class TestAccountSnapshot:
 
         report = check_health(session=dbsession)
         assert report.account_snapshot.at_risk >= 2
+        assert report.account_snapshot.zero_balance >= 1
+        assert report.account_snapshot.negative_balance >= 1
+        assert report.account_snapshot.at_risk == (
+            report.account_snapshot.zero_balance
+            + report.account_snapshot.negative_balance
+        )
 
-    def test_total_credits(self, dbsession: Session):
+    def test_total_balance(self, dbsession: Session):
         from orchestra.routines.billing_health import check_health
 
         ba1 = make_billing_account(dbsession, credits=100)
@@ -101,7 +107,7 @@ class TestAccountSnapshot:
         dbsession.commit()
 
         report = check_health(session=dbsession)
-        assert report.account_snapshot.total_credits >= 150
+        assert report.account_snapshot.total_balance >= 150
 
     def test_autorecharge_counts(self, dbsession: Session):
         from orchestra.routines.billing_health import check_health
@@ -198,6 +204,63 @@ class TestRechargeActivity:
         # The old recharge should NOT contribute; we can't assert exact
         # counts due to other test data, so just verify the method runs
         assert report.recharge_activity is not None
+
+    def test_paid_by_type_breakdown(self, dbsession: Session):
+        """Paid recharges are broken down by type (payment, auto, promo)."""
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_bytype",
+            credits=200,
+        )
+        now = _dt.datetime.now(_dt.timezone.utc)
+        for rtype, amount in [("payment", 50), ("auto", 30), ("promo", 20)]:
+            dbsession.add(
+                Recharge(
+                    billing_account_id=ba.id,
+                    quantity=Decimal(str(amount)),
+                    amount_usd=Decimal(str(amount)),
+                    status=RechargeStatus.PAID,
+                    type=rtype,
+                    at=now - _dt.timedelta(hours=1),
+                ),
+            )
+        dbsession.commit()
+
+        report = check_health(session=dbsession, lookback_hours=24)
+        by_type = report.recharge_activity.paid_by_type
+        assert "payment" in by_type
+        assert by_type["payment"]["count"] >= 1
+        assert by_type["payment"]["usd"] >= 50.0
+        assert "auto" in by_type
+        assert "promo" in by_type
+
+    def test_paid_by_type_in_serialization(self, dbsession: Session):
+        """paid_by_type appears in the to_dict() output."""
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_btype_ser",
+            credits=100,
+        )
+        dbsession.add(
+            Recharge(
+                billing_account_id=ba.id,
+                quantity=Decimal("10"),
+                amount_usd=Decimal("10"),
+                status=RechargeStatus.PAID,
+                type="payment",
+                at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1),
+            ),
+        )
+        dbsession.commit()
+
+        report = check_health(session=dbsession, lookback_hours=24)
+        d = report.recharge_activity.to_dict()
+        assert "paid_by_type" in d
+        assert "payment" in d["paid_by_type"]
 
 
 # ============================================================================
@@ -343,7 +406,9 @@ class TestReportSerialisation:
         assert "suspended" in snap
         assert "total" in snap
         assert "at_risk" in snap
-        assert "total_credits" in snap
+        assert "zero_balance" in snap
+        assert "negative_balance" in snap
+        assert "total_balance" in snap
 
         activity = d["recharge_activity"]
         assert "paid" in activity
