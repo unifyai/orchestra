@@ -314,6 +314,29 @@ def _format_health_embed(report: HealthReport, env_tag: str) -> dict:
             },
         )
 
+    inv = report.invoice_snapshot
+    if inv.total > 0:
+        fields.append(
+            {
+                "name": "Invoices (all time)",
+                "value": (
+                    f"✅ **{inv.paid}** paid "
+                    f"(${float(inv.paid_usd):,.2f})\n"
+                    f"⏳ **{inv.pending}** pending "
+                    f"(${float(inv.pending_usd):,.2f})\n"
+                    f"❌ **{inv.failed}** failed "
+                    f"(${float(inv.failed_usd):,.2f})"
+                    + (
+                        f"\n⚖️ **{inv.uncollectible}** disputed "
+                        f"(${float(inv.uncollectible_usd):,.2f})"
+                        if inv.uncollectible > 0
+                        else ""
+                    )
+                ),
+                "inline": False,
+            },
+        )
+
     contacts = report.contact_snapshot
     if contacts.active > 0 or contacts.grace_period > 0:
         issues = []
