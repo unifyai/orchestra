@@ -5,10 +5,11 @@ Covers:
 1.  Account snapshot (status distribution, at-risk, autorecharge adoption)
 2.  Recharge activity (paid/failed/pending counts and USD)
 3.  Stuck recharge detection (pending > 24 h)
-4.  Alert evaluation (at-risk threshold, auto-recharge failure rate)
-5.  Health report serialisation
-6.  Admin endpoint (POST /v0/admin/billing/health)
-7.  Contact provisioning health (stale billing, stuck grace, active-on-suspended, cost mismatch)
+4.  Invoice snapshot (lifetime invoice breakdown by status)
+5.  Alert evaluation (at-risk threshold, auto-recharge failure rate)
+6.  Health report serialisation
+7.  Admin endpoint (POST /v0/admin/billing/health)
+8.  Contact provisioning health (stale billing, stuck grace, active-on-suspended, cost mismatch)
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ class TestAccountSnapshot:
     def test_status_counts(self, dbsession: Session):
         from orchestra.routines.billing_health import check_health
 
-        for status in ("ACTIVE", "ACTIVE", "PAST_DUE", "SUSPENDED"):
+        for status in ("ACTIVE", "ACTIVE", "ACTIVE", "SUSPENDED"):
             ba = make_billing_account(
                 dbsession,
                 credits=10,
@@ -56,8 +57,8 @@ class TestAccountSnapshot:
         report = check_health(session=dbsession)
         snap = report.account_snapshot
 
-        assert snap.active >= 2
-        assert snap.past_due >= 1
+        assert snap.active >= 3
+        assert snap.past_due == 0
         assert snap.suspended >= 1
         assert snap.total >= 4
 
@@ -90,8 +91,14 @@ class TestAccountSnapshot:
 
         report = check_health(session=dbsession)
         assert report.account_snapshot.at_risk >= 2
+        assert report.account_snapshot.zero_balance >= 1
+        assert report.account_snapshot.negative_balance >= 1
+        assert report.account_snapshot.at_risk == (
+            report.account_snapshot.zero_balance
+            + report.account_snapshot.negative_balance
+        )
 
-    def test_total_credits(self, dbsession: Session):
+    def test_total_balance(self, dbsession: Session):
         from orchestra.routines.billing_health import check_health
 
         ba1 = make_billing_account(dbsession, credits=100)
@@ -101,7 +108,7 @@ class TestAccountSnapshot:
         dbsession.commit()
 
         report = check_health(session=dbsession)
-        assert report.account_snapshot.total_credits >= 150
+        assert report.account_snapshot.total_balance >= 150
 
     def test_autorecharge_counts(self, dbsession: Session):
         from orchestra.routines.billing_health import check_health
@@ -199,6 +206,63 @@ class TestRechargeActivity:
         # counts due to other test data, so just verify the method runs
         assert report.recharge_activity is not None
 
+    def test_paid_by_type_breakdown(self, dbsession: Session):
+        """Paid recharges are broken down by type (payment, auto, promo)."""
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_bytype",
+            credits=200,
+        )
+        now = _dt.datetime.now(_dt.timezone.utc)
+        for rtype, amount in [("payment", 50), ("auto", 30), ("promo", 20)]:
+            dbsession.add(
+                Recharge(
+                    billing_account_id=ba.id,
+                    quantity=Decimal(str(amount)),
+                    amount_usd=Decimal(str(amount)),
+                    status=RechargeStatus.PAID,
+                    type=rtype,
+                    at=now - _dt.timedelta(hours=1),
+                ),
+            )
+        dbsession.commit()
+
+        report = check_health(session=dbsession, lookback_hours=24)
+        by_type = report.recharge_activity.paid_by_type
+        assert "payment" in by_type
+        assert by_type["payment"]["count"] >= 1
+        assert by_type["payment"]["usd"] >= 50.0
+        assert "auto" in by_type
+        assert "promo" in by_type
+
+    def test_paid_by_type_in_serialization(self, dbsession: Session):
+        """paid_by_type appears in the to_dict() output."""
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_btype_ser",
+            credits=100,
+        )
+        dbsession.add(
+            Recharge(
+                billing_account_id=ba.id,
+                quantity=Decimal("10"),
+                amount_usd=Decimal("10"),
+                status=RechargeStatus.PAID,
+                type="payment",
+                at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1),
+            ),
+        )
+        dbsession.commit()
+
+        report = check_health(session=dbsession, lookback_hours=24)
+        d = report.recharge_activity.to_dict()
+        assert "paid_by_type" in d
+        assert "payment" in d["paid_by_type"]
+
 
 # ============================================================================
 # Stuck Recharges
@@ -253,6 +317,163 @@ class TestStuckRecharges:
         report = check_health(session=dbsession)
         # Can't assert exact 0 due to other test data, but method should work
         assert report.stuck_recharges >= 0
+
+
+# ============================================================================
+# Invoice Snapshot
+# ============================================================================
+
+
+class TestInvoiceSnapshot:
+    """Lifetime invoice-backed recharge breakdown."""
+
+    def test_paid_invoices_counted(self, dbsession: Session):
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_inv_paid",
+            credits=100,
+        )
+        dbsession.add(
+            Recharge(
+                billing_account_id=ba.id,
+                quantity=Decimal("50"),
+                amount_usd=Decimal("50"),
+                status=RechargeStatus.PAID,
+                type="auto",
+                stripe_invoice_id="inv_paid_001",
+                at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=10),
+            ),
+        )
+        dbsession.commit()
+
+        report = check_health(session=dbsession)
+        assert report.invoice_snapshot.paid >= 1
+        assert report.invoice_snapshot.paid_usd >= Decimal("50")
+
+    def test_pending_invoices_counted(self, dbsession: Session):
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_inv_pend",
+            credits=100,
+        )
+        dbsession.add(
+            Recharge(
+                billing_account_id=ba.id,
+                quantity=Decimal("30"),
+                amount_usd=Decimal("30"),
+                status=RechargeStatus.INVOICE_CREATED,
+                type="auto",
+                stripe_invoice_id="inv_pend_001",
+                at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=5),
+            ),
+        )
+        dbsession.commit()
+
+        report = check_health(session=dbsession)
+        assert report.invoice_snapshot.pending >= 1
+        assert report.invoice_snapshot.pending_usd >= Decimal("30")
+
+    def test_failed_invoices_counted(self, dbsession: Session):
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_inv_fail",
+            credits=0,
+        )
+        dbsession.add(
+            Recharge(
+                billing_account_id=ba.id,
+                quantity=Decimal("20"),
+                amount_usd=Decimal("20"),
+                status=RechargeStatus.FAILED,
+                type="auto",
+                stripe_invoice_id="inv_fail_001",
+                at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=3),
+            ),
+        )
+        dbsession.commit()
+
+        report = check_health(session=dbsession)
+        assert report.invoice_snapshot.failed >= 1
+        assert report.invoice_snapshot.failed_usd >= Decimal("20")
+
+    def test_disputed_invoices_counted(self, dbsession: Session):
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_inv_disp",
+            credits=0,
+        )
+        dbsession.add(
+            Recharge(
+                billing_account_id=ba.id,
+                quantity=Decimal("40"),
+                amount_usd=Decimal("40"),
+                status=RechargeStatus.DISPUTED,
+                type="payment",
+                stripe_invoice_id="inv_disp_001",
+                at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=5),
+            ),
+        )
+        dbsession.commit()
+
+        report = check_health(session=dbsession)
+        assert report.invoice_snapshot.uncollectible >= 1
+        assert report.invoice_snapshot.uncollectible_usd >= Decimal("40")
+
+    def test_recharges_without_invoice_excluded(self, dbsession: Session):
+        """Checkout-only recharges (no stripe_invoice_id) are excluded."""
+        from orchestra.routines.billing_health import check_health
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "health_inv_noinv",
+            credits=100,
+        )
+        dbsession.add(
+            Recharge(
+                billing_account_id=ba.id,
+                quantity=Decimal("100"),
+                amount_usd=Decimal("100"),
+                status=RechargeStatus.PAID,
+                type="payment",
+                stripe_invoice_id=None,
+                at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=2),
+            ),
+        )
+        dbsession.commit()
+
+        report = check_health(session=dbsession)
+        # This recharge should NOT appear in invoice snapshot
+        assert report.invoice_snapshot is not None
+        assert report.invoice_snapshot.total >= 0
+
+    def test_invoice_snapshot_in_serialization(self, dbsession: Session):
+        """InvoiceSnapshot appears in HealthReport.to_dict()."""
+        from orchestra.routines.billing_health import check_health
+
+        report = check_health(session=dbsession)
+        d = report.to_dict()
+
+        assert "invoice_snapshot" in d
+        inv = d["invoice_snapshot"]
+        assert "paid" in inv
+        assert "pending" in inv
+        assert "failed" in inv
+        assert "uncollectible" in inv
+        assert "total" in inv
+
+    def test_invoice_total_property(self):
+        from orchestra.routines.billing_health import InvoiceSnapshot
+
+        snap = InvoiceSnapshot(paid=5, pending=2, failed=1, uncollectible=1)
+        assert snap.total == 9
 
 
 # ============================================================================
@@ -330,6 +551,7 @@ class TestReportSerialisation:
         assert "timestamp" in d
         assert "account_snapshot" in d
         assert "recharge_activity" in d
+        assert "invoice_snapshot" in d
         assert "stuck_recharges" in d
         assert "alerts" in d
         assert "total_alerts" in d
@@ -343,7 +565,9 @@ class TestReportSerialisation:
         assert "suspended" in snap
         assert "total" in snap
         assert "at_risk" in snap
-        assert "total_credits" in snap
+        assert "zero_balance" in snap
+        assert "negative_balance" in snap
+        assert "total_balance" in snap
 
         activity = d["recharge_activity"]
         assert "paid" in activity
@@ -919,11 +1143,11 @@ class TestDiscordFormatting:
             accounts_checked=10,
             discrepancies=[
                 Discrepancy(
-                    category="stale_past_due",
+                    category="stale_pending_recharge",
                     severity="warning",
                     billing_account_id=7,
                     auto_fixed=True,
-                    detail="PAST_DUE → SUSPENDED",
+                    detail="Confirmed paid by Stripe",
                     owner_type="user",
                     owner_email="fixed@example.com",
                     owner_name="FixedUser",

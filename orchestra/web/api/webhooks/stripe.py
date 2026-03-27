@@ -232,20 +232,6 @@ def process_checkout_session_event(
 
                 AssistantContactDAO(session).maybe_clear_grace_period(ba)
 
-                # Self-heal: restore PAST_DUE → ACTIVE if credits are now
-                # positive.  Runs AFTER maybe_clear_grace_period (which
-                # refreshes ba from DB and may itself restore status when
-                # there are grace-period contacts).
-                if ba.account_status == "PAST_DUE" and ba.credits > 0:
-                    ba.account_status = "ACTIVE"
-                    logger.info(
-                        {
-                            "message": "Organization restored to ACTIVE after checkout",
-                            "organization_id": organization_id,
-                            "credits": float(ba.credits),
-                        },
-                    )
-
             # Handle user checkout (personal billing)
             elif user_id:
                 user_dao = UserDAO(session)
@@ -317,16 +303,6 @@ def process_checkout_session_event(
                 )
 
                 AssistantContactDAO(session).maybe_clear_grace_period(ba)
-
-                if ba.account_status == "PAST_DUE" and ba.credits > 0:
-                    ba.account_status = "ACTIVE"
-                    logger.info(
-                        {
-                            "message": "User restored to ACTIVE after checkout",
-                            "user_id": user_id,
-                            "credits": float(ba.credits),
-                        },
-                    )
 
             else:
                 logger.error(
@@ -502,13 +478,6 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             .update({"status": RechargeStatus.PAID}, synchronize_session=False)
         )
 
-        if billing_account_ids:
-            (
-                session.query(BillingAccount)
-                .filter(BillingAccount.id.in_(ba_ids_subq))
-                .update({"account_status": "ACTIVE"}, synchronize_session=False)
-            )
-
         for ba_id in billing_account_ids:
             ba = session.query(BillingAccount).filter_by(id=ba_id).first()
             if ba:
@@ -557,23 +526,22 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             # never paid for.  This is safe because:
             #  • The recharges record exactly how many credits were loaned.
             #  • Deducting them may push the balance negative, which is
-            #    the desired signal for PAST_DUE / eventual SUSPENDED.
-            from decimal import Decimal as _Decimal
+            #    the desired signal for balance-based enforcement.
+            ba_dao = BillingAccountDAO(session)
 
             for ba_id in billing_account_ids:
                 unpaid = sum(
                     r.quantity for r in recharges if r.billing_account_id == ba_id
                 )
                 if unpaid:
-                    ba = session.query(BillingAccount).filter_by(id=ba_id).first()
-                    if ba:
-                        ba.credits = ba.credits - _Decimal(str(unpaid))
+                    new_balance = ba_dao.deduct_credits(ba_id, float(unpaid))
+                    if new_balance is not None:
                         logger.info(
                             {
                                 "message": "Voided unpaid auto-recharge credits",
                                 "billing_account_id": ba_id,
                                 "credits_voided": float(unpaid),
-                                "new_balance": float(ba.credits),
+                                "new_balance": float(new_balance),
                             },
                         )
 
@@ -596,16 +564,6 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                         "invoice_id": invoice_id,
                         "error": str(void_err),
                     },
-                )
-
-            if billing_account_ids:
-                (
-                    session.query(BillingAccount)
-                    .filter(BillingAccount.id.in_(ba_ids_subq))
-                    .update(
-                        {"account_status": "PAST_DUE"},
-                        synchronize_session=False,
-                    )
                 )
 
         session.commit()
@@ -963,9 +921,8 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     )
 
             if ba and credits_original > 0:
-                from decimal import Decimal
-
-                ba.credits = ba.credits + Decimal(str(credits_original))
+                ba_dao = BillingAccountDAO(session)
+                ba_dao.add_credits(ba.id, credits_original)
 
                 if invoice_id:
                     session.query(Recharge).filter_by(
@@ -976,16 +933,16 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                         synchronize_session=False,
                     )
 
-                has_other_failed = (
+                has_other_disputes = (
                     session.query(Recharge)
                     .filter(
                         Recharge.billing_account_id == ba.id,
-                        Recharge.status == RechargeStatus.FAILED,
+                        Recharge.status == RechargeStatus.DISPUTED,
                     )
                     .first()
                     is not None
                 )
-                if ba.account_status == "SUSPENDED" and not has_other_failed:
+                if ba.account_status == "SUSPENDED" and not has_other_disputes:
                     ba.account_status = "ACTIVE"
 
                 logger.info(
@@ -999,16 +956,16 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                 )
             elif ba:
                 if ba.account_status == "SUSPENDED":
-                    has_other_failed = (
+                    has_other_disputes = (
                         session.query(Recharge)
                         .filter(
                             Recharge.billing_account_id == ba.id,
-                            Recharge.status == RechargeStatus.FAILED,
+                            Recharge.status == RechargeStatus.DISPUTED,
                         )
                         .first()
                         is not None
                     )
-                    if not has_other_failed:
+                    if not has_other_disputes:
                         ba.account_status = "ACTIVE"
                 logger.info(
                     {

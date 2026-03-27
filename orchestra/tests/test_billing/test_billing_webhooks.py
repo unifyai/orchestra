@@ -227,8 +227,12 @@ class TestCheckoutSessionEvent:
         assert total_spending >= MIN_SPEND_FOR_AUTO_RECHARGE
         assert ba_dao.can_enable_auto_recharge(ba.id)
 
-    def test_user_checkout_restores_past_due_to_active(self, dbsession, monkeypatch):
-        """PAST_DUE user buying credits is restored to ACTIVE when balance goes positive."""
+    def test_user_checkout_adds_credits_with_negative_balance(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """User with negative balance buying credits stays ACTIVE; balance goes positive."""
         from orchestra.web.api.webhooks.stripe import process_checkout_session_event
 
         user, ba = make_user_with_billing(
@@ -236,7 +240,7 @@ class TestCheckoutSessionEvent:
             "wh_restore_user",
             credits=-10,
             stripe_customer_id="cus_wh_restore",
-            account_status="PAST_DUE",
+            account_status="ACTIVE",
         )
         dbsession.commit()
 
@@ -261,12 +265,12 @@ class TestCheckoutSessionEvent:
         assert float(ba.credits) == 40.0
         assert ba.account_status == "ACTIVE"
 
-    def test_user_checkout_stays_past_due_if_still_negative(
+    def test_user_checkout_stays_active_even_if_still_negative(
         self,
         dbsession,
         monkeypatch,
     ):
-        """PAST_DUE user whose checkout doesn't cover the deficit stays PAST_DUE."""
+        """User whose checkout doesn't cover the deficit stays ACTIVE with negative balance."""
         from orchestra.web.api.webhooks.stripe import process_checkout_session_event
 
         user, ba = make_user_with_billing(
@@ -274,7 +278,7 @@ class TestCheckoutSessionEvent:
             "wh_still_pd",
             credits=-100,
             stripe_customer_id="cus_wh_still_pd",
-            account_status="PAST_DUE",
+            account_status="ACTIVE",
         )
         dbsession.commit()
 
@@ -297,10 +301,14 @@ class TestCheckoutSessionEvent:
 
         dbsession.refresh(ba)
         assert float(ba.credits) == -50.0
-        assert ba.account_status == "PAST_DUE"
+        assert ba.account_status == "ACTIVE"
 
-    def test_org_checkout_restores_past_due_to_active(self, dbsession, monkeypatch):
-        """PAST_DUE org buying credits is restored to ACTIVE."""
+    def test_org_checkout_adds_credits_with_negative_balance(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """Org with negative balance buying credits stays ACTIVE."""
         from orchestra.web.api.webhooks.stripe import process_checkout_session_event
 
         org, org_ba = make_org_with_billing(
@@ -309,7 +317,6 @@ class TestCheckoutSessionEvent:
             stripe_customer_id="cus_wh_org_restore",
             credits=-5,
         )
-        org_ba.account_status = "PAST_DUE"
         dbsession.commit()
 
         event = {
@@ -586,7 +593,7 @@ class TestInvoiceSelfHealing:
         assert rec.stripe_invoice_id == "in_orphan_fail"
 
         dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
+        assert ba.account_status == "ACTIVE"
         assert float(ba.credits) == 30  # 80 - 50 voided
         assert voided == ["in_orphan_fail"]
 
@@ -595,7 +602,7 @@ class TestInvoicePaymentFailedVoidsCredits:
     """When an invoice payment definitively fails, the postpaid credits
     that were granted during auto-recharge should be voided."""
 
-    def test_final_failure_voids_credits_and_marks_past_due(
+    def test_final_failure_voids_credits_and_keeps_active(
         self,
         dbsession,
         monkeypatch,
@@ -657,7 +664,7 @@ class TestInvoicePaymentFailedVoidsCredits:
         assert r2.status == RechargeStatus.FAILED
 
         dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
+        assert ba.account_status == "ACTIVE"
         assert float(ba.credits) == 40  # 120 - (50 + 30) voided
         assert voided == ["in_void_test"]
 
@@ -712,7 +719,7 @@ class TestInvoicePaymentFailedVoidsCredits:
         assert rec.status == RechargeStatus.FAILED
 
         dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
+        assert ba.account_status == "ACTIVE"
         assert float(ba.credits) == 40  # 100 - 60 voided despite void failure
 
     def test_intermediate_failure_disables_autorecharge_but_keeps_credits(
@@ -1107,8 +1114,8 @@ class TestDisputeClosed:
         dbsession,
         monkeypatch,
     ):
-        """When a dispute is won but there are other FAILED recharges,
-        the account stays SUSPENDED."""
+        """When a dispute is won and no other DISPUTED recharges exist,
+        the account is restored to ACTIVE (FAILED recharges are settled)."""
         import orchestra.web.api.webhooks.stripe as wh_mod
         from orchestra.web.api.webhooks.stripe import process_charge_event
 
@@ -1171,11 +1178,80 @@ class TestDisputeClosed:
         assert response.status_code == 200
 
         dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"  # stays suspended
-        assert float(ba.credits) == 100  # credits still re-granted
+        assert ba.account_status == "ACTIVE"  # restored — FAILED is settled debt
+        assert float(ba.credits) == 100  # credits re-granted
 
         dbsession.refresh(r_disputed)
         assert r_disputed.status == RechargeStatus.PAID
+
+    def test_dispute_won_stays_suspended_with_other_disputes(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """When a dispute is won but another DISPUTED recharge exists,
+        the account stays SUSPENDED."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {
+                        "user_id": "won_multi_user",
+                        "credits_purchased": "40",
+                    },
+                    "invoice": "in_won_multi",
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "won_multi_user",
+            credits=20,
+            stripe_customer_id="cus_won_multi",
+        )
+        ba.account_status = "SUSPENDED"
+        r_disputed_won = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("40"),
+            amount_usd=Decimal("40"),
+            status=RechargeStatus.DISPUTED,
+            stripe_invoice_id="in_won_multi",
+            type="payment",
+        )
+        r_disputed_other = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("25"),
+            amount_usd=Decimal("25"),
+            status=RechargeStatus.DISPUTED,
+            stripe_invoice_id="in_other_dispute",
+            type="payment",
+        )
+        dbsession.add_all([r_disputed_won, r_disputed_other])
+        dbsession.commit()
+
+        event = {
+            "id": "evt_won_multi",
+            "type": "charge.dispute.closed",
+            "data": {
+                "object": {
+                    "id": "dp_won_multi",
+                    "status": "won",
+                    "payment_intent": "pi_won_multi",
+                    "amount": 4000,
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"  # stays — other dispute still open
 
 
 # ============================================================================

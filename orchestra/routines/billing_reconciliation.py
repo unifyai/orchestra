@@ -20,14 +20,14 @@ fixes are applied.  Each tier includes all lower tiers:
     - Disable autorecharge when no ``stripe_customer_id`` exists.
     - Disable autorecharge when no payment method on file.
     - Dispute lost → status set to ``FAILED`` (credits already voided).
+    - Orphaned grace-period contacts → ``active`` (BA has credits ≥ 0).
 
 ``"moderate"``
-    Includes *safe* plus status transitions that mirror existing guards:
+    Includes *safe* plus recharge status corrections:
 
     - Stale recharge confirmed **paid** by Stripe → ``PAID``.
     - Dispute won → ``PAID`` + credits restored + account ``ACTIVE``.
-    - ``ACTIVE`` + negative credits → ``PAST_DUE``.
-    - ``PAST_DUE`` + non-positive credits → ``SUSPENDED``.
+    - SUSPENDED without dispute history → ``ACTIVE``.
 
 ``"all"``
     Includes *moderate* plus fixes that mutate credit balances or
@@ -36,6 +36,7 @@ fixes are applied.  Each tier includes all lower tiers:
     - Stale recharge void/uncollectible → ``FAILED`` + credits voided.
     - Orphaned paid invoice → create ``Recharge`` + grant credits.
     - Missed webhook → replay event through ``handle_event``.
+    - Unvoided FAILED auto-recharge → deduct unearned credits.
 
 Passing ``True`` (bool) is treated as ``"all"`` for backward
 compatibility; ``False`` is treated as ``"none"``.
@@ -47,6 +48,8 @@ Flag-only checks (never auto-fixed)
   dispute penalty).  Manual review needed.
 - **Duplicate Stripe customers** — DB-level data corruption.
 - **Credit balance ceiling** — phantom credit injection detection.
+- **SUSPENDED with past dispute history** — needs manual verification
+  of resolution status.
 
 The routine uses the *same* ``STRIPE_SECRET_KEY`` that Orchestra is
 configured with — staging instances use a test-mode key, production
@@ -285,7 +288,6 @@ def _reconcile_with_session(
     )
     _check_credit_balance_integrity(session, result, fix_level=fix_level)
     _check_duplicate_stripe_customers(session, result)
-    _check_stale_past_due(session, result, fix_level=fix_level)
     _check_payment_methods(session, result, fix_level=fix_level)
     _check_credit_balance_ceiling(session, result)
     _check_webhook_gaps(
@@ -294,6 +296,9 @@ def _reconcile_with_session(
         lookback_days=lookback_days,
         fix_level=fix_level,
     )
+    _check_failed_recharge_voids(session, result, fix_level=fix_level)
+    _check_orphaned_grace_periods(session, result, fix_level=fix_level)
+    _check_unjustified_suspensions(session, result, fix_level=fix_level)
 
     if fix_level > FIX_NONE and result.auto_fixed_count > 0:
         session.commit()
@@ -470,7 +475,7 @@ def _check_stripe_customers(
         session.query(BillingAccount)
         .filter(
             BillingAccount.stripe_customer_id.isnot(None),
-            BillingAccount.account_status.in_(["ACTIVE", "PAST_DUE"]),
+            BillingAccount.account_status == "ACTIVE",
         )
         .all()
     )
@@ -679,40 +684,8 @@ def _check_credit_balance_integrity(
     """For billing accounts with recent recharge activity, verify that
     the credit balance is plausible.
 
-    Tier: ACTIVE→PAST_DUE → moderate, disable autorecharge → safe.
+    Tier: disable autorecharge → safe.
     """
-    # ACTIVE with negative credits → transition to PAST_DUE (moderate)
-    fix_status = fix_level >= FIX_MODERATE
-    active_negative = (
-        session.query(BillingAccount)
-        .filter(
-            BillingAccount.account_status == "ACTIVE",
-            BillingAccount.credits < 0,
-        )
-        .all()
-    )
-    for ba in active_negative:
-        result.discrepancies.append(
-            Discrepancy(
-                category="status_credit_mismatch",
-                severity="warning",
-                billing_account_id=ba.id,
-                detail=(
-                    f"BA {ba.id} is ACTIVE but has negative credits "
-                    f"(${float(ba.credits):.2f}) — billing guard should "
-                    f"transition to PAST_DUE"
-                ),
-                auto_fixed=fix_status,
-            ),
-        )
-        if fix_status:
-            ba.account_status = "PAST_DUE"
-            logger.info(
-                "Auto-fixed BA %s: ACTIVE → PAST_DUE (credits=%s)",
-                ba.id,
-                ba.credits,
-            )
-
     # SUSPENDED with positive credits — flag only, suspension may be intentional
     suspended_positive = (
         session.query(BillingAccount)
@@ -980,58 +953,7 @@ def _check_duplicate_stripe_customers(
 
 
 # ---------------------------------------------------------------------------
-# Check 7: Stale PAST_DUE accounts
-# ---------------------------------------------------------------------------
-
-
-def _check_stale_past_due(
-    session: Session,
-    result: ReconciliationResult,
-    *,
-    fix_level: int = FIX_NONE,
-) -> None:
-    """Flag PAST_DUE accounts with non-positive credits.  The billing
-    guard should have transitioned these to SUSPENDED.
-
-    Tier: moderate — status transition mirroring billing_guard.
-    """
-    fix = fix_level >= FIX_MODERATE
-    stuck = (
-        session.query(BillingAccount)
-        .filter(
-            BillingAccount.account_status == "PAST_DUE",
-            BillingAccount.credits <= 0,
-        )
-        .all()
-    )
-
-    for ba in stuck:
-        result.discrepancies.append(
-            Discrepancy(
-                category="stale_past_due",
-                severity="warning",
-                billing_account_id=ba.id,
-                detail=(
-                    f"BA {ba.id} is PAST_DUE with credits "
-                    f"${float(ba.credits):.2f} — billing guard should have "
-                    f"suspended this account"
-                ),
-                auto_fixed=fix,
-            ),
-        )
-        if fix:
-            ba.account_status = "SUSPENDED"
-            ba.autorecharge = False
-            logger.info(
-                "Auto-fixed BA %s: PAST_DUE → SUSPENDED (credits=%s), "
-                "disabled autorecharge",
-                ba.id,
-                ba.credits,
-            )
-
-
-# ---------------------------------------------------------------------------
-# Check 8: Payment method health for autorecharge accounts
+# Check 7: Payment method health for autorecharge accounts
 # ---------------------------------------------------------------------------
 
 
@@ -1052,7 +974,7 @@ def _check_payment_methods(
         .filter(
             BillingAccount.autorecharge.is_(True),
             BillingAccount.stripe_customer_id.isnot(None),
-            BillingAccount.account_status.in_(["ACTIVE", "PAST_DUE"]),
+            BillingAccount.account_status == "ACTIVE",
         )
         .all()
     )
@@ -1239,6 +1161,281 @@ def _check_webhook_gaps(
 
 
 # ---------------------------------------------------------------------------
+# Check 11: Failed recharge credit void verification
+# ---------------------------------------------------------------------------
+
+
+def _check_failed_recharge_voids(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    fix_level: int = FIX_NONE,
+) -> None:
+    """Verify that FAILED auto-recharges had their credits properly voided.
+
+    Auto-recharge grants credits immediately (PENDING_INVOICE) and bills
+    at month-end.  When the invoice ultimately fails, credits should be
+    voided (deducted back).  If the void was missed, the account has
+    unearned credits.
+
+    Only examines recharges that were already FAILED before this
+    reconciliation run (excludes recharges just fixed by earlier checks
+    like stale-recharge → FAILED, which void credits as part of their
+    own auto-fix).
+
+    Tier: ``all`` — deducts the unvoided credits.
+    """
+    already_fixed_ids = {
+        d.stripe_id for d in result.discrepancies if d.auto_fixed and d.stripe_id
+    }
+
+    failed_auto = (
+        session.query(Recharge)
+        .filter(
+            Recharge.status == RechargeStatus.FAILED,
+            Recharge.type == RECHARGE_TYPE_AUTO,
+            Recharge.stripe_invoice_id.isnot(None),
+            Recharge.quantity > 0,
+        )
+        .all()
+    )
+
+    failed_auto = [
+        r for r in failed_auto if r.stripe_invoice_id not in already_fixed_ids
+    ]
+
+    for recharge in failed_auto:
+        try:
+            inv = stripe.Invoice.retrieve(recharge.stripe_invoice_id)
+        except Exception:
+            continue
+
+        inv_status = (
+            inv.get("status") if isinstance(inv, dict) else getattr(inv, "status", None)
+        )
+        if inv_status not in ("void", "uncollectible"):
+            continue
+
+        ba = (
+            session.query(BillingAccount)
+            .filter_by(id=recharge.billing_account_id)
+            .first()
+        )
+        if ba is None:
+            continue
+
+        paid_total = (
+            session.query(func.coalesce(func.sum(Recharge.quantity), 0))
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.status == RechargeStatus.PAID,
+            )
+            .scalar()
+        )
+
+        if ba.credits > paid_total:
+            fixed = False
+            if fix_level >= FIX_ALL:
+                from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+                ba_dao = BillingAccountDAO(session)
+                ba_dao.deduct_credits(ba.id, float(recharge.quantity))
+                fixed = True
+                logger.info(
+                    "Auto-fixed BA %s: voided %s unearned credits from "
+                    "FAILED recharge %s",
+                    ba.id,
+                    recharge.quantity,
+                    recharge.id,
+                )
+
+            result.discrepancies.append(
+                Discrepancy(
+                    category="unvoided_failed_recharge",
+                    severity="critical",
+                    billing_account_id=ba.id,
+                    stripe_id=recharge.stripe_invoice_id,
+                    detail=(
+                        f"FAILED auto-recharge {recharge.id} "
+                        f"(${float(recharge.quantity):.2f}) was not voided — "
+                        f"BA has {float(ba.credits):.2f} credits vs "
+                        f"{float(paid_total):.2f} from paid recharges"
+                    ),
+                    auto_fixed=fixed,
+                ),
+            )
+
+        result.recharges_checked += 1
+
+
+# ---------------------------------------------------------------------------
+# Check 12: Grace period without negative balance
+# ---------------------------------------------------------------------------
+
+
+def _check_orphaned_grace_periods(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    fix_level: int = FIX_NONE,
+) -> None:
+    """Flag contacts stuck in ``grace_period`` whose billing account
+    has non-negative credits.
+
+    The daily suspension routine should restore these automatically, but
+    if it isn't running (or failed), contacts can be stuck indefinitely
+    in grace_period even though the account can afford them.
+
+    Tier: ``safe`` — restores contacts to ``active`` (no financial impact,
+    the account has sufficient credits).
+    """
+    from orchestra.db.models.orchestra_models import AssistantContact
+
+    grace_contacts = (
+        session.query(AssistantContact)
+        .filter(AssistantContact.status == "grace_period")
+        .all()
+    )
+
+    if not grace_contacts:
+        return
+
+    ba_ids = {c.assistant.user_id for c in grace_contacts if c.assistant}
+    ba_cache: Dict[int, BillingAccount] = {}
+
+    for contact in grace_contacts:
+        if not contact.assistant:
+            continue
+
+        assistant = contact.assistant
+        ba = ba_cache.get(id(assistant))
+        if ba is None:
+            from orchestra.routines.assistant_contact_levy import (
+                _get_billing_account_for_assistant,
+            )
+
+            ba = _get_billing_account_for_assistant(session, assistant)
+            if ba is None:
+                continue
+            ba_cache[id(assistant)] = ba
+
+        if ba.credits >= 0:
+            fixed = False
+            if fix_level >= FIX_SAFE:
+                contact.status = "active"
+                contact.grace_period_started_at = None
+                fixed = True
+                logger.info(
+                    "Auto-fixed contact %s: restored from grace_period → "
+                    "active (BA %s has credits %.2f)",
+                    contact.id,
+                    ba.id,
+                    float(ba.credits),
+                )
+
+            result.discrepancies.append(
+                Discrepancy(
+                    category="orphaned_grace_period",
+                    severity="warning",
+                    billing_account_id=ba.id,
+                    detail=(
+                        f"Contact {contact.id} ({contact.contact_type}) is in "
+                        f"grace_period but BA {ba.id} has "
+                        f"${float(ba.credits):.2f} credits — "
+                        f"suspension routine may not be running"
+                    ),
+                    auto_fixed=fixed,
+                ),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Check 14: SUSPENDED without dispute justification
+# ---------------------------------------------------------------------------
+
+
+def _check_unjustified_suspensions(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    fix_level: int = FIX_NONE,
+) -> None:
+    """Flag SUSPENDED accounts that have no DISPUTED recharges.
+
+    In the simplified billing model, SUSPENDED is only set by
+    ``charge.dispute.created`` (fraud/chargeback).  A SUSPENDED account
+    with no dispute history may be a leftover from the old billing guard
+    that transitioned negative-balance accounts to SUSPENDED.
+
+    Tier: ``moderate`` — restores SUSPENDED → ACTIVE when there are no
+    active disputes.  Accounts with resolved disputes (won/lost) but no
+    current DISPUTED recharges are also eligible.
+    """
+    suspended = (
+        session.query(BillingAccount)
+        .filter(BillingAccount.account_status == "SUSPENDED")
+        .all()
+    )
+
+    for ba in suspended:
+        active_disputes = (
+            session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.status == RechargeStatus.DISPUTED,
+            )
+            .count()
+        )
+
+        if active_disputes > 0:
+            continue
+
+        has_any_dispute_history = (
+            session.query(WebhookLog)
+            .filter(
+                WebhookLog.event_type.in_(
+                    ["charge.dispute.created", "charge.dispute.closed"],
+                ),
+            )
+            .count()
+            > 0
+        )
+
+        fixed = False
+        if fix_level >= FIX_MODERATE and not has_any_dispute_history:
+            ba.account_status = "ACTIVE"
+            fixed = True
+            logger.info(
+                "Auto-fixed BA %s: restored SUSPENDED → ACTIVE "
+                "(no dispute history found)",
+                ba.id,
+            )
+
+        severity = "info" if has_any_dispute_history else "warning"
+        detail_suffix = (
+            " — has past dispute history, verify resolution"
+            if has_any_dispute_history
+            else " — no dispute history, likely leftover from old billing guard"
+        )
+
+        result.discrepancies.append(
+            Discrepancy(
+                category="unjustified_suspension",
+                severity=severity,
+                billing_account_id=ba.id,
+                detail=(
+                    f"BA {ba.id} is SUSPENDED with no active DISPUTED "
+                    f"recharges (credits: ${float(ba.credits):.2f})"
+                    f"{detail_suffix}"
+                ),
+                auto_fixed=fixed,
+            ),
+        )
+
+    result.accounts_checked += len(suspended)
+
+
+# ---------------------------------------------------------------------------
 # Post-collection enrichment
 # ---------------------------------------------------------------------------
 
@@ -1315,6 +1512,8 @@ def _enrich_discrepancies(
             "stuck_dispute",
             "status_credit_mismatch",
             "autorecharge_no_customer",
+            "unvoided_failed_recharge",
+            "unjustified_suspension",
         },
     )
     context_ba_ids = {

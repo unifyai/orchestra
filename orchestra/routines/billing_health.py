@@ -9,7 +9,7 @@ Metrics computed
 
 Account landscape
 ^^^^^^^^^^^^^^^^^
-- Status distribution: count of ACTIVE / PAST_DUE / SUSPENDED accounts.
+- Status distribution: count of ACTIVE / SUSPENDED accounts.
 - At-risk accounts: ACTIVE accounts with credits ≤ 0.
 - Total credit balance across all accounts.
 - Autorecharge adoption: enabled vs. disabled.
@@ -75,7 +75,9 @@ class AccountSnapshot:
     suspended: int = 0
     total: int = 0
     at_risk: int = 0  # ACTIVE with credits <= 0
-    total_credits: Decimal = Decimal("0")
+    zero_balance: int = 0  # ACTIVE with credits == 0
+    negative_balance: int = 0  # ACTIVE with credits < 0
+    total_balance: Decimal = Decimal("0")
     autorecharge_enabled: int = 0
     autorecharge_disabled: int = 0
 
@@ -86,7 +88,9 @@ class AccountSnapshot:
             "suspended": self.suspended,
             "total": self.total,
             "at_risk": self.at_risk,
-            "total_credits": float(self.total_credits),
+            "zero_balance": self.zero_balance,
+            "negative_balance": self.negative_balance,
+            "total_balance": float(self.total_balance),
             "autorecharge_enabled": self.autorecharge_enabled,
             "autorecharge_disabled": self.autorecharge_disabled,
         }
@@ -106,6 +110,8 @@ class RechargeActivity:
     disputed_usd: Decimal = Decimal("0")
     auto_recharge_total: int = 0
     auto_recharge_failed: int = 0
+    # Breakdown of PAID recharges by type (payment, auto, promo, etc.)
+    paid_by_type: Dict[str, dict] = field(default_factory=dict)
 
     @property
     def auto_recharge_failure_rate(self) -> float:
@@ -119,6 +125,7 @@ class RechargeActivity:
             "failed": {"count": self.failed_count, "usd": float(self.failed_usd)},
             "pending": {"count": self.pending_count, "usd": float(self.pending_usd)},
             "disputed": {"count": self.disputed_count, "usd": float(self.disputed_usd)},
+            "paid_by_type": self.paid_by_type,
             "auto_recharge_total": self.auto_recharge_total,
             "auto_recharge_failed": self.auto_recharge_failed,
             "auto_recharge_failure_rate": round(self.auto_recharge_failure_rate, 4),
@@ -150,6 +157,39 @@ class ContactSnapshot:
 
 
 @dataclass
+class InvoiceSnapshot:
+    """Aggregate invoice status breakdown.
+
+    Derived from Recharge records that have a ``stripe_invoice_id``.
+    """
+
+    paid: int = 0
+    paid_usd: Decimal = Decimal("0")
+    pending: int = 0
+    pending_usd: Decimal = Decimal("0")
+    failed: int = 0
+    failed_usd: Decimal = Decimal("0")
+    uncollectible: int = 0
+    uncollectible_usd: Decimal = Decimal("0")
+
+    @property
+    def total(self) -> int:
+        return self.paid + self.pending + self.failed + self.uncollectible
+
+    def to_dict(self) -> dict:
+        return {
+            "paid": {"count": self.paid, "usd": float(self.paid_usd)},
+            "pending": {"count": self.pending, "usd": float(self.pending_usd)},
+            "failed": {"count": self.failed, "usd": float(self.failed_usd)},
+            "uncollectible": {
+                "count": self.uncollectible,
+                "usd": float(self.uncollectible_usd),
+            },
+            "total": self.total,
+        }
+
+
+@dataclass
 class HealthAlert:
     """A health anomaly that warrants attention."""
 
@@ -172,6 +212,7 @@ class HealthReport:
     timestamp: str = ""
     account_snapshot: AccountSnapshot = field(default_factory=AccountSnapshot)
     recharge_activity: RechargeActivity = field(default_factory=RechargeActivity)
+    invoice_snapshot: InvoiceSnapshot = field(default_factory=InvoiceSnapshot)
     contact_snapshot: ContactSnapshot = field(default_factory=ContactSnapshot)
     stuck_recharges: int = 0
     alerts: List[HealthAlert] = field(default_factory=list)
@@ -190,6 +231,7 @@ class HealthReport:
             "timestamp": self.timestamp,
             "account_snapshot": self.account_snapshot.to_dict(),
             "recharge_activity": self.recharge_activity.to_dict(),
+            "invoice_snapshot": self.invoice_snapshot.to_dict(),
             "contact_snapshot": self.contact_snapshot.to_dict(),
             "stuck_recharges": self.stuck_recharges,
             "alerts": [a.to_dict() for a in self.alerts],
@@ -234,6 +276,7 @@ def check_health(
         _compute_account_snapshot(session, report)
         _compute_recharge_activity(session, report, lookback_hours=lookback_hours)
         _compute_stuck_recharges(session, report)
+        _compute_invoice_snapshot(session, report)
         _compute_contact_health(session, report)
         _evaluate_alerts(report)
         _log_summary(report)
@@ -265,7 +308,7 @@ def _compute_account_snapshot(session: Session, report: HealthReport) -> None:
     )
 
     snap = report.account_snapshot
-    for status, count, total_credits in rows:
+    for status, count, balance in rows:
         snap.total += count
         if status == "ACTIVE":
             snap.active = count
@@ -273,16 +316,27 @@ def _compute_account_snapshot(session: Session, report: HealthReport) -> None:
             snap.past_due = count
         elif status == "SUSPENDED":
             snap.suspended = count
-        snap.total_credits += total_credits
+        snap.total_balance += balance
 
-    snap.at_risk = (
+    snap.zero_balance = (
         session.query(func.count(BillingAccount.id))
         .filter(
             BillingAccount.account_status == "ACTIVE",
-            BillingAccount.credits <= 0,
+            BillingAccount.credits == 0,
         )
         .scalar()
     ) or 0
+
+    snap.negative_balance = (
+        session.query(func.count(BillingAccount.id))
+        .filter(
+            BillingAccount.account_status == "ACTIVE",
+            BillingAccount.credits < 0,
+        )
+        .scalar()
+    ) or 0
+
+    snap.at_risk = snap.zero_balance + snap.negative_balance
 
     ar_counts = (
         session.query(
@@ -346,6 +400,26 @@ def _compute_recharge_activity(
             activity.disputed_count = count
             activity.disputed_usd = total_usd
 
+    # Paid recharges broken down by type (payment, auto, promo, etc.)
+    type_rows = (
+        session.query(
+            Recharge.type,
+            func.count(Recharge.id),
+            func.coalesce(func.sum(Recharge.amount_usd), 0),
+        )
+        .filter(
+            Recharge.at >= cutoff,
+            Recharge.status.in_([RechargeStatus.PAID, RechargeStatus.PAID.value]),
+        )
+        .group_by(Recharge.type)
+        .all()
+    )
+    for rtype, count, total_usd in type_rows:
+        activity.paid_by_type[rtype or "unknown"] = {
+            "count": count,
+            "usd": float(total_usd),
+        }
+
     auto_rows = (
         session.query(
             Recharge.status,
@@ -386,6 +460,53 @@ def _compute_stuck_recharges(session: Session, report: HealthReport) -> None:
         )
         .scalar()
     ) or 0
+
+
+# ---------------------------------------------------------------------------
+# Invoice snapshot
+# ---------------------------------------------------------------------------
+
+
+def _compute_invoice_snapshot(session: Session, report: HealthReport) -> None:
+    """Aggregate all invoice-backed recharges by status.
+
+    Unlike ``RechargeActivity`` (time-windowed, last 24 h), this gives
+    a lifetime picture of invoices: how many are paid, still pending
+    collection, or failed/uncollectible.
+
+    Only considers recharges that have a ``stripe_invoice_id`` — i.e.
+    actual Stripe invoices, not checkout-only purchases.
+    """
+    snap = report.invoice_snapshot
+
+    rows = (
+        session.query(
+            Recharge.status,
+            func.count(Recharge.id),
+            func.coalesce(func.sum(Recharge.amount_usd), 0),
+        )
+        .filter(Recharge.stripe_invoice_id.isnot(None))
+        .group_by(Recharge.status)
+        .all()
+    )
+
+    for status, count, total_usd in rows:
+        status_val = status.value if hasattr(status, "value") else status
+        if status_val == RechargeStatus.PAID.value:
+            snap.paid = count
+            snap.paid_usd = total_usd
+        elif status_val in (
+            RechargeStatus.PENDING_INVOICE.value,
+            RechargeStatus.INVOICE_CREATED.value,
+        ):
+            snap.pending += count
+            snap.pending_usd += total_usd
+        elif status_val == RechargeStatus.FAILED.value:
+            snap.failed = count
+            snap.failed_usd = total_usd
+        elif status_val == RechargeStatus.DISPUTED.value:
+            snap.uncollectible = count
+            snap.uncollectible_usd = total_usd
 
 
 # ---------------------------------------------------------------------------
@@ -527,13 +648,19 @@ def _evaluate_alerts(report: HealthReport) -> None:
     activity = report.recharge_activity
 
     if snap.at_risk >= AT_RISK_WARN_THRESHOLD:
+        parts = []
+        if snap.zero_balance:
+            parts.append(f"{snap.zero_balance} at zero")
+        if snap.negative_balance:
+            parts.append(f"{snap.negative_balance} negative")
+        breakdown = f" ({', '.join(parts)})" if parts else ""
         report.alerts.append(
             HealthAlert(
                 category="at_risk_accounts",
                 severity="warning",
                 detail=(
                     f"{snap.at_risk} ACTIVE accounts have zero or negative "
-                    f"credits — billing guard should transition them"
+                    f"credits{breakdown} — billable actions blocked by balance checks"
                 ),
             ),
         )
@@ -543,7 +670,10 @@ def _evaluate_alerts(report: HealthReport) -> None:
             HealthAlert(
                 category="past_due_accounts",
                 severity="info",
-                detail=f"{snap.past_due} accounts are in PAST_DUE status",
+                detail=(
+                    f"{snap.past_due} accounts still in legacy PAST_DUE status "
+                    f"— should be ACTIVE (balance-based enforcement)"
+                ),
             ),
         )
 
@@ -656,6 +786,8 @@ def _log_summary(report: HealthReport) -> None:
         "accounts_past_due": report.account_snapshot.past_due,
         "accounts_suspended": report.account_snapshot.suspended,
         "at_risk": report.account_snapshot.at_risk,
+        "zero_balance": report.account_snapshot.zero_balance,
+        "negative_balance": report.account_snapshot.negative_balance,
         "recharges_paid_24h": report.recharge_activity.paid_count,
         "recharges_failed_24h": report.recharge_activity.failed_count,
         "auto_recharge_failure_rate": round(
@@ -663,6 +795,10 @@ def _log_summary(report: HealthReport) -> None:
             4,
         ),
         "stuck_recharges": report.stuck_recharges,
+        "invoices_paid": report.invoice_snapshot.paid,
+        "invoices_pending": report.invoice_snapshot.pending,
+        "invoices_failed": report.invoice_snapshot.failed,
+        "invoices_uncollectible": report.invoice_snapshot.uncollectible,
         "contacts_active": report.contact_snapshot.active,
         "contacts_grace_period": report.contact_snapshot.grace_period,
         "contacts_stale_billing": report.contact_snapshot.stale_billing,

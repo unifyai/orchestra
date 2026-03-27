@@ -120,6 +120,14 @@ def _format_reconciliation_embed(result: ReconciliationResult, env_tag: str) -> 
 
     fields = [
         {
+            "name": "\u200b",
+            "value": (
+                "*Checks for discrepancies between the Orchestra DB "
+                "and Stripe for accounts with a Stripe customer.*"
+            ),
+            "inline": False,
+        },
+        {
             "name": "Checked",
             "value": (
                 f"**{result.accounts_checked}** accounts · "
@@ -213,7 +221,25 @@ def _format_health_embed(report: HealthReport, env_tag: str) -> dict:
         color = COLOR_GREEN
         title = f"✅ Billing Health — {env_tag}"
 
+    # Build paid-by-type breakdown line
+    by_type_parts = []
+    for rtype, info in sorted(activity.paid_by_type.items()):
+        by_type_parts.append(
+            f"**{info['count']}** {rtype} (${info['usd']:,.2f})",
+        )
+    by_type_line = (
+        " · ".join(by_type_parts) if by_type_parts else "no paid recharges in window"
+    )
+
     fields = [
+        {
+            "name": "\u200b",
+            "value": (
+                "*Snapshot of account billing statuses, recharge "
+                "activity, and contact provisioning health.*"
+            ),
+            "inline": False,
+        },
         {
             "name": "Accounts",
             "value": (
@@ -221,13 +247,17 @@ def _format_health_embed(report: HealthReport, env_tag: str) -> dict:
                 f"🟡 **{snap.past_due}** past due · "
                 f"🔴 **{snap.suspended}** suspended\n"
                 f"**{snap.total}** total · "
-                f"**${float(snap.total_credits):,.2f}** total credits"
+                f"**${float(snap.total_balance):,.2f}** total balance"
             ),
             "inline": False,
         },
         {
             "name": "At Risk",
-            "value": (f"**{snap.at_risk}** active accounts with ≤ 0 credits"),
+            "value": (
+                f"**{snap.at_risk}** active accounts with ≤ 0 credits\n"
+                f"**{snap.zero_balance}** at zero · "
+                f"**{snap.negative_balance}** negative"
+            ),
             "inline": True,
         },
         {
@@ -252,6 +282,15 @@ def _format_health_embed(report: HealthReport, env_tag: str) -> dict:
         },
     ]
 
+    if by_type_parts:
+        fields.append(
+            {
+                "name": "Paid by type",
+                "value": by_type_line,
+                "inline": False,
+            },
+        )
+
     if activity.auto_recharge_total > 0:
         rate_pct = activity.auto_recharge_failure_rate * 100
         fields.append(
@@ -272,6 +311,29 @@ def _format_health_embed(report: HealthReport, env_tag: str) -> dict:
                 "name": "Stuck recharges",
                 "value": f"**{report.stuck_recharges}** pending > 24 h",
                 "inline": True,
+            },
+        )
+
+    inv = report.invoice_snapshot
+    if inv.total > 0:
+        fields.append(
+            {
+                "name": "Invoices (all time)",
+                "value": (
+                    f"✅ **{inv.paid}** paid "
+                    f"(${float(inv.paid_usd):,.2f})\n"
+                    f"⏳ **{inv.pending}** pending "
+                    f"(${float(inv.pending_usd):,.2f})\n"
+                    f"❌ **{inv.failed}** failed "
+                    f"(${float(inv.failed_usd):,.2f})"
+                    + (
+                        f"\n⚖️ **{inv.uncollectible}** disputed "
+                        f"(${float(inv.uncollectible_usd):,.2f})"
+                        if inv.uncollectible > 0
+                        else ""
+                    )
+                ),
+                "inline": False,
             },
         )
 
