@@ -75,7 +75,9 @@ class AccountSnapshot:
     suspended: int = 0
     total: int = 0
     at_risk: int = 0  # ACTIVE with credits <= 0
-    total_credits: Decimal = Decimal("0")
+    zero_balance: int = 0  # ACTIVE with credits == 0
+    negative_balance: int = 0  # ACTIVE with credits < 0
+    total_balance: Decimal = Decimal("0")
     autorecharge_enabled: int = 0
     autorecharge_disabled: int = 0
 
@@ -86,7 +88,9 @@ class AccountSnapshot:
             "suspended": self.suspended,
             "total": self.total,
             "at_risk": self.at_risk,
-            "total_credits": float(self.total_credits),
+            "zero_balance": self.zero_balance,
+            "negative_balance": self.negative_balance,
+            "total_balance": float(self.total_balance),
             "autorecharge_enabled": self.autorecharge_enabled,
             "autorecharge_disabled": self.autorecharge_disabled,
         }
@@ -106,6 +110,8 @@ class RechargeActivity:
     disputed_usd: Decimal = Decimal("0")
     auto_recharge_total: int = 0
     auto_recharge_failed: int = 0
+    # Breakdown of PAID recharges by type (payment, auto, promo, etc.)
+    paid_by_type: Dict[str, dict] = field(default_factory=dict)
 
     @property
     def auto_recharge_failure_rate(self) -> float:
@@ -119,6 +125,7 @@ class RechargeActivity:
             "failed": {"count": self.failed_count, "usd": float(self.failed_usd)},
             "pending": {"count": self.pending_count, "usd": float(self.pending_usd)},
             "disputed": {"count": self.disputed_count, "usd": float(self.disputed_usd)},
+            "paid_by_type": self.paid_by_type,
             "auto_recharge_total": self.auto_recharge_total,
             "auto_recharge_failed": self.auto_recharge_failed,
             "auto_recharge_failure_rate": round(self.auto_recharge_failure_rate, 4),
@@ -265,7 +272,7 @@ def _compute_account_snapshot(session: Session, report: HealthReport) -> None:
     )
 
     snap = report.account_snapshot
-    for status, count, total_credits in rows:
+    for status, count, balance in rows:
         snap.total += count
         if status == "ACTIVE":
             snap.active = count
@@ -273,16 +280,27 @@ def _compute_account_snapshot(session: Session, report: HealthReport) -> None:
             snap.past_due = count
         elif status == "SUSPENDED":
             snap.suspended = count
-        snap.total_credits += total_credits
+        snap.total_balance += balance
 
-    snap.at_risk = (
+    snap.zero_balance = (
         session.query(func.count(BillingAccount.id))
         .filter(
             BillingAccount.account_status == "ACTIVE",
-            BillingAccount.credits <= 0,
+            BillingAccount.credits == 0,
         )
         .scalar()
     ) or 0
+
+    snap.negative_balance = (
+        session.query(func.count(BillingAccount.id))
+        .filter(
+            BillingAccount.account_status == "ACTIVE",
+            BillingAccount.credits < 0,
+        )
+        .scalar()
+    ) or 0
+
+    snap.at_risk = snap.zero_balance + snap.negative_balance
 
     ar_counts = (
         session.query(
@@ -345,6 +363,26 @@ def _compute_recharge_activity(
         ):
             activity.disputed_count = count
             activity.disputed_usd = total_usd
+
+    # Paid recharges broken down by type (payment, auto, promo, etc.)
+    type_rows = (
+        session.query(
+            Recharge.type,
+            func.count(Recharge.id),
+            func.coalesce(func.sum(Recharge.amount_usd), 0),
+        )
+        .filter(
+            Recharge.at >= cutoff,
+            Recharge.status.in_([RechargeStatus.PAID, RechargeStatus.PAID.value]),
+        )
+        .group_by(Recharge.type)
+        .all()
+    )
+    for rtype, count, total_usd in type_rows:
+        activity.paid_by_type[rtype or "unknown"] = {
+            "count": count,
+            "usd": float(total_usd),
+        }
 
     auto_rows = (
         session.query(
@@ -527,13 +565,19 @@ def _evaluate_alerts(report: HealthReport) -> None:
     activity = report.recharge_activity
 
     if snap.at_risk >= AT_RISK_WARN_THRESHOLD:
+        parts = []
+        if snap.zero_balance:
+            parts.append(f"{snap.zero_balance} at zero")
+        if snap.negative_balance:
+            parts.append(f"{snap.negative_balance} negative")
+        breakdown = f" ({', '.join(parts)})" if parts else ""
         report.alerts.append(
             HealthAlert(
                 category="at_risk_accounts",
                 severity="warning",
                 detail=(
                     f"{snap.at_risk} ACTIVE accounts have zero or negative "
-                    f"credits — billing guard should transition them"
+                    f"credits{breakdown} — billing guard should transition them"
                 ),
             ),
         )
@@ -656,6 +700,8 @@ def _log_summary(report: HealthReport) -> None:
         "accounts_past_due": report.account_snapshot.past_due,
         "accounts_suspended": report.account_snapshot.suspended,
         "at_risk": report.account_snapshot.at_risk,
+        "zero_balance": report.account_snapshot.zero_balance,
+        "negative_balance": report.account_snapshot.negative_balance,
         "recharges_paid_24h": report.recharge_activity.paid_count,
         "recharges_failed_24h": report.recharge_activity.failed_count,
         "auto_recharge_failure_rate": round(
