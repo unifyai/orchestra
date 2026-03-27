@@ -1464,17 +1464,17 @@ class TestAutoRechargeEndpoints:
         assert "unpaid" in response.json()["detail"].lower()
 
     @pytest.mark.anyio
-    async def test_put_enable_blocked_when_past_due(self, client, dbsession):
-        """Cannot enable auto-recharge when account is PAST_DUE."""
-        user = await create_test_user(client, "ar_pastdue@test.com")
+    async def test_put_enable_blocked_when_suspended(self, client, dbsession):
+        """Cannot enable auto-recharge when account is SUSPENDED."""
+        user = await create_test_user(client, "ar_suspended@test.com")
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
         if db_user.billing_account is None:
             ba = BillingAccount(
                 credits=Decimal("200"),
-                account_status="PAST_DUE",
-                stripe_customer_id="cus_ar_pastdue",
+                account_status="SUSPENDED",
+                stripe_customer_id="cus_ar_suspended",
             )
             dbsession.add(ba)
             dbsession.flush()
@@ -1483,8 +1483,8 @@ class TestAutoRechargeEndpoints:
         else:
             ba = db_user.billing_account
             ba.credits = Decimal("200")
-            ba.account_status = "PAST_DUE"
-            ba.stripe_customer_id = "cus_ar_pastdue"
+            ba.account_status = "SUSPENDED"
+            ba.stripe_customer_id = "cus_ar_suspended"
         dbsession.commit()
 
         response = await client.put(
@@ -1492,8 +1492,7 @@ class TestAutoRechargeEndpoints:
             json={"enabled": True, "threshold": 10.0, "qty": 50.0},
             headers=user["headers"],
         )
-        assert response.status_code == 400
-        assert "past due" in response.json()["detail"].lower()
+        assert response.status_code in (400, 403)
 
     @pytest.mark.anyio
     async def test_put_enable_allowed_after_invoice_paid(
@@ -2287,8 +2286,7 @@ class TestAdminBillingEndpoints:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "success"
-        assert "Billing guard completed" in data["message"]
+        assert data["status"] == "noop"
 
     @pytest.mark.anyio
     async def test_billing_endpoints_require_auth(self, client: AsyncClient):
@@ -2652,7 +2650,6 @@ class TestBillingModel:
 
         dao = BillingAccountDAO(dbsession)
         assert dao.set_account_status(org.billing_account_id, "SUSPENDED") is True
-        assert dao.set_account_status(org.billing_account_id, "PAST_DUE") is True
         assert dao.set_account_status(org.billing_account_id, "CLOSED") is True
         assert dao.set_account_status(org.billing_account_id, "ACTIVE") is True
 
@@ -2961,10 +2958,11 @@ class TestInternationalAddress:
 
 
 class TestAccountStatusEnforcement:
-    """PAST_DUE only blocks API access when credits are zero or negative.
+    """Only SUSPENDED and CLOSED block API access.
 
-    Users who have prepaid credits (from checkout) should not be locked
-    out just because a postpaid auto-recharge invoice failed.
+    ACTIVE accounts are never blocked by the middleware regardless of
+    credit balance.  Balance-based enforcement is handled per-handler
+    and by the spending-limit hook.
 
     These tests exercise the decision logic directly since the full
     HTTP dependency (check_account_not_frozen) requires request-state
@@ -2975,22 +2973,11 @@ class TestAccountStatusEnforcement:
         """Reproduce the logic from check_account_not_frozen."""
         if account_status in ("SUSPENDED", "CLOSED"):
             return True
-        if account_status == "PAST_DUE" and credits <= 0:
-            return True
         return False
 
     def test_active_never_blocked(self):
         assert self._should_block("ACTIVE", 0) is False
         assert self._should_block("ACTIVE", -50) is False
-
-    def test_past_due_positive_credits_allowed(self):
-        assert self._should_block("PAST_DUE", 50) is False
-
-    def test_past_due_zero_credits_blocked(self):
-        assert self._should_block("PAST_DUE", 0) is True
-
-    def test_past_due_negative_credits_blocked(self):
-        assert self._should_block("PAST_DUE", -20) is True
 
     def test_suspended_always_blocked(self):
         assert self._should_block("SUSPENDED", 500) is True

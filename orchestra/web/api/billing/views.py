@@ -593,7 +593,7 @@ def get_auto_recharge(
 
     blocked_reason = None
     if not ba.autorecharge:
-        if ba.account_status in ("PAST_DUE", "SUSPENDED", "CLOSED"):
+        if ba.account_status in ("SUSPENDED", "CLOSED"):
             blocked_reason = "account_status"
         elif ba_dao.has_unpaid_auto_recharges(ba.id):
             blocked_reason = "unpaid_invoice"
@@ -658,13 +658,13 @@ def update_auto_recharge(
 
     # --- Eligibility check when enabling ---------------------------------
     if body.enabled and not ba.autorecharge:
-        if ba.account_status in ("PAST_DUE", "SUSPENDED", "CLOSED"):
+        if ba.account_status in ("SUSPENDED", "CLOSED"):
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Auto-recharge cannot be enabled while your account "
-                    f"is {ba.account_status.replace('_', ' ').lower()}. "
-                    "Please resolve any outstanding invoices first."
+                    f"is {ba.account_status.lower()}. "
+                    "Please contact support."
                 ),
             )
         if ba_dao.has_unpaid_auto_recharges(ba.id):

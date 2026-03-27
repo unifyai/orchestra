@@ -6,14 +6,13 @@ Covers:
 2.  Auto-fix of stale recharges confirmed paid/void in Stripe
 3.  Stripe customer health checks (deleted / missing customers)
 4.  Orphaned Stripe invoices (paid invoices with no DB record)
-5.  Credit balance integrity (status/credit mismatches)
+5.  Credit balance integrity (autorecharge without customer, SUSPENDED flags)
 6.  Stuck DISPUTED recharges with Stripe cross-reference
 7.  Duplicate stripe_customer_id detection
-8.  Stale PAST_DUE accounts
-9.  Payment method health for autorecharge accounts
-10. Credit balance ceiling sanity check
-11. Webhook gap detection (Stripe events vs WebhookLog)
-12. Admin endpoint (POST /v0/admin/billing/reconcile)
+8.  Payment method health for autorecharge accounts
+9.  Credit balance ceiling sanity check
+10. Webhook gap detection (Stripe events vs WebhookLog)
+11. Admin endpoint (POST /v0/admin/billing/reconcile)
 """
 
 from __future__ import annotations
@@ -495,7 +494,8 @@ class TestStripeCustomerHealth:
 class TestCreditBalanceIntegrity:
     """Status/credit balance mismatches."""
 
-    def test_active_negative_credits_flagged(self, dbsession: Session, monkeypatch):
+    def test_active_negative_credits_not_flagged(self, dbsession: Session, monkeypatch):
+        """ACTIVE + negative credits is normal (balance-based enforcement)."""
         import orchestra.routines.billing_reconciliation as recon_mod
 
         monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
@@ -512,9 +512,11 @@ class TestCreditBalanceIntegrity:
         result = recon_mod.reconcile(session=dbsession)
 
         mismatches = [
-            d for d in result.discrepancies if d.category == "status_credit_mismatch"
+            d
+            for d in result.discrepancies
+            if d.category == "status_credit_mismatch" and d.billing_account_id == ba.id
         ]
-        assert any("ACTIVE" in d.detail and "negative" in d.detail for d in mismatches)
+        assert len(mismatches) == 0
 
     def test_suspended_positive_credits_flagged(self, dbsession: Session, monkeypatch):
         import orchestra.routines.billing_reconciliation as recon_mod
@@ -565,12 +567,12 @@ class TestCreditBalanceIntegrity:
         ]
         assert len(ar) == 1
 
-    def test_auto_fix_active_negative_cascades_to_suspended(
+    def test_active_negative_stays_active(
         self,
         dbsession: Session,
         monkeypatch,
     ):
-        """auto_fix='moderate' cascades ACTIVE + negative credits → PAST_DUE → SUSPENDED."""
+        """ACTIVE + negative credits stays ACTIVE (balance-based enforcement)."""
         import orchestra.routines.billing_reconciliation as recon_mod
 
         monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
@@ -587,8 +589,7 @@ class TestCreditBalanceIntegrity:
         result = recon_mod.reconcile(session=dbsession, auto_fix="moderate")
 
         dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert result.auto_fixed_count >= 2  # both transitions counted
+        assert ba.account_status == "ACTIVE"
 
     def test_auto_fix_autorecharge_no_customer(self, dbsession: Session, monkeypatch):
         """auto_fix='safe' disables autorecharge when there's no customer."""
@@ -1145,107 +1146,6 @@ class TestDuplicateStripeCustomers:
 
 
 # ============================================================================
-# Stale PAST_DUE Accounts
-# ============================================================================
-
-
-class TestStalePastDue:
-    """PAST_DUE accounts with non-positive credits should have been suspended."""
-
-    def test_past_due_zero_credits_flagged(self, dbsession: Session, monkeypatch):
-        import orchestra.routines.billing_reconciliation as recon_mod
-
-        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            account_status="PAST_DUE",
-            stripe_customer_id="cus_stale_pd",
-        )
-        make_user(dbsession, "recon_stale_pd", ba)
-        dbsession.commit()
-
-        result = recon_mod.reconcile(session=dbsession)
-
-        stale = [d for d in result.discrepancies if d.category == "stale_past_due"]
-        assert len(stale) == 1
-        assert stale[0].severity == "warning"
-        assert "PAST_DUE" in stale[0].detail
-
-    def test_past_due_negative_credits_flagged(self, dbsession: Session, monkeypatch):
-        import orchestra.routines.billing_reconciliation as recon_mod
-
-        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
-
-        ba = make_billing_account(
-            dbsession,
-            credits=-25,
-            account_status="PAST_DUE",
-            stripe_customer_id="cus_stale_pd_neg",
-        )
-        make_user(dbsession, "recon_stale_pd_neg", ba)
-        dbsession.commit()
-
-        result = recon_mod.reconcile(session=dbsession)
-
-        stale = [d for d in result.discrepancies if d.category == "stale_past_due"]
-        assert len(stale) == 1
-
-    def test_past_due_positive_credits_not_flagged(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """PAST_DUE with positive credits is a different issue (should restore
-        to ACTIVE), not the billing guard's stale case."""
-        import orchestra.routines.billing_reconciliation as recon_mod
-
-        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
-
-        ba = make_billing_account(
-            dbsession,
-            credits=50,
-            account_status="PAST_DUE",
-            stripe_customer_id="cus_pd_pos",
-        )
-        make_user(dbsession, "recon_pd_pos", ba)
-        dbsession.commit()
-
-        result = recon_mod.reconcile(session=dbsession)
-
-        stale = [
-            d
-            for d in result.discrepancies
-            if d.category == "stale_past_due" and d.billing_account_id == ba.id
-        ]
-        assert len(stale) == 0
-
-    def test_auto_fix_past_due_to_suspended(self, dbsession: Session, monkeypatch):
-        """auto_fix='moderate' transitions PAST_DUE + zero credits to SUSPENDED."""
-        import orchestra.routines.billing_reconciliation as recon_mod
-
-        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            account_status="PAST_DUE",
-            stripe_customer_id="cus_pd_af",
-            autorecharge=True,
-        )
-        make_user(dbsession, "recon_pd_af", ba)
-        dbsession.commit()
-
-        result = recon_mod.reconcile(session=dbsession, auto_fix="moderate")
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert ba.autorecharge is False
-        assert result.auto_fixed_count >= 1
-
-
-# ============================================================================
 # Payment Method Health
 # ============================================================================
 
@@ -1778,8 +1678,8 @@ class TestEnrichment:
         user, ba = make_user_with_billing(
             dbsession,
             "enrich_ctx_1",
-            credits=-5,
-            account_status="ACTIVE",
+            credits=50,
+            account_status="SUSPENDED",
         )
         rec = Recharge(
             billing_account_id=ba.id,
@@ -1814,8 +1714,8 @@ class TestEnrichment:
         user, ba = make_user_with_billing(
             dbsession,
             "enrich_cap_1",
-            credits=-1,
-            account_status="ACTIVE",
+            credits=100,
+            account_status="SUSPENDED",
         )
         now = _dt.datetime.now(_dt.timezone.utc)
         for i in range(8):
@@ -1912,35 +1812,6 @@ class TestEnrichment:
 
 class TestFixTierBoundaries:
     """Verify that each tier only applies its own fixes and below."""
-
-    def test_safe_does_not_fix_moderate_status_transition(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """auto_fix='safe' should NOT transition ACTIVE + negative → PAST_DUE."""
-        import orchestra.routines.billing_reconciliation as recon_mod
-
-        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
-
-        ba = make_billing_account(
-            dbsession,
-            credits=-10,
-            account_status="ACTIVE",
-            stripe_customer_id="cus_tier_s1",
-        )
-        make_user(dbsession, "tier_s1", ba)
-        dbsession.commit()
-
-        result = recon_mod.reconcile(session=dbsession, auto_fix="safe")
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"
-        mismatch = [
-            d for d in result.discrepancies if d.category == "status_credit_mismatch"
-        ]
-        assert len(mismatch) >= 1
-        assert mismatch[0].auto_fixed is False
 
     def test_safe_fixes_autorecharge_no_customer(self, dbsession: Session, monkeypatch):
         """auto_fix='safe' SHOULD disable autorecharge without a customer."""
@@ -2262,6 +2133,418 @@ class TestFixTierBoundaries:
         ]
         assert len(resolved) == 1
         assert resolved[0].auto_fixed is False
+
+
+# ============================================================================
+# Failed Recharge Credit Void Verification
+# ============================================================================
+
+
+class TestFailedRechargeVoids:
+    """FAILED auto-recharges should have their credits voided."""
+
+    def test_unvoided_failed_recharge_flagged(self, dbsession: Session, monkeypatch):
+        """FAILED auto-recharge with unvoided credits is flagged as critical."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(
+            recon_mod,
+            "stripe",
+            _make_mock_stripe(
+                invoice_retrieve=lambda iid: {"id": iid, "status": "void"},
+            ),
+        )
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "void_check_1",
+            credits=100,
+            stripe_customer_id="cus_void1",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.FAILED,
+            stripe_invoice_id="in_void_check",
+            type="auto",
+            at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=48),
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+
+        unvoided = [
+            d
+            for d in result.discrepancies
+            if d.category == "unvoided_failed_recharge"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(unvoided) == 1
+        assert unvoided[0].severity == "critical"
+        assert not unvoided[0].auto_fixed
+
+    def test_voided_failed_recharge_not_flagged(self, dbsession: Session, monkeypatch):
+        """FAILED recharge where credits were properly voided is clean."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(
+            recon_mod,
+            "stripe",
+            _make_mock_stripe(
+                invoice_retrieve=lambda iid: {"id": iid, "status": "void"},
+            ),
+        )
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "void_check_2",
+            credits=0,
+            stripe_customer_id="cus_void2",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.FAILED,
+            stripe_invoice_id="in_void_clean",
+            type="auto",
+            at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=48),
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+
+        unvoided = [
+            d
+            for d in result.discrepancies
+            if d.category == "unvoided_failed_recharge"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(unvoided) == 0
+
+    def test_auto_fix_deducts_unvoided_credits(self, dbsession: Session, monkeypatch):
+        """auto_fix='all' deducts the unvoided credits."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(
+            recon_mod,
+            "stripe",
+            _make_mock_stripe(
+                invoice_retrieve=lambda iid: {"id": iid, "status": "void"},
+            ),
+        )
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "void_fix_1",
+            credits=75,
+            stripe_customer_id="cus_void_fix",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.FAILED,
+            stripe_invoice_id="in_void_fix",
+            type="auto",
+            at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=48),
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession, auto_fix="all")
+
+        dbsession.refresh(ba)
+        assert ba.credits == Decimal("25")
+        unvoided = [
+            d
+            for d in result.discrepancies
+            if d.category == "unvoided_failed_recharge"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(unvoided) == 1
+        assert unvoided[0].auto_fixed is True
+
+
+# ============================================================================
+# Orphaned Grace Periods
+# ============================================================================
+
+
+class TestOrphanedGracePeriods:
+    """Contacts in grace_period with non-negative BA credits are flagged."""
+
+    def test_grace_period_with_positive_credits_flagged(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.models.orchestra_models import Assistant, AssistantContact
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "grace_orphan_1",
+            credits=50,
+            stripe_customer_id="cus_grace_orphan",
+        )
+        assistant = Assistant(
+            user_id=user.id,
+            first_name="TestAssistant",
+        )
+        dbsession.add(assistant)
+        dbsession.flush()
+
+        contact = AssistantContact(
+            assistant_id=assistant.agent_id,
+            contact_type="phone",
+            contact_value="+15551234567",
+            provider="twilio",
+            provisioned_by="platform",
+            status="grace_period",
+            grace_period_started_at=_dt.datetime.now(_dt.timezone.utc)
+            - _dt.timedelta(days=5),
+        )
+        dbsession.add(contact)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+
+        orphaned = [
+            d
+            for d in result.discrepancies
+            if d.category == "orphaned_grace_period" and d.billing_account_id == ba.id
+        ]
+        assert len(orphaned) == 1
+        assert orphaned[0].severity == "warning"
+
+    def test_grace_period_with_negative_credits_not_flagged(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.models.orchestra_models import Assistant, AssistantContact
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "grace_ok_1",
+            credits=-10,
+            stripe_customer_id="cus_grace_ok",
+        )
+        assistant = Assistant(
+            user_id=user.id,
+            first_name="TestAssistant2",
+        )
+        dbsession.add(assistant)
+        dbsession.flush()
+
+        contact = AssistantContact(
+            assistant_id=assistant.agent_id,
+            contact_type="phone",
+            contact_value="+15559876543",
+            provider="twilio",
+            provisioned_by="platform",
+            status="grace_period",
+            grace_period_started_at=_dt.datetime.now(_dt.timezone.utc)
+            - _dt.timedelta(days=3),
+        )
+        dbsession.add(contact)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+
+        orphaned = [
+            d
+            for d in result.discrepancies
+            if d.category == "orphaned_grace_period" and d.billing_account_id == ba.id
+        ]
+        assert len(orphaned) == 0
+
+    def test_auto_fix_safe_restores_contact(self, dbsession: Session, monkeypatch):
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.models.orchestra_models import Assistant, AssistantContact
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "grace_fix_1",
+            credits=100,
+            stripe_customer_id="cus_grace_fix",
+        )
+        assistant = Assistant(
+            user_id=user.id,
+            first_name="TestAssistant3",
+        )
+        dbsession.add(assistant)
+        dbsession.flush()
+
+        contact = AssistantContact(
+            assistant_id=assistant.agent_id,
+            contact_type="email",
+            contact_value="test@example.com",
+            provider="google_workspace",
+            provisioned_by="platform",
+            status="grace_period",
+            grace_period_started_at=_dt.datetime.now(_dt.timezone.utc)
+            - _dt.timedelta(days=2),
+        )
+        dbsession.add(contact)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession, auto_fix="safe")
+
+        dbsession.refresh(contact)
+        assert contact.status == "active"
+        assert contact.grace_period_started_at is None
+
+        orphaned = [
+            d
+            for d in result.discrepancies
+            if d.category == "orphaned_grace_period" and d.billing_account_id == ba.id
+        ]
+        assert len(orphaned) == 1
+        assert orphaned[0].auto_fixed is True
+
+
+# ============================================================================
+# Unjustified Suspensions
+# ============================================================================
+
+
+class TestUnjustifiedSuspensions:
+    """SUSPENDED accounts without dispute history are flagged."""
+
+    def test_suspended_no_disputes_flagged(self, dbsession: Session, monkeypatch):
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=0,
+            account_status="SUSPENDED",
+            stripe_customer_id="cus_unjust_1",
+        )
+        make_user(dbsession, "unjust_1", ba)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+
+        unjust = [
+            d
+            for d in result.discrepancies
+            if d.category == "unjustified_suspension" and d.billing_account_id == ba.id
+        ]
+        assert len(unjust) == 1
+        assert unjust[0].severity == "warning"
+        assert "no dispute history" in unjust[0].detail
+
+    def test_suspended_with_active_dispute_not_flagged(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=0,
+            account_status="SUSPENDED",
+            stripe_customer_id="cus_just_1",
+        )
+        make_user(dbsession, "just_1", ba)
+        disputed_recharge = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.DISPUTED,
+            stripe_invoice_id="in_disputed",
+            type="auto",
+            at=_dt.datetime.now(_dt.timezone.utc),
+        )
+        dbsession.add(disputed_recharge)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+
+        unjust = [
+            d
+            for d in result.discrepancies
+            if d.category == "unjustified_suspension" and d.billing_account_id == ba.id
+        ]
+        assert len(unjust) == 0
+
+    def test_auto_fix_moderate_restores_to_active(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=25,
+            account_status="SUSPENDED",
+            stripe_customer_id="cus_unjust_fix",
+        )
+        make_user(dbsession, "unjust_fix_1", ba)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession, auto_fix="moderate")
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+        unjust = [
+            d
+            for d in result.discrepancies
+            if d.category == "unjustified_suspension" and d.billing_account_id == ba.id
+        ]
+        assert len(unjust) == 1
+        assert unjust[0].auto_fixed is True
+
+    def test_safe_does_not_fix_unjustified_suspension(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """auto_fix='safe' should NOT restore SUSPENDED accounts."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=50,
+            account_status="SUSPENDED",
+            stripe_customer_id="cus_unjust_safe",
+        )
+        make_user(dbsession, "unjust_safe_1", ba)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession, auto_fix="safe")
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        unjust = [
+            d
+            for d in result.discrepancies
+            if d.category == "unjustified_suspension" and d.billing_account_id == ba.id
+        ]
+        assert len(unjust) >= 1
+        assert unjust[0].auto_fixed is False
 
 
 # ============================================================================

@@ -112,7 +112,7 @@ _FOOTER = (
 
 
 def build_insufficient_credits_email() -> str:
-    """Day 1: sent by the levy when an account goes PAST_DUE."""
+    """Day 1: sent by the levy when credits go negative."""
     return f"""
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
