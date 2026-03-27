@@ -1,0 +1,66 @@
+name: Contact Resource Levy
+
+on:
+  schedule:
+    # 1st of each month at midnight UTC
+  - cron: '0 0 1 * *'
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Billing year (defaults to current)'
+        required: false
+      month:
+        description: 'Billing month (defaults to current)'
+        required: false
+
+jobs:
+  levy_production:
+    name: Contact Levy Production
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run contact resource levy
+      run: |
+        PARAMS=""
+        if [ -n "${{ github.event.inputs.year }}" ]; then
+          PARAMS="${PARAMS}&year=${{ github.event.inputs.year }}"
+        fi
+        if [ -n "${{ github.event.inputs.month }}" ]; then
+          PARAMS="${PARAMS}&month=${{ github.event.inputs.month }}"
+        fi
+        PARAMS="${PARAMS#&}"
+        URL="https://api.unify.ai/v0/admin/billing/resource-levy"
+        if [ -n "$PARAMS" ]; then
+          URL="${URL}?${PARAMS}"
+        fi
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "$URL" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Contact resource levy failed with status $http_code"
+          exit 1
+        fi
+
+        month=$(echo "$body" | jq -r '.billing_month // "unknown"')
+        accounts=$(echo "$body" | jq -r '.accounts_processed // 0')
+        contacts=$(echo "$body" | jq -r '.total_contacts_billed // 0')
+        total=$(echo "$body" | jq -r '.total_amount // 0')
+        past_due=$(echo "$body" | jq -r '.accounts_marked_past_due // 0')
+        auto_recharges=$(echo "$body" | jq -r '.auto_recharges_triggered // 0')
+
+        echo "::notice::Billing month: $month"
+        echo "::notice::Processed: $accounts accounts, $contacts contacts billed"
+        echo "::notice::Total charged: \$$total"
+        echo "::notice::Accounts marked past due: $past_due | Auto-recharges triggered: $auto_recharges"
+
+        if [ "$past_due" -gt 0 ]; then
+          echo "::warning::$past_due accounts marked PAST_DUE after contact levy"
+        fi
