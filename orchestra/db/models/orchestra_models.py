@@ -91,7 +91,7 @@ class BillingAccount(Base):
         nullable=False,
         default="ACTIVE",
         server_default="ACTIVE",
-    )  # ACTIVE, PAST_DUE, SUSPENDED, CLOSED
+    )  # ACTIVE, SUSPENDED, CLOSED
     billing_setup_complete = Column(
         Boolean,
         nullable=False,
@@ -133,7 +133,7 @@ class BillingAccount(Base):
     )
     __table_args__ = (
         sa.CheckConstraint(
-            "account_status IN ('ACTIVE', 'PAST_DUE', 'SUSPENDED', 'CLOSED')",
+            "account_status IN ('ACTIVE', 'SUSPENDED', 'CLOSED')",
             name="ck_billing_account_status",
         ),
     )

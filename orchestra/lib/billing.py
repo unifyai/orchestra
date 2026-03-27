@@ -136,10 +136,10 @@ def get_billing_entity(
             f"set up. Please set up billing in the organization settings.",
         )
 
-    if ba.account_status != "ACTIVE":
+    if ba.account_status in ("SUSPENDED", "CLOSED"):
         raise ValueError(
             f"Organization {organization_id} is {ba.account_status}. "
-            f"Billing operations not allowed for non-active organizations.",
+            f"Billing operations not allowed.",
         )
 
     return BillingEntity(
@@ -352,7 +352,8 @@ def queue_auto_recharge(
             status=RechargeStatus.PENDING_INVOICE,
         )
         session.add(recharge)
-        billing_account.credits = billing_account.credits + Decimal(credits)
+        ba_dao = BillingAccountDAO(session)
+        new_balance = ba_dao.add_credits(billing_account.id, float(credits))
 
         logger.info(
             "Auto-recharge recorded for billing_account %s: "
@@ -361,7 +362,7 @@ def queue_auto_recharge(
             credits,
             credits,
             invoice_group,
-            billing_account.credits,
+            new_balance,
         )
     except Exception as e:
         logger.error(

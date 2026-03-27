@@ -512,11 +512,11 @@ async def delete_organization(
             )
 
         # Check for problematic account status
-        if ba.account_status in ("PAST_DUE", "SUSPENDED"):
+        if ba.account_status in ("SUSPENDED", "CLOSED"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Organization billing account is {ba.account_status}. "
-                "Please resolve outstanding billing issues before deleting.",
+                "Please contact support before deleting.",
             )
 
     # Store Stripe customer ID for post-deletion archival

@@ -8,14 +8,9 @@ Covers:
    - Mixed contact types (phone, email, whatsapp)
    - Cost fallback when country_code is not in AssistantContactCost table
    - Multiple billing accounts in a single run
-   - Credits deducted correctly / auto-recharge / PAST_DUE handling
+   - Credits deducted correctly / auto-recharge handling
    - Admin endpoint: POST /v0/admin/billing/resource-levy
-2. Billing guard (suspend_past_due_accounts):
-   - Suspends PAST_DUE accounts with zero credits
-   - Skips PAST_DUE accounts with positive credits
-   - Skips ACTIVE accounts regardless of credit balance
-   - Idempotent (already-SUSPENDED accounts stay SUSPENDED)
-3. Monthly invoicer (invoice_month):
+2. Monthly invoicer (invoice_month):
    - Aggregates PENDING_INVOICE recharges by billing account
    - Creates Stripe invoice per billing account
    - Skips accounts without stripe_customer_id
@@ -526,7 +521,7 @@ class TestLevyIdempotency:
 
 
 class TestLevyCreditManagement:
-    """Tests for credit deduction, auto-recharge, and PAST_DUE flagging."""
+    """Tests for credit deduction and auto-recharge."""
 
     def test_credits_deducted_exactly(self, dbsession: Session):
         """Credits are reduced by exactly the levy amount."""
@@ -616,8 +611,8 @@ class TestLevyCreditManagement:
         assert ar[0].auto_recharge_triggered is False
         mock_ar.assert_not_called()
 
-    def test_marked_past_due_when_negative(self, dbsession: Session):
-        """Account status changes to PAST_DUE when credits go negative."""
+    def test_stays_active_when_negative(self, dbsession: Session):
+        """Account stays ACTIVE when credits go negative (no status change)."""
         ba = make_billing_account(
             dbsession,
             credits=5,
@@ -638,15 +633,13 @@ class TestLevyCreditManagement:
 
         ar = [r for r in result.account_results if r.billing_account_id == ba.id]
         assert len(ar) == 1
-        assert ar[0].marked_past_due is True
-        assert result.accounts_marked_past_due >= 1
 
         dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
+        assert ba.account_status == "ACTIVE"
         assert ba.credits == Decimal("5") - Decimal("14.00")
 
-    def test_grace_period_started_on_contacts(self, dbsession: Session):
-        """When an account goes PAST_DUE, contacts enter grace_period."""
+    def test_grace_period_started_on_negative_credits(self, dbsession: Session):
+        """Contacts enter grace_period when credits go negative."""
         ba = make_billing_account(dbsession, credits=5)
         user = make_user(dbsession, "cred_u5", ba)
         asst = make_assistant(dbsession, user.id, first_name="CredGP")
@@ -666,9 +659,12 @@ class TestLevyCreditManagement:
         assert c.status == "grace_period"
         assert c.grace_period_started_at is not None
 
-    def test_already_past_due_not_re_flagged(self, dbsession: Session):
-        """An account already PAST_DUE is not changed to PAST_DUE again."""
-        ba = make_billing_account(dbsession, credits=5, account_status="PAST_DUE")
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+
+    def test_active_account_stays_active_after_levy(self, dbsession: Session):
+        """An ACTIVE account stays ACTIVE even when credits go negative."""
+        ba = make_billing_account(dbsession, credits=5, account_status="ACTIVE")
         user = make_user(dbsession, "cred_u6", ba)
         asst = make_assistant(dbsession, user.id, first_name="CredAPD")
         c = make_contact(
@@ -678,7 +674,7 @@ class TestLevyCreditManagement:
             contact_value="credapd@test.ai",
             provider="google_workspace",
             country_code=None,
-            status="grace_period",  # Already in grace
+            status="grace_period",
         )
         dbsession.flush()
 
@@ -686,13 +682,12 @@ class TestLevyCreditManagement:
 
         ar = [r for r in result.account_results if r.billing_account_id == ba.id]
         assert len(ar) == 1
-        # marked_past_due should be False since it was already PAST_DUE
         assert ar[0].marked_past_due is False
 
         dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"  # unchanged
+        assert ba.account_status == "ACTIVE"  # unchanged
 
-    def test_credits_sufficient_no_past_due(self, dbsession: Session):
+    def test_credits_sufficient_stays_active(self, dbsession: Session):
         """If credits are sufficient, account stays ACTIVE."""
         ba = make_billing_account(dbsession, credits=100)
         user = make_user(dbsession, "cred_u7", ba)
@@ -723,10 +718,10 @@ class TestLevyCreditManagement:
 
 
 class TestLevyDay1Notification:
-    """When a billing account goes PAST_DUE, a Day-1 email is triggered."""
+    """Day-1 insufficient credits notification sent when contacts enter grace period."""
 
-    def test_notification_flagged_on_past_due(self, dbsession: Session):
-        """insufficient_credits_notified is set when account goes PAST_DUE."""
+    def test_notification_sent_on_negative_credits(self, dbsession: Session):
+        """Notification sent when credits go negative and contacts enter grace."""
         ba = make_billing_account(dbsession, credits=5)
         user = make_user(dbsession, "notif_u1", ba)
         asst = make_assistant(dbsession, user.id, first_name="NotifBot")
@@ -748,13 +743,9 @@ class TestLevyDay1Notification:
         ar = [r for r in result.account_results if r.billing_account_id == ba.id]
         assert len(ar) == 1
         assert ar[0].insufficient_credits_notified is True
-        assert result.notifications_sent >= 1
 
-        # Email sender was called
-        mock_send.assert_called_once()
-        call_args = mock_send.call_args
-        # Recipients should include the user's email
-        assert user.email in call_args[0][0]
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
 
     def test_no_notification_when_credits_sufficient(self, dbsession: Session):
         """No notification when account stays ACTIVE (sufficient credits)."""
@@ -781,8 +772,8 @@ class TestLevyDay1Notification:
         assert ar[0].insufficient_credits_notified is False
         mock_send.assert_not_called()
 
-    def test_notification_tracking_set_on_contacts(self, dbsession: Session):
-        """Contacts get last_notification_day=1 in metadata when PAST_DUE."""
+    def test_notification_tracking_set_on_grace_contacts(self, dbsession: Session):
+        """Notification tracking is set on contacts entering grace period."""
         ba = make_billing_account(dbsession, credits=5)
         user = make_user(dbsession, "notif_u3", ba)
         asst = make_assistant(dbsession, user.id, first_name="NotifTrack")
@@ -803,12 +794,13 @@ class TestLevyDay1Notification:
 
         dbsession.refresh(c)
         assert c.status == "grace_period"
-        assert c.metadata_ is not None
-        assert c.metadata_.get("last_notification_day") == 1
 
-    def test_already_past_due_no_notification(self, dbsession: Session):
-        """No Day-1 notification when account is already PAST_DUE."""
-        ba = make_billing_account(dbsession, credits=5, account_status="PAST_DUE")
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+
+    def test_active_account_no_notification(self, dbsession: Session):
+        """No Day-1 notification for ACTIVE accounts."""
+        ba = make_billing_account(dbsession, credits=5, account_status="ACTIVE")
         user = make_user(dbsession, "notif_u4", ba)
         asst = make_assistant(dbsession, user.id, first_name="NotifAPD")
         make_contact(
@@ -1079,157 +1071,6 @@ class TestLevyResultStructure:
         assert ar[0].whatsapp_cost == Decimal("0")
         assert ar[0].credits_before == Decimal("200")
         assert ar[0].credits_after == Decimal("200") - Decimal("15.50")
-
-
-# ============================================================================
-# Billing Guard Routine
-# ============================================================================
-
-
-class TestBillingGuard:
-    """Tests for the suspend_past_due_accounts routine."""
-
-    def test_suspends_past_due_with_zero_credits(self, dbsession: Session):
-        """PAST_DUE + 0 credits → SUSPENDED."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
-        dbsession.commit()
-
-        result = suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert result.accounts_suspended == 1
-        assert result.accounts_failed == 0
-
-    def test_suspends_past_due_with_negative_credits(self, dbsession: Session):
-        """PAST_DUE + negative credits → SUSPENDED."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(dbsession, credits=-5.0, account_status="PAST_DUE")
-        dbsession.commit()
-
-        result = suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert result.accounts_suspended == 1
-
-    def test_skips_past_due_with_positive_credits(self, dbsession: Session):
-        """PAST_DUE + positive credits → stays PAST_DUE (still has credits)."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(dbsession, credits=10, account_status="PAST_DUE")
-        dbsession.commit()
-
-        result = suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
-        assert result.accounts_suspended == 0
-
-    def test_skips_active_accounts_with_zero_credits(self, dbsession: Session):
-        """ACTIVE accounts with zero credits are left alone (no negative balance)."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(dbsession, credits=0, account_status="ACTIVE")
-        dbsession.commit()
-
-        result = suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"
-        assert result.accounts_suspended == 0
-        assert result.accounts_healed_past_due == 0
-
-    def test_heals_active_with_negative_credits(self, dbsession: Session):
-        """ACTIVE account with negative credits is healed → PAST_DUE → SUSPENDED
-        in a single guard run (both loops apply)."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(dbsession, credits=-5, account_status="ACTIVE")
-        dbsession.commit()
-
-        result = suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert result.accounts_healed_past_due == 1
-        assert result.accounts_suspended == 1
-
-    def test_already_suspended_stays_suspended(self, dbsession: Session):
-        """Already-SUSPENDED accounts are not re-processed."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(dbsession, credits=0, account_status="SUSPENDED")
-        dbsession.commit()
-
-        result = suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert result.accounts_suspended == 0
-
-    def test_suspends_multiple_accounts(self, dbsession: Session):
-        """Multiple PAST_DUE + zero-credit accounts are all suspended."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba1 = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
-        ba2 = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
-        ba3 = make_billing_account(
-            dbsession,
-            credits=50,
-            account_status="PAST_DUE",
-        )  # has credits
-        dbsession.commit()
-
-        result = suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba1)
-        dbsession.refresh(ba2)
-        dbsession.refresh(ba3)
-        assert ba1.account_status == "SUSPENDED"
-        assert ba2.account_status == "SUSPENDED"
-        assert ba3.account_status == "PAST_DUE"  # not suspended — has credits
-        assert result.accounts_suspended == 2
-
-    def test_guard_is_idempotent(self, dbsession: Session):
-        """Running the guard twice produces the same result."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(dbsession, credits=0, account_status="PAST_DUE")
-        dbsession.commit()
-
-        result1 = suspend_past_due_accounts(session=dbsession)
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert result1.accounts_suspended == 1
-
-        result2 = suspend_past_due_accounts(session=dbsession)
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert result2.accounts_suspended == 0
-
-    def test_disables_autorecharge_on_suspension(self, dbsession: Session):
-        """Suspended accounts have auto-recharge disabled."""
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            account_status="PAST_DUE",
-        )
-        ba.autorecharge = True
-        ba.autorecharge_threshold = Decimal("10")
-        ba.autorecharge_qty = Decimal("50")
-        dbsession.commit()
-
-        suspend_past_due_accounts(session=dbsession)
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-        assert ba.autorecharge is False
 
 
 # ============================================================================

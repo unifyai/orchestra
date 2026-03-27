@@ -21,8 +21,8 @@ Behaviour:
        BillingAccount``).
     3. For each billing account, sum costs, deduct from credit wallet,
        set ``last_billed_month`` on every contact, trigger auto-recharge
-       if threshold met, and mark account ``PAST_DUE`` + set
-       ``grace_period_started_at`` on contacts if credits go negative.
+       if threshold met, and set ``grace_period_started_at`` on contacts
+       if credits go negative.
 """
 
 from __future__ import annotations
@@ -381,7 +381,7 @@ def _process_billing_account(
     After processing all contacts:
     4. Deduct total from ``ba.credits``.
     5. Trigger auto-recharge if threshold is crossed.
-    6. If credits go negative and account is ``ACTIVE``, mark ``PAST_DUE``
+    6. If credits go negative, start grace period on active contacts
        and set ``grace_period_started_at`` on all contacts in this batch.
     """
     ar = LevyAccountResult(
@@ -419,9 +419,15 @@ def _process_billing_account(
         ar.credits_after = ar.credits_before
         return ar
 
-    # Deduct credits
-    ba.credits = ba.credits - total_levy
-    ar.credits_after = Decimal(str(ba.credits))
+    # Deduct credits via DAO (acquires FOR UPDATE lock, tracks balance events)
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+    ba_dao = BillingAccountDAO(session)
+    new_balance = ba_dao.deduct_credits(ba.id, float(total_levy))
+    if new_balance is not None:
+        ar.credits_after = Decimal(str(new_balance))
+    else:
+        ar.credits_after = ar.credits_before
 
     logger.info(
         "Billing account %d: charged $%s for %d contacts (%s). " "Credits: %s → %s.",
@@ -455,12 +461,8 @@ def _process_billing_account(
                 },
             )
 
-    # Mark PAST_DUE if credits went negative
-    if ba.credits < 0 and ba.account_status == "ACTIVE":
-        ba.account_status = "PAST_DUE"
-        ar.marked_past_due = True
-
-        # Start grace period on all contacts for this billing account
+    # Start grace period on active contacts if credits went negative
+    if ba.credits < 0:
         now = _dt.datetime.now(_dt.timezone.utc)
         for contact in contacts:
             if contact.status == "active":
@@ -469,14 +471,16 @@ def _process_billing_account(
                 set_last_notification_day(contact, 1)
                 ar.grace_period_contacts += 1
 
-        ar.insufficient_credits_notified = True
+        if ar.grace_period_contacts > 0:
+            ar.marked_past_due = True
+            ar.insufficient_credits_notified = True
 
-        logger.warning(
-            "Billing account %d marked PAST_DUE after levy. "
-            "%d contacts entered grace period.",
-            ba.id,
-            ar.grace_period_contacts,
-        )
+            logger.warning(
+                "Billing account %d has negative credits after levy. "
+                "%d contacts entered grace period.",
+                ba.id,
+                ar.grace_period_contacts,
+            )
 
     return ar
 

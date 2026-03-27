@@ -311,7 +311,6 @@ async def _process_ba_grace_contacts(
         for contact in contacts:
             contact.status = "active"
             contact.grace_period_started_at = None
-            # Clear notification tracking
             set_last_notification_day(contact, 0)
             ar.restored_contacts += 1
             assistant_ids_to_reawaken.add(contact.assistant_id)
@@ -320,10 +319,6 @@ async def _process_ba_grace_contacts(
                 if getattr(contact, "assistant", None)
                 else None
             )
-
-        # If account was PAST_DUE, set it back to ACTIVE
-        if ba.account_status in ("PAST_DUE", "SUSPENDED"):
-            ba.account_status = "ACTIVE"
 
         # Reawaken affected assistants
         for aid in assistant_ids_to_reawaken:
