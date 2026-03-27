@@ -12,7 +12,6 @@ from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import AdminUser
 from orchestra.web.api.utils.http_responses import (
     account_frozen,
-    account_suspended,
     admin_not_authorized,
     invalid_api_key,
 )
@@ -135,13 +134,11 @@ def auth_admin_key(
 
 def check_account_not_frozen(request: Request):
     """
-    Check if the relevant billing account is frozen or suspended.
+    Check if the relevant billing account is frozen (dispute / fraud).
 
-    For personal API keys: checks the user's BillingAccount.
-    For org API keys: checks the organization's BillingAccount.
-
-    Uses :class:`BillingAccountDAO` to resolve the billing account rather
-    than duplicating ORM queries here.
+    Only SUSPENDED and CLOSED accounts are hard-blocked.  Balance-based
+    enforcement for billable actions is handled per-handler (credits
+    checks) and by Unity's spending-limit hook — not here.
     """
     user_id = getattr(request.state, "user_id", None)
     organization_id = getattr(request.state, "organization_id", None)
@@ -157,11 +154,9 @@ def check_account_not_frozen(request: Request):
 
             if ba.account_status in ("SUSPENDED", "CLOSED"):
                 raise account_frozen
-            if ba.account_status == "PAST_DUE" and ba.credits <= 0:
-                raise account_suspended
 
     except Exception as e:
-        if e == account_frozen or e == account_suspended:
+        if e == account_frozen:
             raise
         # If there's any other error, allow the request to proceed
         # rather than blocking legitimate users

@@ -490,7 +490,7 @@ def update_autorecharge(  # noqa: WPS211
 
     if enable:
         ba_dao = BillingAccountDAO(session)
-        if ba.account_status in ("PAST_DUE", "SUSPENDED", "CLOSED"):
+        if ba.account_status in ("SUSPENDED", "CLOSED"):
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -644,27 +644,17 @@ def trigger_monthly_invoicing(
 
 
 @router.post("/billing/suspend-past-due")
-def trigger_billing_guard(
-    session=Depends(get_db_session),
-) -> dict:
+def trigger_billing_guard() -> dict:
+    """Deprecated — billing guard removed.
+
+    SUSPENDED is now only set by dispute/fraud events, not by a
+    scheduled status escalation.  Balance-based enforcement handles
+    accounts with zero/negative credits.
     """
-    Trigger billing guard to suspend past-due billing accounts with zero credits.
-
-    Operates on **all** billing accounts (users and organizations).
-    This endpoint is designed to be called by Cloud Scheduler.
-    """
-    try:
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        suspend_past_due_accounts(session=session)
-
-        return {
-            "status": "success",
-            "message": "Billing guard completed - past-due accounts with zero credits suspended",
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Billing guard failed: {str(e)}")
+    return {
+        "status": "noop",
+        "message": "Billing guard has been removed. SUSPENDED is set only by disputes.",
+    }
 
 
 @router.post("/billing/resource-levy")

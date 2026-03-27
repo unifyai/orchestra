@@ -43,7 +43,7 @@ class TestAccountSnapshot:
     def test_status_counts(self, dbsession: Session):
         from orchestra.routines.billing_health import check_health
 
-        for status in ("ACTIVE", "ACTIVE", "PAST_DUE", "SUSPENDED"):
+        for status in ("ACTIVE", "ACTIVE", "ACTIVE", "SUSPENDED"):
             ba = make_billing_account(
                 dbsession,
                 credits=10,
@@ -56,8 +56,8 @@ class TestAccountSnapshot:
         report = check_health(session=dbsession)
         snap = report.account_snapshot
 
-        assert snap.active >= 2
-        assert snap.past_due >= 1
+        assert snap.active >= 3
+        assert snap.past_due == 0
         assert snap.suspended >= 1
         assert snap.total >= 4
 
@@ -984,11 +984,11 @@ class TestDiscordFormatting:
             accounts_checked=10,
             discrepancies=[
                 Discrepancy(
-                    category="stale_past_due",
+                    category="stale_pending_recharge",
                     severity="warning",
                     billing_account_id=7,
                     auto_fixed=True,
-                    detail="PAST_DUE → SUSPENDED",
+                    detail="Confirmed paid by Stripe",
                     owner_type="user",
                     owner_email="fixed@example.com",
                     owner_name="FixedUser",
