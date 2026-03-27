@@ -529,26 +529,26 @@ class AssistantContactDAO:
         self,
         ba: BillingAccount,
     ) -> None:
-        """Clear grace period on contacts if the billing account has been restored.
+        """Clear grace period on contacts if credits have been restored.
 
         Called after credits are added (checkout or invoice payment succeeded).
-        If credits are now >= 0 and the account was PAST_DUE, restores all
-        contacts from ``grace_period`` to ``active`` and sets the account back
-        to ``ACTIVE``.
+        If credits are now >= 0, restores all contacts from
+        ``grace_period`` to ``active``.
+
+        Does NOT change ``account_status`` — that is only set by
+        dispute/fraud events.
 
         Note: ``reawaken_assistant()`` is *not* called here because the Stripe
         webhook handler is synchronous.  The daily suspension routine will
         reawaken affected assistants on its next run; contacts in grace_period
         still have provisioned resources, so they remain functional.
         """
-        # Refresh the billing account to get latest credits after add_credits
         self.session.refresh(ba)
 
-        if ba.credits >= 0 and ba.account_status in ("PAST_DUE", "SUSPENDED"):
+        if ba.credits >= 0:
             try:
                 affected = self.clear_grace_period_for_billing_account(ba)
                 if affected:
-                    ba.account_status = "ACTIVE"
                     logger.info(
                         {
                             "message": "Grace period cleared after credit top-up",
@@ -557,7 +557,6 @@ class AssistantContactDAO:
                         },
                     )
             except Exception as e:
-                # Non-fatal: the daily suspension routine will handle this
                 logger.warning(
                     {
                         "message": "Failed to clear grace period after credit top-up (non-fatal)",

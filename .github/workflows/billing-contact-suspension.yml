@@ -1,0 +1,45 @@
+name: Contact Suspension Check
+
+on:
+  schedule:
+    # Daily at 01:00 UTC
+  - cron: '0 1 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  suspension_production:
+    name: Contact Suspension Production
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run contact suspension check
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/billing/resource-suspension" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Contact suspension check failed with status $http_code"
+          exit 1
+        fi
+
+        grace_found=$(echo "$body" | jq -r '.total_grace_contacts_found // 0')
+        accounts=$(echo "$body" | jq -r '.accounts_processed // 0')
+        restored=$(echo "$body" | jq -r '.contacts_restored // 0')
+        deleted=$(echo "$body" | jq -r '.contacts_deleted // 0')
+        reminders=$(echo "$body" | jq -r '.reminders_sent // 0')
+        deletion_emails=$(echo "$body" | jq -r '.deletion_emails_sent // 0')
+
+        echo "::notice::Grace period contacts found: $grace_found across $accounts accounts"
+        echo "::notice::Restored: $restored (account topped up) | Deleted: $deleted (grace expired)"
+        echo "::notice::Reminders sent: $reminders | Deletion emails: $deletion_emails"
+
+        if [ "$deleted" -gt 0 ]; then
+          echo "::warning::$deleted contacts deprovisioned due to expired grace period"
+        fi

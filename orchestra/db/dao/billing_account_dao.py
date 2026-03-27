@@ -28,7 +28,7 @@ MIN_AUTORECHARGE_AMOUNT = decimal.Decimal("25")
 MIN_SPEND_FOR_AUTO_RECHARGE = decimal.Decimal("1000")
 
 # Valid account status values
-VALID_ACCOUNT_STATUSES = {"ACTIVE", "PAST_DUE", "SUSPENDED", "CLOSED"}
+VALID_ACCOUNT_STATUSES = {"ACTIVE", "SUSPENDED", "CLOSED"}
 
 
 class BillingAccountDAO:
@@ -183,16 +183,27 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
+        Balance transitions are tracked automatically — a billing event
+        is published after the session commits if the balance crossed
+        zero in either direction.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to add.
         :return: New credit balance, or None if not found.
         """
+        from orchestra.lib.billing_events import (
+            track_balance_after,
+            track_balance_before,
+        )
+
         ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
+        track_balance_before(self.session, billing_account_id, ba.credits)
         new_credits = ba.credits + decimal.Decimal(str(quantity))
         ba.credits = new_credits
+        track_balance_after(self.session, billing_account_id, new_credits)
         return new_credits
 
     def deduct_credits(
@@ -206,14 +217,24 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
+        Balance transitions are tracked automatically — a billing event
+        is published after the session commits if the balance crossed
+        zero in either direction.
+
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to deduct.
         :return: New credit balance, or None if not found.
         """
+        from orchestra.lib.billing_events import (
+            track_balance_after,
+            track_balance_before,
+        )
+
         ba = self.get_for_update(billing_account_id)
         if ba is None:
             return None
 
+        track_balance_before(self.session, billing_account_id, ba.credits)
         new_credits = ba.credits - decimal.Decimal(str(quantity))
 
         if new_credits < 0:
@@ -223,6 +244,7 @@ class BillingAccountDAO:
             )
 
         ba.credits = new_credits
+        track_balance_after(self.session, billing_account_id, new_credits)
         return new_credits
 
     # =========================================================================
@@ -331,7 +353,7 @@ class BillingAccountDAO:
         Set the account status.
 
         :param billing_account_id: BillingAccount ID.
-        :param status: Must be ACTIVE, PAST_DUE, SUSPENDED, or CLOSED.
+        :param status: Must be ACTIVE, SUSPENDED, or CLOSED.
         :raises ValueError: If status is invalid.
         """
         if status not in VALID_ACCOUNT_STATUSES:
@@ -388,11 +410,17 @@ class BillingAccountDAO:
 
     def has_unpaid_auto_recharges(self, billing_account_id: int) -> bool:
         """Return True if the account has auto-recharge credits that
-        have been invoiced but not yet paid (``INVOICE_CREATED``) or
-        that failed collection (``FAILED``).
+        are still awaiting payment.
 
-        This is used to prevent re-enabling auto-recharge while the
-        account has outstanding debt from a previous auto-recharge cycle.
+        Checks for ``PENDING_INVOICE`` (invoice not yet created by
+        Stripe) and ``INVOICE_CREATED`` (invoice created, collection
+        in progress).
+
+        ``FAILED`` is intentionally excluded: by the time a recharge
+        reaches FAILED, the credits have already been voided and the
+        Stripe invoice has been voided — the debt is settled.  Keeping
+        FAILED here would permanently block auto-recharge after a
+        single payment failure with no self-service recovery path.
         """
         return (
             self.session.query(Recharge)
@@ -400,7 +428,7 @@ class BillingAccountDAO:
                 Recharge.billing_account_id == billing_account_id,
                 Recharge.type == "auto",
                 Recharge.status.in_(
-                    [RechargeStatus.INVOICE_CREATED, RechargeStatus.FAILED],
+                    [RechargeStatus.PENDING_INVOICE, RechargeStatus.INVOICE_CREATED],
                 ),
             )
             .first()
@@ -467,18 +495,29 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock so the credit addition is
         atomic with respect to concurrent deductions.
 
+        Balance transitions are tracked automatically — a billing event
+        is published after the session commits if the balance crossed
+        zero in either direction.
+
         :param billing_account_id: BillingAccount ID.
         :param credit_amount: Amount of credits to grant.
         :return: The created Recharge record.
         :raises ValueError: If the billing account is not found.
         """
+        from orchestra.lib.billing_events import (
+            track_balance_after,
+            track_balance_before,
+        )
+
         ba = self.get_for_update(billing_account_id)
         if ba is None:
             raise ValueError(
                 f"BillingAccount {billing_account_id} not found.",
             )
 
+        track_balance_before(self.session, billing_account_id, ba.credits)
         ba.credits = ba.credits + decimal.Decimal(str(credit_amount))
+        track_balance_after(self.session, billing_account_id, ba.credits)
 
         recharge = Recharge(
             billing_account_id=billing_account_id,

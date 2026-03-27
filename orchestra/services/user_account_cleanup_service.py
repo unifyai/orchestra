@@ -55,7 +55,7 @@ class UserAccountCleanupService:
         - User exists in user table
         - Has pending bills (PENDING_INVOICE or INVOICE_CREATED)
         - Has disputed recharges (DISPUTED)
-        - Billing account is in PAST_DUE or SUSPENDED state
+        - Billing account is in SUSPENDED or CLOSED state
         - Owns any organizations
 
         :param user_id: The user's ID
@@ -133,7 +133,7 @@ class UserAccountCleanupService:
                 ),
             )
 
-        if result.account_status in ("PAST_DUE", "SUSPENDED"):
+        if result.account_status in ("SUSPENDED", "CLOSED"):
             blockers.append(
                 DeletionBlocker(
                     reason="account_status",

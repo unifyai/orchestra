@@ -5,7 +5,7 @@ clearing (Phase 4).
 Covers:
 1. Suspension routine – restoration path:
    - Contacts restored when BA has credits ≥ 0
-   - BA status changed from PAST_DUE to ACTIVE on restoration
+   - Account status not modified by routine (contacts only)
    - reawaken_assistant called for restored contacts
 2. Suspension routine – deletion path (≥ 14 days overdue):
    - External deprovisioning called (phone / email / whatsapp)
@@ -263,7 +263,7 @@ class TestSuspensionRestoration:
         dbsession: Session,
     ):
         """Grace-period contacts are restored to 'active' if BA is topped up."""
-        ba = _make_ba(dbsession, credits=50, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=50, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rest_u1", ba)
         asst = _make_assistant(dbsession, user.id, first_name="RestBot1")
         c = _make_grace_contact(
@@ -284,9 +284,9 @@ class TestSuspensionRestoration:
         assert c.grace_period_started_at is None
 
     @pytest.mark.anyio
-    async def test_ba_status_restored_to_active(self, dbsession: Session):
-        """BA status is changed from PAST_DUE to ACTIVE when credits ≥ 0."""
-        ba = _make_ba(dbsession, credits=10, account_status="PAST_DUE")
+    async def test_account_status_not_modified_on_restoration(self, dbsession: Session):
+        """Account status is not modified by the suspension routine."""
+        ba = _make_ba(dbsession, credits=10, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rest_u2", ba)
         asst = _make_assistant(dbsession, user.id, first_name="RestBot2")
         _make_grace_contact(
@@ -303,8 +303,8 @@ class TestSuspensionRestoration:
         assert ba.account_status == "ACTIVE"
 
     @pytest.mark.anyio
-    async def test_ba_status_restored_from_suspended(self, dbsession: Session):
-        """BA status is changed from SUSPENDED to ACTIVE when credits ≥ 0."""
+    async def test_account_status_unchanged_when_suspended(self, dbsession: Session):
+        """Account status remains SUSPENDED – routine does not modify it."""
         ba = _make_ba(dbsession, credits=10, account_status="SUSPENDED")
         user = _make_user(dbsession, "susp_rest_u3", ba)
         asst = _make_assistant(dbsession, user.id, first_name="RestBot3")
@@ -319,12 +319,12 @@ class TestSuspensionRestoration:
         await suspend_overdue_contacts(session=dbsession)
 
         dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"
+        assert ba.account_status == "SUSPENDED"
 
     @pytest.mark.anyio
     async def test_restores_multiple_contacts(self, dbsession: Session):
         """Multiple grace-period contacts are all restored when BA is topped up."""
-        ba = _make_ba(dbsession, credits=100, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=100, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rest_u4", ba)
         asst = _make_assistant(dbsession, user.id, first_name="RestBot4")
         c1 = _make_grace_contact(
@@ -356,7 +356,7 @@ class TestSuspensionRestoration:
     @pytest.mark.anyio
     async def test_zero_credits_restores_contacts(self, dbsession: Session):
         """Contacts are restored when credits are exactly 0 (≥ 0 check)."""
-        ba = _make_ba(dbsession, credits=0, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=0, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rest_u5", ba)
         asst = _make_assistant(dbsession, user.id, first_name="RestBot5")
         c = _make_grace_contact(
@@ -389,7 +389,7 @@ class TestSuspensionDeletion:
         mock_external_calls,
     ):
         """Phone contact overdue by 15 days is soft-deleted."""
-        ba = _make_ba(dbsession, credits=-10, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-10, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_del_u1", ba)
         asst = _make_assistant(
             dbsession,
@@ -423,7 +423,7 @@ class TestSuspensionDeletion:
         mock_external_calls,
     ):
         """Email contact overdue by 14 days is soft-deleted."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_del_u2", ba)
         asst = _make_assistant(
             dbsession,
@@ -455,7 +455,7 @@ class TestSuspensionDeletion:
         mock_external_calls,
     ):
         """WhatsApp contact overdue by 20 days is soft-deleted."""
-        ba = _make_ba(dbsession, credits=-1, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-1, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_del_u3", ba)
         asst = _make_assistant(
             dbsession,
@@ -487,7 +487,7 @@ class TestSuspensionDeletion:
         dbsession: Session,
     ):
         """Contacts in grace_period for < 14 days are not deleted."""
-        ba = _make_ba(dbsession, credits=-10, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-10, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_del_u4", ba)
         asst = _make_assistant(dbsession, user.id, first_name="DelBot4")
         c = _make_grace_contact(
@@ -511,7 +511,7 @@ class TestSuspensionDeletion:
         mock_external_calls,
     ):
         """All overdue contacts for a BA are deleted at once."""
-        ba = _make_ba(dbsession, credits=-20, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-20, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_del_u5", ba)
         asst = _make_assistant(
             dbsession,
@@ -562,7 +562,7 @@ class TestSuspensionNotifications:
         mock_external_calls,
     ):
         """Day-7 warning sent for contacts at 7+ days in grace period."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rem_u1", ba, email="reminder@test.com")
         asst = _make_assistant(dbsession, user.id, first_name="RemBot1")
         c = _make_grace_contact(
@@ -587,7 +587,7 @@ class TestSuspensionNotifications:
         mock_external_calls,
     ):
         """Day-13 final warning sent for contacts at 13 days in grace period."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_n13_u1", ba, email="day13@test.com")
         asst = _make_assistant(dbsession, user.id, first_name="Day13Bot")
         c = _make_grace_contact(
@@ -608,7 +608,7 @@ class TestSuspensionNotifications:
     @pytest.mark.anyio
     async def test_no_reminder_under_7_days(self, dbsession: Session):
         """No reminder email for contacts < 7 days in grace period."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rem_u2", ba)
         asst = _make_assistant(dbsession, user.id, first_name="RemBot2")
         _make_grace_contact(
@@ -631,7 +631,7 @@ class TestSuspensionNotifications:
         mock_external_calls,
     ):
         """A contact already notified for Day 7 does not get Day 7 again."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_nodup_u1", ba)
         asst = _make_assistant(dbsession, user.id, first_name="NoDupBot")
         c = _make_grace_contact(
@@ -656,7 +656,7 @@ class TestSuspensionNotifications:
         mock_external_calls,
     ):
         """If Day-7 was missed, Day-13 run sends Day-13 (catch-up)."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_catch_u1", ba)
         asst = _make_assistant(dbsession, user.id, first_name="CatchBot")
         c = _make_grace_contact(
@@ -683,7 +683,7 @@ class TestSuspensionNotifications:
         mock_external_calls,
     ):
         """One contact gets a reminder, another gets deleted – both happen."""
-        ba = _make_ba(dbsession, credits=-10, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-10, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rem_u3", ba)
         asst1 = _make_assistant(
             dbsession,
@@ -730,7 +730,7 @@ class TestSuspensionNotifications:
         mock_external_calls,
     ):
         """When credits are restored, notification tracking is reset."""
-        ba = _make_ba(dbsession, credits=10, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=10, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_rst_n_u1", ba)
         asst = _make_assistant(dbsession, user.id, first_name="RstNBot")
         c = _make_grace_contact(
@@ -791,7 +791,7 @@ class TestSuspensionEdgeCases:
     @pytest.mark.anyio
     async def test_future_grace_period_not_acted_on(self, dbsession: Session):
         """Contacts with a future grace_period_started_at are not acted upon."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_edge_u2", ba)
         asst = _make_assistant(dbsession, user.id, first_name="EdgeBot2")
 
@@ -822,7 +822,7 @@ class TestSuspensionEdgeCases:
     async def test_mixed_ba_states(self, dbsession: Session, mock_external_calls):
         """Multiple BAs: one topped-up (restore), one negative (delete)."""
         # BA1: topped up
-        ba1 = _make_ba(dbsession, credits=100, account_status="PAST_DUE")
+        ba1 = _make_ba(dbsession, credits=100, account_status="ACTIVE")
         user1 = _make_user(dbsession, "susp_edge_u3a", ba1)
         asst1 = _make_assistant(dbsession, user1.id, first_name="EdgeBot3a")
         c_restore = _make_grace_contact(
@@ -833,7 +833,7 @@ class TestSuspensionEdgeCases:
         )
 
         # BA2: still negative
-        ba2 = _make_ba(dbsession, credits=-20, account_status="PAST_DUE")
+        ba2 = _make_ba(dbsession, credits=-20, account_status="ACTIVE")
         user2 = _make_user(dbsession, "susp_edge_u3b", ba2)
         asst2 = _make_assistant(
             dbsession,
@@ -867,7 +867,7 @@ class TestSuspensionEdgeCases:
         dbsession: Session,
     ):
         """Contacts with NULL grace_period_started_at are not deleted/reminded."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "susp_edge_u4", ba)
         asst = _make_assistant(dbsession, user.id, first_name="EdgeBot4")
 
@@ -956,7 +956,7 @@ class TestClearGracePeriodForBa:
 
     def test_clears_personal_user_contacts(self, dbsession: Session):
         """Personal user's grace-period contacts are restored."""
-        ba = _make_ba(dbsession, credits=50, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=50, account_status="ACTIVE")
         user = _make_user(dbsession, "cgp_u1", ba)
         asst = _make_assistant(dbsession, user.id, first_name="CgpBot1")
         c = _make_grace_contact(
@@ -981,7 +981,7 @@ class TestClearGracePeriodForBa:
         """Org contacts are restored when org BA is topped up."""
         user_ba = _make_ba(dbsession, credits=10)
         user = _make_user(dbsession, "cgp_u2", user_ba)
-        org_ba = _make_ba(dbsession, credits=50, account_status="PAST_DUE")
+        org_ba = _make_ba(dbsession, credits=50, account_status="ACTIVE")
         org = _make_org(dbsession, user, org_ba, name="CgpOrg1")
         asst = _make_assistant(
             dbsession,
@@ -1008,9 +1008,9 @@ class TestClearGracePeriodForBa:
 
     def test_does_not_cross_contaminate(self, dbsession: Session):
         """Clearing grace for user BA does not affect org BA contacts."""
-        user_ba = _make_ba(dbsession, credits=50, account_status="PAST_DUE")
+        user_ba = _make_ba(dbsession, credits=50, account_status="ACTIVE")
         user = _make_user(dbsession, "cgp_u3", user_ba)
-        org_ba = _make_ba(dbsession, credits=-10, account_status="PAST_DUE")
+        org_ba = _make_ba(dbsession, credits=-10, account_status="ACTIVE")
         org = _make_org(dbsession, user, org_ba, name="CgpOrg2")
 
         # Personal assistant
@@ -1087,7 +1087,7 @@ class TestMaybeClearGracePeriod:
         dbsession: Session,
     ):
         """When a top-up restores credits, grace period is cleared."""
-        ba = _make_ba(dbsession, credits=50, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=50, account_status="ACTIVE")
         user = _make_user(dbsession, "webhook_u1", ba)
         asst = _make_assistant(dbsession, user.id, first_name="WebhookBot1")
         c = _make_grace_contact(
@@ -1122,7 +1122,7 @@ class TestMaybeClearGracePeriod:
 
     def test_no_op_when_credits_still_negative(self, dbsession: Session):
         """No action when credits are still negative."""
-        ba = _make_ba(dbsession, credits=-5, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
         user = _make_user(dbsession, "webhook_u3", ba)
         asst = _make_assistant(dbsession, user.id, first_name="WebhookBot3")
         c = _make_grace_contact(
@@ -1136,7 +1136,7 @@ class TestMaybeClearGracePeriod:
         AssistantContactDAO(dbsession).maybe_clear_grace_period(ba)
 
         dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
+        assert ba.account_status == "ACTIVE"
 
         dbsession.refresh(c)
         assert c.status == "grace_period"
@@ -1254,7 +1254,7 @@ class TestAdminResourceSuspensionEndpoint:
         from orchestra.tests.utils import ADMIN_HEADERS
 
         # Create a grace-period contact that should be restored
-        ba = _make_ba(dbsession, credits=50, account_status="PAST_DUE")
+        ba = _make_ba(dbsession, credits=50, account_status="ACTIVE")
         user = _make_user(dbsession, "admin_susp_u1", ba)
         asst = _make_assistant(dbsession, user.id, first_name="AdminSusp1")
         _make_grace_contact(
@@ -1301,7 +1301,7 @@ class TestAdminResourceSuspensionEndpoint:
 
 
 class TestLevyToSuspensionLifecycle:
-    """Integration test: levy marks PAST_DUE → suspension deletes overdue."""
+    """Integration test: levy puts contacts in grace → suspension deletes overdue."""
 
     @pytest.mark.anyio
     async def test_levy_creates_grace_suspension_deletes(
@@ -1335,11 +1335,10 @@ class TestLevyToSuspensionLifecycle:
         dbsession.add(c)
         dbsession.flush()
 
-        # Step 1: Run levy → should go negative and mark PAST_DUE
+        # Step 1: Run levy → should go negative and put contacts in grace
         levy_result = levy_provisioned_resources(2026, 3, session=dbsession)
 
         dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
         assert ba.credits < 0
 
         dbsession.refresh(c)
@@ -1382,7 +1381,7 @@ class TestLevyToSuspensionLifecycle:
         dbsession.add(c)
         dbsession.flush()
 
-        # Step 1: Levy → PAST_DUE + grace_period
+        # Step 1: Levy → grace_period
         levy_provisioned_resources(2026, 3, session=dbsession)
 
         dbsession.refresh(c)
