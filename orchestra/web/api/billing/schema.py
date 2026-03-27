@@ -56,7 +56,7 @@ class AutoRechargeResponse(BaseModel):
     # If non-null, auto-recharge cannot be enabled and this explains why.
     # Possible values:
     #   "unpaid_invoice" – outstanding auto-recharge invoice being retried
-    #   "account_status" – account is PAST_DUE / SUSPENDED / CLOSED
+    #   "account_status" – account is SUSPENDED / CLOSED
     #   "spending"       – spending threshold not met
     #   "payment_method" – no default payment method
     blocked_reason: Optional[str] = None

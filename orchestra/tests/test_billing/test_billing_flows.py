@@ -11,7 +11,7 @@ Sections:
 - BillingProfileFlows: profile update → Stripe sync
 - CheckoutAutoRechargeFlows: checkout → credit spend → auto-recharge
 - DisputeFlows: charge.dispute → credit debit
-- InvoiceFailureFlows: invoice.payment_failed → PAST_DUE
+- InvoiceFailureFlows: invoice.payment_failed handling
 - LiveCheckoutFlows: real Stripe checkout session tests
 - LiveOrgFlows: org checkout, business details, tax ID sync
 
@@ -228,84 +228,6 @@ class TestAutoRechargeInvoicerFlows:
 
 
 # ============================================================================
-# Billing Guard Flows
-# ============================================================================
-
-
-class TestBillingGuardFlows:
-    """E2E: billing guard freeze / unfreeze scenarios."""
-
-    pytestmark = [
-        pytest.mark.e2e_webhook,
-        pytest.mark.skipif(not STRIPE_CLI_AVAILABLE, reason="Stripe CLI not available"),
-    ]
-
-    @pytest.mark.anyio
-    async def test_freeze_unfreeze(
-        self,
-        dbsession: Session,
-        require_server,
-        require_webhook_forwarding,
-    ):
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        email = f"e2e_guard_{uuid.uuid4().hex[:8]}@test.com"
-        user, customer_id = create_test_user_with_stripe(dbsession, email)
-        ba = user.billing_account
-
-        ba.account_status = "PAST_DUE"
-        ba.credits = Decimal("0")
-        dbsession.commit()
-
-        suspend_past_due_accounts(session=dbsession)
-        dbsession.refresh(ba)
-        assert ba.account_status == "SUSPENDED"
-
-        ba.credits = Decimal("50")
-        ba.account_status = "ACTIVE"
-        dbsession.commit()
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"
-        assert ba.credits == Decimal("50")
-
-        suspend_past_due_accounts(session=dbsession)
-        dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"
-
-    @pytest.mark.anyio
-    async def test_skips_active_accounts(
-        self,
-        dbsession: Session,
-        require_server,
-        require_webhook_forwarding,
-    ):
-        from orchestra.routines.billing_guard import suspend_past_due_accounts
-
-        email = f"e2e_guard_skip_{uuid.uuid4().hex[:8]}@test.com"
-        user, customer_id = create_test_user_with_stripe(dbsession, email)
-        ba = user.billing_account
-
-        # PAST_DUE with credits → not suspended
-        ba.account_status = "PAST_DUE"
-        ba.credits = Decimal("10")
-        dbsession.commit()
-
-        suspend_past_due_accounts(session=dbsession)
-        dbsession.refresh(ba)
-        assert ba.account_status == "PAST_DUE"
-
-        # ACTIVE with zero credits → not suspended
-        ba.account_status = "ACTIVE"
-        ba.credits = Decimal("0")
-        dbsession.commit()
-
-        suspend_past_due_accounts(session=dbsession)
-        dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"
-
-
-# ============================================================================
 # Billing Profile → Stripe Sync Flow
 # ============================================================================
 
@@ -483,7 +405,7 @@ class TestDisputeFlows:
 
 
 class TestInvoiceFailureFlows:
-    """E2E: invoice payment failure → PAST_DUE."""
+    """E2E: invoice payment failure — account stays ACTIVE."""
 
     pytestmark = [
         pytest.mark.e2e_webhook,
@@ -491,7 +413,7 @@ class TestInvoiceFailureFlows:
     ]
 
     @pytest.mark.anyio
-    async def test_invoice_payment_failed_marks_past_due(
+    async def test_invoice_payment_failed_keeps_active(
         self,
         dbsession: Session,
         require_server,
@@ -543,23 +465,15 @@ class TestInvoiceFailureFlows:
         if not success:
             pytest.skip(f"Stripe trigger failed: {output}")
 
+        time.sleep(3)
+
         ba_id = ba.id
+        dbsession.expire_all()
+        account = dbsession.query(BillingAccount).filter_by(id=ba_id).first()
+        assert account.account_status == "ACTIVE"
 
-        def check_past_due():
-            dbsession.expire_all()
-            account = dbsession.query(BillingAccount).filter_by(id=ba_id).first()
-            return account and account.account_status == "PAST_DUE"
-
-        past_due = wait_for_db_condition(dbsession, check_past_due, timeout=15)
-
-        if past_due:
-            dbsession.expire_all()
-            account = dbsession.query(BillingAccount).filter_by(id=ba_id).first()
-            assert account.account_status == "PAST_DUE"
-        else:
-            dbsession.expire_all()
-            r = dbsession.query(Recharge).filter_by(id=recharge.id).first()
-            assert r.status != RechargeStatus.PAID
+        r = dbsession.query(Recharge).filter_by(id=recharge.id).first()
+        assert r.status != RechargeStatus.PAID
 
 
 # ============================================================================

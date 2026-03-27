@@ -577,7 +577,7 @@ def _evaluate_alerts(report: HealthReport) -> None:
                 severity="warning",
                 detail=(
                     f"{snap.at_risk} ACTIVE accounts have zero or negative "
-                    f"credits{breakdown} — billing guard should transition them"
+                    f"credits{breakdown} — billable actions blocked by balance checks"
                 ),
             ),
         )
@@ -587,7 +587,10 @@ def _evaluate_alerts(report: HealthReport) -> None:
             HealthAlert(
                 category="past_due_accounts",
                 severity="info",
-                detail=f"{snap.past_due} accounts are in PAST_DUE status",
+                detail=(
+                    f"{snap.past_due} accounts still in legacy PAST_DUE status "
+                    f"— should be ACTIVE (balance-based enforcement)"
+                ),
             ),
         )
 
