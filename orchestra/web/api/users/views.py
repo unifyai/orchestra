@@ -483,10 +483,10 @@ def create_api_key(
     name: str,
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
+    custom_key: Optional[str] = None,
     session: Session = Depends(get_db_session),
 ):
     api_key_dao = ApiKeyDAO(session)
-    # TODO: This only allows for one api key at the time
     existing_api_key = api_key_dao.filter(
         user_id=user_id,
         organization_id=organization_id,
@@ -496,7 +496,14 @@ def create_api_key(
             status_code=400,
             detail="This user/organization already has an API key.",
         )
-    new_api_key = generate_key()
+    if custom_key:
+        existing_custom = api_key_dao.filter(key=custom_key)
+        if existing_custom:
+            raise HTTPException(
+                status_code=400,
+                detail="This API key value is already in use.",
+            )
+    new_api_key = custom_key or generate_key()
     api_key_dao.create(
         key=new_api_key,
         name=name,
