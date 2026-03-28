@@ -517,15 +517,20 @@ def create_api_key(
 def reset_api_key(
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
+    custom_key: Optional[str] = None,
     session: Session = Depends(get_db_session),
 ):
-    # TODO: This deletes all previous key from a user/org and creates a new one,
-    # this will need to be changed once multiple keys are enabled.
-    # delete prev key
     api_key_dao = ApiKeyDAO(session)
     old_api_key = api_key_dao.filter(user_id=user_id, organization_id=organization_id)
     api_key_dao.delete(id=old_api_key[0][0].id)
-    new_api_key = generate_key()
+    if custom_key:
+        existing_custom = api_key_dao.filter(key=custom_key)
+        if existing_custom:
+            raise HTTPException(
+                status_code=400,
+                detail="This API key value is already in use.",
+            )
+    new_api_key = custom_key or generate_key()
     api_key_dao.create(
         key=new_api_key,
         name="",
