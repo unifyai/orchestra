@@ -27,7 +27,9 @@ fixes are applied.  Each tier includes all lower tiers:
 
     - Stale recharge confirmed **paid** by Stripe → ``PAID``.
     - Dispute won → ``PAID`` + credits restored + account ``ACTIVE``.
-    - SUSPENDED without dispute history → ``ACTIVE``.
+    - SUSPENDED with no active disputes and reason ``dispute`` or
+      ``None`` (legacy) → ``ACTIVE``.  Accounts with reason
+      ``admin_freeze`` are always skipped.
 
 ``"all"``
     Includes *moderate* plus fixes that mutate credit balances or
@@ -48,8 +50,8 @@ Flag-only checks (never auto-fixed)
   dispute penalty).  Manual review needed.
 - **Duplicate Stripe customers** — DB-level data corruption.
 - **Credit balance ceiling** — phantom credit injection detection.
-- **SUSPENDED with past dispute history** — needs manual verification
-  of resolution status.
+- **SUSPENDED with ``admin_freeze`` reason** — intentional admin action,
+  never auto-fixed.
 
 The routine uses the *same* ``STRIPE_SECRET_KEY`` that Orchestra is
 configured with — staging instances use a test-mode key, production
@@ -616,8 +618,12 @@ def _check_orphaned_invoices(
                         )
                         session.add(new_recharge)
                         ba.credits += credits_amount
-                        if ba.account_status == "SUSPENDED":
+                        if (
+                            ba.account_status == "SUSPENDED"
+                            and ba.suspension_reason != "admin_freeze"
+                        ):
                             ba.account_status = "ACTIVE"
+                            ba.suspension_reason = None
                         fixed = True
                         logger.info(
                             "Auto-fixed orphaned invoice %s: created PAID "
@@ -860,8 +866,12 @@ def _check_stuck_disputes(
                     )
                     if ba:
                         ba.credits += recharge.quantity
-                        if ba.account_status == "SUSPENDED":
+                        if (
+                            ba.account_status == "SUSPENDED"
+                            and ba.suspension_reason != "admin_freeze"
+                        ):
                             ba.account_status = "ACTIVE"
+                            ba.suspension_reason = None
                         logger.info(
                             "Auto-fixed stuck dispute %s: DISPUTED → PAID, "
                             "re-credited %s to BA %s",
@@ -1360,16 +1370,19 @@ def _check_unjustified_suspensions(
     *,
     fix_level: int = FIX_NONE,
 ) -> None:
-    """Flag SUSPENDED accounts that have no DISPUTED recharges.
+    """Flag SUSPENDED accounts whose suspension may no longer be justified.
 
-    In the simplified billing model, SUSPENDED is only set by
-    ``charge.dispute.created`` (fraud/chargeback).  A SUSPENDED account
-    with no dispute history may be a leftover from the old billing guard
-    that transitioned negative-balance accounts to SUSPENDED.
+    Uses ``suspension_reason`` to decide whether a suspension is intentional:
+
+    - ``admin_freeze`` → intentional, always skipped.
+    - ``dispute`` → flagged only if no active DISPUTED recharges remain
+      (dispute may have been resolved without the webhook clearing the
+      status).  Auto-fixed at ``moderate``.
+    - ``None`` (legacy, pre-``suspension_reason``) → flagged; auto-fixed
+      at ``moderate`` since no explicit reason exists.
 
     Tier: ``moderate`` — restores SUSPENDED → ACTIVE when there are no
-    active disputes.  Accounts with resolved disputes (won/lost) but no
-    current DISPUTED recharges are also eligible.
+    active disputes and suspension_reason is ``dispute`` or ``None``.
     """
     suspended = (
         session.query(BillingAccount)
@@ -1378,6 +1391,9 @@ def _check_unjustified_suspensions(
     )
 
     for ba in suspended:
+        if ba.suspension_reason == "admin_freeze":
+            continue
+
         active_disputes = (
             session.query(Recharge)
             .filter(
@@ -1390,33 +1406,26 @@ def _check_unjustified_suspensions(
         if active_disputes > 0:
             continue
 
-        has_any_dispute_history = (
-            session.query(WebhookLog)
-            .filter(
-                WebhookLog.event_type.in_(
-                    ["charge.dispute.created", "charge.dispute.closed"],
-                ),
-            )
-            .count()
-            > 0
-        )
-
         fixed = False
-        if fix_level >= FIX_MODERATE and not has_any_dispute_history:
+        if fix_level >= FIX_MODERATE:
             ba.account_status = "ACTIVE"
+            ba.suspension_reason = None
             fixed = True
             logger.info(
                 "Auto-fixed BA %s: restored SUSPENDED → ACTIVE "
-                "(no dispute history found)",
+                "(reason=%r, no active disputes)",
                 ba.id,
+                ba.suspension_reason,
             )
 
-        severity = "info" if has_any_dispute_history else "warning"
-        detail_suffix = (
-            " — has past dispute history, verify resolution"
-            if has_any_dispute_history
-            else " — no dispute history, likely leftover from old billing guard"
-        )
+        if ba.suspension_reason == "dispute":
+            severity = "info"
+            detail_suffix = " — dispute reason set, but no active disputes remain"
+        else:
+            severity = "warning"
+            detail_suffix = (
+                " — no suspension reason, likely leftover from old billing guard"
+            )
 
         result.discrepancies.append(
             Discrepancy(
