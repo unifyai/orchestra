@@ -207,7 +207,7 @@ class TestRechargeActivity:
         assert report.recharge_activity is not None
 
     def test_paid_by_type_breakdown(self, dbsession: Session):
-        """Paid recharges are broken down by type (payment, auto, promo)."""
+        """Paid recharges are broken down by type with credits and USD."""
         from orchestra.routines.billing_health import check_health
 
         user, ba = make_user_with_billing(
@@ -216,12 +216,16 @@ class TestRechargeActivity:
             credits=200,
         )
         now = _dt.datetime.now(_dt.timezone.utc)
-        for rtype, amount in [("payment", 50), ("auto", 30), ("promo", 20)]:
+        for rtype, qty, usd in [
+            ("payment", 50, 50),
+            ("auto", 30, 30),
+            ("promo", 20, 0),
+        ]:
             dbsession.add(
                 Recharge(
                     billing_account_id=ba.id,
-                    quantity=Decimal(str(amount)),
-                    amount_usd=Decimal(str(amount)),
+                    quantity=Decimal(str(qty)),
+                    amount_usd=Decimal(str(usd)),
                     status=RechargeStatus.PAID,
                     type=rtype,
                     at=now - _dt.timedelta(hours=1),
@@ -234,8 +238,11 @@ class TestRechargeActivity:
         assert "payment" in by_type
         assert by_type["payment"]["count"] >= 1
         assert by_type["payment"]["usd"] >= 50.0
+        assert by_type["payment"]["credits"] >= 50.0
         assert "auto" in by_type
         assert "promo" in by_type
+        assert by_type["promo"]["usd"] == 0.0
+        assert by_type["promo"]["credits"] >= 20.0
 
     def test_paid_by_type_in_serialization(self, dbsession: Session):
         """paid_by_type appears in the to_dict() output."""
@@ -262,6 +269,7 @@ class TestRechargeActivity:
         d = report.recharge_activity.to_dict()
         assert "paid_by_type" in d
         assert "payment" in d["paid_by_type"]
+        assert "credits" in d["paid_by_type"]["payment"]
 
 
 # ============================================================================
