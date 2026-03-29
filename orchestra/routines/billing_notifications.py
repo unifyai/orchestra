@@ -224,9 +224,18 @@ def _format_health_embed(report: HealthReport, env_tag: str) -> dict:
     # Build paid-by-type breakdown line
     by_type_parts = []
     for rtype, info in sorted(activity.paid_by_type.items()):
-        by_type_parts.append(
-            f"**{info['count']}** {rtype} (${info['usd']:,.2f})",
-        )
+        credits = info.get("credits", 0)
+        usd = info.get("usd", 0)
+        if usd > 0:
+            by_type_parts.append(
+                f"**{info['count']}** {rtype} (${usd:,.2f})",
+            )
+        elif credits > 0:
+            by_type_parts.append(
+                f"**{info['count']}** {rtype} ({credits:,.0f} credits)",
+            )
+        else:
+            by_type_parts.append(f"**{info['count']}** {rtype}")
     by_type_line = (
         " · ".join(by_type_parts) if by_type_parts else "no paid recharges in window"
     )
