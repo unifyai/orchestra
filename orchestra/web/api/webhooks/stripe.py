@@ -793,6 +793,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
         def _suspend_ba_for_dispute(ba: BillingAccount) -> None:
             ba.account_status = "SUSPENDED"
+            ba.suspension_reason = "dispute"
             ba.autorecharge = False
 
         if credits_original > 0:
@@ -943,7 +944,12 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     is not None
                 )
                 if ba.account_status == "SUSPENDED" and not has_other_disputes:
-                    ba.account_status = "ACTIVE"
+                    if (
+                        ba.suspension_reason == "dispute"
+                        or ba.suspension_reason is None
+                    ):
+                        ba.account_status = "ACTIVE"
+                        ba.suspension_reason = None
 
                 logger.info(
                     {
@@ -966,7 +972,12 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                         is not None
                     )
                     if not has_other_disputes:
-                        ba.account_status = "ACTIVE"
+                        if (
+                            ba.suspension_reason == "dispute"
+                            or ba.suspension_reason is None
+                        ):
+                            ba.account_status = "ACTIVE"
+                            ba.suspension_reason = None
                 logger.info(
                     {
                         "message": "Dispute won — account evaluated (no credits to re-credit)",
