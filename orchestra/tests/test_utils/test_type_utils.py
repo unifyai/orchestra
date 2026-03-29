@@ -313,6 +313,34 @@ async def test_types_match_basic_and_nested():
     assert types_match("int", "str") is False
 
 
+@pytest.mark.anyio
+async def test_types_match_union_and_optional():
+    """Union[T, NoneType] (Optional[T]) must match T but not unrelated types."""
+    # Optional[datetime] matches datetime
+    assert types_match("Union[datetime, NoneType]", "datetime") is True
+    assert types_match("Optional[datetime]", "datetime") is True
+
+    # Optional[datetime] must NOT match str
+    assert types_match("Union[datetime, NoneType]", "str") is False
+    assert types_match("Optional[datetime]", "str") is False
+
+    # Optional[int] matches int, not str
+    assert types_match("Union[int, NoneType]", "int") is True
+    assert types_match("Union[int, NoneType]", "str") is False
+
+    # NoneType always matches (weak type, both directions)
+    assert types_match("Union[datetime, NoneType]", "NoneType") is True
+    assert types_match("NoneType", "Union[datetime, NoneType]") is True
+
+    # Inferred datetime matches field Optional[datetime]
+    assert types_match("Optional[datetime]", "datetime") is True
+
+    # Non-Optional Union: Union[int, str] matches both
+    assert types_match("Union[int, str]", "int") is True
+    assert types_match("Union[int, str]", "str") is True
+    assert types_match("Union[int, str]", "float") is False
+
+
 # -----------------
 # Value → Type inference
 # -----------------

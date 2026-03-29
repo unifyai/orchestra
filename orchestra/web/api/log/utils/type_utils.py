@@ -765,7 +765,7 @@ def types_match(field_type: Any, inferred_type: str) -> bool:
     # ---------- AST transformer to constraint graph ----------
     @dataclass
     class TypeConstraint:
-        kind: str  # any, none, enum, primitive, list, set, dict, tuple
+        kind: str  # any, none, enum, primitive, union, list, set, dict, tuple
         name: Optional[str] = None
         elements: Optional[List["TypeConstraint"]] = (
             None  # for list/set allowed element unions
@@ -788,6 +788,11 @@ def types_match(field_type: Any, inferred_type: str) -> bool:
             return TypeConstraint(kind="none")
         if node.name.lower() == "enum":
             return TypeConstraint(kind="enum")
+        if node.name == "Union" and node.args:
+            return TypeConstraint(
+                kind="union",
+                elements=[_to_constraint(a) for a in node.args],
+            )
 
         fam = _family_name(node.name)
         if fam is None:
@@ -852,6 +857,19 @@ def types_match(field_type: Any, inferred_type: str) -> bool:
             and inf.kind == "primitive"
             and (inf.name or "").lower() == "str"
         ):
+            return True
+
+        # Union handling: strip NoneType members to avoid NoneType's "weak"
+        # semantics making every Optional[T] match any type.
+        if exp.kind == "union":
+            non_none = [m for m in (exp.elements or []) if m.kind != "none"]
+            if non_none:
+                return any(_satisfies_c(m, inf) for m in non_none)
+            return True
+        if inf.kind == "union":
+            non_none = [m for m in (inf.elements or []) if m.kind != "none"]
+            if non_none:
+                return all(_satisfies_c(exp, m) for m in non_none)
             return True
 
         if exp.kind == "primitive" and inf.kind == "primitive":
