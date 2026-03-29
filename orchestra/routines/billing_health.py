@@ -406,6 +406,7 @@ def _compute_recharge_activity(
             Recharge.type,
             func.count(Recharge.id),
             func.coalesce(func.sum(Recharge.amount_usd), 0),
+            func.coalesce(func.sum(Recharge.quantity), 0),
         )
         .filter(
             Recharge.at >= cutoff,
@@ -414,10 +415,11 @@ def _compute_recharge_activity(
         .group_by(Recharge.type)
         .all()
     )
-    for rtype, count, total_usd in type_rows:
+    for rtype, count, total_usd, total_credits in type_rows:
         activity.paid_by_type[rtype or "unknown"] = {
             "count": count,
             "usd": float(total_usd),
+            "credits": float(total_credits),
         }
 
     auto_rows = (
