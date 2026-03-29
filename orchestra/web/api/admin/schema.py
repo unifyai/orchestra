@@ -1,4 +1,5 @@
 import datetime
+from enum import StrEnum
 from typing import Optional
 
 from pydantic import BaseModel
@@ -133,3 +134,15 @@ class AssistantContactCostWrite(BaseModel):
     country_code: Optional[str] = None
     monthly_cost: float
     one_time_cost: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Suspension reason
+# ---------------------------------------------------------------------------
+
+
+class SuspensionReason(StrEnum):
+    """Valid reasons for suspending a billing account."""
+
+    ADMIN_FREEZE = "admin_freeze"
+    DISPUTE = "dispute"

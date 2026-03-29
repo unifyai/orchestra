@@ -40,6 +40,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     RechargeModelResponse,
     RechargeTypeModelRequest,
     RechargeTypeModelResponse,
+    SuspensionReason,
     UsersModelResponse,
 )
 from orchestra.web.api.assistant.schema import (
@@ -992,6 +993,7 @@ def delete_contact_cost(
 @router.post("/billing/freeze")
 def freeze_billing_account(
     freeze: bool = True,
+    reason: Optional[SuspensionReason] = None,
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
     session=Depends(get_db_session),
@@ -1002,6 +1004,8 @@ def freeze_billing_account(
     Accepts ``user_id`` or ``organization_id`` (exactly one).
 
     :param freeze: True to suspend, False to activate.
+    :param reason: Suspension reason — ``admin_freeze`` or ``dispute``.
+        Defaults to ``admin_freeze`` when freezing.  Cleared on unfreeze.
     :param user_id: User ID.
     :param organization_id: Organization ID.
     """
@@ -1010,7 +1014,12 @@ def freeze_billing_account(
         user_id=user_id,
         organization_id=organization_id,
     )
-    ba.account_status = "SUSPENDED" if freeze else "ACTIVE"
+    if freeze:
+        ba.account_status = "SUSPENDED"
+        ba.suspension_reason = (reason or SuspensionReason.ADMIN_FREEZE).value
+    else:
+        ba.account_status = "ACTIVE"
+        ba.suspension_reason = None
     session.commit()
     status_str = "frozen" if freeze else "unfrozen"
     result: dict = {
@@ -1028,6 +1037,7 @@ def freeze_billing_account(
 def freeze_billing_account_by_stripe_id(
     stripe_id: str,
     freeze: bool = True,
+    reason: Optional[SuspensionReason] = None,
     session=Depends(get_db_session),
 ) -> dict:
     """
@@ -1038,6 +1048,8 @@ def freeze_billing_account_by_stripe_id(
 
     :param stripe_id: Stripe customer ID.
     :param freeze: True to suspend, False to activate.
+    :param reason: Suspension reason — ``admin_freeze`` or ``dispute``.
+        Defaults to ``admin_freeze`` when freezing.  Cleared on unfreeze.
     """
     ba_dao = BillingAccountDAO(session)
     ba = ba_dao.get_by_stripe_customer_id(stripe_id)
@@ -1048,6 +1060,9 @@ def freeze_billing_account_by_stripe_id(
         )
     new_status = "SUSPENDED" if freeze else "ACTIVE"
     ba_dao.set_account_status(ba.id, new_status)
+    ba.suspension_reason = (
+        (reason or SuspensionReason.ADMIN_FREEZE).value if freeze else None
+    )
     status_str = "frozen" if freeze else "unfrozen"
     return {
         "message": f"Account with stripe_id {stripe_id} {status_str} successfully!",

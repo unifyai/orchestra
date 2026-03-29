@@ -934,6 +934,7 @@ class TestDisputeCreated:
 
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
+        assert ba.suspension_reason == "dispute"
         assert ba.autorecharge is False
         assert float(ba.credits) == 20  # 100 - 80
 
@@ -1003,6 +1004,7 @@ class TestDisputeCreated:
 
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
+        assert ba.suspension_reason == "dispute"
         assert ba.autorecharge is False
         assert float(ba.credits) == 120  # 200 - (50 + 30)
 
@@ -1074,6 +1076,7 @@ class TestDisputeClosed:
             stripe_customer_id="cus_won_dispute",
         )
         ba.account_status = "SUSPENDED"
+        ba.suspension_reason = "dispute"
         ba.autorecharge = False
         r = Recharge(
             billing_account_id=ba.id,
@@ -1104,6 +1107,7 @@ class TestDisputeClosed:
 
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
         assert float(ba.credits) == 100  # 40 + 60
 
         dbsession.refresh(r)
@@ -1140,6 +1144,7 @@ class TestDisputeClosed:
             stripe_customer_id="cus_won_other",
         )
         ba.account_status = "SUSPENDED"
+        ba.suspension_reason = "dispute"
         # The disputed recharge
         r_disputed = Recharge(
             billing_account_id=ba.id,
@@ -1179,6 +1184,7 @@ class TestDisputeClosed:
 
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"  # restored — FAILED is settled debt
+        assert ba.suspension_reason is None
         assert float(ba.credits) == 100  # credits re-granted
 
         dbsession.refresh(r_disputed)
@@ -1215,6 +1221,7 @@ class TestDisputeClosed:
             stripe_customer_id="cus_won_multi",
         )
         ba.account_status = "SUSPENDED"
+        ba.suspension_reason = "dispute"
         r_disputed_won = Recharge(
             billing_account_id=ba.id,
             quantity=Decimal("40"),
@@ -1252,6 +1259,71 @@ class TestDisputeClosed:
 
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"  # stays — other dispute still open
+        assert ba.suspension_reason == "dispute"
+
+    def test_dispute_won_does_not_restore_admin_freeze(
+        self,
+        dbsession,
+        monkeypatch,
+    ):
+        """When a dispute is won but the account was admin-frozen,
+        the account stays SUSPENDED with its admin_freeze reason."""
+        import orchestra.web.api.webhooks.stripe as wh_mod
+        from orchestra.web.api.webhooks.stripe import process_charge_event
+
+        mock_stripe = SimpleNamespace(
+            PaymentIntent=SimpleNamespace(
+                retrieve=lambda pi_id: {
+                    "metadata": {
+                        "user_id": "won_admin_user",
+                        "credits_purchased": "50",
+                    },
+                    "invoice": "in_won_admin",
+                },
+            ),
+            StripeError=Exception,
+        )
+        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "won_admin_user",
+            credits=10,
+            stripe_customer_id="cus_won_admin",
+        )
+        ba.account_status = "SUSPENDED"
+        ba.suspension_reason = "admin_freeze"
+        r = Recharge(
+            billing_account_id=ba.id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status=RechargeStatus.DISPUTED,
+            stripe_invoice_id="in_won_admin",
+            type="payment",
+        )
+        dbsession.add(r)
+        dbsession.commit()
+
+        event = {
+            "id": "evt_won_admin",
+            "type": "charge.dispute.closed",
+            "data": {
+                "object": {
+                    "id": "dp_won_admin",
+                    "status": "won",
+                    "payment_intent": "pi_won_admin",
+                    "amount": 5000,
+                },
+            },
+        }
+
+        response = process_charge_event(event, dbsession)
+        assert response.status_code == 200
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        assert ba.suspension_reason == "admin_freeze"
+        assert float(ba.credits) == 60  # credits still restored
 
 
 # ============================================================================
