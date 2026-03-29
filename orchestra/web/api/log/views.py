@@ -2811,6 +2811,17 @@ def _delete_logs(
 
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
+            # Embedding cleanup before hard delete (see LogEventDAO.delete)
+            from orchestra.db.dao.embedding_dao import EmbeddingDAO
+
+            embedding_dao = EmbeddingDAO(session)
+            embedding_dao.cancel_queue(
+                log_event_ids=logs_to_delete,
+                reason="Log deleted",
+            )
+            embedding_dao.soft_delete(log_event_ids=logs_to_delete)
+            embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+
             deleted_count = (
                 session.query(LogEvent)
                 .filter(LogEvent.id.in_(logs_to_delete))
@@ -2974,6 +2985,17 @@ def _delete_logs(
 
             # Delete logs that don't exist in other contexts - BULK DELETE
             if logs_to_delete:
+                # Embedding cleanup before hard delete (see LogEventDAO.delete)
+                from orchestra.db.dao.embedding_dao import EmbeddingDAO
+
+                embedding_dao = EmbeddingDAO(session)
+                embedding_dao.cancel_queue(
+                    log_event_ids=logs_to_delete,
+                    reason="Log deleted",
+                )
+                embedding_dao.soft_delete(log_event_ids=logs_to_delete)
+                embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+
                 deleted_count = (
                     session.query(LogEvent)
                     .filter(LogEvent.id.in_(logs_to_delete))
