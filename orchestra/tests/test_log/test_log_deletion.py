@@ -3,6 +3,7 @@ from httpx import AsyncClient
 
 from . import (
     HEADERS,
+    _create_derived_entry,
     _create_log,
     _create_project,
     _delete_log_fields_from_logs,
@@ -2508,3 +2509,129 @@ async def test_delete_logs_source_type_derived_rejected_in_jsonb(
     assert (
         "JSONB mode does not distinguish" in detail
     ), f"Expected JSONB mode error message, got: {detail}"
+
+
+@pytest.mark.anyio
+async def test_delete_log_event_dao_cleans_up_embeddings(
+    client: AsyncClient,
+    dbsession,
+):
+    """LogEventDAO.delete must soft-delete embeddings and null their ref_ids
+    before hard-deleting the log event rows.  Without EmbeddingDAO cleanup the
+    DB-level SET NULL trigger fires per-row (expensive) and is_deleted stays
+    false so the embedding remains visible in HNSW searches."""
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project_name = "test-log-dao-embed-cleanup"
+
+    await _create_project(client, project_name)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"text_field": "some text to embed"},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="text_embed",
+        equation="embed({log:text_field})",
+        referenced_logs={"log": [log_id]},
+    )
+    assert response.status_code == 200
+
+    embedding_row = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_id,
+            Embedding.key == "text_embed",
+        ),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding should exist after sync embed"
+    assert embedding_row.is_deleted is False
+    embedding_id = embedding_row.id
+
+    response = await client.delete(
+        f"/v0/project/{project_name}/logs",
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Expected 200 but got {response.status_code}: {response.json()}"
+
+    dbsession.expire_all()
+    embedding_row = dbsession.execute(
+        select(Embedding).where(Embedding.id == embedding_id),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding row should survive log deletion"
+    assert (
+        embedding_row.is_deleted is True
+    ), "Embedding should be soft-deleted after log deletion"
+    assert (
+        embedding_row.ref_id is None
+    ), "Embedding ref_id should be nulled after log deletion"
+
+
+@pytest.mark.anyio
+async def test_delete_logs_api_cleans_up_embeddings(
+    client: AsyncClient,
+    dbsession,
+):
+    """DELETE /v0/logs (the _delete_logs view) performs inline ORM .delete()
+    on LogEvent rows.  It must run EmbeddingDAO cleanup first so embeddings
+    are soft-deleted and detached, rather than relying on the DB-level
+    SET NULL trigger (which leaves is_deleted=false)."""
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project_name = "test-logs-api-embed-cleanup"
+
+    await _create_project(client, project_name)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"text_field": "some text to embed via api"},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="text_embed",
+        equation="embed({log:text_field})",
+        referenced_logs={"log": [log_id]},
+    )
+    assert response.status_code == 200
+
+    embedding_row = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_id,
+            Embedding.key == "text_embed",
+        ),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding should exist after sync embed"
+    assert embedding_row.is_deleted is False
+    embedding_id = embedding_row.id
+
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(client, ids_and_fields, project_name=project_name)
+    assert (
+        response.status_code == 200
+    ), f"Expected 200 but got {response.status_code}: {response.json()}"
+
+    dbsession.expire_all()
+    embedding_row = dbsession.execute(
+        select(Embedding).where(Embedding.id == embedding_id),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding row should survive log deletion"
+    assert (
+        embedding_row.is_deleted is True
+    ), "Embedding should be soft-deleted after log deletion via API"
+    assert (
+        embedding_row.ref_id is None
+    ), "Embedding ref_id should be nulled after log deletion via API"
