@@ -26,9 +26,13 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.db.utils import FKPathParser, PathSegment
 
 
-def delete_orphaned_log_events(session: Session, project_id: int) -> None:
-    # Using a scoped delete for the specific project.
-    # This statement deletes log events that have no association rows in log_event_context.
+def delete_orphaned_log_events(
+    session: Session,
+    project_id: int,
+    skip_embedding_cleanup: bool = False,
+) -> None:
+    from orchestra.db.dao.embedding_dao import EmbeddingDAO
+
     orphaned_log_event_ids = session.execute(
         text(
             """
@@ -50,7 +54,18 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
 
     orphaned_ids = [row[0] for row in orphaned_log_event_ids]
 
-    # Delete the orphaned log events (JSONB-only storage)
+    # Clean up embeddings for orphaned log events before hard-deleting them.
+    # Skipped when called from a higher-level deletion (e.g. ProjectDAO.delete)
+    # that already handles embedding cleanup at project scope.
+    if not skip_embedding_cleanup:
+        embedding_dao = EmbeddingDAO(session)
+        embedding_dao.cancel_queue(
+            log_event_ids=orphaned_ids,
+            reason="Context deleted",
+        )
+        embedding_dao.soft_delete(log_event_ids=orphaned_ids)
+        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
+
     session.execute(
         text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
         {"log_event_ids": orphaned_ids},
@@ -2943,7 +2958,7 @@ class ContextDAO:
         self.session.commit()
         return total
 
-    def delete(self, id: int) -> None:
+    def delete(self, id: int, skip_embedding_cleanup: bool = False) -> None:
         from orchestra.db.dao.log_event_dao import LogEventDAO
         from orchestra.db.dao.plot_dao import PlotDAO
         from orchestra.db.dao.sibling_context_cleanup import (
@@ -3034,7 +3049,11 @@ class ContextDAO:
             self.session.flush()  # Ensure the context deletion cascades.
 
             # then remove all orphaned log events
-            delete_orphaned_log_events(self.session, context.project_id)
+            delete_orphaned_log_events(
+                self.session,
+                context.project_id,
+                skip_embedding_cleanup,
+            )
             self.session.commit()
         except Exception as e:
             self.session.rollback()
