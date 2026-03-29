@@ -1652,6 +1652,17 @@ class LogEventDAO:
             if first_log_event:
                 self._bulk_delete_gcs_media(ids, first_log_event.project_id)
 
+            # Embedding cleanup before hard delete: cancel pending queue items
+            # (prevents worker race conditions), soft-delete embeddings (excludes
+            # from HNSW search immediately), and null ref_ids (avoids per-row
+            # SET NULL trigger overhead when log_event rows are deleted).
+            from orchestra.db.dao.embedding_dao import EmbeddingDAO
+
+            embedding_dao = EmbeddingDAO(self.session)
+            embedding_dao.cancel_queue(log_event_ids=ids, reason="Log deleted")
+            embedding_dao.soft_delete(log_event_ids=ids)
+            embedding_dao.null_ref_ids(log_event_ids=ids)
+
             # First, delete the association rows referencing these log events
             self.session.query(LogEventContext).filter(
                 LogEventContext.log_event_id.in_(ids),
