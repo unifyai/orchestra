@@ -30,6 +30,10 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
+from orchestra.web.api.assistant.schema import (
+    SpendingLimitReachedRequest,
+    SpendingLimitReachedResponse,
+)
 from orchestra.web.api.users.schema import (
     AccountDeletionConfirmation,
     AccountDeletionResponse,
@@ -1499,14 +1503,9 @@ async def get_user_spending_limit(
     )
 
 
-# ============================================================================
-# Admin Spend Endpoints (for UniLLM service calls)
-# ============================================================================
-
-
-@admin_router.get("/user/{target_user_id}/spend", response_model=UserSpendResponse)
-def admin_get_user_spend(
-    target_user_id: str,
+@router.get("/user/spend", response_model=UserSpendResponse)
+async def get_user_spend(
+    request: Request,
     month: str = Query(
         ...,
         description="Month in YYYY-MM format",
@@ -1515,39 +1514,116 @@ def admin_get_user_spend(
     ),
     session: Session = Depends(get_db_session),
 ) -> UserSpendResponse:
-    """
-    Admin endpoint: Get a user's cumulative spend for a given month (personal context).
-
-    This endpoint is for internal service calls (e.g., UniLLM) and does not
-    require the caller to be the user themselves.
-    """
+    """Get the current user's cumulative spend for a given month (personal context)."""
+    user_id = request.state.user_id
     user_dao = UserDAO(session)
-    user_row = user_dao.get_by_id(target_user_id)
+    user_row = user_dao.get_by_id(user_id)
     if not user_row:
         raise not_found("User")
 
     user = user_row[0]
 
-    cumulative_spend = user_dao.get_cumulative_spend(target_user_id, month)
-    limit = user_dao.get_spending_cap(target_user_id)
+    cumulative_spend = user_dao.get_cumulative_spend(user_id, month)
+    limit = user_dao.get_spending_cap(user_id)
 
     percent_used = None
     if limit is not None and limit > 0:
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
-    # Include credit balance from the billing account (for credit guard checks)
     credit_balance = None
     if user.billing_account:
         credit_balance = float(user.billing_account.credits)
 
     return UserSpendResponse(
-        user_id=target_user_id,
+        user_id=user_id,
         month=month,
         cumulative_spend=cumulative_spend,
         limit=limit,
         limit_set_at=user.monthly_spending_cap_set_at,
         percent_used=percent_used,
         credit_balance=credit_balance,
+    )
+
+
+@router.post(
+    "/user/spending-limit-reached",
+    response_model=SpendingLimitReachedResponse,
+)
+async def spending_limit_reached(
+    request: Request,
+    body: SpendingLimitReachedRequest,
+    session: Session = Depends(get_db_session),
+) -> SpendingLimitReachedResponse:
+    """
+    Notify users when a spending limit is reached.
+
+    Called by Unity when a spending limit blocks an LLM call. Verifies the
+    caller has access to the entity, then sends email notifications and
+    records the notification for deduplication.
+    """
+    from orchestra.db.dao.assistant_dao import AssistantDAO
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.services.spending_limit_notification_service import (
+        SpendingLimitNotificationService,
+    )
+
+    user_id = request.state.user_id
+
+    if body.limit_type == "assistant":
+        assistant_dao = AssistantDAO(session)
+        assistant = assistant_dao.get_assistant_by_agent_id(int(body.entity_id))
+        if not assistant or assistant.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Assistant not found.")
+    elif body.limit_type == "user":
+        if body.entity_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot send notifications for another user.",
+            )
+    elif body.limit_type == "member":
+        org_member_dao = OrganizationMemberDAO(session)
+        member = org_member_dao.get_member(user_id, body.organization_id)
+        if not member:
+            raise HTTPException(
+                status_code=403,
+                detail="You must be a member of this organization.",
+            )
+    elif body.limit_type == "organization":
+        org_dao = OrganizationDAO(session)
+        org = org_dao.get(int(body.entity_id))
+        if not org:
+            raise HTTPException(status_code=404, detail="Organization not found.")
+        org_member_dao = OrganizationMemberDAO(session)
+        member = org_member_dao.get_member(user_id, int(body.entity_id))
+        is_owner = org.owner_id == user_id
+        if not member and not is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail="You must be a member of this organization.",
+            )
+
+    notification_service = SpendingLimitNotificationService(session)
+
+    result = notification_service.process_limit_reached(
+        limit_type=body.limit_type,
+        entity_id=body.entity_id,
+        limit_value=body.limit_value,
+        current_spend=body.current_spend,
+        month=body.month,
+        limit_set_at=body.limit_set_at,
+        entity_name=body.entity_name,
+        organization_id=body.organization_id,
+    )
+
+    if result.notified:
+        session.commit()
+
+    return SpendingLimitReachedResponse(
+        notified=result.notified,
+        reason=result.reason,
+        recipient_count=result.recipient_count,
+        notified_user_ids=result.notified_user_ids,
     )
 
 

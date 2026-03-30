@@ -1,11 +1,13 @@
 """Role and permission management endpoints."""
 
+import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.permission_dao import PermissionDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dependencies import get_db_session
@@ -16,6 +18,8 @@ from orchestra.web.api.roles.schema import (
     RoleResponse,
     RoleUpdate,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -80,7 +84,6 @@ def list_organization_roles(
     org_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
 
-    # Verify organization exists
     org = org_dao.get(organization_id)
     if not org:
         raise HTTPException(
@@ -88,7 +91,13 @@ def list_organization_roles(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Get roles for the organization
+    member_dao = OrganizationMemberDAO(session)
+    if org.owner_id != user_id and not member_dao.get_member(user_id, organization_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this organization",
+        )
+
     roles = role_dao.get_organization_roles(organization_id)
 
     return [_role_to_response(role, role_dao) for role in roles]
@@ -161,9 +170,10 @@ def create_custom_role(
         return _role_to_response(role, role_dao)
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to create role: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create role: {str(e)}",
+            detail="Failed to create role",
         )
 
 
@@ -191,7 +201,6 @@ def get_role(
     org_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
 
-    # Verify organization exists
     org = org_dao.get(organization_id)
     if not org:
         raise HTTPException(
@@ -199,7 +208,13 @@ def get_role(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Get role
+    member_dao = OrganizationMemberDAO(session)
+    if org.owner_id != user_id and not member_dao.get_member(user_id, organization_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this organization",
+        )
+
     role = role_dao.get(role_id)
     if not role:
         raise HTTPException(
@@ -207,7 +222,6 @@ def get_role(
             detail=f"Role with id {role_id} not found",
         )
 
-    # Verify role belongs to the organization (or is a system role)
     if role.organization_id is not None and role.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -294,9 +308,10 @@ def update_role(
         return _role_to_response(role, role_dao)
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to update role: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update role: {str(e)}",
+            detail="Failed to update role",
         )
 
 
@@ -368,9 +383,10 @@ def delete_role(
         return None
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to delete role: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete role: {str(e)}",
+            detail="Failed to delete role",
         )
 
 
@@ -449,9 +465,10 @@ def add_permissions_to_role(
         return _role_to_response(role, role_dao)
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to add permissions to role: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add permissions: {str(e)}",
+            detail="Failed to add permissions",
         )
 
 
@@ -528,9 +545,10 @@ def remove_permission_from_role(
         return _role_to_response(role, role_dao)
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to remove permission from role: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove permission: {str(e)}",
+            detail="Failed to remove permission",
         )
 
 

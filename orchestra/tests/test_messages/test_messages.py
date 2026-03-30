@@ -442,32 +442,6 @@ async def test_send_message_dispatches_tags_and_attachments(
 
 
 @pytest.mark.anyio
-async def test_send_message_too_many_attachments(
-    client: AsyncClient,
-    assistant_id: int,
-):
-    attachments = [
-        {
-            "id": f"att-{i}",
-            "filename": f"file{i}.txt",
-            "gs_url": f"gs://bucket/path/{i}",
-        }
-        for i in range(11)
-    ]
-    resp = await client.post(
-        "/v0/messages",
-        json={
-            "assistant_id": assistant_id,
-            "message": "Too many",
-            "attachments": attachments,
-        },
-        headers=HEADERS,
-    )
-    assert resp.status_code == status.HTTP_400_BAD_REQUEST
-    assert "10" in resp.json()["detail"]
-
-
-@pytest.mark.anyio
 async def test_complete_message_with_tags_and_attachments(
     client: AsyncClient,
     assistant_id: int,

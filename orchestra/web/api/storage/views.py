@@ -8,6 +8,7 @@ from Google Cloud Storage objects.
 import base64
 import datetime
 import logging
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,7 +24,21 @@ from orchestra.web.api.utils.gcp import parse_gcs_url
 
 logger = logging.getLogger(__name__)
 
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
 router = APIRouter()
+
+
+def _validate_bucket(bucket_name: str, bucket_service: BucketService) -> None:
+    if not bucket_service.is_allowed_bucket(bucket_name):
+        raise HTTPException(
+            status_code=403,
+            detail="Access to the requested bucket is not permitted",
+        )
+
+
+def _sanitize_filename(filename: str) -> str:
+    return re.sub(r'["\r\n\x00/\\]', "_", filename)
 
 
 @router.post(
@@ -82,33 +97,29 @@ def generate_signed_url(
             detail="Invalid GCS URI format. Expected gs://bucket-name/object-path",
         )
 
+    _validate_bucket(bucket_name, bucket_service)
+
     try:
-        # Get the bucket and blob
         bucket = bucket_service.storage_client.bucket(bucket_name)
         blob = bucket.blob(object_path)
 
-        # Check if the object exists
         if not blob.exists():
             raise HTTPException(
                 status_code=404,
                 detail=f"Object not found: {request.gcs_uri}",
             )
 
-        # Generate the signed URL
         expiration = datetime.timedelta(minutes=request.expiration_minutes)
 
-        # Build signed URL kwargs
         signed_url_kwargs = {
             "version": "v4",
             "expiration": expiration,
             "method": "GET",
         }
 
-        # Add response_disposition to force download if requested
         if request.download:
-            # Use provided filename, or extract from object path
             if request.filename:
-                filename = request.filename
+                filename = _sanitize_filename(request.filename)
             else:
                 filename = (
                     object_path.split("/")[-1] if "/" in object_path else object_path
@@ -130,7 +141,7 @@ def generate_signed_url(
         logger.error(f"Failed to generate signed URL for {request.gcs_uri}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate signed URL: {str(e)}",
+            detail="Failed to generate signed URL",
         )
 
 
@@ -192,26 +203,28 @@ def download_object(
             detail="Invalid GCS URI format. Expected gs://bucket-name/object-path",
         )
 
+    _validate_bucket(bucket_name, bucket_service)
+
     try:
-        # Get the bucket and blob
         bucket = bucket_service.storage_client.bucket(bucket_name)
         blob = bucket.blob(object_path)
 
-        # Check if the object exists
         if not blob.exists():
             raise HTTPException(
                 status_code=404,
                 detail=f"Object not found: {request.gcs_uri}",
             )
 
-        # Download the content
-        content = blob.download_as_bytes()
+        blob.reload()
+        if isinstance(blob.size, (int, float)) and blob.size > MAX_DOWNLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Object exceeds maximum download size of {MAX_DOWNLOAD_BYTES} bytes",
+            )
 
-        # Get content type from blob metadata
-        blob.reload()  # Ensure we have the latest metadata
+        content = blob.download_as_bytes()
         content_type: Optional[str] = blob.content_type
 
-        # Encode to base64
         content_base64 = base64.b64encode(content).decode("utf-8")
 
         return DownloadResponse(
@@ -226,5 +239,5 @@ def download_object(
         logger.error(f"Failed to download object {request.gcs_uri}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to download object: {str(e)}",
+            detail="Failed to download object",
         )

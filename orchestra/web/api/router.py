@@ -1,5 +1,3 @@
-import os
-
 from fastapi import Depends
 from fastapi.responses import RedirectResponse
 from fastapi.routing import APIRouter
@@ -45,11 +43,33 @@ API_KEY_AUTH = [
     Depends(auth_api_key),
     Depends(check_account_not_frozen),
 ]
-ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else None
+ADMIN_AUTH = [Depends(auth_admin_key)]
 
 groupings = {
     "Assistants": [
+        "Assistant Management",
         "Messages",
+        "Voices",
+        "Media",
+    ],
+    "Projects": [
+        "Projects",
+        "Contexts",
+        "Logs",
+    ],
+    "Account": [
+        "User",
+        "API Keys",
+        "Credits",
+        "Billing",
+    ],
+    "Organizations": [
+        "Organizations",
+        "Roles & Permissions",
+        "Teams & Resource Access",
+    ],
+    "Storage": [
+        "Storage",
     ],
 }
 
@@ -73,7 +93,7 @@ api_router.include_router(
 )
 api_router.include_router(
     users.router,
-    tags=["Query Logging"],
+    tags=["User"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

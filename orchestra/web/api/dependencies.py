@@ -3,7 +3,7 @@ import os
 import secrets
 from contextlib import contextmanager
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -156,7 +156,10 @@ def check_account_not_frozen(request: Request):
                 raise account_frozen
 
     except Exception as e:
-        if e == account_frozen:
+        if e is account_frozen:
             raise
-        # If there's any other error, allow the request to proceed
-        # rather than blocking legitimate users
+        logger.error(f"Account freeze check failed: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify account status",
+        )
