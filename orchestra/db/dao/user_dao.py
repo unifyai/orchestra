@@ -111,7 +111,6 @@ class UserDAO:
             store_prompts=True,
         )
         self.session.add(user)
-
         return user
 
     def filter(
