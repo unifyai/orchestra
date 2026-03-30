@@ -3692,3 +3692,255 @@ async def test_delete_context_with_pending_embeddings(
     assert (
         embedding_row.ref_id is None
     ), "Embedding ref_id should be nulled after context deletion"
+
+
+@pytest.mark.anyio
+async def test_delete_context_batched_sibling_cleanup_multiple_logs(
+    client: AsyncClient,
+):
+    """
+    Batched sibling cleanup must handle multiple logs correctly.
+
+    Creates 3 logs across all 3 tiers, deletes tier3.
+    Verifies all logs are cleaned from tier2, preserved in tier1 (archive).
+    """
+    project_name = "Assistants"
+    tier1 = "All/BatchTest"
+    tier2 = "batch-user/All/BatchTest"
+    tier3 = "batch-user/batch-asst/BatchTest"
+
+    await _create_project(client, project_name)
+
+    for ctx in [tier1, tier2, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    log_ids = []
+    for i in range(3):
+        log_resp = await _create_log(
+            client,
+            project_name,
+            entries={
+                "message": f"batch sibling test {i}",
+                "_user": "batch-user",
+                "_assistant": "batch-asst",
+            },
+            context=tier3,
+        )
+        assert log_resp.status_code == 200
+        log_ids.append(log_resp.json()["log_event_ids"][0])
+
+    for ctx in [tier1, tier2]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": log_ids},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    for ctx in [tier1, tier2, tier3]:
+        logs = await fetch_logs(client, project_name, context=ctx)
+        found = [log["id"] for log in logs]
+        for lid in log_ids:
+            assert lid in found, f"Log {lid} should be in {ctx} before deletion"
+
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{tier3}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    tier2_logs = await fetch_logs(client, project_name, context=tier2)
+    tier2_ids = [log["id"] for log in tier2_logs]
+    for lid in log_ids:
+        assert (
+            lid not in tier2_ids
+        ), f"Log {lid} should be removed from tier2 after tier3 deletion"
+
+    tier1_logs = await fetch_logs(client, project_name, context=tier1)
+    tier1_ids = [log["id"] for log in tier1_logs]
+    for lid in log_ids:
+        assert (
+            lid in tier1_ids
+        ), f"Log {lid} should remain in archive tier1 (archive protection)"
+
+
+@pytest.mark.anyio
+async def test_delete_context_scoped_orphan_detection(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Scoped orphan detection only removes logs that have no other context.
+
+    Creates two contexts sharing some logs, deletes one context.
+    Logs exclusive to the deleted context become orphaned and are deleted.
+    Shared logs survive because they still belong to the other context.
+    """
+    from sqlalchemy import text
+
+    project_name = "test-scoped-orphan"
+
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    for ctx in ["ctx-a", "ctx-b"]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    shared_resp = await _create_log(
+        client,
+        project_name,
+        entries={"note": "shared log"},
+        context="ctx-a",
+    )
+    assert shared_resp.status_code == 200
+    shared_id = shared_resp.json()["log_event_ids"][0]
+
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": "ctx-b", "log_ids": [shared_id]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    exclusive_resp = await _create_log(
+        client,
+        project_name,
+        entries={"note": "exclusive to ctx-a"},
+        context="ctx-a",
+    )
+    assert exclusive_resp.status_code == 200
+    exclusive_id = exclusive_resp.json()["log_event_ids"][0]
+
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/ctx-a",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    ctx_b_logs = await fetch_logs(client, project_name, context="ctx-b")
+    ctx_b_ids = [log["id"] for log in ctx_b_logs]
+    assert shared_id in ctx_b_ids, "Shared log should survive in ctx-b"
+
+    dbsession.expire_all()
+    row = dbsession.execute(
+        text("SELECT id FROM log_event WHERE id = :id"),
+        {"id": exclusive_id},
+    ).fetchone()
+    assert row is None, "Exclusive log should be hard-deleted as orphan"
+
+    row = dbsession.execute(
+        text("SELECT id FROM log_event WHERE id = :id"),
+        {"id": shared_id},
+    ).fetchone()
+    assert row is not None, "Shared log should still exist"
+
+
+@pytest.mark.anyio
+async def test_delete_context_phased_with_embeddings_tier1(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Deleting a tier1 (All/*) context in Assistants project should cascade to
+    other tiers and soft-delete embeddings for orphaned logs.
+
+    This tests the full phased deletion: sibling cleanup -> embedding cleanup
+    -> context deletion -> orphan log deletion.
+    """
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project_name = "Assistants"
+    tier1 = "All/EmbedPhaseTest"
+    tier2 = "phase-user/All/EmbedPhaseTest"
+    tier3 = "phase-user/phase-asst/EmbedPhaseTest"
+
+    await _create_project(client, project_name)
+
+    for ctx in [tier1, tier2, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    log_resp = await _create_log(
+        client,
+        project_name,
+        entries={
+            "text_field": "phased embed test",
+            "_user": "phase-user",
+            "_assistant": "phase-asst",
+        },
+        context=tier3,
+    )
+    assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    for ctx in [tier1, tier2]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    embed_resp = await _create_derived_entry(
+        client,
+        project_name,
+        key="text_embed",
+        equation="embed({log:text_field})",
+        referenced_logs={"log": [log_id]},
+        context=tier1,
+    )
+    assert embed_resp.status_code == 200
+
+    embedding_row = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_id,
+            Embedding.key == "text_embed",
+        ),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding should exist"
+    assert embedding_row.is_deleted is False
+    embedding_id = embedding_row.id
+
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{tier1}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    for ctx in [tier2, tier3]:
+        logs = await fetch_logs(client, project_name, context=ctx)
+        assert log_id not in [
+            log["id"] for log in logs
+        ], f"Log should be removed from {ctx} when tier1 is deleted"
+
+    dbsession.expire_all()
+    embedding_row = dbsession.execute(
+        select(Embedding).where(Embedding.id == embedding_id),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding row should survive"
+    assert (
+        embedding_row.is_deleted is True
+    ), "Embedding should be soft-deleted when tier1 context is deleted"
+    assert (
+        embedding_row.ref_id is None
+    ), "Embedding ref_id should be nulled after orphan cleanup"
