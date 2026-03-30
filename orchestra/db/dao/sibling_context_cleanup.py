@@ -17,14 +17,18 @@ ARCHIVE PROTECTION:
 - Intermediate contexts (*/All/*) are NOT protected.
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+import logging
+from typing import TYPE_CHECKING, Dict, List, Set, Tuple
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Context, LogEvent, LogEventContext
 
 if TYPE_CHECKING:
     from orchestra.db.dao.context_dao import ContextDAO
+
+logger = logging.getLogger(__name__)
 
 
 def get_assistants_sibling_context_info(
@@ -53,13 +57,15 @@ def get_assistants_sibling_context_info(
 
     Uses "_user" and "_assistant" fields from logs to construct sibling paths.
 
+    All DB lookups are batched to avoid per-log round trips.
+
     Args:
         session: Database session
         project_id: Project ID
         context_id: Current context ID being deleted from
         context_name: Name of the current context
         log_event_ids: List of log event IDs being deleted
-        context_dao: Context DAO instance
+        context_dao: Context DAO instance (kept for API compatibility)
 
     Returns:
         Dict mapping log_event_id to list of sibling context_ids.
@@ -67,15 +73,6 @@ def get_assistants_sibling_context_info(
     """
     if not log_event_ids or not context_name:
         return {}
-
-    sibling_map: Dict[int, List[int]] = {}
-
-    def _add_sibling(log_id: int, ctx_id: int):
-        """Helper to add a sibling context ID to the map."""
-        if log_id not in sibling_map:
-            sibling_map[log_id] = []
-        if ctx_id not in sibling_map[log_id]:
-            sibling_map[log_id].append(ctx_id)
 
     def _is_topmost_archive(name: str) -> bool:
         """Check if context is a topmost archive (All/* only, NOT */All/*).
@@ -111,25 +108,6 @@ def get_assistants_sibling_context_info(
                 result[log_event_id] = value
         return result
 
-    def _find_context_id(ctx_name: str) -> Optional[int]:
-        """Find context by name and return its ID if it exists."""
-        ctx = context_dao.filter(project_id=project_id, name=ctx_name)
-        if ctx:
-            return ctx[0][0].id
-        return None
-
-    def _verify_logs_in_context(ctx_id: int, logs: List[int]) -> List[int]:
-        """Verify which logs exist in the given context."""
-        existing = (
-            session.query(LogEventContext.log_event_id)
-            .filter(
-                LogEventContext.log_event_id.in_(logs),
-                LogEventContext.context_id == ctx_id,
-            )
-            .all()
-        )
-        return [log_id for (log_id,) in existing]
-
     def _get_tier1_context_for_logs() -> Dict[int, str]:
         """Find the Tier 1 context name for each log.
 
@@ -164,7 +142,7 @@ def get_assistants_sibling_context_info(
 
         return result
 
-    def _parse_tier1_context(tier1_ctx: str) -> tuple:
+    def _parse_tier1_context(tier1_ctx: str) -> Tuple[str, str]:
         """Parse a Tier 1 context into (prefix, sub_context).
 
         Args:
@@ -184,17 +162,22 @@ def get_assistants_sibling_context_info(
         except ValueError:
             return ("", "")
 
-    # Step 1: Find Tier 1 context for each log to determine prefix/SubContext
+    # ── Step 1: Find Tier 1 context for each log (1 query) ──
     tier1_contexts = _get_tier1_context_for_logs()
 
     if not tier1_contexts:
         return {}
 
-    # Step 2: Get _user and _assistant fields for all logs
+    # ── Step 2: Get _user and _assistant fields (2 queries) ──
     user_values = _get_log_field_values("_user")
     assistant_values = _get_log_field_values("_assistant")
 
-    # Step 3: For each log, construct and find sibling contexts
+    current_is_archive = _is_topmost_archive(context_name)
+
+    # ── Step 3: Construct all candidate sibling names (Python-only, no DB) ──
+    candidate_names: Set[str] = set()
+    log_sibling_names: Dict[int, List[str]] = {}
+
     for log_id in log_event_ids:
         tier1_ctx = tier1_contexts.get(log_id)
         if not tier1_ctx:
@@ -225,10 +208,8 @@ def get_assistants_sibling_context_info(
                 else None
             )
 
-        # Determine if current context is a topmost archive
-        current_is_archive = _is_topmost_archive(context_name)
-
         # Find sibling contexts (excluding the current context)
+        siblings_for_log: List[str] = []
         for sibling_name in [tier1_name, tier2_name, tier3_name]:
             if sibling_name and sibling_name != context_name:
                 # ARCHIVE PROTECTION: When deleting from a non-archive context,
@@ -237,12 +218,83 @@ def get_assistants_sibling_context_info(
                 sibling_is_archive = _is_topmost_archive(sibling_name)
                 if not current_is_archive and sibling_is_archive:
                     continue
+                siblings_for_log.append(sibling_name)
+                candidate_names.add(sibling_name)
 
-                ctx_id = _find_context_id(sibling_name)
-                if ctx_id and ctx_id != context_id:
-                    # Verify log actually exists in this context before adding
-                    if _verify_logs_in_context(ctx_id, [log_id]):
-                        _add_sibling(log_id, ctx_id)
+        if siblings_for_log:
+            log_sibling_names[log_id] = siblings_for_log
+
+    if not candidate_names:
+        return {}
+
+    # ── Step 4: Batch-resolve all candidate names → IDs (1 query) ──
+    # Replaces the old per-log _find_context_id() which made ~16K individual
+    # SELECT queries (one per log per sibling tier). Now a single query
+    # resolves all unique sibling context names to their IDs at once.
+    name_to_id: Dict[str, int] = {}
+    rows = session.execute(
+        text(
+            "SELECT id, name FROM context "
+            "WHERE project_id = :pid AND name = ANY(:names)",
+        ),
+        {"pid": project_id, "names": list(candidate_names)},
+    ).fetchall()
+    for row_id, row_name in rows:
+        name_to_id[row_name] = row_id
+
+    if not name_to_id:
+        # None of the candidate sibling contexts exist in the DB
+        return {}
+
+    # ── Step 5: Build candidate (log_id, ctx_id) pairs (Python-only) ──
+    # Map resolved context IDs back to each log's candidate siblings,
+    # excluding the current context being deleted.
+    candidate_pairs: List[Tuple[int, int]] = []
+    candidate_ctx_ids: Set[int] = set()
+    candidate_log_ids: Set[int] = set()
+
+    for log_id, sibling_names in log_sibling_names.items():
+        for sib_name in sibling_names:
+            ctx_id = name_to_id.get(sib_name)
+            if ctx_id and ctx_id != context_id:
+                candidate_pairs.append((log_id, ctx_id))
+                candidate_ctx_ids.add(ctx_id)
+                candidate_log_ids.add(log_id)
+
+    if not candidate_pairs:
+        return {}
+
+    # ── Step 6: Batch-verify which pairs actually exist (1 query) ──
+    # Replaces the old per-log _verify_logs_in_context() which made ~16K
+    # individual SELECT queries. Now a single query fetches all existing
+    # (log_event_id, context_id) associations for our candidate sets.
+    # The ANY/ANY filter is a cross-product scan, but with only 2-3 unique
+    # context IDs the result set is bounded and well-indexed.
+    existing_associations: Set[Tuple[int, int]] = set()
+    verify_rows = session.execute(
+        text(
+            "SELECT log_event_id, context_id FROM log_event_context "
+            "WHERE log_event_id = ANY(:log_ids) AND context_id = ANY(:ctx_ids)",
+        ),
+        {
+            "log_ids": list(candidate_log_ids),
+            "ctx_ids": list(candidate_ctx_ids),
+        },
+    ).fetchall()
+    for le_id, c_id in verify_rows:
+        existing_associations.add((le_id, c_id))
+
+    # ── Step 7: Build verified sibling_map (Python-only) ──
+    # Only include pairs that were confirmed to exist in the DB.
+    # This is the same output format as the original per-log approach:
+    # Dict mapping log_event_id to list of sibling context_ids.
+    sibling_map: Dict[int, List[int]] = {}
+    for log_id, ctx_id in candidate_pairs:
+        if (log_id, ctx_id) in existing_associations:
+            if log_id not in sibling_map:
+                sibling_map[log_id] = []
+            if ctx_id not in sibling_map[log_id]:
+                sibling_map[log_id].append(ctx_id)
 
     return sibling_map
 
@@ -252,7 +304,7 @@ def remove_logs_from_sibling_contexts(
     sibling_context_map: Dict[int, List[int]],
 ) -> int:
     """
-    Remove log associations from sibling contexts.
+    Remove log associations from sibling contexts using a single bulk DELETE.
 
     Args:
         session: Database session
@@ -261,16 +313,29 @@ def remove_logs_from_sibling_contexts(
     Returns:
         Number of associations removed.
     """
-    removed = 0
+    if not sibling_context_map:
+        return 0
+
+    # Group log_ids by context_id for efficient bulk DELETEs.
+    # Typically only 2-3 unique sibling context IDs exist, so this is
+    # 2-3 queries instead of the previous ~16K individual DELETEs.
+    ctx_to_logs: Dict[int, List[int]] = {}
     for log_id, sibling_ctx_ids in sibling_context_map.items():
-        for sibling_ctx_id in sibling_ctx_ids:
-            deleted = (
-                session.query(LogEventContext)
-                .filter(
-                    LogEventContext.log_event_id == log_id,
-                    LogEventContext.context_id == sibling_ctx_id,
-                )
-                .delete(synchronize_session=False)
-            )
-            removed += deleted
+        for ctx_id in sibling_ctx_ids:
+            if ctx_id not in ctx_to_logs:
+                ctx_to_logs[ctx_id] = []
+            ctx_to_logs[ctx_id].append(log_id)
+
+    removed = 0
+    for ctx_id, log_ids in ctx_to_logs.items():
+        result = session.execute(
+            text(
+                "DELETE FROM log_event_context "
+                "WHERE context_id = :ctx_id "
+                "AND log_event_id = ANY(:log_ids)",
+            ),
+            {"ctx_id": ctx_id, "log_ids": log_ids},
+        )
+        removed += result.rowcount
+
     return removed
