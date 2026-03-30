@@ -4,6 +4,7 @@ from decimal import Decimal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BillingAccount
 from orchestra.lib.billing import get_billing_entity, queue_auto_recharge
@@ -16,11 +17,21 @@ from orchestra.web.api.credits.schema import (
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
-logger.addHandler(handler)
+
+def _check_org_billing_permission(session, user_id, organization_id, permission):
+    if organization_id is None:
+        return
+    ra_dao = ResourceAccessDAO(session)
+    if not ra_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        permission,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=f"You do not have {permission} permission in this organization",
+        )
 
 
 @router.get(
@@ -49,13 +60,14 @@ def get_credits(
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
 
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
     try:
         billing_entity = get_billing_entity(session, user_id, organization_id)
         credits = float(billing_entity.credits)
     except ValueError:
         credits = 0.0
 
-    # Return the entity whose credits were looked up
     entity_id = str(organization_id) if organization_id else user_id
     return {"id": entity_id, "credits": credits}
 
@@ -110,6 +122,8 @@ def deduct_credits(
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
 
     try:
         billing_entity = get_billing_entity(session, user_id, organization_id)

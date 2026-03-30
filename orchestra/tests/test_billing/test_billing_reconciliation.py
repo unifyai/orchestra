@@ -2421,9 +2421,10 @@ class TestOrphanedGracePeriods:
 
 
 class TestUnjustifiedSuspensions:
-    """SUSPENDED accounts without dispute history are flagged."""
+    """SUSPENDED accounts without justified reason are flagged."""
 
-    def test_suspended_no_disputes_flagged(self, dbsession: Session, monkeypatch):
+    def test_suspended_no_reason_flagged(self, dbsession: Session, monkeypatch):
+        """SUSPENDED with no suspension_reason is flagged as warning."""
         import orchestra.routines.billing_reconciliation as recon_mod
 
         monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
@@ -2446,7 +2447,37 @@ class TestUnjustifiedSuspensions:
         ]
         assert len(unjust) == 1
         assert unjust[0].severity == "warning"
-        assert "no dispute history" in unjust[0].detail
+        assert "no suspension reason" in unjust[0].detail
+
+    def test_suspended_dispute_reason_no_active_disputes_flagged(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """SUSPENDED with reason='dispute' but no active disputes is flagged."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=0,
+            account_status="SUSPENDED",
+            stripe_customer_id="cus_unjust_disp",
+        )
+        ba.suspension_reason = "dispute"
+        make_user(dbsession, "unjust_disp_1", ba)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+
+        unjust = [
+            d
+            for d in result.discrepancies
+            if d.category == "unjustified_suspension" and d.billing_account_id == ba.id
+        ]
+        assert len(unjust) == 1
+        assert unjust[0].severity == "info"
 
     def test_suspended_with_active_dispute_not_flagged(
         self,
@@ -2463,6 +2494,7 @@ class TestUnjustifiedSuspensions:
             account_status="SUSPENDED",
             stripe_customer_id="cus_just_1",
         )
+        ba.suspension_reason = "dispute"
         make_user(dbsession, "just_1", ba)
         disputed_recharge = Recharge(
             billing_account_id=ba.id,
@@ -2485,11 +2517,44 @@ class TestUnjustifiedSuspensions:
         ]
         assert len(unjust) == 0
 
-    def test_auto_fix_moderate_restores_to_active(
+    def test_admin_freeze_always_skipped(
         self,
         dbsession: Session,
         monkeypatch,
     ):
+        """SUSPENDED with reason='admin_freeze' is never flagged."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=100,
+            account_status="SUSPENDED",
+            stripe_customer_id="cus_admin_frz",
+        )
+        ba.suspension_reason = "admin_freeze"
+        make_user(dbsession, "admin_frz_1", ba)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession, auto_fix="all")
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        assert ba.suspension_reason == "admin_freeze"
+        unjust = [
+            d
+            for d in result.discrepancies
+            if d.category == "unjustified_suspension" and d.billing_account_id == ba.id
+        ]
+        assert len(unjust) == 0
+
+    def test_auto_fix_moderate_restores_no_reason(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """moderate auto-fix restores SUSPENDED with no reason."""
         import orchestra.routines.billing_reconciliation as recon_mod
 
         monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
@@ -2507,6 +2572,7 @@ class TestUnjustifiedSuspensions:
 
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
         unjust = [
             d
             for d in result.discrepancies
@@ -2514,6 +2580,33 @@ class TestUnjustifiedSuspensions:
         ]
         assert len(unjust) == 1
         assert unjust[0].auto_fixed is True
+
+    def test_auto_fix_moderate_restores_dispute_no_active(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """moderate auto-fix restores SUSPENDED with reason='dispute' when
+        no active DISPUTED recharges remain."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=10,
+            account_status="SUSPENDED",
+            stripe_customer_id="cus_unjust_disp_fix",
+        )
+        ba.suspension_reason = "dispute"
+        make_user(dbsession, "unjust_disp_fix", ba)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession, auto_fix="moderate")
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
 
     def test_safe_does_not_fix_unjustified_suspension(
         self,

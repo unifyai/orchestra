@@ -109,6 +109,19 @@ class BucketService:
         )
         self.presets_bucket = self.storage_client.bucket(self.presets_bucket_name)
 
+        self._allowed_buckets: set[str] = {
+            self.bucket_name,
+            self.assistant_media_bucket_name,
+            self.message_attachments_bucket_name,
+            self.call_recordings_bucket_name,
+            self.account_photo_bucket_name,
+            self.presets_bucket_name,
+        }
+
+    def is_allowed_bucket(self, bucket_name: str) -> bool:
+        """Check if a bucket name is in the configured allowlist."""
+        return bucket_name in self._allowed_buckets
+
     # -----------------------------------------------------------------
     #                          Path helpers
     # -----------------------------------------------------------------

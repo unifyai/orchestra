@@ -124,6 +124,8 @@ router = APIRouter()
 admin_router = APIRouter()
 demo_router = APIRouter()
 
+_prediction_owners: dict[str, str] = {}
+
 
 def _build_assistant_read(
     a: Assistant,
@@ -612,27 +614,29 @@ async def create_assistant(
                     rollback_errors.append(f"Failed to delete assistant: {str(e)}")
                 print(f"ASSISTANT DELETED: {assistant_id}")
 
-                error_msg = f"Infrastructure setup failed: {str(infra_error)}"
+                error_msg = f"Infrastructure setup failed: {infra_error}"
                 if rollback_errors:
                     error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
+                logging.error(error_msg, exc_info=True)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=error_msg,
+                    detail="Infrastructure setup failed",
                 )
 
     except IntegrityError as e:
         session.rollback()
+        logging.error(f"Database error creating assistant: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Database error creating assistant: {str(e)}",
+            detail="Database error creating assistant",
         )
     except HTTPException:
         raise
     except Exception as e_prepare:
-        print(f"FAILED TO CREATE ASSISTANT: {str(e_prepare)}")
+        logging.error(f"Failed to create assistant: {e_prepare}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create assistant: {str(e_prepare)}",
+            detail="Failed to create assistant",
         )
 
     # Phase 2: Deduct credits from the correct billing account (user or org).
@@ -644,9 +648,13 @@ async def create_assistant(
             deduct_credits(session, billing_entity, Decimal(str(total_creation_cost)))
             session.commit()
         except Exception as e_commit:
+            logging.error(
+                f"Payment processing failed for assistant creation: {e_commit}",
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Payment processing failed. Assistant creation has been rolled back. Details: {str(e_commit)}",
+                detail="Payment processing failed",
             )
 
     if assistant is None:
@@ -864,9 +872,10 @@ def list_assistants(
     except HTTPException:
         raise
     except Exception as e:
+        logging.error(f"Error fetching assistants: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error fetching assistants: {str(e)}",
+            detail="Error fetching assistants",
         )
 
 
@@ -987,10 +996,13 @@ async def delete_assistant_contact(
         raise
     except Exception as e:
         session.rollback()
-        logging.error(f"Failed to delete contact for assistant {assistant_id}: {e}")
+        logging.error(
+            f"Failed to delete contact for assistant {assistant_id}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove contact: {str(e)}",
+            detail="Failed to remove contact",
         )
 
 
@@ -1186,10 +1198,11 @@ async def create_assistant_contact(
     except Exception as e:
         logging.error(
             f"Failed to provision {contact_type} for assistant {assistant_id}: {e}",
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to provision {contact_type}: {str(e)}",
+            detail=f"Failed to provision {contact_type}",
         )
 
     # 6. Create AssistantContact row + update Assistant columns + deduct cost
@@ -1317,6 +1330,19 @@ async def list_assistant_contacts(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:read",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to view this assistant's contacts.",
+            )
 
     contact_dao = AssistantContactDAO(session)
     contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
@@ -1960,10 +1986,10 @@ async def update_assistant_config(
         raise
     except Exception as e:
         session.rollback()
-
+        logging.error(f"Error updating assistant config: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating assistant config: {str(e)}",
+            detail="Error updating assistant config",
         )
 
 
@@ -2294,10 +2320,13 @@ def transfer_assistant_to_org(
         raise
     except Exception as e:
         session.rollback()
-        logging.error(f"Failed to transfer assistant {assistant_id} to org: {e}")
+        logging.error(
+            f"Failed to transfer assistant {assistant_id} to org: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to transfer assistant: {str(e)}",
+            detail="Failed to transfer assistant",
         )
 
 
@@ -2455,10 +2484,13 @@ def transfer_assistant_to_personal(
         raise
     except Exception as e:
         session.rollback()
-        logging.error(f"Failed to transfer assistant {assistant_id} to personal: {e}")
+        logging.error(
+            f"Failed to transfer assistant {assistant_id} to personal: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to transfer assistant: {str(e)}",
+            detail="Failed to transfer assistant",
         )
 
 
@@ -2548,18 +2580,20 @@ def register_voice(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Voice with ID '{voice_in.voice_id}' already exists for this user.",
             )
+        logging.error(f"Database error registering voice: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Database error registering voice: {str(e)}",
+            detail="Database error registering voice",
         )
     except HTTPException as e:
         session.rollback()
         raise e
     except Exception as e:
         session.rollback()
+        logging.error(f"Error registering voice: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error registering voice: {str(e)}",
+            detail="Error registering voice",
         )
 
 
@@ -2589,8 +2623,14 @@ async def clone_voice(
     new_voice_id: Optional[str] = None
     voice_language: Optional[str] = language
 
+    MAX_VOICE_CLONE_BYTES = 25 * 1024 * 1024  # 25 MB
     try:
         file_content = await file.read()
+        if len(file_content) > MAX_VOICE_CLONE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size exceeds {MAX_VOICE_CLONE_BYTES // (1024 * 1024)}MB limit.",
+            )
         if not voice_language:
             try:
                 detected_language = deepgram_service.detect_language_from_audio(
@@ -2689,9 +2729,13 @@ async def clone_voice(
                 logging.error(
                     f"Failed to cleanup {provider} voice {new_voice_id} after DB integrity error: {e_voice_cleanup}",
                 )
+        logging.error(
+            f"Failed to save cloned voice to database: {e_db_integrity}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Failed to save cloned voice to database, voice ID might already exist: {str(e_db_integrity)}",
+            detail="Failed to save cloned voice to database",
         )
     except Exception as e_generic:
         session.rollback()
@@ -2704,9 +2748,10 @@ async def clone_voice(
                 provider_service.delete_voice(new_voice_id)
             except Exception:
                 pass
+        logging.error(f"Failed to clone and save voice: {e_generic}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to clone and save voice: {str(e_generic)}",
+            detail="Failed to clone and save voice",
         )
 
 
@@ -2783,9 +2828,10 @@ def list_voices(
             ],
         )
     except Exception as e:
+        logging.error(f"Error fetching user voices: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error fetching user voices: {str(e)}",
+            detail="Error fetching user voices",
         )
 
 
@@ -2882,11 +2928,12 @@ async def delete_voice(
     except Exception as e_generic:
         session.rollback()
         logging.error(
-            f"Generic error during voice deletion {voice_id}: {str(e_generic)}",
+            f"Generic error during voice deletion {voice_id}: {e_generic}",
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting voice from database: {str(e_generic)}",
+            detail="Error deleting voice",
         )
 
 
@@ -2980,11 +3027,12 @@ async def generate_speech(
         raise
     except Exception as e:
         logging.error(
-            f"Unexpected error generating speech for user {user_id}: {str(e)}",
+            f"Unexpected error generating speech for user {user_id}: {e}",
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate speech: {str(e)}",
+            detail="Failed to generate speech",
         )
 
 
@@ -3063,11 +3111,12 @@ async def design_voice_generate_previews_endpoint(
         raise
     except Exception as e:
         logging.error(
-            f"Unexpected error generating voice previews for user {user_id}: {str(e)}",
+            f"Unexpected error generating voice previews for user {user_id}: {e}",
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate voice previews: {str(e)}",
+            detail="Failed to generate voice previews",
         )
 
 
@@ -3222,15 +3271,19 @@ async def design_voice_create_from_preview_endpoint(
                 logging.error(
                     f"Failed to cleanup EL voice {new_el_voice_id} after DB integrity error: {e_cleanup}",
                 )
+        logging.error(
+            f"Database error creating voice from preview: {e_db}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Database error creating voice, it might already exist: {str(e_db)}",
+            detail="Database error creating voice, it might already exist",
         )
     except HTTPException:
         raise
     except Exception as e:
         session.rollback()
-        if new_el_voice_id:  # EL voice might have been created
+        if new_el_voice_id:
             logging.warning(
                 f"Generic error after EL voice {new_el_voice_id} might have been created. Attempting EL cleanup.",
             )
@@ -3241,11 +3294,12 @@ async def design_voice_create_from_preview_endpoint(
                     f"Failed to cleanup EL voice {new_el_voice_id} after generic error: {e_cleanup}",
                 )
         logging.error(
-            f"Unexpected error creating voice from preview for user {user_id}: {str(e)}",
+            f"Unexpected error creating voice from preview for user {user_id}: {e}",
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create voice from preview: {str(e)}",
+            detail="Failed to create voice from preview",
         )
 
 
@@ -3261,6 +3315,7 @@ async def upload_assistant_photo(
     request: Request,
     file: UploadFile = File(..., example="assistant_photo.jpg"),
     assistant_id: Optional[int] = Form(None),
+    session: Session = Depends(get_db_session),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3269,6 +3324,20 @@ async def upload_assistant_photo(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User not authenticated.",
         )
+
+    if assistant_id is not None:
+        organization_id = getattr(request.state, "organization_id", None)
+        assistant_dao = AssistantDAO(session)
+        assistant = assistant_dao.get_assistant_by_id(
+            user_id=user_id,
+            agent_id=assistant_id,
+            organization_id=organization_id,
+        )
+        if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
 
     ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
     if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
@@ -3323,6 +3392,7 @@ async def upload_assistant_video(
     request: Request,
     file: UploadFile = File(..., example="assistant_video.mp4"),
     assistant_id: Optional[int] = Form(None),
+    session: Session = Depends(get_db_session),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -3331,6 +3401,20 @@ async def upload_assistant_video(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User not authenticated.",
         )
+
+    if assistant_id is not None:
+        organization_id = getattr(request.state, "organization_id", None)
+        assistant_dao = AssistantDAO(session)
+        assistant = assistant_dao.get_assistant_by_id(
+            user_id=user_id,
+            agent_id=assistant_id,
+            organization_id=organization_id,
+        )
+        if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
 
     ALLOWED_VIDEO_TYPES = {"video/mp4", "video/webm", "video/quicktime"}
     if not file.content_type or file.content_type not in ALLOWED_VIDEO_TYPES:
@@ -3366,10 +3450,13 @@ async def upload_assistant_video(
     except HTTPException as e:
         raise e
     except Exception as e:
-        logging.error(f"Error uploading assistant video for user {user_id}: {str(e)}")
+        logging.error(
+            f"Error uploading assistant video for user {user_id}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not upload video: {str(e)}",
+            detail="Could not upload video",
         )
 
 
@@ -3458,10 +3545,10 @@ async def generate_assistant_photo(
         )
     except Exception as e:
         session.rollback()
-        logging.error(f"Error generating photo for user {user_id}: {str(e)}")
+        logging.error(f"Error generating photo for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not generate photo: {str(e)}",
+            detail="Could not generate photo",
         )
 
 
@@ -3625,10 +3712,10 @@ async def edit_assistant_photo(
         raise
     except Exception as e:
         session.rollback()
-        logging.error(f"Error editing photo for user {user_id}: {str(e)}")
+        logging.error(f"Error editing photo for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not edit photo: {str(e)}",
+            detail="Could not edit photo",
         )
     finally:
         if temp_gcs_url_to_delete:
@@ -3737,6 +3824,9 @@ async def animate_video_endpoint(
             final_audio_url_for_replicate = public_audio_url
             temp_audio_gcs_url = gcs_audio_url
         else:
+            from orchestra.web.api.utils.url_validation import validate_url_for_ssrf
+
+            validate_url_for_ssrf(audio_url)
             final_audio_url_for_replicate = audio_url
             try:
                 with urllib.request.urlopen(audio_url, timeout=30) as resp:
@@ -3843,6 +3933,8 @@ async def animate_video_endpoint(
             seed=seed,
         )
 
+        _prediction_owners[prediction.id] = user_id
+
         # Deduct credits after successful prediction creation
         if not settings.is_staging:
             from orchestra.lib.billing import deduct_credits
@@ -3872,10 +3964,10 @@ async def animate_video_endpoint(
         raise
     except Exception as e:
         session.rollback()
-        logging.error(f"Error animating video for user {user_id}: {str(e)}")
+        logging.error(f"Error animating video for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not animate video: {str(e)}",
+            detail="Could not animate video",
         )
     finally:
         # NOTE: Do NOT delete temp files here. The prediction runs
@@ -3898,6 +3990,13 @@ def get_animation_prediction(
     request: Request,
     replicate_service: ReplicateService = Depends(),
 ):
+    user_id = request.state.user_id
+    owner = _prediction_owners.get(prediction_id)
+    if owner is not None and owner != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Prediction not found.",
+        )
     try:
         prediction = replicate_service.get_prediction(prediction_id)
         response_data = ReplicatePredictionResponse.from_orm(prediction)
@@ -3922,6 +4021,13 @@ def cancel_animation_prediction(
     request: Request,
     replicate_service: ReplicateService = Depends(),
 ):
+    user_id = request.state.user_id
+    owner = _prediction_owners.get(prediction_id)
+    if owner is not None and owner != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Prediction not found.",
+        )
     try:
         prediction = replicate_service.cancel_prediction(prediction_id)
         response_data = ReplicatePredictionResponse.from_orm(prediction)
@@ -4306,7 +4412,10 @@ def admin_list_all_assistants(
             if assistant.organization_id is None:
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
-                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+                keys = api_key_dao.get_organization_keys(
+                    assistant.user_id,
+                    assistant.organization_id,
+                )
             return keys[0][0].key if keys else None
 
         # Perform expensive lookups only if needed
@@ -4470,7 +4579,10 @@ def admin_update_assistant_by_filter(
     if a.organization_id is None:
         keys = api_key_dao.get_personal_keys(a.user_id)
     else:
-        keys = api_key_dao.filter(organization_id=a.organization_id)
+        keys = api_key_dao.get_organization_keys(
+            a.user_id,
+            a.organization_id,
+        )
     api_key = keys[0][0].key if keys else None
 
     # Return updated assistant
@@ -4537,7 +4649,10 @@ def admin_list_assistants_for_user(
             if assistant.organization_id is None:
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
-                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+                keys = api_key_dao.get_organization_keys(
+                    assistant.user_id,
+                    assistant.organization_id,
+                )
             return keys[0][0].key if keys else None
 
         api_keys = [get_api_key_for_assistant(a) for a in assistants]
@@ -4759,6 +4874,63 @@ async def get_assistant_spending_limit(
     )
 
 
+@router.get("/assistant/{agent_id}/spend", response_model=AssistantSpendResponse)
+async def get_assistant_spend(
+    request: Request,
+    agent_id: int,
+    month: str = Query(
+        ...,
+        description="Month in YYYY-MM format",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        examples=["2026-01"],
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """Get an assistant's cumulative spend for a given month."""
+    user_id = request.state.user_id
+
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    if assistant.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
+    limit = assistant_dao.get_spending_cap(agent_id)
+
+    percent_used = None
+    if limit is not None and limit > 0:
+        percent_used = round((cumulative_spend / limit) * 100, 2)
+
+    credit_balance = None
+    if assistant.organization_id is not None:
+        org = (
+            session.query(Organization)
+            .filter(Organization.id == assistant.organization_id)
+            .first()
+        )
+        if org and org.billing_account:
+            credit_balance = float(org.billing_account.credits)
+    else:
+        from orchestra.db.models.orchestra_models import User
+
+        user = session.query(User).filter(User.id == assistant.user_id).first()
+        if user and user.billing_account:
+            credit_balance = float(user.billing_account.credits)
+
+    return AssistantSpendResponse(
+        agent_id=agent_id,
+        month=month,
+        cumulative_spend=cumulative_spend,
+        limit=limit,
+        limit_set_at=assistant.monthly_spending_cap_set_at,
+        percent_used=percent_used,
+        credit_balance=credit_balance,
+    )
+
+
 @router.put(
     "/assistant/{agent_id}/spending-limit",
     response_model=AssistantSpendingLimitResponse,
@@ -4834,71 +5006,6 @@ async def set_assistant_spending_limit(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-# ============================================================================
-# Admin Spend Endpoints (for UniLLM service calls)
-# ============================================================================
-
-
-@admin_router.get("/assistant/{agent_id}/spend")
-def admin_get_assistant_spend(
-    agent_id: int,
-    month: str = Query(
-        ...,
-        description="Month in YYYY-MM format",
-        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
-        examples=["2026-01"],
-    ),
-    session: Session = Depends(get_db_session),
-):
-    """
-    Admin endpoint: Get an assistant's cumulative spend for a given month.
-
-    This endpoint is for internal service calls (e.g., UniLLM) and does not
-    require the caller to own the assistant.
-    """
-    assistant_dao = AssistantDAO(session)
-    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
-    if not assistant:
-        raise HTTPException(status_code=404, detail="Assistant not found.")
-
-    cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
-    limit = assistant_dao.get_spending_cap(agent_id)
-
-    percent_used = None
-    if limit is not None and limit > 0:
-        percent_used = round((cumulative_spend / limit) * 100, 2)
-
-    # Include credit balance from the billing account (for credit guard checks).
-    # The billing account comes from the org (if org assistant) or the user.
-    credit_balance = None
-    if assistant.organization_id is not None:
-        from orchestra.db.models.orchestra_models import Organization
-
-        org = (
-            session.query(Organization)
-            .filter(Organization.id == assistant.organization_id)
-            .first()
-        )
-        if org and org.billing_account:
-            credit_balance = float(org.billing_account.credits)
-    else:
-        from orchestra.db.models.orchestra_models import User
-
-        user = session.query(User).filter(User.id == assistant.user_id).first()
-        if user and user.billing_account:
-            credit_balance = float(user.billing_account.credits)
-
-    return AssistantSpendResponse(
-        agent_id=agent_id,
-        month=month,
-        cumulative_spend=cumulative_spend,
-        limit=limit,
-        limit_set_at=assistant.monthly_spending_cap_set_at,
-        percent_used=percent_used,
-        credit_balance=credit_balance,
-    )
 
 
 # ============================================================================

@@ -6,6 +6,7 @@ from httpx import AsyncClient, Request
 
 from orchestra.tests.test_log import (
     HEADERS,
+    _create_derived_entry,
     _create_log,
     _create_project,
     _update_logs,
@@ -3612,3 +3613,82 @@ async def test_unitytests_project_sibling_cleanup(client: AsyncClient):
     assert log_id in [
         log["id"] for log in logs
     ], f"Log should remain in archive {tier1} in UnityTests project"
+
+
+@pytest.mark.anyio
+async def test_delete_context_with_pending_embeddings(
+    client: AsyncClient,
+    dbsession,
+):
+    """Deleting a context whose only log has a sync embedding must
+    soft-delete the embedding and null its ref_id via EmbeddingDAO cleanup
+    in delete_orphaned_log_events."""
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project_name = "test-ctx-embed-cleanup"
+
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    context_name = "embed-ctx"
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"text_field": "context embed test"},
+        context=context_name,
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="text_embed",
+        equation="embed({log:text_field})",
+        referenced_logs={"log": [log_id]},
+        context=context_name,
+    )
+    assert response.status_code == 200
+
+    embedding_row = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_id,
+            Embedding.key == "text_embed",
+        ),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding should exist after sync embed"
+    assert embedding_row.is_deleted is False
+    embedding_id = embedding_row.id
+
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Expected 200 but got {response.status_code}: {response.json()}"
+
+    dbsession.expire_all()
+    embedding_row = dbsession.execute(
+        select(Embedding).where(Embedding.id == embedding_id),
+    ).scalar_one_or_none()
+    assert embedding_row is not None, "Embedding row should survive context deletion"
+    assert (
+        embedding_row.is_deleted is True
+    ), "Embedding should be soft-deleted after context deletion"
+    assert (
+        embedding_row.ref_id is None
+    ), "Embedding ref_id should be nulled after context deletion"
