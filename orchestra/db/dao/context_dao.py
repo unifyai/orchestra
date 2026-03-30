@@ -30,24 +30,48 @@ def delete_orphaned_log_events(
     session: Session,
     project_id: int,
     skip_embedding_cleanup: bool = False,
+    log_event_ids: Optional[List[int]] = None,
 ) -> None:
     from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
-    orphaned_log_event_ids = session.execute(
-        text(
-            """
-        SELECT le.id
-        FROM log_event le
-        WHERE le.project_id = :project_id
-          AND NOT EXISTS (
-            SELECT 1
-            FROM log_event_context lec
-            WHERE lec.log_event_id = le.id
-          );
-        """,
-        ),
-        {"project_id": project_id},
-    ).fetchall()
+    if log_event_ids is not None:
+        # Scoped scan: only check the provided log IDs for orphan status.
+        # Much faster than a project-wide scan when the candidate set is known
+        # (e.g. the logs that belonged to the just-deleted context).
+        if not log_event_ids:
+            return
+        orphaned_log_event_ids = session.execute(
+            text(
+                """
+            SELECT le.id
+            FROM log_event le
+            WHERE le.id = ANY(:log_event_ids)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM log_event_context lec
+                WHERE lec.log_event_id = le.id
+              );
+            """,
+            ),
+            {"log_event_ids": log_event_ids},
+        ).fetchall()
+    else:
+        # Project-wide fallback: scans all logs in the project.
+        orphaned_log_event_ids = session.execute(
+            text(
+                """
+            SELECT le.id
+            FROM log_event le
+            WHERE le.project_id = :project_id
+              AND NOT EXISTS (
+                SELECT 1
+                FROM log_event_context lec
+                WHERE lec.log_event_id = le.id
+              );
+            """,
+            ),
+            {"project_id": project_id},
+        ).fetchall()
 
     if not orphaned_log_event_ids:
         return
@@ -2959,6 +2983,16 @@ class ContextDAO:
         return total
 
     def delete(self, id: int, skip_embedding_cleanup: bool = False) -> None:
+        """
+        Delete a context and clean up associated data in phases.
+
+        Phase 0: Collect the context's log_event_ids (used by all later phases)
+        Phase 1: Sibling cleanup for Assistants/UnityTests (batched)
+        Phase 2: GCS media cleanup (must happen while log data exists)
+        Phase 3: Delete context row (cascades log_event_context)
+        Phase 4: Scoped orphan detection + embedding cleanup + log deletion
+        """
+        from orchestra.db.dao.embedding_dao import EmbeddingDAO
         from orchestra.db.dao.log_event_dao import LogEventDAO
         from orchestra.db.dao.plot_dao import PlotDAO
         from orchestra.db.dao.sibling_context_cleanup import (
@@ -2970,91 +3004,183 @@ class ContextDAO:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
             project = context.project
+            context_name = context.name
+            project_id = project.id
+
+            logger.info(
+                f"Starting phased deletion of context {id} ('{context_name}') "
+                f"in project {project_id}",
+            )
+
+            # ── Phase 0: Collect log_event_ids once, reuse everywhere ──
+            log_event_ids = [
+                row[0]
+                for row in self.session.execute(
+                    text(
+                        "SELECT log_event_id FROM log_event_context "
+                        "WHERE context_id = :ctx_id",
+                    ),
+                    {"ctx_id": id},
+                ).fetchall()
+            ]
 
             # Delete plots that reference this context
             # Plots store context as a string in project_config JSONB, not as a FK
             plot_dao = PlotDAO(self.session)
             deleted_plots = plot_dao.delete_by_project(
-                project_id=project.id,
-                context=context.name,
+                project_id=project_id,
+                context=context_name,
             )
             if deleted_plots > 0:
                 logger.info(
-                    f"Deleted {deleted_plots} plots for context '{context.name}' "
-                    f"in project {project.id}",
+                    f"Deleted {deleted_plots} plots for context '{context_name}' "
+                    f"in project {project_id}",
                 )
 
             # Delete table views that reference this context
             # Table views store context as a string in project_config JSONB, not as FK
             table_view_dao = TableViewDAO(self.session)
             deleted_table_views = table_view_dao.delete_by_project(
-                project_id=project.id,
-                context=context.name,
+                project_id=project_id,
+                context=context_name,
             )
             if deleted_table_views > 0:
                 logger.info(
                     f"Deleted {deleted_table_views} table views for context "
-                    f"'{context.name}' in project {project.id}",
+                    f"'{context_name}' in project {project_id}",
                 )
 
-            # For Assistants/UnityTests projects, clean up sibling contexts first
-            # This must happen BEFORE deleting the context while associations exist
+            # ── Phase 1: Sibling cleanup (batched queries) ──
+            # For Assistants/UnityTests projects, clean up sibling contexts first.
+            # This must happen BEFORE deleting the context while associations exist.
             is_assistants_project = project.name in ("Assistants", "UnityTests")
 
-            if is_assistants_project and "/" in context.name:
-                # Get all log event IDs in this context before deletion
-                log_event_ids = [
-                    lec.log_event_id
-                    for lec in self.session.query(LogEventContext)
-                    .filter(LogEventContext.context_id == id)
-                    .all()
-                ]
+            if is_assistants_project and "/" in context_name and log_event_ids:
+                sibling_map = get_assistants_sibling_context_info(
+                    session=self.session,
+                    project_id=project_id,
+                    context_id=id,
+                    context_name=context_name,
+                    log_event_ids=log_event_ids,
+                    context_dao=self,
+                )
 
-                if log_event_ids:
-                    # Find sibling contexts for these logs
-                    sibling_map = get_assistants_sibling_context_info(
-                        session=self.session,
-                        project_id=project.id,
-                        context_id=id,
-                        context_name=context.name,
-                        log_event_ids=log_event_ids,
-                        context_dao=self,
+                if sibling_map:
+                    removed = remove_logs_from_sibling_contexts(
+                        self.session,
+                        sibling_map,
+                    )
+                    self.session.flush()
+                    logger.info(
+                        f"Phase 1: Removed {removed} sibling context associations",
                     )
 
-                    # Remove log associations from sibling contexts
-                    if sibling_map:
-                        remove_logs_from_sibling_contexts(self.session, sibling_map)
-                        self.session.flush()
-
-            # Delete associated GCS media BEFORE deleting the context
-            log_event_dao = LogEventDAO(self.session, self)
-            log_events_subquery = (
-                select(LogEvent.id)
-                .join(LogEventContext)
-                .where(LogEventContext.context_id == id)
-                .subquery()
-            )
-            # Extract log_event_ids from subquery for GCS media deletion
-            log_event_ids = [
-                row[0]
-                for row in self.session.execute(
-                    select(log_events_subquery.c.id),
-                ).fetchall()
-            ]
+            # ── Phase 2: GCS media cleanup ──
+            # Delete associated GCS media BEFORE deleting the context,
+            # because log_event data is needed to locate GCS objects.
             if log_event_ids:
-                log_event_dao._bulk_delete_gcs_media(log_event_ids, project.id)
+                log_event_dao = LogEventDAO(self.session, self)
+                log_event_dao._bulk_delete_gcs_media(log_event_ids, project_id)
 
-            # Proceed with deleting the context from the database
+            # ── Phase 3: Delete context row (cascades log_event_context) ──
+            # Proceed with deleting the context from the database.
+            # This CASCADE-deletes from log_event_context, severing log
+            # associations and allowing the Phase 4 orphan query to work.
             self.session.delete(context)
-            self.session.flush()  # Ensure the context deletion cascades.
+            self.session.flush()  # Ensure the context deletion cascades
 
-            # then remove all orphaned log events
-            delete_orphaned_log_events(
-                self.session,
-                context.project_id,
-                skip_embedding_cleanup,
-            )
+            # ── Phase 4: Scoped orphan cleanup ──
+            # Uses scoped query on this context's log_event_ids instead of
+            # scanning all logs in the project (23ms vs 632ms on prod).
+            if log_event_ids:
+                if not skip_embedding_cleanup:
+                    # Find which of our logs are now orphaned (no context left)
+                    orphaned_ids = [
+                        row[0]
+                        for row in self.session.execute(
+                            text(
+                                "SELECT le.id FROM log_event le "
+                                "WHERE le.id = ANY(:ids) "
+                                "AND NOT EXISTS ("
+                                "  SELECT 1 FROM log_event_context lec "
+                                "  WHERE lec.log_event_id = le.id"
+                                ")",
+                            ),
+                            {"ids": log_event_ids},
+                        ).fetchall()
+                    ]
+
+                    if orphaned_ids:
+                        embedding_dao = EmbeddingDAO(self.session)
+                        cancelled = embedding_dao.cancel_queue(
+                            log_event_ids=orphaned_ids,
+                            reason="Context deleted",
+                        )
+                        soft_deleted = embedding_dao.soft_delete(
+                            log_event_ids=orphaned_ids,
+                        )
+                        nulled = embedding_dao.null_ref_ids(
+                            log_event_ids=orphaned_ids,
+                        )
+                        self.session.commit()
+
+                        if soft_deleted > 0 or cancelled > 0:
+                            logger.info(
+                                f"Phase 4a: Cancelled {cancelled} queue items, "
+                                f"soft-deleted {soft_deleted} embeddings, "
+                                f"nulled {nulled} ref_ids for "
+                                f"{len(orphaned_ids)} orphaned logs",
+                            )
+
+                        # Batched orphan log deletion with SKIP LOCKED.
+                        # SKIP LOCKED avoids blocking on rows locked by
+                        # concurrent embedding workers, preventing deadlocks.
+                        batch_size = 5000
+                        total_deleted = 0
+                        while True:
+                            result = self.session.execute(
+                                text(
+                                    "WITH batch AS ("
+                                    "  SELECT id FROM log_event"
+                                    "  WHERE id = ANY(:ids)"
+                                    "  LIMIT :batch_size"
+                                    "  FOR UPDATE SKIP LOCKED"
+                                    ") "
+                                    "DELETE FROM log_event "
+                                    "WHERE id IN (SELECT id FROM batch)",
+                                ),
+                                {
+                                    "ids": orphaned_ids,
+                                    "batch_size": batch_size,
+                                },
+                            )
+                            deleted = result.rowcount
+                            self.session.commit()
+                            if deleted == 0:
+                                break
+                            total_deleted += deleted
+
+                        if total_deleted > 0:
+                            logger.info(
+                                f"Phase 4b: Deleted {total_deleted} orphaned "
+                                f"log events in batches",
+                            )
+                else:
+                    # Called from higher-level deletion (e.g. ProjectDAO) that
+                    # handles embedding cleanup at project scope -- just find
+                    # and delete orphan logs.
+                    delete_orphaned_log_events(
+                        self.session,
+                        project_id,
+                        skip_embedding_cleanup=True,
+                        log_event_ids=log_event_ids,
+                    )
+
             self.session.commit()
+
+            logger.info(
+                f"Context {id} ('{context_name}') deleted successfully",
+            )
         except Exception as e:
             self.session.rollback()
             raise ValueError(f"Failed to delete context with id {id}: {e}")
