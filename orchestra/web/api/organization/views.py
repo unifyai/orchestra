@@ -142,9 +142,10 @@ async def create_organization(
         }
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to create organization: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create organization: {str(e)}",
+            detail="Failed to create organization",
         )
 
 
@@ -313,9 +314,10 @@ async def update_organization(
         return OrganizationResponse.model_validate(updated_org)
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to update organization: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update organization: {str(e)}",
+            detail="Failed to update organization",
         )
 
 
@@ -570,9 +572,10 @@ async def delete_organization(
         org_dao.delete(organization_id)
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to delete organization: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete organization: {str(e)}",
+            detail="Failed to delete organization",
         )
 
     # Post-commit: clean up GCS data for every assistant that was in this org
@@ -755,9 +758,10 @@ async def add_organization_member(
         }
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to add organization member: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add member: {str(e)}",
+            detail="Failed to add member",
         )
 
 
@@ -884,9 +888,10 @@ async def remove_organization_member(
         session.commit()
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to remove organization member: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove member: {str(e)}",
+            detail="Failed to remove member",
         )
 
     # Post-commit: clean up GCS data for deleted assistants (best-effort).
@@ -1074,9 +1079,10 @@ async def update_member_role(
         raise
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to update member role: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update member role: {str(e)}",
+            detail="Failed to update member role",
         )
 
 
@@ -1172,9 +1178,10 @@ async def transfer_organization_ownership(
 
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to transfer organization ownership: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to transfer ownership: {str(e)}",
+            detail="Failed to transfer ownership",
         )
 
 
@@ -1186,6 +1193,8 @@ def _build_invite_response(
     org,
     role_dao: RoleDAO,
     user_dao: UserDAO,
+    *,
+    include_token: bool = False,
 ) -> InviteResponse:
     """Helper to build InviteResponse from invite object."""
     role_name = None
@@ -1206,7 +1215,7 @@ def _build_invite_response(
 
     return InviteResponse(
         id=invite.id,
-        token=invite.token,
+        token=invite.token if include_token else None,
         organization_id=invite.organization_id,
         organization_name=org.name,
         invitee_email=invite.invitee_email,
@@ -1316,7 +1325,13 @@ async def invite_user_to_organization(
             existing_invite.role_id = resolved_role_id
         session.commit()
         await _send_invite_email(existing_invite, org, user_dao, user_id)
-        return _build_invite_response(existing_invite, org, role_dao, user_dao)
+        return _build_invite_response(
+            existing_invite,
+            org,
+            role_dao,
+            user_dao,
+            include_token=True,
+        )
 
     # Determine role_id (default to Member role)
     role_id = resolved_role_id
@@ -1356,13 +1371,20 @@ async def invite_user_to_organization(
         # Send invite email
         await _send_invite_email(invite, org, user_dao, user_id)
 
-        return _build_invite_response(invite, org, role_dao, user_dao)
+        return _build_invite_response(
+            invite,
+            org,
+            role_dao,
+            user_dao,
+            include_token=True,
+        )
 
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to create organization invite: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create invite: {str(e)}",
+            detail="Failed to create invite",
         )
 
 
@@ -1744,9 +1766,10 @@ async def accept_invite(
 
     except Exception as e:
         session.rollback()
+        logger.error(f"Failed to accept organization invite: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to join organization: {str(e)}",
+            detail="Failed to join organization",
         )
 
 
@@ -2042,7 +2065,11 @@ async def set_member_spending_limit(
             assistants_capped=cascade_result.assistants_capped,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Failed to set member spending limit: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to set member spending limit",
+        )
 
 
 @router.get(
