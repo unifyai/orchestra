@@ -902,7 +902,11 @@ def update_billing_profile(
     resolved_name = profile_update.name
     tax_id = profile_update.tax_id
     tax_id_type = profile_update.tax_id_type
-    billing_address = profile_update.billing_address
+    billing_address = (
+        profile_update.billing_address.model_dump(exclude_unset=True)
+        if profile_update.billing_address is not None
+        else None
+    )
 
     # Validate billing address if provided
     if billing_address is not None:
@@ -910,7 +914,7 @@ def update_billing_profile(
             validate_billing_address_data,
         )
 
-        addr = billing_address if isinstance(billing_address, dict) else {}
+        addr = billing_address
         if addr.get("line1") or addr.get("city") or addr.get("country"):
             is_valid, error_msg = validate_billing_address_data(
                 line1=addr.get("line1"),

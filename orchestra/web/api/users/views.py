@@ -984,6 +984,9 @@ def claim_credit_grant_link(
     """
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
     from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.models.orchestra_models import OneTimeCreditGrantLink
+    from orchestra.db.models.orchestra_models import Organization as OrganizationModel
+    from orchestra.db.models.orchestra_models import User as UserModel
 
     user_dao = UserDAO(session)
     user_id = request.state.user_id
@@ -1000,6 +1003,22 @@ def claim_credit_grant_link(
     if not link:
         raise not_found("Credit grant link token")
 
+    # Acquire row locks to serialize concurrent claims and prevent
+    # TOCTOU races on the per-user lifetime, per-org lifetime, and
+    # per-link max_claims guards.
+    session.query(UserModel).filter(
+        UserModel.id == user_id,
+    ).with_for_update().first()
+    session.query(OneTimeCreditGrantLink).filter(
+        OneTimeCreditGrantLink.id == link.id,
+    ).with_for_update().first()
+
+    org_instance = None
+    if organization_id:
+        session.query(OrganizationModel).filter(
+            OrganizationModel.id == organization_id,
+        ).with_for_update().first()
+
     # --- Per-user lifetime guard ---
     if token_dao.has_user_claimed_any_link(user_id):
         return CreditGrantClaimResponse(
@@ -1009,7 +1028,6 @@ def claim_credit_grant_link(
         )
 
     # --- Per-org lifetime guard ---
-    org_instance = None
     if organization_id:
         org_dao = OrganizationDAO(session)
         org_instance = org_dao.get(organization_id)
