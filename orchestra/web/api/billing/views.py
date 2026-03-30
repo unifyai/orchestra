@@ -213,6 +213,7 @@ def get_account_info(
 @router.post(
     "/billing/checkout-session",
     response_model=CheckoutSessionResponse,
+    include_in_schema=False,
     responses={
         200: {"description": "Checkout session created"},
         400: {"description": "Bad request"},
@@ -419,6 +420,7 @@ def create_checkout_session(
 @router.post(
     "/billing/portal-session",
     response_model=PortalSessionResponse,
+    include_in_schema=False,
     responses={
         200: {"description": "Portal session created"},
         404: {"description": "No Stripe customer found"},
@@ -493,6 +495,7 @@ def create_portal_session(
 @router.get(
     "/billing/checkout-status",
     response_model=CheckoutStatusResponse,
+    include_in_schema=False,
     responses={
         200: {"description": "Checkout session status"},
         400: {"description": "Missing or invalid sessionId"},
@@ -756,7 +759,7 @@ def update_auto_recharge(
 # ============================================================================
 
 
-@router.post("/billing/validate-tax-id")
+@router.post("/billing/validate-tax-id", include_in_schema=False)
 def validate_tax_id(
     request: Request,
     body: TaxIdValidationRequest,
@@ -782,7 +785,7 @@ def validate_tax_id(
         raise HTTPException(status_code=400, detail="Tax ID validation failed")
 
 
-@router.get("/billing/supported-tax-countries")
+@router.get("/billing/supported-tax-countries", include_in_schema=False)
 def get_supported_tax_countries():
     """
     Get list of countries supported for tax ID validation.

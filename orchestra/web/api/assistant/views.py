@@ -2604,6 +2604,7 @@ def register_voice(
     summary="Clone voice",
     description="Create a new assistant voice by cloning a voice from an audio file.",
     tags=["Voices"],
+    include_in_schema=False,
 )
 async def clone_voice(
     request: Request,
@@ -3043,6 +3044,7 @@ async def generate_speech(
     summary="Design Voice Previews",
     description="Generates voice design previews from a text description.",
     tags=["Voices", "TTS Design"],
+    include_in_schema=False,
 )
 async def design_voice_generate_previews_endpoint(
     request_data: VoiceDesignGeneratePreviewsRequest,
@@ -3127,6 +3129,7 @@ async def design_voice_generate_previews_endpoint(
     summary="Create Voice from Design Preview",
     description="Creates a full voice from a generated preview voice id.",
     tags=["Voices", "TTS Design"],
+    include_in_schema=False,
 )
 async def design_voice_create_from_preview_endpoint(
     request_data: VoiceDesignCreateFromPreviewRequest,
