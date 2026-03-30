@@ -69,7 +69,8 @@ def _init_stripe() -> None:
     try:
         configure_stripe()
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"Stripe configuration failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Stripe is not configured")
 
 
 def _customer_has_payment_method(stripe_customer_id: Optional[str]) -> bool:
@@ -389,7 +390,14 @@ def create_checkout_session(
                 session_params["customer_email"] = billing_email
             checkout_session = stripe.checkout.Session.create(**session_params)
         else:
-            raise HTTPException(status_code=400, detail=str(exc))
+            logger.error(
+                f"Stripe checkout session creation failed: {exc}",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to create checkout session",
+            )
 
     if not checkout_session.url:
         raise HTTPException(
@@ -468,7 +476,11 @@ def create_portal_session(
                     "Please purchase credits first to set up billing in this environment."
                 ),
             )
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.error(f"Stripe portal session creation failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to create billing portal session",
+        )
 
     return PortalSessionResponse(url=portal_session.url)
 
@@ -520,7 +532,8 @@ def get_checkout_status(
     try:
         checkout_session = stripe.checkout.Session.retrieve(session_id)
     except stripe.InvalidRequestError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.error(f"Stripe checkout session retrieval failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid checkout session")
 
     # --- Ownership verification ------------------------------------------
     session_customer = checkout_session.customer
@@ -765,7 +778,8 @@ def validate_tax_id(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
+        logger.error(f"Tax ID validation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Tax ID validation failed")
 
 
 @router.get("/billing/supported-tax-countries")
