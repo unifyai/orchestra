@@ -4759,6 +4759,63 @@ async def get_assistant_spending_limit(
     )
 
 
+@router.get("/assistant/{agent_id}/spend", response_model=AssistantSpendResponse)
+async def get_assistant_spend(
+    request: Request,
+    agent_id: int,
+    month: str = Query(
+        ...,
+        description="Month in YYYY-MM format",
+        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+        examples=["2026-01"],
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """Get an assistant's cumulative spend for a given month."""
+    user_id = request.state.user_id
+
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    if assistant.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
+    limit = assistant_dao.get_spending_cap(agent_id)
+
+    percent_used = None
+    if limit is not None and limit > 0:
+        percent_used = round((cumulative_spend / limit) * 100, 2)
+
+    credit_balance = None
+    if assistant.organization_id is not None:
+        org = (
+            session.query(Organization)
+            .filter(Organization.id == assistant.organization_id)
+            .first()
+        )
+        if org and org.billing_account:
+            credit_balance = float(org.billing_account.credits)
+    else:
+        from orchestra.db.models.orchestra_models import User
+
+        user = session.query(User).filter(User.id == assistant.user_id).first()
+        if user and user.billing_account:
+            credit_balance = float(user.billing_account.credits)
+
+    return AssistantSpendResponse(
+        agent_id=agent_id,
+        month=month,
+        cumulative_spend=cumulative_spend,
+        limit=limit,
+        limit_set_at=assistant.monthly_spending_cap_set_at,
+        percent_used=percent_used,
+        credit_balance=credit_balance,
+    )
+
+
 @router.put(
     "/assistant/{agent_id}/spending-limit",
     response_model=AssistantSpendingLimitResponse,
@@ -4834,71 +4891,6 @@ async def set_assistant_spending_limit(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-# ============================================================================
-# Admin Spend Endpoints (for UniLLM service calls)
-# ============================================================================
-
-
-@admin_router.get("/assistant/{agent_id}/spend")
-def admin_get_assistant_spend(
-    agent_id: int,
-    month: str = Query(
-        ...,
-        description="Month in YYYY-MM format",
-        pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
-        examples=["2026-01"],
-    ),
-    session: Session = Depends(get_db_session),
-):
-    """
-    Admin endpoint: Get an assistant's cumulative spend for a given month.
-
-    This endpoint is for internal service calls (e.g., UniLLM) and does not
-    require the caller to own the assistant.
-    """
-    assistant_dao = AssistantDAO(session)
-    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
-    if not assistant:
-        raise HTTPException(status_code=404, detail="Assistant not found.")
-
-    cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
-    limit = assistant_dao.get_spending_cap(agent_id)
-
-    percent_used = None
-    if limit is not None and limit > 0:
-        percent_used = round((cumulative_spend / limit) * 100, 2)
-
-    # Include credit balance from the billing account (for credit guard checks).
-    # The billing account comes from the org (if org assistant) or the user.
-    credit_balance = None
-    if assistant.organization_id is not None:
-        from orchestra.db.models.orchestra_models import Organization
-
-        org = (
-            session.query(Organization)
-            .filter(Organization.id == assistant.organization_id)
-            .first()
-        )
-        if org and org.billing_account:
-            credit_balance = float(org.billing_account.credits)
-    else:
-        from orchestra.db.models.orchestra_models import User
-
-        user = session.query(User).filter(User.id == assistant.user_id).first()
-        if user and user.billing_account:
-            credit_balance = float(user.billing_account.credits)
-
-    return AssistantSpendResponse(
-        agent_id=agent_id,
-        month=month,
-        cumulative_spend=cumulative_spend,
-        limit=limit,
-        limit_set_at=assistant.monthly_spending_cap_set_at,
-        percent_used=percent_used,
-        credit_balance=credit_balance,
-    )
 
 
 # ============================================================================

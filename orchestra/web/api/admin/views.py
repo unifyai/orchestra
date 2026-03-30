@@ -27,9 +27,6 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     User,
 )
-from orchestra.services.spending_limit_notification_service import (
-    SpendingLimitNotificationService,
-)
 from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     AssistantContactCostRead,
@@ -42,10 +39,6 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     RechargeTypeModelResponse,
     SuspensionReason,
     UsersModelResponse,
-)
-from orchestra.web.api.assistant.schema import (
-    SpendingLimitReachedRequest,
-    SpendingLimitReachedResponse,
 )
 
 router = APIRouter()
@@ -1633,64 +1626,6 @@ def admin_get_spending_limit_notifications(
             status_code=500,
             detail=f"Failed to get spending limit notifications: {str(e)}",
         )
-
-
-@router.post(
-    "/spending-limit-reached",
-    response_model=SpendingLimitReachedResponse,
-    summary="Notify users when a spending limit is reached",
-    description="""
-    Called by Unity when a spending limit blocks an LLM call.
-    Sends email notifications to relevant users and records the notification
-    for deduplication.
-
-    **Entity Types:**
-    - `assistant`: Notifies the assistant owner
-    - `user`: Notifies the user
-    - `member`: Notifies the organization member
-    - `organization`: Notifies all org members who have assistants
-
-    **Deduplication:**
-    - Notifications are deduplicated by (entity_type, entity_id, month, limit_value)
-    - If `limit_set_at` is provided and is after the last notification, a new
-      notification is sent (handles the "limit removed then re-enabled" scenario)
-    """,
-)
-async def admin_spending_limit_reached(
-    body: SpendingLimitReachedRequest,
-    session: Session = Depends(get_db_session),
-) -> SpendingLimitReachedResponse:
-    """
-    Handle spending limit reached notification.
-
-    This endpoint:
-    1. Checks if we've already notified for this limit (deduplication)
-    2. Gets the relevant recipients based on entity type
-    3. Sends emails asynchronously (fire-and-forget)
-    4. Records the notification for future deduplication
-    """
-    notification_service = SpendingLimitNotificationService(session)
-
-    result = notification_service.process_limit_reached(
-        limit_type=body.limit_type,
-        entity_id=body.entity_id,
-        limit_value=body.limit_value,
-        current_spend=body.current_spend,
-        month=body.month,
-        limit_set_at=body.limit_set_at,
-        entity_name=body.entity_name,
-        organization_id=body.organization_id,
-    )
-
-    if result.notified:
-        session.commit()
-
-    return SpendingLimitReachedResponse(
-        notified=result.notified,
-        reason=result.reason,
-        recipient_count=result.recipient_count,
-        notified_user_ids=result.notified_user_ids,
-    )
 
 
 # =============================================================================

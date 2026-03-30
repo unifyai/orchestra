@@ -2099,13 +2099,12 @@ async def get_member_spending_limit(
     )
 
 
-# ============================================================================
-# Admin Spend Endpoints (for UniLLM service calls)
-# ============================================================================
-
-
-@admin_router.get("/organization/{organization_id}/spend")
-def admin_get_org_spend(
+@router.get(
+    "/organizations/{organization_id}/spend",
+    response_model=OrgSpendResponse,
+)
+async def get_org_spend(
+    request_fastapi: Request,
     organization_id: int,
     month: str = Query(
         ...,
@@ -2115,16 +2114,23 @@ def admin_get_org_spend(
     ),
     session: Session = Depends(get_db_session),
 ):
-    """
-    Admin endpoint: Get an organization's cumulative spend for a given month.
+    """Get an organization's cumulative spend for a given month."""
+    user_id = request_fastapi.state.user_id
 
-    This endpoint is for internal service calls (e.g., UniLLM) and does not
-    require the caller to be a member of the organization.
-    """
     org_dao = OrganizationDAO(session)
     org = org_dao.get(organization_id)
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found.")
+
+    org_member_dao = OrganizationMemberDAO(session)
+    member = org_member_dao.get_member(user_id, organization_id)
+    is_owner = org.owner_id == user_id
+
+    if not member and not is_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="You must be a member of this organization to view its spend.",
+        )
 
     cumulative_spend = org_dao.get_cumulative_spend(organization_id, month)
     limit = org_dao.get_spending_cap(organization_id)
@@ -2133,7 +2139,6 @@ def admin_get_org_spend(
     if limit is not None and limit > 0:
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
-    # Include credit balance from the billing account (for credit guard checks)
     credit_balance = None
     if org.billing_account:
         credit_balance = float(org.billing_account.credits)
@@ -2149,8 +2154,12 @@ def admin_get_org_spend(
     )
 
 
-@admin_router.get("/organization/{organization_id}/members/{member_user_id}/spend")
-def admin_get_member_spend(
+@router.get(
+    "/organizations/{organization_id}/members/{member_user_id}/spend",
+    response_model=MemberSpendResponse,
+)
+async def get_member_spend(
+    request_fastapi: Request,
     organization_id: int,
     member_user_id: str,
     month: str = Query(
@@ -2161,18 +2170,25 @@ def admin_get_member_spend(
     ),
     session: Session = Depends(get_db_session),
 ):
-    """
-    Admin endpoint: Get an organization member's cumulative spend for a given month.
+    """Get an organization member's cumulative spend for a given month."""
+    user_id = request_fastapi.state.user_id
 
-    This endpoint is for internal service calls (e.g., UniLLM) and does not
-    require the caller to have org membership.
-
-    The spend is the SUM of all assistant spending logs for this user in the org.
-    """
     org_dao = OrganizationDAO(session)
     org = org_dao.get(organization_id)
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found.")
+
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view member spend.",
+        )
 
     org_member_dao = OrganizationMemberDAO(session)
     member = org_member_dao.get_member(member_user_id, organization_id)
@@ -2193,7 +2209,6 @@ def admin_get_member_spend(
     if limit is not None and limit > 0:
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
-    # Include credit balance from the org's billing account (for credit guard checks)
     credit_balance = None
     if org.billing_account:
         credit_balance = float(org.billing_account.credits)
