@@ -4412,7 +4412,10 @@ def admin_list_all_assistants(
             if assistant.organization_id is None:
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
-                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+                keys = api_key_dao.get_organization_keys(
+                    assistant.user_id,
+                    assistant.organization_id,
+                )
             return keys[0][0].key if keys else None
 
         # Perform expensive lookups only if needed
@@ -4576,7 +4579,10 @@ def admin_update_assistant_by_filter(
     if a.organization_id is None:
         keys = api_key_dao.get_personal_keys(a.user_id)
     else:
-        keys = api_key_dao.filter(organization_id=a.organization_id)
+        keys = api_key_dao.get_organization_keys(
+            a.user_id,
+            a.organization_id,
+        )
     api_key = keys[0][0].key if keys else None
 
     # Return updated assistant
@@ -4643,7 +4649,10 @@ def admin_list_assistants_for_user(
             if assistant.organization_id is None:
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
-                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+                keys = api_key_dao.get_organization_keys(
+                    assistant.user_id,
+                    assistant.organization_id,
+                )
             return keys[0][0].key if keys else None
 
         api_keys = [get_api_key_for_assistant(a) for a in assistants]
