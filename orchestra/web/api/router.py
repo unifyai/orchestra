@@ -49,7 +49,29 @@ ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else Non
 
 groupings = {
     "Assistants": [
+        "Assistant Management",
         "Messages",
+        "Voices",
+        "Media",
+    ],
+    "Projects": [
+        "Projects",
+        "Contexts",
+        "Logs",
+    ],
+    "Account": [
+        "User",
+        "API Keys",
+        "Credits",
+        "Billing",
+    ],
+    "Organizations": [
+        "Organizations",
+        "Roles & Permissions",
+        "Teams & Resource Access",
+    ],
+    "Storage": [
+        "Storage",
     ],
 }
 
@@ -73,7 +95,7 @@ api_router.include_router(
 )
 api_router.include_router(
     users.router,
-    tags=["Query Logging"],
+    tags=["User"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
