@@ -99,6 +99,28 @@ router = APIRouter()
 admin_router = APIRouter()
 
 
+def _check_project_write_permission(
+    session,
+    user_id: str,
+    organization_id: Optional[int],
+    project_id: int,
+) -> None:
+    """Enforce project:write for org-context requests. Personal context is always allowed."""
+    if organization_id is None:
+        return
+    ra_dao = ResourceAccessDAO(session)
+    if not ra_dao.check_user_permission(
+        user_id,
+        "project",
+        project_id,
+        "project:write",
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to write to this project",
+        )
+
+
 def _sanitize_sql_error(error: Exception) -> str:
     """
     Extract a clean error message from SQLAlchemy exceptions, removing SQL traces.
@@ -302,20 +324,7 @@ def create_logs(
     except (IndexError, AttributeError):
         raise not_found("Project")
 
-    # Check write permission for org projects with explicit grants
-    if organization_id is not None:
-        resource_access_dao = ResourceAccessDAO(session)
-        has_write = resource_access_dao.check_user_permission(
-            user_id=user_id,
-            resource_type="project",
-            resource_id=project_id,
-            permission_name="project:write",
-        )
-        if not has_write:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to write logs to this project",
-            )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     # Get or create context_id
     if request.context:
@@ -631,6 +640,8 @@ def create_from_logs(
             status_code=404,
             detail=f"Project '{body.project_name}' not found.",
         )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
+
     # Get or create context_id
     if body.context:
         # Check if context is a string
@@ -1076,6 +1087,8 @@ def update_derived_log(
             status_code=404,
             detail=f"Project '{body.project_name}' not found.",
         )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
+
     # Get or create context_id
     if body.context:
         # Check if context is a string
@@ -1527,6 +1540,12 @@ def _atomic_field_update_impl(
         )
         if not project:
             raise HTTPException(status_code=404, detail="Log not found.")
+        _check_project_write_permission(
+            session,
+            user_id,
+            organization_id,
+            log_event.project_id,
+        )
 
         # Build the atomic SQL update
         sql = text(
@@ -1594,6 +1613,7 @@ def _atomic_upsert_mode(
         raise HTTPException(status_code=404, detail="Project not found.")
     project = projects[0][0]  # filter_by_user_access returns list of tuples
     project_id = project.id
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     context_dao = ContextDAO(session)
 
@@ -1859,6 +1879,7 @@ def _update_logs(
 
     # Get user ID for permission checks
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # Normalize the logs parameter to get IDs to update
     ids_to_update = []
@@ -1885,6 +1906,12 @@ def _update_logs(
                     status_code=404,
                     detail=f"Project '{body.project_name}' not found.",
                 )
+            _check_project_write_permission(
+                session,
+                user_id,
+                organization_id,
+                project_id,
+            )
 
             # It's a filter dict, use log_dao.get_ids_by_filter to get matching IDs
             try:
@@ -1967,10 +1994,11 @@ def _update_logs(
             # Check cache first for project access
             if project_id not in project_access_cache:
                 project_obj = project_dao.filter_by_user_access(
-                    user_id=request_fastapi.state.user_id,
+                    user_id=user_id,
+                    organization_id=organization_id,
                     id=project_id,
                 )
-                project_access_cache[project_id] = project_obj is not None
+                project_access_cache[project_id] = bool(project_obj)
 
             if not project_access_cache[project_id]:
                 not_found_logs.append(log_id)
@@ -1996,6 +2024,7 @@ def _update_logs(
 
     # Get the common project_id for all logs
     project_id = next(iter(log_id_to_project.values()))
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     # Fetch context object once for duplicate checks (cache)
     # This is done early to avoid N queries in the duplicate check loop later
@@ -2811,6 +2840,17 @@ def _delete_logs(
 
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
+            # Embedding cleanup before hard delete (see LogEventDAO.delete)
+            from orchestra.db.dao.embedding_dao import EmbeddingDAO
+
+            embedding_dao = EmbeddingDAO(session)
+            embedding_dao.cancel_queue(
+                log_event_ids=logs_to_delete,
+                reason="Log deleted",
+            )
+            embedding_dao.soft_delete(log_event_ids=logs_to_delete)
+            embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+
             deleted_count = (
                 session.query(LogEvent)
                 .filter(LogEvent.id.in_(logs_to_delete))
@@ -2974,6 +3014,17 @@ def _delete_logs(
 
             # Delete logs that don't exist in other contexts - BULK DELETE
             if logs_to_delete:
+                # Embedding cleanup before hard delete (see LogEventDAO.delete)
+                from orchestra.db.dao.embedding_dao import EmbeddingDAO
+
+                embedding_dao = EmbeddingDAO(session)
+                embedding_dao.cancel_queue(
+                    log_event_ids=logs_to_delete,
+                    reason="Log deleted",
+                )
+                embedding_dao.soft_delete(log_event_ids=logs_to_delete)
+                embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+
                 deleted_count = (
                     session.query(LogEvent)
                     .filter(LogEvent.id.in_(logs_to_delete))
@@ -3115,6 +3166,7 @@ def delete_logs(
             status_code=404,
             detail=f"Project '{body.project_name}' not found.",
         )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     # Validate context
     context_name = body.context if body.context else ""
@@ -4497,6 +4549,7 @@ def rename_field(
                 detail=f"Project '{request.project_name}' not found",
             )
         project_id = project.id
+        _check_project_write_permission(session, user_id, organization_id, project_id)
 
         context_name = request.context if request.context else ""
         context_id = context_dao.get_or_create(project_id=project_id, name=context_name)
@@ -4657,6 +4710,7 @@ def join_logs(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     # Validate pair_of_args
     if not isinstance(request.pair_of_args, list) or len(request.pair_of_args) != 2:
@@ -4974,6 +5028,7 @@ def create_fields(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     # Get or create context
     context_name = request.context if request.context else ""
@@ -5177,6 +5232,7 @@ def update_field(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     context_name = request.context or ""
     if request.context:
@@ -5280,6 +5336,7 @@ def delete_fields(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
 
     # Get context
     context_name = request.context if request.context else ""

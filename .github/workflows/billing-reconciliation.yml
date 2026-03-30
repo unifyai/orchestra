@@ -9,7 +9,7 @@ on:
       auto_fix:
         description: 'Auto-fix tier (none/safe/moderate/all)'
         required: false
-        default: 'none'
+        default: 'moderate'
         type: choice
         options:
         - 'none'
@@ -29,7 +29,7 @@ jobs:
     steps:
     - name: Run billing reconciliation
       run: |
-        AUTO_FIX="${{ github.event.inputs.auto_fix || 'none' }}"
+        AUTO_FIX="${{ github.event.inputs.auto_fix || 'moderate' }}"
         LOOKBACK="${{ github.event.inputs.lookback_days || '30' }}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \
@@ -74,7 +74,7 @@ jobs:
     steps:
     - name: Run billing reconciliation
       run: |
-        AUTO_FIX="${{ github.event.inputs.auto_fix || 'none' }}"
+        AUTO_FIX="${{ github.event.inputs.auto_fix || 'moderate' }}"
         LOOKBACK="${{ github.event.inputs.lookback_days || '30' }}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \

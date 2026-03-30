@@ -92,6 +92,11 @@ class BillingAccount(Base):
         default="ACTIVE",
         server_default="ACTIVE",
     )  # ACTIVE, SUSPENDED, CLOSED
+    suspension_reason = Column(
+        String,
+        nullable=True,
+        default=None,
+    )  # dispute, admin_freeze — NULL when ACTIVE
     billing_setup_complete = Column(
         Boolean,
         nullable=False,

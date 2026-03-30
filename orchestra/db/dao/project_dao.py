@@ -7,6 +7,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.embedding_dao import EmbeddingDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.models.orchestra_models import (
@@ -208,23 +209,11 @@ class ProjectDAO:
             )
 
             # Phase 0: Cancel all pending embedding queue items for this project
-            # This prevents embedding workers from processing items during deletion,
-            # avoiding race conditions and FK violations
-            cancelled_result = self.session.execute(
-                text(
-                    """
-                    UPDATE embedding_queue eq
-                    SET status = 'cancelled',
-                        error_message = 'Project deleted'
-                    FROM log_event le
-                    WHERE eq.ref_id = le.id
-                      AND le.project_id = :project_id
-                      AND eq.status IN ('pending', 'generating', 'vector_ready', 'inserting')
-                """,
-                ),
-                {"project_id": id},
+            embedding_dao = EmbeddingDAO(self.session)
+            cancelled_count = embedding_dao.cancel_queue(
+                project_id=id,
+                reason="Project deleted",
             )
-            cancelled_count = cancelled_result.rowcount
             self.session.commit()
 
             if cancelled_count > 0:
@@ -234,21 +223,7 @@ class ProjectDAO:
                 )
 
             # Phase 1: Soft-delete embeddings (fast, no HNSW index surgery)
-            # This marks embeddings as deleted so they're excluded from searches
-            soft_delete_result = self.session.execute(
-                text(
-                    """
-                    UPDATE embedding e
-                    SET is_deleted = true
-                    FROM log_event le
-                    WHERE e.ref_id = le.id
-                      AND le.project_id = :project_id
-                      AND e.is_deleted = false
-                """,
-                ),
-                {"project_id": id},
-            )
-            soft_deleted_count = soft_delete_result.rowcount
+            soft_deleted_count = embedding_dao.soft_delete(project_id=id)
             self.session.commit()
 
             if soft_deleted_count > 0:
@@ -290,23 +265,8 @@ class ProjectDAO:
                     f"Phase 2: Cleaned up GCS media for {total_gcs_deleted} log events",
                 )
 
-            # Phase 3a: Null out embedding ref_ids for this project's log_events.
-            # This must happen BEFORE deleting log_events, otherwise the FK
-            # SET NULL trigger fires per-row during each batch delete, causing
-            # massive overhead (index updates on the embedding table for every row).
-            nulled_result = self.session.execute(
-                text(
-                    """
-                    UPDATE embedding e
-                    SET ref_id = NULL
-                    FROM log_event le
-                    WHERE e.ref_id = le.id
-                      AND le.project_id = :project_id
-                """,
-                ),
-                {"project_id": id},
-            )
-            nulled_count = nulled_result.rowcount
+            # Phase 3a: Null out embedding ref_ids before deleting log_events
+            nulled_count = embedding_dao.null_ref_ids(project_id=id)
             self.session.commit()
 
             if nulled_count > 0:

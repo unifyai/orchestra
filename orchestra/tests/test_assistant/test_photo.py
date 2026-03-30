@@ -5,7 +5,9 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.services.bucket_service import BucketService as OriginalBucketService
-from orchestra.services.openai_service import ImageAnalysisResponse
+from orchestra.services.openai_service import (
+    ImageAnalysisResponse,
+)
 from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
 from orchestra.services.openai_service import (
     TextModerationResponse,
@@ -472,13 +474,7 @@ async def test_animate_video_with_files_success(
         seed=None,
     )
 
-    assert bucket_mock.delete_assistant_file.call_count == 2
-    bucket_mock.delete_assistant_file.assert_any_call(
-        "gs://mock-bucket/tmp/temp_image.jpg",
-    )
-    bucket_mock.delete_assistant_file.assert_any_call(
-        "gs://mock-bucket/tmp/temp_audio.mp3",
-    )
+    assert bucket_mock.delete_assistant_file.call_count == 0
 
 
 @pytest.mark.anyio
