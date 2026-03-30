@@ -44,6 +44,7 @@ class ApiMessageDAO:
         if organization_id is not None:
             stmt = select(ApiMessage).where(
                 ApiMessage.id == message_id,
+                ApiMessage.user_id == user_id,
                 ApiMessage.organization_id == organization_id,
             )
         else:

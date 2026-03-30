@@ -860,7 +860,7 @@ class VoiceCloneRequestData(BaseModel):
 
 
 class VoiceGenerateRequest(BaseModel):
-    text: str = Field(..., description="Text to synthesize.")
+    text: str = Field(..., description="Text to synthesize.", max_length=5000)
     provider: Literal["cartesia", "elevenlabs", "openai"] = Field(
         ...,
         description="TTS provider.",

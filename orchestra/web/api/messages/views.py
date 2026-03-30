@@ -168,7 +168,13 @@ async def upload_attachment(
             detail="Attachment upload service unavailable.",
         )
 
+    MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MB
     file_content = await file.read()
+    if len(file_content) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit.",
+        )
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{adapters_url}/unify/attachment",
@@ -184,9 +190,10 @@ async def upload_attachment(
             timeout=60,
         )
     if resp.status_code != 200:
+        logger.error(f"Attachment upload failed: {resp.status_code} {resp.text}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Attachment upload failed: {resp.text}",
+            detail="Attachment upload failed",
         )
     return resp.json()
 

@@ -142,7 +142,7 @@ class InviteResponse(BaseModel):
     """
 
     id: str
-    token: str
+    token: Optional[str] = None
     organization_id: int
     organization_name: str
     invitee_email: str
