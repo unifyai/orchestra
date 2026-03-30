@@ -1352,7 +1352,7 @@ async def handle_stripe_webhook(
                 payload=payload,
                 sig_header=sig_header,
                 secret=settings.stripe_webhook_secret,
-                tolerance=600,
+                tolerance=300,
             )
         except ValueError as e:
             logger.error({"message": "Invalid payload", "error": str(e)})

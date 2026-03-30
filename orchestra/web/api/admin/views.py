@@ -300,6 +300,19 @@ def create_recharge_model(
             detail="Transaction id must be specified when adding a payment.",
         )
 
+    MAX_PROMO_AMOUNT = settings.max_promo_amount
+    if (
+        new_recharge_object.type == "promo"
+        and new_recharge_object.quantity > MAX_PROMO_AMOUNT
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Promo recharges are capped at ${MAX_PROMO_AMOUNT}. "
+                f"Requested: ${new_recharge_object.quantity:.2f}"
+            ),
+        )
+
     # Resolve billing account from user_id or organization_id
     ba = _resolve_billing_account(
         session,

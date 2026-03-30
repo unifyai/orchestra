@@ -1558,8 +1558,6 @@ class OneTimeCreditGrantLink(Base):
     max_claims = Column(
         Integer,
         nullable=True,
-        default=1,
-        server_default=text("1"),
         comment="Maximum number of claims allowed (NULL = unlimited)",
     )
 
