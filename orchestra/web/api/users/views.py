@@ -962,6 +962,7 @@ def update_query_logging_status(
     "/user/claim-credit-grant-link",
     response_model=CreditGrantClaimResponse,
     status_code=200,
+    include_in_schema=False,
 )
 def claim_credit_grant_link(
     request: Request,
@@ -1234,7 +1235,11 @@ def delete_credit_grant_link(
     return None
 
 
-@router.get("/user/onboarding-status", response_model=OnboardingStatusResponse)
+@router.get(
+    "/user/onboarding-status",
+    response_model=OnboardingStatusResponse,
+    include_in_schema=False,
+)
 def get_onboarding_status(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1252,7 +1257,7 @@ def get_onboarding_status(
     return OnboardingStatusResponse(onboarded=onboarded)
 
 
-@router.put("/user/onboarding-status")
+@router.put("/user/onboarding-status", include_in_schema=False)
 def update_onboarding_status(
     request: Request,
     body: UpdateOnboardingStatusRequest,
@@ -1278,7 +1283,11 @@ def update_onboarding_status(
 # -- Detailed Onboarding Progress (Step-by-Step) --
 
 
-@router.get("/user/onboarding", response_model=OnboardingStatusDetailedResponse)
+@router.get(
+    "/user/onboarding",
+    response_model=OnboardingStatusDetailedResponse,
+    include_in_schema=False,
+)
 def get_onboarding_progress(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1309,7 +1318,11 @@ def get_onboarding_progress(
     )
 
 
-@router.put("/user/onboarding", response_model=OnboardingStatusDetailedResponse)
+@router.put(
+    "/user/onboarding",
+    response_model=OnboardingStatusDetailedResponse,
+    include_in_schema=False,
+)
 def update_onboarding_progress(
     request: Request,
     body: OnboardingStatusUpdateRequest,
@@ -1372,7 +1385,7 @@ def update_onboarding_progress(
     )
 
 
-@router.delete("/user/onboarding")
+@router.delete("/user/onboarding", include_in_schema=False)
 def reset_onboarding_progress(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1402,7 +1415,11 @@ def reset_onboarding_progress(
 # -- Account Deletion (Self-Service) --
 
 
-@router.get("/user/can-delete-account", response_model=CanDeleteAccountResponse)
+@router.get(
+    "/user/can-delete-account",
+    response_model=CanDeleteAccountResponse,
+    include_in_schema=False,
+)
 def can_delete_account(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1426,7 +1443,11 @@ def can_delete_account(
     )
 
 
-@router.delete("/user/delete-account", response_model=AccountDeletionResponse)
+@router.delete(
+    "/user/delete-account",
+    response_model=AccountDeletionResponse,
+    include_in_schema=False,
+)
 def delete_own_account(
     request: Request,
     body: AccountDeletionConfirmation,
@@ -1681,7 +1702,7 @@ def _compat_list_business_accounts(
     return []
 
 
-@router.post("/user/create-with-business-info")
+@router.post("/user/create-with-business-info", include_in_schema=False)
 def _compat_create_user_with_business_info(
     session: Session = Depends(get_db_session),
 ):
