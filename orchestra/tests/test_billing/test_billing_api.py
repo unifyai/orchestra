@@ -318,6 +318,10 @@ class TestBillingEntity:
         user_dao = UserDAO(dbsession)
         ba_dao = BillingAccountDAO(dbsession)
         user_obj = user_dao.get_user_with_id(user["id"])
+
+        baseline = get_billing_entity(dbsession, user["id"], organization_id=None)
+        baseline_credits = baseline.credits
+
         ba_dao.add_credits(user_obj.billing_account_id, 50)
         dbsession.commit()
 
@@ -325,7 +329,7 @@ class TestBillingEntity:
 
         assert entity.entity_type == BillingEntityType.USER
         assert entity.entity_id == user["id"]
-        assert entity.credits == Decimal("50")
+        assert entity.credits == baseline_credits + Decimal("50")
         assert entity.is_user is True
         assert entity.is_organization is False
 
