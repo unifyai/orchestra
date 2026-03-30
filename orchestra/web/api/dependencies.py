@@ -139,6 +139,9 @@ def check_account_not_frozen(request: Request):
     Only SUSPENDED and CLOSED accounts are hard-blocked.  Balance-based
     enforcement for billable actions is handled per-handler (credits
     checks) and by Unity's spending-limit hook — not here.
+
+    Fails closed: if the DB check itself errors, the request is blocked
+    to prevent suspended accounts from exploiting transient DB issues.
     """
     user_id = getattr(request.state, "user_id", None)
     organization_id = getattr(request.state, "organization_id", None)
@@ -155,11 +158,15 @@ def check_account_not_frozen(request: Request):
             if ba.account_status in ("SUSPENDED", "CLOSED"):
                 raise account_frozen
 
-    except Exception as e:
-        if e is account_frozen:
-            raise
-        logger.error(f"Account freeze check failed: {e}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "Failed to check account frozen status for user %s — "
+            "blocking request (fail-closed)",
+            user_id,
+        )
         raise HTTPException(
             status_code=503,
-            detail="Unable to verify account status",
+            detail="Unable to verify account status. Please try again.",
         )

@@ -2148,7 +2148,6 @@ class TestBillingProfile:
                     "line1": "Tower B, Tech Park",
                     "city": "Hyderabad",
                     "state": "Telangana",
-                    "district": "Rangareddy",
                     "postal_code": "500081",
                 },
             },
@@ -2157,9 +2156,32 @@ class TestBillingProfile:
         assert response.status_code == 200
         data = response.json()
         assert data["billing_address"]["country"] == "IN"
-        assert data["billing_address"]["district"] == "Rangareddy"
         assert data["billing_address"]["state"] == "Telangana"
         assert data["billing_address"]["postal_code"] == "500081"
+
+    @pytest.mark.anyio
+    async def test_billing_address_rejects_extra_fields(
+        self,
+        client: AsyncClient,
+        dbsession,
+    ):
+        """Arbitrary keys in billing_address are rejected (extra=forbid)."""
+        owner = await create_test_user(client, "extra_addr_fields@test.com")
+        org = await create_test_org(client, owner, "ExtraFieldOrg")
+
+        response = await client.patch(
+            "/v0/billing/billing-profile",
+            json={
+                "billing_address": {
+                    "line1": "123 Main St",
+                    "city": "NYC",
+                    "country": "US",
+                    "district": "Manhattan",
+                },
+            },
+            headers=org["headers"],
+        )
+        assert response.status_code == 422
 
 
 # ============================================================================
@@ -2322,6 +2344,35 @@ class TestAdminBillingEndpoints:
 
     @pytest.mark.anyio
     async def test_recharge_user_credits(self, client: AsyncClient):
+        user_id = "user1"
+        url = "/v0/admin/create_recharge"
+        response = await client.post(
+            url,
+            json={"user_id": user_id, "quantity": 100, "type": "promo"},
+            headers=ADMIN_HEADERS,
+        )
+        if response.status_code == 404:
+            pytest.skip("Recharge endpoint not available at this path")
+        assert response.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_promo_recharge_capped_at_100(self, client: AsyncClient):
+        """Promo recharges above $100 are rejected."""
+        user_id = "user1"
+        url = "/v0/admin/create_recharge"
+        response = await client.post(
+            url,
+            json={"user_id": user_id, "quantity": 101, "type": "promo"},
+            headers=ADMIN_HEADERS,
+        )
+        if response.status_code == 404:
+            pytest.skip("Recharge endpoint not available at this path")
+        assert response.status_code == 400
+        assert "capped" in response.json()["detail"].lower()
+
+    @pytest.mark.anyio
+    async def test_promo_recharge_at_limit_succeeds(self, client: AsyncClient):
+        """Promo recharge at exactly $100 should succeed."""
         user_id = "user1"
         url = "/v0/admin/create_recharge"
         response = await client.post(
@@ -2904,7 +2955,6 @@ class TestInternationalAddress:
                     "line1": "Tower B, Tech Park",
                     "city": "Hyderabad",
                     "state": "Telangana",
-                    "district": "Rangareddy",
                     "postal_code": "500081",
                 },
             },
@@ -2913,8 +2963,8 @@ class TestInternationalAddress:
         assert response.status_code == 200
         data = response.json()
         assert data["billing_address"]["country"] == "IN"
-        assert data["billing_address"]["district"] == "Rangareddy"
         assert data["billing_address"]["state"] == "Telangana"
+        assert data["billing_address"]["postal_code"] == "500081"
 
     @pytest.mark.anyio
     async def test_partial_update_merges(self, client: AsyncClient, dbsession):

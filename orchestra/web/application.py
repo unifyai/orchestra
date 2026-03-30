@@ -32,7 +32,8 @@ def get_app() -> FastAPI:
     if os.environ.get("ON_PREM") and os.environ.get("GCP_PROJECT_ID") == "saas-368716":
         raise RuntimeError(
             "ON_PREM must not be set in cloud deployments. "
-            "This flag disables authentication and is only for self-hosted instances.",
+            "This flag overrides GCP project/location settings "
+            "and is only for self-hosted instances.",
         )
 
     if (

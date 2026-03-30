@@ -269,6 +269,9 @@ class Settings(BaseSettings):
         os.environ.get("STRIPE_MAX_CREDIT_QTY", "500"),
     )
 
+    # Promo credits
+    max_promo_amount: float = 100.0
+
     # Assistant creation
     assistant_creation_cost: float = 10.0
 
