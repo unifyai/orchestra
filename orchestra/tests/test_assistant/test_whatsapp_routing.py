@@ -831,8 +831,8 @@ class TestAdminEndpoints:
         dbsession.commit()
 
         # Set user's whatsapp_number
-        user_wa = "+15559876543"
-        await client.put(
+        user_wa = "+16505551234"
+        update_resp = await client.put(
             "/v0/admin/user",
             json={
                 "user_id": test_user["id"],
@@ -840,6 +840,7 @@ class TestAdminEndpoints:
             },
             headers=ADMIN_HEADERS,
         )
+        assert update_resp.status_code == status.HTTP_200_OK, update_resp.text
 
         # Resolve inbound
         resolve_resp = await client.get(

@@ -1328,7 +1328,7 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         assert (
             phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
         )  # Unchanged
-        mock_delete_phone.assert_called_once_with("+15558675309")
+        mock_delete_phone.assert_called_once_with("+15558675309", deploy_env=None)
 
         # 6. Delete WhatsApp contact
         delete_whatsapp_payload = {"contact_type": "whatsapp"}
