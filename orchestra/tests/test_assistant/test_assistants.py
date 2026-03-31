@@ -15,7 +15,6 @@ def _insert_contact(
     contact_type: str,
     contact_value: str,
     *,
-    user_value: str | None = None,
     provider: str | None = None,
     country_code: str | None = None,
 ):
@@ -27,7 +26,6 @@ def _insert_contact(
         contact_value=contact_value,
         provider=provider,
         country_code=country_code,
-        user_value=user_value,
     )
     dbsession.flush()
 
@@ -1282,7 +1280,6 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
             "phone",
             "+15558675309",
             provider="twilio",
-            user_value="+15558675310",
         )
         _insert_contact(
             dbsession,
@@ -1392,8 +1389,8 @@ async def test_update_assistant_contact_info_reawakens(
     )
     mock_reawaken.reset_mock()
 
-    # Update the contact's user_value via PUT /assistant/{id}/contact and expect reawaken
-    update_contact_payload = {"contact_type": "phone", "user_value": "+15550009999"}
+    # Update the contact's metadata via PUT /assistant/{id}/contact and expect reawaken
+    update_contact_payload = {"contact_type": "phone", "metadata": {"test_key": "test_val"}}
     put_resp = await client.put(
         f"/v0/assistant/{assistant_id}/contact",
         json=update_contact_payload,

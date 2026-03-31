@@ -273,12 +273,12 @@ class AssistantRead(AssistantCreate):
     )
     user_phone: Optional[str] = Field(
         None,
-        description="User's personal phone number (for call forwarding)",
+        description="User's personal phone number",
         example="+15559876543",
     )
     user_whatsapp_number: Optional[str] = Field(
         None,
-        description="User's WhatsApp number associated with the assistant",
+        description="User's WhatsApp number",
         example="+15559876543",
     )
     assistant_whatsapp_number: Optional[str] = Field(
@@ -1220,11 +1220,6 @@ class AssistantContactCreate(BaseModel):
         description="Country code for phone number provisioning (e.g., 'US', 'GB'). Only used for phone contacts.",
         example="US",
     )
-    user_phone: Optional[str] = Field(
-        None,
-        description="User's personal phone number (for forwarding). Only used for phone contacts.",
-        example="+15551234567",
-    )
     # Email-specific fields
     email_local: Optional[str] = Field(
         None,
@@ -1247,7 +1242,6 @@ class AssistantContactCreate(BaseModel):
             "example": {
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15551234567",
             },
         }
 
@@ -1282,10 +1276,6 @@ class AssistantContactRead(BaseModel):
         None,
         description="Country code for phone numbers.",
     )
-    user_value: Optional[str] = Field(
-        None,
-        description="Linked user-side value (personal phone/WhatsApp for forwarding).",
-    )
     status: str = Field(
         ...,
         description="Lifecycle status: 'active', 'grace_period', or 'deleted'.",
@@ -1311,21 +1301,17 @@ class AssistantContactRead(BaseModel):
 
 class AssistantContactUpdate(BaseModel):
     """
-    Schema for updating non-provisioned fields on an existing contact.
+    Schema for updating metadata on an existing contact.
 
-    Only ``user_value`` and ``metadata`` can be changed. Changing the actual
-    provisioned resource (phone number, email address) requires delete + create.
+    Only ``metadata`` can be changed via this endpoint. User-side contact
+    info (phone, whatsapp) is managed on the user profile. Changing the
+    actual provisioned resource requires delete + create.
     """
 
     contact_type: Literal["phone", "email", "whatsapp"] = Field(
         ...,
         description="The type of contact to update.",
         example="phone",
-    )
-    user_value: Optional[str] = Field(
-        None,
-        description="Updated user-side value (e.g., personal phone for forwarding).",
-        example="+15559876543",
     )
     metadata: Optional[Dict[str, Any]] = Field(
         None,
@@ -1336,7 +1322,7 @@ class AssistantContactUpdate(BaseModel):
         schema_extra = {
             "example": {
                 "contact_type": "phone",
-                "user_value": "+15559876543",
+                "metadata": {"custom_key": "value"},
             },
         }
 

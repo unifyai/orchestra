@@ -43,6 +43,43 @@ class UserRequest(BaseModel):
         return result["formatted_phone_number"]
 
 
+class PhoneVerificationRequest(BaseModel):
+    """Request to send a verification code to a phone number."""
+
+    user_id: str
+    phone_number: str
+    phone_type: Literal["phone", "whatsapp"] = "phone"
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+        result = validate_phone_number(v)
+        if not result["is_valid"]:
+            raise ValueError(f"Invalid phone number: {result['error']}")
+        return result["formatted_phone_number"]
+
+
+class PhoneVerificationConfirm(BaseModel):
+    """Request to confirm a verification code."""
+
+    user_id: str
+    phone_number: str
+    phone_type: Literal["phone", "whatsapp"] = "phone"
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+        result = validate_phone_number(v)
+        if not result["is_valid"]:
+            raise ValueError(f"Invalid phone number: {result['error']}")
+        return result["formatted_phone_number"]
+
+
 class AccountRequest(BaseModel):
     provider: str
     type: str

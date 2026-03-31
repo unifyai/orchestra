@@ -10,7 +10,12 @@ from zoneinfo import available_timezones
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, BillingAccount, User
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    BillingAccount,
+    PhoneVerification,
+    User,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 if TYPE_CHECKING:
@@ -315,6 +320,182 @@ class UserDAO:
                         new_bio=entry.bio,
                     )
                 self.session.commit()
+
+    def check_verification_cooldown(
+        self,
+        user_id: str,
+        phone_number: str,
+        phone_type: str,
+        cooldown_seconds: int,
+    ) -> bool:
+        """Return True if a verification was sent recently (within cooldown)."""
+        import datetime
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cutoff = now - datetime.timedelta(seconds=cooldown_seconds)
+        recent = self.session.execute(
+            select(PhoneVerification)
+            .where(
+                PhoneVerification.user_id == user_id,
+                PhoneVerification.phone_number == phone_number,
+                PhoneVerification.phone_type == phone_type,
+                PhoneVerification.created_at >= cutoff,
+            )
+            .order_by(PhoneVerification.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        return recent is not None
+
+    def create_phone_verification(
+        self,
+        user_id: str,
+        phone_number: str,
+        phone_type: str,
+        code_hash: str,
+        expiry_minutes: int,
+    ) -> None:
+        """
+        Invalidate pending verifications for the same user/number/type,
+        then create a new verification record.
+        """
+        import datetime
+
+        from sqlalchemy import delete as sa_delete
+
+        self.session.execute(
+            sa_delete(PhoneVerification).where(
+                PhoneVerification.user_id == user_id,
+                PhoneVerification.phone_number == phone_number,
+                PhoneVerification.phone_type == phone_type,
+                PhoneVerification.verified_at.is_(None),
+            )
+        )
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.session.add(
+            PhoneVerification(
+                user_id=user_id,
+                phone_number=phone_number,
+                phone_type=phone_type,
+                code_hash=code_hash,
+                expires_at=now + datetime.timedelta(minutes=expiry_minutes),
+            )
+        )
+        self.session.commit()
+
+    def confirm_phone_verification(
+        self,
+        user_id: str,
+        phone_number: str,
+        phone_type: str,
+        code: str,
+        max_attempts: int,
+    ) -> tuple[bool, str]:
+        """
+        Check a verification code.
+
+        Returns ``(True, message)`` on success or ``(False, error)`` on
+        failure (wrong code, expired, too many attempts, not found).
+        """
+        import datetime
+        import hashlib
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        verification = self.session.execute(
+            select(PhoneVerification)
+            .where(
+                PhoneVerification.user_id == user_id,
+                PhoneVerification.phone_number == phone_number,
+                PhoneVerification.phone_type == phone_type,
+                PhoneVerification.expires_at > now,
+                PhoneVerification.verified_at.is_(None),
+            )
+            .order_by(PhoneVerification.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        if not verification:
+            return False, "No pending verification found. Please request a new code."
+
+        if verification.attempts >= max_attempts:
+            return False, "Too many attempts. Please request a new code."
+
+        verification.attempts += 1
+
+        submitted_hash = hashlib.sha256(code.encode()).hexdigest()
+        if submitted_hash != verification.code_hash:
+            self.session.commit()
+            remaining = max_attempts - verification.attempts
+            return False, f"Incorrect verification code. {remaining} attempts remaining."
+
+        verification.verified_at = now
+        self.session.commit()
+        return True, "Phone number verified successfully."
+
+    def require_verified_phone(
+        self,
+        user: User,
+        new_value: Optional[str],
+        phone_type: str,
+    ) -> None:
+        """
+        Raise ``ValueError`` if ``new_value`` is a *changed* phone/whatsapp
+        number that has not been verified via ``confirm-verification``.
+
+        Clearing a number (None / empty) or keeping the same value is allowed
+        without verification.
+        """
+        import datetime
+
+        if new_value is None:
+            return
+
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+        result = validate_phone_number(new_value)
+        if result["is_valid"]:
+            new_value = result["formatted_phone_number"]
+
+        def _normalize(val: Optional[str]) -> Optional[str]:
+            if not val:
+                return val
+            r = validate_phone_number(val)
+            return r["formatted_phone_number"] if r["is_valid"] else val
+
+        current = _normalize(user.phone_number if phone_type == "phone" else user.whatsapp_number)
+        if new_value == current or not new_value:
+            return
+
+        other = _normalize(user.whatsapp_number if phone_type == "phone" else user.phone_number)
+        if new_value == other:
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        verified = self.session.execute(
+            select(PhoneVerification)
+            .where(
+                PhoneVerification.user_id == user.id,
+                PhoneVerification.phone_number == new_value,
+                PhoneVerification.verified_at.isnot(None),
+                PhoneVerification.expires_at > now,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+
+        if not verified:
+            label = "phone number" if phone_type == "phone" else "WhatsApp number"
+            raise ValueError(
+                f"The new {label} must be verified before it can be saved."
+            )
+
+    def cleanup_phone_verifications(self, user_id: str) -> None:
+        """Remove all verification records for a user after a successful update."""
+        from sqlalchemy import delete as sa_delete
+
+        self.session.execute(
+            sa_delete(PhoneVerification).where(PhoneVerification.user_id == user_id)
+        )
+        self.session.commit()
 
     def delete(self, id: str) -> None:
         """Delete a user by ID."""
