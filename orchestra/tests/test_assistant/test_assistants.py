@@ -1303,7 +1303,10 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         email_deleted_info = delete_email_resp.json()["info"]
         assert email_deleted_info["email"] is None
         assert email_deleted_info["phone"] == "+15558675309"  # Should be unchanged
-        mock_delete_email.assert_called_once_with("contact.remover@example.com")
+        mock_delete_email.assert_called_once_with(
+            "contact.remover@example.com",
+            deploy_env=None,
+        )
 
         # 5. Delete Phone contact
         delete_phone_payload = {"contact_type": "phone"}
@@ -1469,7 +1472,7 @@ async def test_delete_assistant_contact_reawakens(
     mock_reawaken.assert_called_once()
     assert mock_reawaken.call_args[0][0] == str(assistant_id)
     # Also assert the mock for deleting the phone number was called
-    mock_delete_phone.assert_called_once_with("+15552223333")
+    mock_delete_phone.assert_called_once_with("+15552223333", deploy_env=None)
 
 
 # ==== Voice Configuration Validation Tests ====
