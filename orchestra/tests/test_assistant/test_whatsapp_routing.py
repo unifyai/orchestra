@@ -780,7 +780,7 @@ class TestAdminEndpoints:
         """Create an assistant with enough credits for WhatsApp."""
         response = await client.post(
             "/v0/assistant",
-            json={"first_name": "WA", "surname": "Bot"},
+            json={"first_name": "WA", "surname": "Bot", "create_infra": False},
             headers=test_user["headers"],
         )
         assert response.status_code in (
