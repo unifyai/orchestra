@@ -17,19 +17,19 @@ class UserRequest(BaseModel):
     bio: Optional[str] = None
     timezone: Optional[str] = None
     phone_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None
 
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
         """Ensure the timezone is a valid IANA timezone name."""
         if v is None:
-            # Allow timezone to be optional
             return v
         if v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
 
-    @field_validator("phone_number")
+    @field_validator("phone_number", "whatsapp_number")
     @classmethod
     def validate_phone_number(cls, v: Optional[str]) -> Optional[str]:
         """Validate phone number and normalize to E.164 format."""

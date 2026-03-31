@@ -121,13 +121,26 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
                 contact.id,
             )
     elif contact.contact_type == "whatsapp":
-        # WhatsApp senders on our shared account don't need explicit
-        # deprovisioning – clearing the mapping is sufficient.
-        logger.info(
-            "WhatsApp contact %s cleared (contact %d, no external deprovision needed)",
-            contact.contact_value,
-            contact.id,
-        )
+        from sqlalchemy.orm import object_session
+
+        from orchestra.db.dao.whatsapp_route_dao import WhatsAppRouteDAO
+
+        session = object_session(contact)
+        if session:
+            dao = WhatsAppRouteDAO(session)
+            deleted = dao.delete_routes_for_assistant(contact.assistant_id)
+            logger.info(
+                "WhatsApp contact %s cleared (contact %d, %d routes deleted)",
+                contact.contact_value,
+                contact.id,
+                deleted,
+            )
+        else:
+            logger.info(
+                "WhatsApp contact %s cleared (contact %d, no session for route cleanup)",
+                contact.contact_value,
+                contact.id,
+            )
 
 
 # ---------------------------------------------------------------------------
