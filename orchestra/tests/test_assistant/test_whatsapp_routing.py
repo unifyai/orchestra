@@ -773,21 +773,14 @@ class TestAdminEndpoints:
     @pytest.fixture
     async def test_assistant(
         self,
-        client: AsyncClient,
         test_user,
         dbsession: Session,
     ):
-        """Create an assistant with enough credits for WhatsApp."""
-        response = await client.post(
-            "/v0/assistant",
-            json={"first_name": "WA", "surname": "Bot", "create_infra": False},
-            headers=test_user["headers"],
-        )
-        assert response.status_code in (
-            status.HTTP_200_OK,
-            status.HTTP_201_CREATED,
-        ), response.json()
-        return response.json()
+        """Create an assistant directly in the DB (avoids unmocked infra calls)."""
+        assistant = Assistant(user_id=test_user["id"], first_name="WA")
+        dbsession.add(assistant)
+        dbsession.commit()
+        return {"agent_id": assistant.agent_id}
 
     async def test_pool_endpoint(self, client: AsyncClient):
         response = await client.get(
