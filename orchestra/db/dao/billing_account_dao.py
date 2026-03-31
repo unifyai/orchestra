@@ -530,6 +530,67 @@ class BillingAccountDAO:
         self.session.flush()
         return recharge
 
+    def grant_signup_credits(
+        self,
+        user_id: str,
+        selected_type: str,
+        organization_id: Optional[int] = None,
+    ) -> Optional[Recharge]:
+        """
+        Grant one-time signup promo credits to the appropriate billing account.
+
+        Called when a user completes the onboarding workspace-selection step.
+        Credits go to the user's personal billing account when *selected_type*
+        is ``"personal"``, or to the organization's billing account when it is
+        ``"organization"``.
+
+        Idempotent: silently returns ``None`` if the target billing account
+        already has any promo recharge, so the grant is safe to call on
+        retries, auto-complete, or when multiple org members complete
+        onboarding for the same organization.
+
+        :param user_id: The user completing onboarding.
+        :param selected_type: ``"personal"`` or ``"organization"``.
+        :param organization_id: Required when *selected_type* is
+            ``"organization"``.
+        :return: The created Recharge, or ``None`` if skipped.
+        """
+        from orchestra.settings import settings
+
+        credit_amount = settings.signup_credit_grant
+        if credit_amount <= 0:
+            return None
+
+        if selected_type == "organization":
+            if organization_id is None:
+                return None
+            org = (
+                self.session.query(Organization)
+                .filter(Organization.id == organization_id)
+                .first()
+            )
+            if not org or not org.billing_account_id:
+                return None
+            target_ba_id = org.billing_account_id
+        else:
+            user = self.session.query(User).filter(User.id == user_id).first()
+            if not user or not user.billing_account_id:
+                return None
+            target_ba_id = user.billing_account_id
+
+        existing_promo = (
+            self.session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == target_ba_id,
+                Recharge.type == RECHARGE_TYPE_PROMO,
+            )
+            .first()
+        )
+        if existing_promo:
+            return None
+
+        return self.apply_credit_grant(target_ba_id, credit_amount)
+
     def get_billing_profile(self, billing_account_id: int) -> Optional[dict]:
         """
         Get the billing profile.
