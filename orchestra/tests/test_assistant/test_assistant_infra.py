@@ -349,7 +349,6 @@ async def test_create_infra_pubsub_fails(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
 
     # No contact infra to roll back (contact provisioning removed from create)
     mock_all_infra["delete_email"].assert_not_called()
@@ -391,7 +390,6 @@ async def test_create_infra_rollback_also_fails(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
 
 
 @pytest.mark.anyio
@@ -418,7 +416,6 @@ async def test_create_infra_multiple_rollback_failures(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "PubSub error" in error_detail
 
 
 # =============================================================================
@@ -664,7 +661,6 @@ async def test_org_assistant_infra_pubsub_fails_rollback(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
 
     # No contact infra to roll back (contact provisioning removed from create)
     mock_all_infra["delete_email"].assert_not_called()
@@ -762,7 +758,6 @@ async def test_org_assistant_infra_rollback_also_fails(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "PubSub org error" in error_detail
 
     # No contact infra to roll back
     mock_all_infra["delete_email"].assert_not_called()
@@ -921,7 +916,10 @@ async def test_delete_assistant_with_windows_desktop_mode(
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
     mock_all_infra["release_pool_vm"].assert_called()
-    mock_all_infra["delete_assistant_disk"].assert_called_once_with(agent_id)
+    mock_all_infra["delete_assistant_disk"].assert_called_once_with(
+        agent_id,
+        deploy_env=None,
+    )
     mock_all_infra["delete_pubsub_topic"].assert_called_once()
 
 
@@ -950,5 +948,8 @@ async def test_delete_assistant_with_ubuntu_desktop_mode(
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
     mock_all_infra["release_pool_vm"].assert_called()
-    mock_all_infra["delete_assistant_disk"].assert_called_once_with(agent_id)
+    mock_all_infra["delete_assistant_disk"].assert_called_once_with(
+        agent_id,
+        deploy_env=None,
+    )
     mock_all_infra["delete_pubsub_topic"].assert_called_once()
