@@ -48,6 +48,78 @@ class WhatsAppRouteDAO:
             .first()
         )
 
+    def add_pool_number(
+        self,
+        number: str,
+        twilio_sender_sid: str | None = None,
+    ) -> WhatsAppPoolNumber:
+        """Add a new number to the pool. Raises ValueError if it already exists."""
+        if self.get_pool_number_by_value(number):
+            raise ValueError(f"Pool number {number} already exists.")
+        pool = WhatsAppPoolNumber(
+            number=number,
+            twilio_sender_sid=twilio_sender_sid,
+        )
+        self.session.add(pool)
+        self.session.flush()
+        return pool
+
+    def update_pool_number(
+        self,
+        pool_id: int,
+        status: str | None = None,
+        twilio_sender_sid: str | None = ...,
+    ) -> WhatsAppPoolNumber:
+        """Update a pool number's status and/or Twilio SID."""
+        pool = (
+            self.session.query(WhatsAppPoolNumber)
+            .filter(WhatsAppPoolNumber.id == pool_id)
+            .first()
+        )
+        if not pool:
+            raise ValueError(f"Pool number with id {pool_id} not found.")
+        if status is not None:
+            pool.status = status
+        if twilio_sender_sid is not ...:
+            pool.twilio_sender_sid = twilio_sender_sid
+        self.session.flush()
+        return pool
+
+    def delete_pool_number(self, pool_id: int) -> int:
+        """Delete a pool number if no active contacts reference it.
+
+        Returns the number of routes cleaned up.
+        """
+        pool = (
+            self.session.query(WhatsAppPoolNumber)
+            .filter(WhatsAppPoolNumber.id == pool_id)
+            .first()
+        )
+        if not pool:
+            raise ValueError(f"Pool number with id {pool_id} not found.")
+        active_contacts = (
+            self.session.query(AssistantContact)
+            .filter(
+                AssistantContact.contact_type == "whatsapp",
+                AssistantContact.contact_value == pool.number,
+                AssistantContact.status == "active",
+            )
+            .count()
+        )
+        if active_contacts:
+            raise ValueError(
+                f"Cannot delete pool number {pool.number}: "
+                f"{active_contacts} active assistant(s) use it.",
+            )
+        route_count = (
+            self.session.query(WhatsAppRoute)
+            .filter(WhatsAppRoute.pool_number_id == pool_id)
+            .delete()
+        )
+        self.session.delete(pool)
+        self.session.flush()
+        return route_count
+
     # ------------------------------------------------------------------
     # Inbound routing (Tier 1 + Tier 2)
     # ------------------------------------------------------------------
