@@ -41,9 +41,6 @@ def mock_all_infra(dbsession):
         "create_phone_number": AsyncMock(
             return_value={"phoneNumber": "+15551234567"},
         ),
-        "assign_whatsapp_sender": AsyncMock(
-            return_value={"whatsapp_number": "+15559876543"},
-        ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
         "delete_assistant_disk": AsyncMock(return_value={"success": True}),
         "delete_email": AsyncMock(return_value={"success": True}),
@@ -54,13 +51,19 @@ def mock_all_infra(dbsession):
     }
 
     release_pool_vm_mock = AsyncMock(return_value={"success": True})
+    wa_pool_mock = AsyncMock(return_value={"pool_number": "+15559876543"})
+    wa_register_mock = AsyncMock(return_value={"success": True})
 
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
-        # Patch release_pool_vm at the infra module level so
-        # stop_jobs()'s internal call is intercepted.
         with patch(
             "orchestra.web.api.utils.assistant_infra.release_pool_vm",
             release_pool_vm_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.assign_whatsapp_pool_number",
+            wa_pool_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
+            wa_register_mock,
         ):
             with patch(
                 "orchestra.web.api.assistant.views.settings",
@@ -75,6 +78,8 @@ def mock_all_infra(dbsession):
                         new_callable=AsyncMock,
                     ), patch("orchestra.web.api.assistant.views.time.sleep"):
                         patches["release_pool_vm"] = release_pool_vm_mock
+                        patches["assign_whatsapp_pool_number"] = wa_pool_mock
+                        patches["register_whatsapp_sender"] = wa_register_mock
                         yield patches
 
 
@@ -115,7 +120,8 @@ async def test_create_assistant_with_infra_full(
     # Contact provisioning removed from create
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
     # Verify no rollback functions were called
     mock_all_infra["delete_email"].assert_not_called()
@@ -150,7 +156,8 @@ async def test_create_assistant_with_infra_email_only(
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["watch_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -313,7 +320,8 @@ async def test_create_infra_whatsapp_fails(
     # Create succeeds because contact provisioning is no longer part of create
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
@@ -591,7 +599,8 @@ async def test_org_assistant_with_infra_full(
     # Contact provisioning removed from create
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
 
 @pytest.mark.anyio
