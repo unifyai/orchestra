@@ -93,7 +93,6 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
-    assign_whatsapp_sender,
     create_email,
     create_phone_number,
     create_pubsub_topic,
@@ -953,7 +952,6 @@ async def delete_assistant_contact(
         )
 
         if contact:
-            # Deprovision external resource based on AssistantContact data
             if contact_type == "phone" and contact.contact_value:
                 await delete_phone_number(
                     contact.contact_value,
@@ -964,7 +962,12 @@ async def delete_assistant_contact(
                     contact.contact_value,
                     deploy_env=assistant.deploy_env,
                 )
-            # WhatsApp: no external infra deletion needed
+            elif contact_type == "whatsapp":
+                from orchestra.web.api.utils.assistant_infra import (
+                    delete_whatsapp_routes,
+                )
+
+                await delete_whatsapp_routes(assistant_id, session)
 
             # Soft-delete the AssistantContact row
             contact_dao.soft_delete_assistant_contact(
@@ -1178,17 +1181,23 @@ async def create_assistant_contact(
                 )
 
         elif contact_type == "whatsapp":
-            if not contact_request.user_whatsapp_number:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="user_whatsapp_number is required for WhatsApp contacts.",
-                )
-            whatsapp_response = await assign_whatsapp_sender(
-                contact_request.user_whatsapp_number,
+            from orchestra.web.api.utils.assistant_infra import (
+                assign_whatsapp_pool_number,
+                register_whatsapp_sender,
+            )
+
+            pool_result = await assign_whatsapp_pool_number(
+                assistant_id,
+                session,
+            )
+            created_value = pool_result["pool_number"]
+            user_value = None
+
+            # Register the Twilio sender (idempotent if already registered)
+            await register_whatsapp_sender(
+                created_value,
                 deploy_env=assistant.deploy_env,
             )
-            created_value = whatsapp_response.get("whatsapp_number")
-            user_value = contact_request.user_whatsapp_number
 
         if not created_value:
             raise Exception(f"Failed to provision {contact_type}: no value returned.")
@@ -1694,7 +1703,6 @@ async def delete_assistant(
             print(f"PUBSUB DELETED: {assistant_id}")
 
         async def _deprovision_contacts():
-            # Deprovision all contacts (phone numbers, emails)
             async def _deprovision(ac):
                 try:
                     if ac.contact_type == "phone" and ac.contact_value:
@@ -1709,6 +1717,13 @@ async def delete_assistant(
                             deploy_env=assistant.deploy_env,
                         )
                         print(f"EMAIL DELETED: {ac.contact_value}")
+                    elif ac.contact_type == "whatsapp":
+                        from orchestra.web.api.utils.assistant_infra import (
+                            delete_whatsapp_routes,
+                        )
+
+                        await delete_whatsapp_routes(assistant_id, session)
+                        print(f"WHATSAPP ROUTES DELETED: {assistant_id}")
                 except Exception as e:
                     cleanup_errors.append(
                         f"Failed to deprovision {ac.contact_type} "

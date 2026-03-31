@@ -62,6 +62,7 @@ class UserDAO:
         image: Optional[str] = None,
         timezone: Optional[str] = None,
         phone_number: Optional[str] = None,
+        whatsapp_number: Optional[str] = None,
         credits: Optional[float] = 0,
     ) -> User:
         """
@@ -91,16 +92,19 @@ class UserDAO:
         if timezone is not None and timezone not in VALID_TIMEZONES:
             raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
 
-        # Validate and format phone_number if provided
-        if phone_number is not None:
-            from orchestra.web.api.utils.phone_number_validator import (
-                validate_phone_number,
-            )
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
 
+        if phone_number is not None:
             result = validate_phone_number(phone_number)
             if not result["is_valid"]:
                 raise ValueError(f"Invalid phone number: {result['error']}")
             phone_number = result["formatted_phone_number"]
+
+        if whatsapp_number is not None:
+            result = validate_phone_number(whatsapp_number)
+            if not result["is_valid"]:
+                raise ValueError(f"Invalid WhatsApp number: {result['error']}")
+            whatsapp_number = result["formatted_phone_number"]
 
         # Create a BillingAccount for this user
         billing_account = BillingAccount(
@@ -118,6 +122,7 @@ class UserDAO:
             image=image,
             timezone=timezone,
             phone_number=phone_number,
+            whatsapp_number=whatsapp_number,
             billing_account_id=billing_account.id,
             store_prompts=True,
         )
@@ -189,6 +194,19 @@ class UserDAO:
             raise not_found("User ID")
         return result
 
+    def get_by_whatsapp_number(self, whatsapp_number: str) -> Optional[User]:
+        """
+        Get a user by their WhatsApp number.
+
+        :param whatsapp_number: E.164-formatted WhatsApp number.
+        :return: User instance or None.
+        """
+        return (
+            self.session.query(User)
+            .filter(User.whatsapp_number == whatsapp_number)
+            .first()
+        )
+
     def get_all_users(self) -> List[User]:
         """
         Get all users.
@@ -223,6 +241,7 @@ class UserDAO:
         image: Optional[str] = ...,
         timezone: Optional[str] = ...,
         phone_number: Optional[str] = ...,
+        whatsapp_number: Optional[str] = ...,
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
         monthly_spending_cap: Optional[float] = ...,
@@ -274,6 +293,19 @@ class UserDAO:
                         raise ValueError(f"Invalid phone number: {result['error']}")
                     phone_number = result["formatted_phone_number"]
                 setattr(entry, "phone_number", phone_number)
+            if whatsapp_number is not ...:
+                if whatsapp_number is not None:
+                    from orchestra.web.api.utils.phone_number_validator import (
+                        validate_phone_number,
+                    )
+
+                    result = validate_phone_number(whatsapp_number)
+                    if not result["is_valid"]:
+                        raise ValueError(
+                            f"Invalid WhatsApp number: {result['error']}",
+                        )
+                    whatsapp_number = result["formatted_phone_number"]
+                setattr(entry, "whatsapp_number", whatsapp_number)
             if queries_enabled is not ...:
                 setattr(entry, "queries_enabled", queries_enabled)
             if evaluations_enabled is not ...:
