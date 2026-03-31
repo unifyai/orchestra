@@ -144,9 +144,8 @@ def _build_assistant_read(
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
 
     Contact fields (phone, email, whatsapp, etc.) are populated from the
-    ``AssistantContact`` table rather than the legacy columns on the
-    ``Assistant`` model.  ``user_whatsapp_number`` is sourced from the
-    ``User`` profile (canonical), not from AssistantContact.
+    ``AssistantContact`` table.  User-side contact info (``user_phone``,
+    ``user_whatsapp_number``) is sourced from the ``User`` profile.
 
     Args:
         user_whatsapp_number: When provided, used directly.  When ``None``
@@ -188,8 +187,10 @@ def _build_assistant_read(
     email_contact = contact_map.get("email")
     whatsapp_contact = contact_map.get("whatsapp")
 
+    # User-side contact info comes from the User profile
+    user_obj = session.get(User, a.user_id)
+    user_phone_number = user_obj.phone_number if user_obj else None
     if user_whatsapp_number is None:
-        user_obj = session.get(User, a.user_id)
         user_whatsapp_number = user_obj.whatsapp_number if user_obj else None
 
     return AssistantRead(
@@ -216,7 +217,7 @@ def _build_assistant_read(
         updated_at=a.updated_at,
         phone=(phone_contact.contact_value if phone_contact else None),
         email=(email_contact.contact_value if email_contact else None),
-        user_phone=(phone_contact.user_value if phone_contact else None),
+        user_phone=user_phone_number,
         user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=(
             whatsapp_contact.contact_value if whatsapp_contact else None
@@ -1095,9 +1096,37 @@ async def create_assistant_contact(
             )
 
     contact_type = contact_request.contact_type
+
+    # 2. Require verified profile number for phone / whatsapp contacts
+    if contact_type in ("phone", "whatsapp"):
+        user_dao = UserDAO(session)
+        user_rows = user_dao.filter(id=user_id)
+        if not user_rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found.",
+            )
+        user = user_rows[0][0]
+        if contact_type == "phone" and not user.phone_number:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "A verified phone number is required on your profile "
+                    "before creating a phone contact for an assistant."
+                ),
+            )
+        if contact_type == "whatsapp" and not user.whatsapp_number:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "A verified WhatsApp number is required on your profile "
+                    "before creating a WhatsApp contact for an assistant."
+                ),
+            )
+
     contact_dao = AssistantContactDAO(session)
 
-    # 2. Check for duplicate active contact
+    # 3. Check for duplicate active contact
     existing = contact_dao.get_contact_by_assistant_and_type(assistant_id, contact_type)
     if existing:
         raise HTTPException(
@@ -1147,7 +1176,6 @@ async def create_assistant_contact(
 
     # 5. Provision external resource
     created_value = None
-    user_value = None
 
     try:
         if contact_type == "phone":
@@ -1161,7 +1189,6 @@ async def create_assistant_contact(
                     f"Phone number creation failed: {phone_response['detail']}",
                 )
             created_value = phone_response.get("phoneNumber")
-            user_value = contact_request.user_phone
 
         elif contact_type == "email":
             if not contact_request.email_local:
@@ -1203,7 +1230,6 @@ async def create_assistant_contact(
                 session,
             )
             created_value = pool_result["pool_number"]
-            user_value = None
 
             # Register the Twilio sender (idempotent if already registered)
             await register_whatsapp_sender(
@@ -1233,6 +1259,7 @@ async def create_assistant_contact(
         session.close()
         session = next(get_db_session(request))
         assistant_dao = AssistantDAO(session)
+        contact_dao = AssistantContactDAO(session)
 
         # Re-fetch assistant with fresh session
         assistant = assistant_dao.get_assistant_by_id(
@@ -1250,7 +1277,6 @@ async def create_assistant_contact(
             contact_value=created_value,
             provider=provider,
             country_code=country_code,
-            user_value=user_value,
         )
         contact.monthly_cost = monthly_cost
 
@@ -1376,7 +1402,6 @@ async def list_assistant_contacts(
             provider=c.provider,
             provisioned_by=c.provisioned_by,
             country_code=c.country_code,
-            user_value=c.user_value,
             status=c.status,
             monthly_cost=float(c.monthly_cost) if c.monthly_cost is not None else None,
             created_at=c.created_at,
@@ -1394,7 +1419,7 @@ async def list_assistant_contacts(
     status_code=status.HTTP_200_OK,
     summary="Update contact metadata",
     description=(
-        "Updates non-provisioned fields (user_value, metadata) on an existing contact. "
+        "Updates metadata on an existing contact. "
         "Changing the actual provisioned resource requires delete + create."
     ),
     tags=["Assistant Management"],
@@ -1410,11 +1435,11 @@ async def update_assistant_contact(
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
-    Update non-provisioned fields on an existing contact.
+    Update metadata on an existing contact.
 
-    Only ``user_value`` and ``metadata`` can be changed via this endpoint.
-    Changing the actual provisioned resource (phone number, email address, etc.)
-    requires a delete + create flow.
+    Only ``metadata`` can be changed via this endpoint. User-side contact
+    info is managed on the user profile. Changing the actual provisioned
+    resource (phone number, email address, etc.) requires delete + create.
     """
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -1455,10 +1480,6 @@ async def update_assistant_contact(
             detail=f"No active {contact_type} contact found for this assistant.",
         )
 
-    # Update user_value
-    if contact_update.user_value is not None:
-        contact.user_value = contact_update.user_value
-
     # Update metadata (merge with existing)
     if contact_update.metadata is not None:
         existing_meta = contact.metadata_ or {}
@@ -1467,7 +1488,7 @@ async def update_assistant_contact(
     session.commit()
     session.refresh(assistant)
 
-    # Trigger reawaken so Unity picks up the user_value change
+    # Trigger reawaken so Unity picks up the metadata change
     try:
         await reawaken_assistant(
             str(assistant_id),
@@ -5227,8 +5248,12 @@ async def create_demo_assistant(
                 contact_value=demo_phone_number,
                 provider="twilio",
                 country_code=phone_country,
-                user_value=demo_create.demoer_phone,
             )
+            # Store demoer phone on user profile if not already set
+            if demo_create.demoer_phone:
+                demo_user = session.get(User, user_id)
+                if demo_user and not demo_user.phone_number:
+                    demo_user.phone_number = demo_create.demoer_phone
         if demo_email:
             contact_dao.upsert_assistant_contact(
                 assistant_id=demo_assistant.agent_id,

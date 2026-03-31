@@ -49,6 +49,8 @@ from orchestra.web.api.users.schema import (
     OnboardingStatusResponse,
     OnboardingStatusUpdateRequest,
     OnboardingStepDataResponse,
+    PhoneVerificationConfirm,
+    PhoneVerificationRequest,
     QueryLoggingStatus,
     UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
@@ -339,9 +341,29 @@ def update_user(
     session: Session = Depends(get_db_session),
 ):
     user_dao = UserDAO(session)
-    user = user_dao.filter(id=updated_user.user_id)
-    if not user:
+    user_rows = user_dao.filter(id=updated_user.user_id)
+    if not user_rows:
         raise not_found("User")
+    user = user_rows[0][0]
+
+    # Require server-side verification when phone or whatsapp changes
+    try:
+        user_dao.require_verified_phone(user, updated_user.phone_number, "phone")
+        user_dao.require_verified_phone(user, updated_user.whatsapp_number, "whatsapp")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+    def _normalize_phone(val: str | None) -> str | None:
+        if not val:
+            return val
+        r = validate_phone_number(val)
+        return r["formatted_phone_number"] if r["is_valid"] else val
+
     user_dao.update(
         id=updated_user.user_id,
         name=updated_user.name,
@@ -349,10 +371,142 @@ def update_user(
         job_title=updated_user.job_title,
         bio=updated_user.bio,
         timezone=updated_user.timezone,
-        phone_number=updated_user.phone_number,
-        whatsapp_number=updated_user.whatsapp_number,
+        phone_number=_normalize_phone(updated_user.phone_number),
+        whatsapp_number=_normalize_phone(updated_user.whatsapp_number),
     )
+
+    user_dao.cleanup_phone_verifications(updated_user.user_id)
+
     return "User information updated successfully!"
+
+
+# ---------------------------------------------------------------------------
+# Phone / WhatsApp number verification
+# ---------------------------------------------------------------------------
+
+VERIFICATION_EXPIRY_MINUTES = 10
+VERIFICATION_MAX_ATTEMPTS = 5
+VERIFICATION_COOLDOWN_SECONDS = 60
+
+
+@admin_router.post("/user/phone/send-verification")
+async def send_phone_verification(
+    body: PhoneVerificationRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Send a verification SMS to a phone number.
+
+    Delegates to the communication service for SMS delivery and to
+    ``UserDAO`` for cooldown checks and record persistence.
+    """
+    import hashlib
+    import os
+
+    import httpx
+
+    user_dao = UserDAO(session)
+    user_rows = user_dao.filter(id=body.user_id)
+    if not user_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    if user_dao.check_verification_cooldown(
+        body.user_id, body.phone_number, body.phone_type, VERIFICATION_COOLDOWN_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Please wait before requesting another verification code.",
+        )
+
+    # Call communication service — it generates the code, sends SMS,
+    # and returns the code so we can hash and store it server-side.
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+
+    if not comms_url or not admin_key:
+        logger.error("UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Verification service is not configured.",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{comms_url}/social/verify",
+                headers={
+                    "Authorization": f"Bearer {admin_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "platform": "phone",
+                    "account_identifier": body.phone_number,
+                },
+            )
+            if response.status_code != 200:
+                logger.error(
+                    "Communication service returned %s: %s",
+                    response.status_code,
+                    response.text,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to send verification SMS.",
+                )
+            comms_data = response.json()
+            code = comms_data.get("verification_code") or comms_data.get("verificationCode")
+            if not code:
+                logger.error("Communication service did not return a verification code")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to send verification SMS.",
+                )
+    except httpx.HTTPError as exc:
+        logger.error("Failed to reach communication service: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send verification SMS.",
+        )
+
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    user_dao.create_phone_verification(
+        body.user_id, body.phone_number, body.phone_type,
+        code_hash, VERIFICATION_EXPIRY_MINUTES,
+    )
+
+    return {"detail": "Verification code sent.", "expires_in_seconds": VERIFICATION_EXPIRY_MINUTES * 60}
+
+
+@admin_router.post("/user/phone/confirm-verification")
+def confirm_phone_verification(
+    body: PhoneVerificationConfirm,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Confirm a phone verification code.
+
+    On success, marks the verification record as verified so that a
+    subsequent ``PUT /user`` can accept the new phone number.
+    """
+    user_dao = UserDAO(session)
+    success, message = user_dao.confirm_phone_verification(
+        body.user_id, body.phone_number, body.phone_type,
+        body.code, VERIFICATION_MAX_ATTEMPTS,
+    )
+
+    if not success:
+        if "No pending" in message:
+            code = status.HTTP_404_NOT_FOUND
+        elif "Too many" in message:
+            code = status.HTTP_429_TOO_MANY_REQUESTS
+        else:
+            code = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=message)
+
+    return {"detail": message}
 
 
 @admin_router.delete("/user", response_model=AccountDeletionResponse)
