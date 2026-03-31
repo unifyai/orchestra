@@ -1290,7 +1290,6 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
             "whatsapp",
             "+15551112222",
             provider="twilio",
-            user_value="+15558675311",
         )
 
         assistant_whatsapp_number = "+15551112222"

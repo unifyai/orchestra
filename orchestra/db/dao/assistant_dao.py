@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, exists, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, AssistantContact
+from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
 
 
 @dataclass
@@ -52,7 +52,6 @@ class AssistantDAO:
         phone_country: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
-        user_whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
         voice_provider: Optional[str] = None,
         timezone: Optional[str] = None,
@@ -92,7 +91,6 @@ class AssistantDAO:
             phone=phone,
             user_phone=user_phone,
             email=email,
-            user_whatsapp_number=user_whatsapp_number,
             voice_id=voice_id,
             voice_provider=voice_provider,
             phone_country=phone_country,
@@ -240,10 +238,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "whatsapp",
-                        AssistantContact.user_value == user_whatsapp_number,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.whatsapp_number == user_whatsapp_number,
                     ),
                 ),
             )
@@ -330,10 +326,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "whatsapp",
-                        AssistantContact.user_value == user_whatsapp_number,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.whatsapp_number == user_whatsapp_number,
                     ),
                 ),
             )
@@ -583,10 +577,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "whatsapp",
-                        AssistantContact.user_value == user_whatsapp_number,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.whatsapp_number == user_whatsapp_number,
                     ),
                 ),
             )

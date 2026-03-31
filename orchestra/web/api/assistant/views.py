@@ -49,6 +49,7 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
+    User,
 )
 from orchestra.lib.billing import get_billing_entity
 from orchestra.services.bucket_service import BucketService
@@ -135,6 +136,7 @@ def _build_assistant_read(
     user_last_name: Optional[str] = None,
     user_email: Optional[str] = None,
     user_image: Optional[str] = None,
+    user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
     contacts: Optional[list] = None,
     include_internal: bool = False,
@@ -143,9 +145,12 @@ def _build_assistant_read(
 
     Contact fields (phone, email, whatsapp, etc.) are populated from the
     ``AssistantContact`` table rather than the legacy columns on the
-    ``Assistant`` model.
+    ``Assistant`` model.  ``user_whatsapp_number`` is sourced from the
+    ``User`` profile (canonical), not from AssistantContact.
 
     Args:
+        user_whatsapp_number: When provided, used directly.  When ``None``
+            the value is fetched from ``User.whatsapp_number``.
         contacts: Pre-fetched list of active ``AssistantContact`` rows for
             this assistant.  When ``None`` the contacts are fetched from
             the database.  Callers that build many ``AssistantRead``
@@ -183,6 +188,10 @@ def _build_assistant_read(
     email_contact = contact_map.get("email")
     whatsapp_contact = contact_map.get("whatsapp")
 
+    if user_whatsapp_number is None:
+        user_obj = session.get(User, a.user_id)
+        user_whatsapp_number = user_obj.whatsapp_number if user_obj else None
+
     return AssistantRead(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
@@ -208,9 +217,7 @@ def _build_assistant_read(
         phone=(phone_contact.contact_value if phone_contact else None),
         email=(email_contact.contact_value if email_contact else None),
         user_phone=(phone_contact.user_value if phone_contact else None),
-        user_whatsapp_number=(
-            whatsapp_contact.user_value if whatsapp_contact else None
-        ),
+        user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=(
             whatsapp_contact.contact_value if whatsapp_contact else None
         ),
@@ -863,6 +870,11 @@ def list_assistants(
                     ),
                     user_email=users[a.user_id].email if users.get(a.user_id) else None,
                     user_image=users[a.user_id].image if users.get(a.user_id) else None,
+                    user_whatsapp_number=(
+                        users[a.user_id].whatsapp_number
+                        if users.get(a.user_id)
+                        else None
+                    ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
                 )
                 for a in assistants
@@ -4448,7 +4460,13 @@ def admin_list_all_assistants(
                 requested_fields is None
                 or bool(
                     requested_fields
-                    & {"user_email", "user_first_name", "user_last_name", "user_image"},
+                    & {
+                        "user_email",
+                        "user_first_name",
+                        "user_last_name",
+                        "user_image",
+                        "user_whatsapp_number",
+                    },
                 )
             )
             else None
@@ -4475,6 +4493,7 @@ def admin_list_all_assistants(
                 user_last_name=users[i].last_name if users else None,
                 user_email=users[i].email if users else None,
                 user_image=users[i].image if users else None,
+                user_whatsapp_number=(users[i].whatsapp_number if users else None),
                 team_ids=[] if skip_teams else None,
                 contacts=contacts_by_assistant.get(a.agent_id, []),
                 include_internal=True,
@@ -4569,27 +4588,25 @@ def admin_update_assistant_by_filter(
         )
     a = assistants[0]
 
-    # Update the whatsapp AssistantContact row (the canonical source of
-    # contact data) instead of the legacy columns on the Assistant model.
     contact_dao = AssistantContactDAO(session)
-    whatsapp_contact = contact_dao.get_contact_by_assistant_and_type(
-        a.agent_id,
-        "whatsapp",
-    )
-    if whatsapp_contact:
-        if new_assistant_whatsapp_number:
+    if new_assistant_whatsapp_number:
+        whatsapp_contact = contact_dao.get_contact_by_assistant_and_type(
+            a.agent_id,
+            "whatsapp",
+        )
+        if whatsapp_contact:
             whatsapp_contact.contact_value = new_assistant_whatsapp_number
-        if new_user_whatsapp_number:
-            whatsapp_contact.user_value = new_user_whatsapp_number
-    else:
-        # No existing whatsapp contact – create one if a new number was provided
-        if new_assistant_whatsapp_number:
+        else:
             contact_dao.upsert_assistant_contact(
                 assistant_id=a.agent_id,
                 contact_type="whatsapp",
                 contact_value=new_assistant_whatsapp_number,
-                user_value=new_user_whatsapp_number,
             )
+
+    if new_user_whatsapp_number:
+        user = session.get(User, a.user_id)
+        if user:
+            user.whatsapp_number = new_user_whatsapp_number
 
     session.commit()
 
@@ -4932,8 +4949,6 @@ async def get_assistant_spend(
         if org and org.billing_account:
             credit_balance = float(org.billing_account.credits)
     else:
-        from orchestra.db.models.orchestra_models import User
-
         user = session.query(User).filter(User.id == assistant.user_id).first()
         if user and user.billing_account:
             credit_balance = float(user.billing_account.credits)
