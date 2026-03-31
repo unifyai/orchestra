@@ -89,6 +89,25 @@ def whatsapp_dao(dbsession: Session) -> WhatsAppRouteDAO:
     return WhatsAppRouteDAO(dbsession)
 
 
+@pytest.fixture
+def user_with_phone_only(dbsession: Session) -> User:
+    """User who has phone_number set but NOT whatsapp_number."""
+    ba = BillingAccount(credits=100)
+    dbsession.add(ba)
+    dbsession.flush()
+    user = User(
+        email="phone_only@test.com",
+        name="Phone",
+        last_name="Only",
+        phone_number="+15559990000",
+        whatsapp_number=None,
+        billing_account_id=ba.id,
+    )
+    dbsession.add(user)
+    dbsession.flush()
+    return user
+
+
 # ============================================================================
 # 1. Pool number seeding
 # ============================================================================
@@ -319,6 +338,127 @@ class TestResolveInbound:
         # Tier 1 should win → route to a1 (the one with WhatsApp enabled)
         assert result["assistant_id"] == a1.agent_id
         assert result["role"] == "owner"
+
+    def test_tier1b_phone_number_fallback(
+        self,
+        dbsession: Session,
+        whatsapp_dao,
+        user_with_phone_only,
+        pool_numbers,
+    ):
+        """Tier 1b: sender matches user.phone_number (no whatsapp_number set)."""
+        assistant = Assistant(user_id=user_with_phone_only.id, first_name="PhoneBot")
+        dbsession.add(assistant)
+        dbsession.flush()
+
+        dbsession.add(
+            AssistantContact(
+                assistant_id=assistant.agent_id,
+                contact_type="whatsapp",
+                contact_value=pool_numbers[0].number,
+                status="active",
+            ),
+        )
+        dbsession.flush()
+
+        result = whatsapp_dao.resolve_inbound(
+            pool_numbers[0].number,
+            user_with_phone_only.phone_number,
+        )
+        assert result is not None
+        assert result["assistant_id"] == assistant.agent_id
+        assert result["role"] == "owner"
+
+    def test_whatsapp_number_priority_over_phone(
+        self,
+        dbsession: Session,
+        whatsapp_dao,
+        pool_numbers,
+    ):
+        """Tier 1a (whatsapp_number) wins over Tier 1b (phone_number) on a different user."""
+        ba1 = BillingAccount(credits=100)
+        ba2 = BillingAccount(credits=100)
+        dbsession.add_all([ba1, ba2])
+        dbsession.flush()
+
+        shared_number = "+15550505050"
+
+        u_wa = User(
+            email="wa_prio@test.com",
+            whatsapp_number=shared_number,
+            billing_account_id=ba1.id,
+        )
+        u_ph = User(
+            email="ph_prio@test.com",
+            phone_number=shared_number,
+            billing_account_id=ba2.id,
+        )
+        dbsession.add_all([u_wa, u_ph])
+        dbsession.flush()
+
+        a_wa = Assistant(user_id=u_wa.id, first_name="WaBot")
+        a_ph = Assistant(user_id=u_ph.id, first_name="PhBot")
+        dbsession.add_all([a_wa, a_ph])
+        dbsession.flush()
+
+        for a in [a_wa, a_ph]:
+            dbsession.add(
+                AssistantContact(
+                    assistant_id=a.agent_id,
+                    contact_type="whatsapp",
+                    contact_value=pool_numbers[0].number,
+                    status="active",
+                ),
+            )
+        dbsession.flush()
+
+        result = whatsapp_dao.resolve_inbound(pool_numbers[0].number, shared_number)
+        assert result is not None
+        assert result["assistant_id"] == a_wa.agent_id
+        assert result["role"] == "owner"
+
+    def test_ambiguous_phone_number_skips_tier1b(
+        self,
+        dbsession: Session,
+        whatsapp_dao,
+        pool_numbers,
+    ):
+        """Two users share the same phone_number → Tier 1b is skipped (ambiguous)."""
+        ba1 = BillingAccount(credits=100)
+        ba2 = BillingAccount(credits=100)
+        dbsession.add_all([ba1, ba2])
+        dbsession.flush()
+
+        shared_phone = "+15550707070"
+        u1 = User(
+            email="ambig1@test.com",
+            phone_number=shared_phone,
+            billing_account_id=ba1.id,
+        )
+        u2 = User(
+            email="ambig2@test.com",
+            phone_number=shared_phone,
+            billing_account_id=ba2.id,
+        )
+        dbsession.add_all([u1, u2])
+        dbsession.flush()
+
+        a1 = Assistant(user_id=u1.id, first_name="Amb1")
+        dbsession.add(a1)
+        dbsession.flush()
+
+        dbsession.add(
+            AssistantContact(
+                assistant_id=a1.agent_id,
+                contact_type="whatsapp",
+                contact_value=pool_numbers[0].number,
+                status="active",
+            ),
+        )
+        dbsession.flush()
+
+        result = whatsapp_dao.resolve_inbound(pool_numbers[0].number, shared_phone)
+        assert result is None
 
 
 # ============================================================================
