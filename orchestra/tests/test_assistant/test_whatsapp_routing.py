@@ -12,6 +12,8 @@ Covers:
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient
@@ -61,6 +63,7 @@ def user_with_whatsapp(dbsession: Session) -> User:
     dbsession.add(ba)
     dbsession.flush()
     user = User(
+        id=str(uuid.uuid4()),
         email="wa_owner@test.com",
         name="WA",
         last_name="Owner",
@@ -96,6 +99,7 @@ def user_with_phone_only(dbsession: Session) -> User:
     dbsession.add(ba)
     dbsession.flush()
     user = User(
+        id=str(uuid.uuid4()),
         email="phone_only@test.com",
         name="Phone",
         last_name="Only",
@@ -384,11 +388,13 @@ class TestResolveInbound:
         shared_number = "+15550505050"
 
         u_wa = User(
+            id=str(uuid.uuid4()),
             email="wa_prio@test.com",
             whatsapp_number=shared_number,
             billing_account_id=ba1.id,
         )
         u_ph = User(
+            id=str(uuid.uuid4()),
             email="ph_prio@test.com",
             phone_number=shared_number,
             billing_account_id=ba2.id,
@@ -431,11 +437,13 @@ class TestResolveInbound:
 
         shared_phone = "+15550707070"
         u1 = User(
+            id=str(uuid.uuid4()),
             email="ambig1@test.com",
             phone_number=shared_phone,
             billing_account_id=ba1.id,
         )
         u2 = User(
+            id=str(uuid.uuid4()),
             email="ambig2@test.com",
             phone_number=shared_phone,
             billing_account_id=ba2.id,
@@ -558,11 +566,13 @@ class TestPoolAssignment:
         dbsession.flush()
 
         u1 = User(
+            id=str(uuid.uuid4()),
             email="u1@test.com",
             whatsapp_number="+15551111111",
             billing_account_id=ba1.id,
         )
         u2 = User(
+            id=str(uuid.uuid4()),
             email="u2@test.com",
             whatsapp_number="+15552222222",
             billing_account_id=ba2.id,
@@ -709,11 +719,13 @@ class TestUserWhatsappNumber:
         dbsession.flush()
 
         u1 = User(
+            id=str(uuid.uuid4()),
             email="dup1@test.com",
             whatsapp_number="+15553333333",
             billing_account_id=ba1.id,
         )
         u2 = User(
+            id=str(uuid.uuid4()),
             email="dup2@test.com",
             whatsapp_number="+15553333333",
             billing_account_id=ba2.id,
@@ -731,11 +743,13 @@ class TestUserWhatsappNumber:
         dbsession.flush()
 
         u1 = User(
+            id=str(uuid.uuid4()),
             email="null1@test.com",
             whatsapp_number=None,
             billing_account_id=ba1.id,
         )
         u2 = User(
+            id=str(uuid.uuid4()),
             email="null2@test.com",
             whatsapp_number=None,
             billing_account_id=ba2.id,
@@ -954,12 +968,12 @@ class TestUserWhatsappAPI:
             json={
                 "email": "wa_create@test.com",
                 "name": "Test",
-                "whatsapp_number": "+15559999999",
+                "whatsapp_number": "+16502530001",
             },
             headers=ADMIN_HEADERS,
         )
-        assert resp.status_code == status.HTTP_200_OK
-        assert resp.json()["whatsapp_number"] == "+15559999999"
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        assert resp.json()["whatsapp_number"] == "+16502530001"
 
     async def test_update_user_whatsapp(self, client: AsyncClient):
         user = await create_test_user(client, "wa_update@test.com")
@@ -967,11 +981,11 @@ class TestUserWhatsappAPI:
             "/v0/admin/user",
             json={
                 "user_id": user["id"],
-                "whatsapp_number": "+15558888888",
+                "whatsapp_number": "+16502530002",
             },
             headers=ADMIN_HEADERS,
         )
-        assert resp.status_code == status.HTTP_200_OK
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
 
         # Verify via basic-info
         info_resp = await client.get(
@@ -979,7 +993,7 @@ class TestUserWhatsappAPI:
             headers=user["headers"],
         )
         assert info_resp.status_code == status.HTTP_200_OK
-        assert info_resp.json()["whatsapp_number"] == "+15558888888"
+        assert info_resp.json()["whatsapp_number"] == "+16502530002"
 
     async def test_whatsapp_number_in_user_lookup(self, client: AsyncClient):
         resp = await client.post(
@@ -987,10 +1001,11 @@ class TestUserWhatsappAPI:
             json={
                 "email": "wa_lookup@test.com",
                 "name": "Lookup",
-                "whatsapp_number": "+15557777777",
+                "whatsapp_number": "+16502530003",
             },
             headers=ADMIN_HEADERS,
         )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
         user_id = resp.json()["id"]
 
         detail_resp = await client.get(
@@ -998,4 +1013,4 @@ class TestUserWhatsappAPI:
             headers=ADMIN_HEADERS,
         )
         assert detail_resp.status_code == status.HTTP_200_OK
-        assert detail_resp.json()["whatsapp_number"] == "+15557777777"
+        assert detail_resp.json()["whatsapp_number"] == "+16502530003"
