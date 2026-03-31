@@ -68,19 +68,54 @@ async def create_phone_number(
             )
 
 
-async def assign_whatsapp_sender(
-    user_whatsapp_number: str,
-    deploy_env: str | None = None,
-):
+async def assign_whatsapp_pool_number(
+    assistant_id: int,
+    session,
+) -> dict:
+    """Assign a WhatsApp pool number to an assistant via the local DAO.
+
+    This replaces the old flow that called the Communication service's
+    ``/whatsapp/assign`` endpoint.  Pool assignment is now handled
+    entirely within Orchestra.
+
+    Returns a dict with ``pool_number`` and ``assistant_id``.
     """
-    Create a WhatsApp sender by making a POST request to the comms endpoint.
+    from orchestra.db.dao.whatsapp_route_dao import WhatsAppRouteDAO
+    from orchestra.db.models.orchestra_models import Assistant, OrganizationMember
 
-    Args:
-        user_whatsapp_number (str): The WhatsApp number to assign
-        deploy_env: 'preview' for preview stack, None for native environment.
+    assistant = (
+        session.query(Assistant).filter(Assistant.agent_id == assistant_id).first()
+    )
+    if not assistant:
+        raise ValueError(f"Assistant {assistant_id} not found.")
 
-    Returns:
-        JSON response from the WhatsApp creation endpoint
+    # Determine accessible users
+    user_ids = [assistant.user_id]
+    if assistant.organization_id is not None:
+        members = (
+            session.query(OrganizationMember.user_id)
+            .filter(
+                OrganizationMember.organization_id == assistant.organization_id,
+            )
+            .all()
+        )
+        for (uid,) in members:
+            if uid not in user_ids:
+                user_ids.append(uid)
+
+    dao = WhatsAppRouteDAO(session)
+    pool = dao.assign_pool_number(assistant_id, user_ids)
+    return {"pool_number": pool.number, "assistant_id": assistant_id}
+
+
+async def register_whatsapp_sender(
+    phone_number: str,
+    deploy_env: str | None = None,
+) -> dict:
+    """Register a WhatsApp sender with Twilio via the Communication service.
+
+    This calls the existing ``POST /whatsapp/create`` on the Communication
+    service to set up the Twilio Messaging Channel Sender and webhook.
     """
     comms_url = _comms_url_for(deploy_env)
     callback_url = _adapters_url_for(deploy_env) + "/twilio/whatsapp"
@@ -89,12 +124,26 @@ async def assign_whatsapp_sender(
             f"{comms_url}/whatsapp/create",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             json={
-                "user_whatsapp_number": user_whatsapp_number,
+                "phone_number": phone_number,
                 "callback_url": callback_url,
             },
             timeout=20,
         )
         return response.json()
+
+
+async def delete_whatsapp_routes(
+    assistant_id: int,
+    session,
+) -> int:
+    """Delete all WhatsApp routes for an assistant.
+
+    Returns the number of routes deleted.
+    """
+    from orchestra.db.dao.whatsapp_route_dao import WhatsAppRouteDAO
+
+    dao = WhatsAppRouteDAO(session)
+    return dao.delete_routes_for_assistant(assistant_id)
 
 
 async def delete_phone_number(phone_number: str, deploy_env: str | None = None):

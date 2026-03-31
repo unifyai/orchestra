@@ -231,6 +231,7 @@ class User(Base):
     image = Column(String)
     timezone = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
+    whatsapp_number = Column(String, nullable=True)
 
     # === BILLING (via BillingAccount) ===
     billing_account_id = Column(
@@ -268,6 +269,15 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_user_whatsapp_number",
+            "whatsapp_number",
+            unique=True,
+            postgresql_where=text("whatsapp_number IS NOT NULL"),
+        ),
     )
 
 
@@ -1451,11 +1461,12 @@ class AssistantContact(Base):
             postgresql_where=text("status != 'deleted'"),
         ),
         # Prevent duplicate active contact values across all assistants
+        # (excludes WhatsApp because pool numbers are shared)
         Index(
             "uq_active_contact_value",
             "contact_value",
             unique=True,
-            postgresql_where=text("status != 'deleted'"),
+            postgresql_where=text("status != 'deleted' AND contact_type != 'whatsapp'"),
         ),
         sa.CheckConstraint(
             "contact_type IN ('phone', 'email', 'whatsapp')",
@@ -2488,3 +2499,73 @@ class ApiMessage(Base):
     response_attachments = Column(JSONB, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
     completed_at = Column(TIMESTAMP, nullable=True)
+
+
+class WhatsAppPoolNumber(Base):
+    """Platform-owned WhatsApp numbers shared across assistants.
+
+    Each row represents a Twilio-registered WhatsApp sender that can be
+    assigned to multiple assistants.  The pool is small (currently 2 numbers)
+    and managed at the platform level.
+    """
+
+    __tablename__ = "whatsapp_pool_numbers"
+
+    id = Column(Integer, primary_key=True)
+    number = Column(String, nullable=False, unique=True)
+    status = Column(String, nullable=False, default="active", server_default="active")
+    twilio_sender_sid = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('active', 'inactive')",
+            name="ck_whatsapp_pool_number_status",
+        ),
+    )
+
+
+class WhatsAppRoute(Base):
+    """Maps (pool_number, external_contact) → assistant for inbound routing.
+
+    Only used for external contacts (non-platform-users).  Platform users
+    are routed dynamically via ``user.whatsapp_number`` lookups (Tier 1).
+    Routes are created when an assistant sends an outbound WhatsApp message
+    to an external contact, establishing a permanent reply path.
+    """
+
+    __tablename__ = "whatsapp_routes"
+
+    id = Column(Integer, primary_key=True)
+    pool_number_id = Column(
+        Integer,
+        ForeignKey("whatsapp_pool_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    contact_number = Column(String, nullable=False)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    pool_number = relationship("WhatsAppPoolNumber")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pool_number_id",
+            "contact_number",
+            name="uq_pool_contact",
+        ),
+        Index(
+            "ix_whatsapp_routes_assistant",
+            "assistant_id",
+            "contact_number",
+        ),
+        Index(
+            "ix_whatsapp_routes_contact",
+            "contact_number",
+        ),
+    )

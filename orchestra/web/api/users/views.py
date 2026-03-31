@@ -87,6 +87,7 @@ def create_user(
         image=user.image,
         timezone=user.timezone,
         phone_number=user.phone_number,
+        whatsapp_number=user.whatsapp_number,
     )
     user_row = user_dao.filter(email=user.email)
     new_user = user_row[0][0]
@@ -112,6 +113,7 @@ def create_user(
         "email": new_user.email,
         "timezone": new_user.timezone,
         "phone_number": new_user.phone_number,
+        "whatsapp_number": new_user.whatsapp_number,
     }
 
 
@@ -180,6 +182,7 @@ def get_user(
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
+        "whatsapp_number": user_instance.whatsapp_number,
     }
 
 
@@ -249,6 +252,7 @@ def get_user_by_email(
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
+        "whatsapp_number": user_instance.whatsapp_number,
     }
 
 
@@ -325,6 +329,7 @@ def get_user_by_account(
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
+        "whatsapp_number": user_instance.whatsapp_number,
     }
 
 
@@ -345,6 +350,7 @@ def update_user(
         bio=updated_user.bio,
         timezone=updated_user.timezone,
         phone_number=updated_user.phone_number,
+        whatsapp_number=updated_user.whatsapp_number,
     )
     return "User information updated successfully!"
 
@@ -936,6 +942,7 @@ def get_user_basic_info(
         "bio": user.bio,
         "timezone": user.timezone,
         "phone_number": user.phone_number,
+        "whatsapp_number": user.whatsapp_number,
     }
 
 
