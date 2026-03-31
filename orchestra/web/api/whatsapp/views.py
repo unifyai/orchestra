@@ -60,6 +60,22 @@ class PoolNumberResponse(BaseModel):
     twilio_sender_sid: Optional[str] = None
 
 
+class PoolNumberCreateRequest(BaseModel):
+    number: str = Field(..., description="E.164 WhatsApp number to add to the pool.")
+    twilio_sender_sid: Optional[str] = Field(
+        None,
+        description="Twilio Messaging Service SID for this number.",
+    )
+
+
+class PoolNumberUpdateRequest(BaseModel):
+    status: Optional[str] = Field(None, description="'active' or 'inactive'.")
+    twilio_sender_sid: Optional[str] = Field(
+        None,
+        description="Twilio Messaging Service SID (send null to clear).",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -186,6 +202,70 @@ def get_pool_status(
         )
         for n in numbers
     ]
+
+
+@admin_router.post("/whatsapp/pool")
+def add_pool_number(
+    body: PoolNumberCreateRequest,
+    session: Session = Depends(get_db_session),
+) -> PoolNumberResponse:
+    """Add a new WhatsApp number to the pool."""
+    dao = WhatsAppRouteDAO(session)
+    try:
+        pool = dao.add_pool_number(body.number, body.twilio_sender_sid)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    session.commit()
+    return PoolNumberResponse(
+        id=pool.id,
+        number=pool.number,
+        status=pool.status,
+        twilio_sender_sid=pool.twilio_sender_sid,
+    )
+
+
+@admin_router.patch("/whatsapp/pool/{pool_id}")
+def update_pool_number(
+    pool_id: int,
+    body: PoolNumberUpdateRequest,
+    session: Session = Depends(get_db_session),
+) -> PoolNumberResponse:
+    """Update a pool number's status or Twilio sender SID."""
+    dao = WhatsAppRouteDAO(session)
+    kwargs: dict = {}
+    if body.status is not None:
+        kwargs["status"] = body.status
+    if body.twilio_sender_sid is not None:
+        kwargs["twilio_sender_sid"] = body.twilio_sender_sid
+    try:
+        pool = dao.update_pool_number(pool_id, **kwargs)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    session.commit()
+    return PoolNumberResponse(
+        id=pool.id,
+        number=pool.number,
+        status=pool.status,
+        twilio_sender_sid=pool.twilio_sender_sid,
+    )
+
+
+@admin_router.delete("/whatsapp/pool/{pool_id}")
+def delete_pool_number(
+    pool_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """Remove a pool number (only if no active contacts use it)."""
+    dao = WhatsAppRouteDAO(session)
+    try:
+        route_count = dao.delete_pool_number(pool_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    session.commit()
+    return {"deleted_routes": route_count}
 
 
 # ---------------------------------------------------------------------------

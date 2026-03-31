@@ -1014,3 +1014,150 @@ class TestUserWhatsappAPI:
         )
         assert detail_resp.status_code == status.HTTP_200_OK
         assert detail_resp.json()["whatsapp_number"] == "+16502530003"
+
+
+# ============================================================================
+# 10. Pool number CRUD via admin endpoints
+# ============================================================================
+
+
+class TestPoolNumberCRUD:
+    async def test_add_pool_number(self, client: AsyncClient):
+        """POST /admin/whatsapp/pool creates a new pool number."""
+        resp = await client.post(
+            "/v0/admin/whatsapp/pool",
+            json={"number": "+15550001111"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["number"] == "+15550001111"
+        assert data["status"] == "active"
+        assert data["id"] is not None
+
+        # Verify it shows up in the pool list
+        pool_resp = await client.get(
+            "/v0/admin/whatsapp/pool",
+            headers=ADMIN_HEADERS,
+        )
+        numbers = {p["number"] for p in pool_resp.json()}
+        assert "+15550001111" in numbers
+
+    async def test_add_duplicate_pool_number(self, client: AsyncClient, pool_numbers):
+        """POST with an existing number returns 409."""
+        resp = await client.post(
+            "/v0/admin/whatsapp/pool",
+            json={"number": pool_numbers[0].number},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_409_CONFLICT
+        assert "already exists" in resp.json()["detail"]
+
+    async def test_add_pool_number_with_sid(self, client: AsyncClient):
+        """POST with twilio_sender_sid stores it."""
+        resp = await client.post(
+            "/v0/admin/whatsapp/pool",
+            json={
+                "number": "+15550002222",
+                "twilio_sender_sid": "MG_test_sid_123",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["twilio_sender_sid"] == "MG_test_sid_123"
+
+    async def test_update_pool_number_status(
+        self,
+        client: AsyncClient,
+        pool_numbers,
+    ):
+        """PATCH updates the status field."""
+        pool_id = pool_numbers[0].id
+        resp = await client.patch(
+            f"/v0/admin/whatsapp/pool/{pool_id}",
+            json={"status": "inactive"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["status"] == "inactive"
+
+    async def test_update_pool_number_sid(
+        self,
+        client: AsyncClient,
+        pool_numbers,
+    ):
+        """PATCH updates the twilio_sender_sid field."""
+        pool_id = pool_numbers[1].id
+        resp = await client.patch(
+            f"/v0/admin/whatsapp/pool/{pool_id}",
+            json={"twilio_sender_sid": "MG_updated_456"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["twilio_sender_sid"] == "MG_updated_456"
+
+    async def test_update_nonexistent_pool_number(self, client: AsyncClient):
+        """PATCH on invalid ID returns 404."""
+        resp = await client.patch(
+            "/v0/admin/whatsapp/pool/999999",
+            json={"status": "inactive"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_delete_unused_pool_number(
+        self,
+        client: AsyncClient,
+    ):
+        """DELETE removes a pool number not in use by any assistant."""
+        # Add a number specifically for deletion
+        add_resp = await client.post(
+            "/v0/admin/whatsapp/pool",
+            json={"number": "+15550003333"},
+            headers=ADMIN_HEADERS,
+        )
+        pool_id = add_resp.json()["id"]
+
+        del_resp = await client.delete(
+            f"/v0/admin/whatsapp/pool/{pool_id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert del_resp.status_code == status.HTTP_200_OK
+        assert del_resp.json()["deleted_routes"] == 0
+
+        # Verify it's gone
+        pool_resp = await client.get(
+            "/v0/admin/whatsapp/pool",
+            headers=ADMIN_HEADERS,
+        )
+        ids = {p["id"] for p in pool_resp.json()}
+        assert pool_id not in ids
+
+    async def test_delete_pool_number_in_use(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        pool_numbers,
+        user_with_whatsapp,
+    ):
+        """DELETE on a number with active contacts returns 400."""
+        assistant = Assistant(user_id=user_with_whatsapp.id, first_name="InUse")
+        dbsession.add(assistant)
+        dbsession.flush()
+
+        dbsession.add(
+            AssistantContact(
+                assistant_id=assistant.agent_id,
+                contact_type="whatsapp",
+                contact_value=pool_numbers[0].number,
+                status="active",
+            ),
+        )
+        dbsession.commit()
+
+        resp = await client.delete(
+            f"/v0/admin/whatsapp/pool/{pool_numbers[0].id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert "active assistant" in resp.json()["detail"]

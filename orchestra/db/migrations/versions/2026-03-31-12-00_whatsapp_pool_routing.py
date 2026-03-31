@@ -2,7 +2,7 @@
 
 Adds:
 - ``user.whatsapp_number`` column with unique partial index
-- ``whatsapp_pool_numbers`` table seeded with the 2 current numbers
+- ``whatsapp_pool_numbers`` table (managed via admin endpoints)
 - ``whatsapp_routes`` table for external-contact → assistant routing
 - Modifies ``uq_active_contact_value`` to exclude WhatsApp contacts
   (pool numbers are shared across assistants)
@@ -53,15 +53,6 @@ def upgrade() -> None:
             "status IN ('active', 'inactive')",
             name="ck_whatsapp_pool_number_status",
         ),
-    )
-
-    # Seed the 2 current WhatsApp numbers
-    conn = op.get_bind()
-    conn.execute(
-        sa.text(
-            "INSERT INTO whatsapp_pool_numbers (number) VALUES (:n1), (:n2)",
-        ),
-        {"n1": "+15550100001", "n2": "+15550100002"},
     )
 
     # 3. Create whatsapp_routes table
