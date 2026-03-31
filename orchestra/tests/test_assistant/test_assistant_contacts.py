@@ -925,9 +925,6 @@ def mock_all_infra(dbsession):
         "create_phone_number": AsyncMock(
             return_value={"phoneNumber": "+15551234567"},
         ),
-        "assign_whatsapp_sender": AsyncMock(
-            return_value={"whatsapp_number": "+15559876543"},
-        ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
         "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
@@ -940,23 +937,35 @@ def mock_all_infra(dbsession):
         "stop_jobs": AsyncMock(return_value=MagicMock(status_code=200)),
     }
 
+    wa_pool_mock = AsyncMock(return_value={"pool_number": "+15559876543"})
+    wa_register_mock = AsyncMock(return_value={"success": True})
+
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
         with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings:
-            mock_settings.is_staging = True
+            "orchestra.web.api.utils.assistant_infra.assign_whatsapp_pool_number",
+            wa_pool_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
+            wa_register_mock,
+        ):
+            patches["assign_whatsapp_pool_number"] = wa_pool_mock
+            patches["register_whatsapp_sender"] = wa_register_mock
             with patch(
-                "orchestra.web.api.assistant.views.get_db_session",
-                side_effect=_mock_get_db_session_generator(dbsession),
-            ):
+                "orchestra.web.api.assistant.views.settings",
+            ) as mock_settings:
+                mock_settings.is_staging = True
                 with patch(
-                    "orchestra.web.api.assistant.views.asyncio.sleep",
-                    new_callable=AsyncMock,
-                ), patch("orchestra.web.api.assistant.views.time.sleep"), patch(
-                    "orchestra.services.bucket_service.BucketService.__init__",
-                    lambda self: None,
+                    "orchestra.web.api.assistant.views.get_db_session",
+                    side_effect=_mock_get_db_session_generator(dbsession),
                 ):
-                    yield patches
+                    with patch(
+                        "orchestra.web.api.assistant.views.asyncio.sleep",
+                        new_callable=AsyncMock,
+                    ), patch("orchestra.web.api.assistant.views.time.sleep"), patch(
+                        "orchestra.services.bucket_service.BucketService.__init__",
+                        lambda self: None,
+                    ):
+                        yield patches
 
 
 class TestContactCreationViaDedicatedEndpoint:
@@ -1615,10 +1624,7 @@ class TestCreateContactEndpoint:
 
         resp = await client.post(
             f"/v0/assistant/{agent_id}/contact",
-            json={
-                "contact_type": "whatsapp",
-                "user_whatsapp_number": "+15550222222",
-            },
+            json={"contact_type": "whatsapp"},
             headers=HEADERS,
         )
         assert resp.status_code == status.HTTP_200_OK, resp.json()
@@ -1630,7 +1636,7 @@ class TestCreateContactEndpoint:
         assert contact is not None
         assert contact.contact_value == "+15559876543"
         assert contact.provider == "twilio"
-        assert contact.user_value == "+15550222222"
+        assert contact.user_value is None
 
     @pytest.mark.anyio
     async def test_duplicate_contact_type_returns_409(
@@ -1718,33 +1724,6 @@ class TestCreateContactEndpoint:
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         assert "email_local" in resp.json()["detail"]
-
-    @pytest.mark.anyio
-    async def test_whatsapp_requires_user_number(
-        self,
-        client: AsyncClient,
-        dbsession: Session,
-        mock_all_infra,
-    ):
-        """Creating a WhatsApp contact without user_whatsapp_number returns 400."""
-        create_resp = await client.post(
-            "/v0/assistant",
-            json={
-                "first_name": "CCE",
-                "surname": "NoWA",
-                "create_infra": False,
-            },
-            headers=HEADERS,
-        )
-        agent_id = int(create_resp.json()["info"]["agent_id"])
-
-        resp = await client.post(
-            f"/v0/assistant/{agent_id}/contact",
-            json={"contact_type": "whatsapp"},
-            headers=HEADERS,
-        )
-        assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert "user_whatsapp_number" in resp.json()["detail"]
 
     @pytest.mark.anyio
     async def test_monthly_cost_stored_on_contact(
@@ -2520,7 +2499,8 @@ class TestAssistantCreateSchemaNoContactFields:
         # No infra provisioning calls should have been made for contacts
         mock_all_infra["create_phone_number"].assert_not_called()
         mock_all_infra["create_email"].assert_not_called()
-        mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+        mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+        mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
 
 class TestAssistantUpdateDeprecatedContactFields:
@@ -2621,7 +2601,8 @@ class TestAssistantUpdateDeprecatedContactFields:
         )
         assert update_resp.status_code == status.HTTP_200_OK
 
-        mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+        mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+        mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
         contacts = AssistantContactDAO(dbsession).get_active_contacts_for_assistant(
             agent_id,
@@ -2731,7 +2712,8 @@ class TestCreateAssistantNoContactProvisioning:
         # No contact provisioning calls were made
         mock_all_infra["create_phone_number"].assert_not_called()
         mock_all_infra["create_email"].assert_not_called()
-        mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+        mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+        mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
     @pytest.mark.anyio
     async def test_create_no_infra_no_contacts(
@@ -2852,7 +2834,8 @@ class TestUpdateAssistantNoContactProvisioning:
         # No provisioning calls
         mock_all_infra["create_phone_number"].assert_not_called()
         mock_all_infra["create_email"].assert_not_called()
-        mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+        mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+        mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
     @pytest.mark.anyio
     async def test_existing_contacts_not_affected_by_assistant_update(

@@ -1241,12 +1241,6 @@ class AssistantContactCreate(BaseModel):
         description="Last name for Google Workspace account. Only used for email contacts.",
         example="Lovelace",
     )
-    # WhatsApp-specific fields
-    user_whatsapp_number: Optional[str] = Field(
-        None,
-        description="User's WhatsApp number to associate with the sender. Only used for WhatsApp contacts.",
-        example="+15551234567",
-    )
 
     class Config:
         schema_extra = {
