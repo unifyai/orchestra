@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_dao import AuthDAO, decrypt_secret
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLinkDAO
@@ -1319,6 +1320,11 @@ def update_onboarding_progress(
 
     The step_data is validated based on the current_step to ensure
     only valid fields are stored.
+
+    When completing onboarding, grants signup promo credits to the
+    billing account that matches the user's workspace choice:
+    - personal  → user's billing account
+    - organization → org's billing account
     """
     user_dao = UserDAO(session)
     onboarding_dao = OnboardingStatusDAO(session)
@@ -1334,6 +1340,26 @@ def update_onboarding_progress(
         current_step=body.current_step,
         step_data=body.step_data,
     )
+
+    # Grant signup promo credits when onboarding completes.
+    # The console's axios interceptor converts camelCase → snake_case
+    # before the request reaches here, so keys are always snake_case.
+    if body.current_step == "completed" and body.step_data:
+        selected_type = body.step_data.get("selected_type")
+        if selected_type:
+            org_id_str = body.step_data.get("organization_id")
+            org_id: Optional[int] = None
+            if org_id_str:
+                try:
+                    org_id = int(org_id_str)
+                except (ValueError, TypeError):
+                    org_id = None
+            ba_dao = BillingAccountDAO(session)
+            ba_dao.grant_signup_credits(
+                user_id=request.state.user_id,
+                selected_type=selected_type,
+                organization_id=org_id,
+            )
 
     session.commit()
 
