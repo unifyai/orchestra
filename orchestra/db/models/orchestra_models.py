@@ -372,6 +372,47 @@ class EmailVerification(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
+class PhoneVerification(Base):
+    """
+    Short-lived verification codes for phone / WhatsApp number ownership.
+
+    When a user wants to add or change their phone_number or whatsapp_number
+    on the User table, they must first verify ownership via SMS.  The flow:
+
+    1. ``POST /user/phone/send-verification`` creates a row with a hashed
+       6-digit code and sends the SMS via the communication service.
+    2. ``POST /user/phone/confirm-verification`` checks the code, and on
+       success sets ``verified_at``.
+    3. ``PUT /user`` (profile update) checks for a recent verified row
+       matching the new number before accepting the change.
+
+    Rows are deleted after successful profile update or by a periodic
+    cleanup job for expired entries.
+    """
+
+    __tablename__ = "phone_verifications"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    phone_number = Column(String, nullable=False)
+    phone_type = Column(String, nullable=False)  # "phone" | "whatsapp"
+    code_hash = Column(String, nullable=False)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    attempts = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    verified_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class MFACredential(Base):
     """
     Polymorphic MFA credential.
@@ -1261,26 +1302,8 @@ class Assistant(Base):
     Assistants can be either personal (user_id set, organization_id NULL)
     or organizational (organization_id set, user_id is the creator).
 
-    Contact columns legacy note
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    The columns ``phone``, ``phone_country``, ``user_phone``, ``email``,
-    ``user_whatsapp_number``, and ``assistant_whatsapp_number`` are legacy
-    columns.  The single source of truth for contact details is now the
+    Contact details (phone, email, WhatsApp) are stored in the
     ``assistant_contacts`` table (see :class:`AssistantContact`).
-
-    These columns are **retained temporarily** for two reasons:
-
-    1. **Zero-downtime deployment** – during a rolling deploy, old application
-       instances still reference these columns.  Dropping them in the same
-       migration that adds ``assistant_contacts`` would cause column-not-found
-       errors on old instances that haven't been replaced yet.
-    2. **Rollback safety** – if the new code needs to be reverted, the old
-       columns still contain valid data and no reverse data migration is
-       required.
-
-    A follow-up migration should drop these columns once the new code has
-    been running stably in production and rollback to the previous version
-    is no longer a concern.
     """
 
     __tablename__ = "assistants"
@@ -1314,7 +1337,6 @@ class Assistant(Base):
     )
     user_desktop_filesys_sync = Column(Boolean, nullable=False, default=False)
     about = Column(String, nullable=True)
-    phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
     # Monthly spending limit for this assistant (NULL = no limit)
@@ -1323,11 +1345,6 @@ class Assistant(Base):
     # When the spending cap was last changed (for notification deduplication)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
     max_parallel = Column(Integer, nullable=True)
-    email = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
-    user_phone = Column(String, nullable=True)
-    user_whatsapp_number = Column(String, nullable=True)
-    assistant_whatsapp_number = Column(String, nullable=True)
     deploy_env = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
@@ -1410,9 +1427,6 @@ class AssistantContact(Base):
 
     # Country code for phone numbers (affects pricing lookups)
     country_code = Column(String, nullable=True)
-
-    # Linked user-side value (user's personal phone/whatsapp for forwarding)
-    user_value = Column(String, nullable=True)
 
     # Lifecycle status
     status = Column(

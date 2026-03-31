@@ -48,10 +48,6 @@ class AssistantDAO:
         desktop_mode: Optional[str] = None,
         user_desktop_id: Optional[int] = None,
         user_desktop_filesys_sync: bool = False,
-        phone: Optional[str] = None,
-        phone_country: Optional[str] = None,
-        user_phone: Optional[str] = None,
-        email: Optional[str] = None,
         voice_id: Optional[str] = None,
         voice_provider: Optional[str] = None,
         timezone: Optional[str] = None,
@@ -88,12 +84,8 @@ class AssistantDAO:
             about=about,
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
-            phone=phone,
-            user_phone=user_phone,
-            email=email,
             voice_id=voice_id,
             voice_provider=voice_provider,
-            phone_country=phone_country,
             timezone=timezone,
             is_local=is_local,
             deploy_env=deploy_env,
@@ -216,10 +208,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "phone",
-                        AssistantContact.user_value == user_phone,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.phone_number == user_phone,
                     ),
                 ),
             )
@@ -304,10 +294,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "phone",
-                        AssistantContact.user_value == user_phone,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.phone_number == user_phone,
                     ),
                 ),
             )
@@ -566,10 +554,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "phone",
-                        AssistantContact.user_value == user_phone,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.phone_number == user_phone,
                     ),
                 ),
             )

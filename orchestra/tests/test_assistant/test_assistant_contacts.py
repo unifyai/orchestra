@@ -38,6 +38,7 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     User,
 )
+from orchestra.db.models.orchestra_models import ApiKey as ApiKeyModel
 from orchestra.tests.utils import HEADERS, create_test_user
 
 # ============================================================================
@@ -124,6 +125,8 @@ def _make_user_ba(
     uid: str,
     email: str | None = None,
     credits: float = 10000,
+    phone_number: str | None = None,
+    whatsapp_number: str | None = None,
 ) -> tuple[User, BillingAccount]:
     """Helper: create a User + BillingAccount pair."""
     ba = BillingAccount(
@@ -136,10 +139,38 @@ def _make_user_ba(
         id=uid,
         email=email or f"{uid}@test.com",
         billing_account_id=ba.id,
+        phone_number=phone_number,
+        whatsapp_number=whatsapp_number,
     )
     dbsession.add(user)
     dbsession.flush()
     return user, ba
+
+
+def _ensure_user_has_contacts(dbsession: Session) -> None:
+    """
+    Ensure the user behind HEADERS has phone and WhatsApp numbers set.
+
+    Required after the gate was added to ``create_assistant_contact``
+    that blocks phone/WhatsApp contact creation unless the user has
+    the corresponding number on their profile.
+    """
+    import os
+
+    api_key = os.getenv("AUTH_ACCOUNT_API_KEY", "")
+    row = (
+        dbsession.query(ApiKeyModel)
+        .filter(ApiKeyModel.key == api_key)
+        .first()
+    )
+    if row:
+        user = dbsession.query(User).filter(User.id == row.user_id).first()
+        if user:
+            if not user.phone_number:
+                user.phone_number = "+15550001111"
+            if not user.whatsapp_number:
+                user.whatsapp_number = "+15550002222"
+            dbsession.commit()
 
 
 def _make_assistant(
@@ -180,7 +211,6 @@ class TestAssistantContactModel:
             contact_value="+15551000001",
             provider="twilio",
             country_code="US",
-            user_value="+15559990001",
             status="active",
         )
         dbsession.add(contact)
@@ -571,7 +601,6 @@ class TestUpsertAssistantContact:
             contact_type="phone",
             contact_value="+15553000001",
             country_code="US",
-            user_value="+15559000001",
         )
         dbsession.flush()
 
@@ -579,7 +608,6 @@ class TestUpsertAssistantContact:
         assert contact.status == "active"
         assert contact.provider == "twilio"  # inferred
         assert contact.country_code == "US"
-        assert contact.user_value == "+15559000001"
 
     def test_upsert_updates_existing_active(self, dbsession: Session):
         """upsert updates an existing active row in-place (idempotent)."""
@@ -915,6 +943,7 @@ def _mock_get_db_session_generator(real_session):
 @pytest.fixture
 def mock_all_infra(dbsession):
     """Mock all infrastructure utilities for create_infra=True testing."""
+    _ensure_user_has_contacts(dbsession)
     patches = {
         "create_email": AsyncMock(
             return_value={
@@ -1007,7 +1036,6 @@ class TestContactCreationViaDedicatedEndpoint:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550001111",
             },
             headers=HEADERS,
         )
@@ -1021,7 +1049,6 @@ class TestContactCreationViaDedicatedEndpoint:
         assert phone_contacts[0].contact_value == "+15551234567"
         assert phone_contacts[0].provider == "twilio"
         assert phone_contacts[0].country_code == "US"
-        assert phone_contacts[0].user_value == "+15550001111"
 
     @pytest.mark.anyio
     async def test_email_contact_via_dedicated_endpoint(
@@ -1080,7 +1107,6 @@ class TestContactCreationViaDedicatedEndpoint:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550003333",
             },
             headers=HEADERS,
         )
@@ -1153,7 +1179,6 @@ class TestDeleteContactWithDedicatedEndpoint:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550006666",
             },
             headers=HEADERS,
         )
@@ -1266,7 +1291,6 @@ class TestDeleteAssistantSoftDeletesContacts:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550007777",
             },
             headers=HEADERS,
         )
@@ -1298,45 +1322,40 @@ class TestDeleteAssistantSoftDeletesContacts:
 
 class TestBackfillConsistency:
     """
-    Verify that if an assistant has contact columns populated, a
-    corresponding AssistantContact row can be created via upsert
-    (simulates what the migration backfill does).
+    The legacy contact columns (phone, email, etc.) have been dropped from
+    the assistants table.  The backfill tests that previously set those
+    columns and verified upsert behavior are no longer applicable.
+
+    AssistantContact rows are now created exclusively through the dedicated
+    contact endpoints and the DAO's upsert_assistant_contact method.
     """
 
-    def test_backfill_phone(self, dbsession: Session):
-        """Backfill phone from assistant columns."""
+    def test_upsert_phone_contact(self, dbsession: Session):
+        """Create a phone contact via upsert."""
         user, _ = _make_user_ba(dbsession, "bf_u1")
         asst = _make_assistant(dbsession, user.id, "Backfill", "Phone")
-        asst.phone = "+15558000001"
-        asst.user_phone = "+15559000001"
-        asst.phone_country = "GB"
-        dbsession.flush()
 
         contact = AssistantContactDAO(dbsession).upsert_assistant_contact(
             assistant_id=asst.agent_id,
             contact_type="phone",
-            contact_value=asst.phone,
+            contact_value="+15558000001",
             provider="twilio",
-            country_code=asst.phone_country,
-            user_value=asst.user_phone,
+            country_code="GB",
         )
         dbsession.flush()
 
         assert contact.contact_value == "+15558000001"
         assert contact.country_code == "GB"
-        assert contact.user_value == "+15559000001"
 
-    def test_backfill_email(self, dbsession: Session):
-        """Backfill email from assistant columns."""
+    def test_upsert_email_contact(self, dbsession: Session):
+        """Create an email contact via upsert."""
         user, _ = _make_user_ba(dbsession, "bf_u2")
         asst = _make_assistant(dbsession, user.id, "Backfill", "Email")
-        asst.email = "backfill@unify.ai"
-        dbsession.flush()
 
         contact = AssistantContactDAO(dbsession).upsert_assistant_contact(
             assistant_id=asst.agent_id,
             contact_type="email",
-            contact_value=asst.email,
+            contact_value="backfill@unify.ai",
             provider="google_workspace",
         )
         dbsession.flush()
@@ -1344,11 +1363,10 @@ class TestBackfillConsistency:
         assert contact.contact_value == "backfill@unify.ai"
         assert contact.provider == "google_workspace"
 
-    def test_backfill_whatsapp(self, dbsession: Session):
-        """Backfill whatsapp contact (pool number only, user WA lives on User)."""
+    def test_upsert_whatsapp_contact(self, dbsession: Session):
+        """Create a whatsapp contact via upsert (pool number only, user WA lives on User)."""
         user, _ = _make_user_ba(dbsession, "bf_u3")
         asst = _make_assistant(dbsession, user.id, "Backfill", "WhatsApp")
-        dbsession.flush()
 
         pool_number = "+15558000003"
         contact = AssistantContactDAO(dbsession).upsert_assistant_contact(
@@ -1360,7 +1378,6 @@ class TestBackfillConsistency:
         dbsession.flush()
 
         assert contact.contact_value == pool_number
-        assert contact.user_value is None
 
 
 # ============================================================================
@@ -1541,7 +1558,6 @@ class TestCreateContactEndpoint:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550111111",
             },
             headers=HEADERS,
         )
@@ -1556,7 +1572,6 @@ class TestCreateContactEndpoint:
         assert contact.contact_value == "+15551234567"
         assert contact.provider == "twilio"
         assert contact.country_code == "US"
-        assert contact.user_value == "+15550111111"
         assert contact.status == "active"
 
         # Verify reawaken was called
@@ -1634,7 +1649,6 @@ class TestCreateContactEndpoint:
         assert contact is not None
         assert contact.contact_value == "+15559876543"
         assert contact.provider == "twilio"
-        assert contact.user_value is None
 
     @pytest.mark.anyio
     async def test_duplicate_contact_type_returns_409(
@@ -1790,7 +1804,6 @@ class TestListContactsEndpoint:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550333333",
             },
             headers=HEADERS,
         )
@@ -1911,13 +1924,13 @@ class TestUpdateContactEndpoint:
     """Tests for PUT /assistant/{id}/contact."""
 
     @pytest.mark.anyio
-    async def test_update_user_value_phone(
+    async def test_update_metadata_phone(
         self,
         client: AsyncClient,
         dbsession: Session,
         mock_all_infra,
     ):
-        """Updating user_value on a phone contact changes the forwarding number."""
+        """Updating metadata on a phone contact stores the new metadata."""
         create_resp = await client.post(
             "/v0/assistant",
             json={
@@ -1935,17 +1948,16 @@ class TestUpdateContactEndpoint:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550444444",
             },
             headers=HEADERS,
         )
 
-        # Update user_value
+        # Update metadata
         resp = await client.put(
             f"/v0/assistant/{agent_id}/contact",
             json={
                 "contact_type": "phone",
-                "user_value": "+15550555555",
+                "metadata": {"forwarding": "+15550555555"},
             },
             headers=HEADERS,
         )
@@ -1956,7 +1968,7 @@ class TestUpdateContactEndpoint:
             agent_id,
             "phone",
         )
-        assert contact.user_value == "+15550555555"
+        assert contact.metadata_.get("forwarding") == "+15550555555"
 
     @pytest.mark.anyio
     async def test_update_metadata_merges(
@@ -2038,7 +2050,7 @@ class TestUpdateContactEndpoint:
             f"/v0/assistant/{agent_id}/contact",
             json={
                 "contact_type": "phone",
-                "user_value": "+15550888888",
+                "metadata": {"label": "test"},
             },
             headers=HEADERS,
         )
@@ -2055,7 +2067,7 @@ class TestUpdateContactEndpoint:
             "/v0/assistant/999999/contact",
             json={
                 "contact_type": "email",
-                "user_value": "someone@example.com",
+                "metadata": {"label": "test"},
             },
             headers=HEADERS,
         )
@@ -2096,7 +2108,7 @@ class TestUpdateContactEndpoint:
             f"/v0/assistant/{agent_id}/contact",
             json={
                 "contact_type": "phone",
-                "user_value": "+15550999999",
+                "metadata": {"label": "reawaken-test"},
             },
             headers=HEADERS,
         )
@@ -2160,10 +2172,6 @@ class TestDeleteContactEndpointPhase2:
             "email",
         )
         assert contact is None
-
-        # Verify assistant column cleared
-        asst = dbsession.query(Assistant).filter_by(agent_id=agent_id).first()
-        assert asst.email is None
 
     @pytest.mark.anyio
     async def test_create_after_delete_recycles_row(
@@ -2256,7 +2264,6 @@ class TestEndToEndContactLifecycle:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15551110001",
             },
             headers=HEADERS,
         )
@@ -2276,12 +2283,12 @@ class TestEndToEndContactLifecycle:
         assert contacts[0]["contact_type"] == "phone"
         assert contacts[0]["status"] == "active"
 
-        # 4. Update user_value
+        # 4. Update metadata
         update_resp = await client.put(
             f"/v0/assistant/{agent_id}/contact",
             json={
                 "contact_type": "phone",
-                "user_value": "+15551110002",
+                "metadata": {"label": "primary"},
             },
             headers=HEADERS,
         )
@@ -2292,7 +2299,7 @@ class TestEndToEndContactLifecycle:
             agent_id,
             "phone",
         )
-        assert contact.user_value == "+15551110002"
+        assert contact.metadata_.get("label") == "primary"
 
         # 5. Delete contact
         del_resp = await client.request(
@@ -2310,11 +2317,6 @@ class TestEndToEndContactLifecycle:
         )
         assert list_resp2.status_code == status.HTTP_200_OK
         assert len(list_resp2.json()["info"]) == 0
-
-        # Assistant columns cleared
-        asst = dbsession.query(Assistant).filter_by(agent_id=agent_id).first()
-        assert asst.phone is None
-        assert asst.user_phone is None
 
 
 # ============================================================================
@@ -2355,10 +2357,6 @@ class TestAssistantCreateSchemaNoContactFields:
         email_contacts = [c for c in contacts if c.contact_type == "email"]
         assert len(email_contacts) == 0
 
-        # The assistant model column should be None
-        asst = dbsession.query(Assistant).filter_by(agent_id=agent_id).first()
-        assert asst.email is None
-
     @pytest.mark.anyio
     async def test_create_ignores_phone_fields(
         self,
@@ -2387,9 +2385,6 @@ class TestAssistantCreateSchemaNoContactFields:
         phone_contacts = [c for c in contacts if c.contact_type == "phone"]
         assert len(phone_contacts) == 0
 
-        asst = dbsession.query(Assistant).filter_by(agent_id=agent_id).first()
-        assert asst.phone is None
-
     @pytest.mark.anyio
     async def test_create_ignores_whatsapp_field(
         self,
@@ -2416,9 +2411,6 @@ class TestAssistantCreateSchemaNoContactFields:
         )
         wa_contacts = [c for c in contacts if c.contact_type == "whatsapp"]
         assert len(wa_contacts) == 0
-
-        asst = dbsession.query(Assistant).filter_by(agent_id=agent_id).first()
-        assert asst.assistant_whatsapp_number is None
 
     @pytest.mark.anyio
     async def test_create_with_all_contact_fields_still_succeeds(
@@ -2625,9 +2617,6 @@ class TestAssistantUpdateDeprecatedContactFields:
         dbsession.refresh(asst)
         assert asst.about == "New description"
         assert asst.max_parallel == 5
-        # Contact fields should NOT have been written to the assistant model
-        assert asst.email is None
-        assert asst.phone is None
 
         # No contact provisioning calls
         mock_all_infra["create_email"].assert_not_called()
@@ -2730,7 +2719,6 @@ class TestCreateAssistantNoContactProvisioning:
             json={
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15550123456",
             },
             headers=HEADERS,
         )
