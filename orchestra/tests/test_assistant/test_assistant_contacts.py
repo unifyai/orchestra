@@ -1096,7 +1096,7 @@ class TestContactCreationViaDedicatedEndpoint:
         )
         await client.post(
             f"/v0/assistant/{agent_id}/contact",
-            json={"contact_type": "whatsapp", "user_whatsapp_number": "+15550004444"},
+            json={"contact_type": "whatsapp"},
             headers=HEADERS,
         )
 
@@ -1345,24 +1345,22 @@ class TestBackfillConsistency:
         assert contact.provider == "google_workspace"
 
     def test_backfill_whatsapp(self, dbsession: Session):
-        """Backfill whatsapp from assistant columns."""
+        """Backfill whatsapp contact (pool number only, user WA lives on User)."""
         user, _ = _make_user_ba(dbsession, "bf_u3")
         asst = _make_assistant(dbsession, user.id, "Backfill", "WhatsApp")
-        asst.assistant_whatsapp_number = "+15558000003"
-        asst.user_whatsapp_number = "+15559000003"
         dbsession.flush()
 
+        pool_number = "+15558000003"
         contact = AssistantContactDAO(dbsession).upsert_assistant_contact(
             assistant_id=asst.agent_id,
             contact_type="whatsapp",
-            contact_value=asst.assistant_whatsapp_number,
+            contact_value=pool_number,
             provider="twilio",
-            user_value=asst.user_whatsapp_number,
         )
         dbsession.flush()
 
-        assert contact.contact_value == "+15558000003"
-        assert contact.user_value == "+15559000003"
+        assert contact.contact_value == pool_number
+        assert contact.user_value is None
 
 
 # ============================================================================
@@ -1959,50 +1957,6 @@ class TestUpdateContactEndpoint:
             "phone",
         )
         assert contact.user_value == "+15550555555"
-
-    @pytest.mark.anyio
-    async def test_update_user_value_whatsapp(
-        self,
-        client: AsyncClient,
-        dbsession: Session,
-        mock_all_infra,
-    ):
-        """Updating user_value on a WhatsApp contact updates the user's WA number."""
-        create_resp = await client.post(
-            "/v0/assistant",
-            json={
-                "first_name": "UCE",
-                "surname": "WA",
-                "create_infra": False,
-            },
-            headers=HEADERS,
-        )
-        agent_id = int(create_resp.json()["info"]["agent_id"])
-
-        await client.post(
-            f"/v0/assistant/{agent_id}/contact",
-            json={
-                "contact_type": "whatsapp",
-                "user_whatsapp_number": "+15550666666",
-            },
-            headers=HEADERS,
-        )
-
-        resp = await client.put(
-            f"/v0/assistant/{agent_id}/contact",
-            json={
-                "contact_type": "whatsapp",
-                "user_value": "+15550777777",
-            },
-            headers=HEADERS,
-        )
-        assert resp.status_code == status.HTTP_200_OK
-
-        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
-            agent_id,
-            "whatsapp",
-        )
-        assert contact.user_value == "+15550777777"
 
     @pytest.mark.anyio
     async def test_update_metadata_merges(
