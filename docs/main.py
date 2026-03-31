@@ -227,6 +227,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("-w", "--write", action="store_true")
     parser.add_argument("-dd", "--docs_dir", type=str, help="directory for docs")
+    parser.add_argument(
+        "--include-api",
+        action="store_true",
+        help="generate and write REST API reference pages (off by default)",
+    )
     args = parser.parse_args()
 
     # docs mint filepath
@@ -246,18 +251,19 @@ if __name__ == "__main__":
             "and {} also does not exist for retrieval".format(docs_mint_filepath),
         )
 
-    # build docs
-    openapi_config = write_openapi_file()
-    paths = list(openapi_config["paths"].keys())
-    pages = write_pages(paths, openapi_config)
-    update_mint(pages, groupings)
+    if args.include_api:
+        openapi_config = write_openapi_file()
+        paths = list(openapi_config["paths"].keys())
+        pages = write_pages(paths, openapi_config)
+        update_mint(pages, groupings)
 
     # write to docs if specified
     if args.write:
         # write or overwrite mint.json in docs repo
         shutil.copyfile(local_mint_filepath, docs_mint_filepath)
-        # write or overwrite the api-reference folder in docs repo
-        api_ref_docs_dir = os.path.join(docs_dir, "api-reference")
-        if os.path.exists(api_ref_docs_dir):
-            shutil.rmtree(api_ref_docs_dir)
-        shutil.copytree("api-reference", api_ref_docs_dir)
+        if args.include_api:
+            # write or overwrite the api-reference folder in docs repo
+            api_ref_docs_dir = os.path.join(docs_dir, "api-reference")
+            if os.path.exists(api_ref_docs_dir):
+                shutil.rmtree(api_ref_docs_dir)
+            shutil.copytree("api-reference", api_ref_docs_dir)
