@@ -6,6 +6,7 @@ flow for pool assignment and outbound route creation.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -51,6 +52,10 @@ class RouteResponse(BaseModel):
     pool_number: str
     contact_number: str
     assistant_id: int
+    window_open: bool = Field(
+        ...,
+        description="True if the contact messaged within the last 24h (free-form allowed).",
+    )
 
 
 class PoolNumberResponse(BaseModel):
@@ -161,10 +166,17 @@ def create_route(
     session.commit()
 
     pool = route.pool_number
+    now = datetime.now(timezone.utc)
+    # 5-minute safety margin accounts for clock skew between our
+    # recording of last_inbound_at and WhatsApp's internal timer.
+    window_open = route.last_inbound_at is not None and (
+        now - route.last_inbound_at
+    ) < timedelta(hours=23, minutes=55)
     return RouteResponse(
         pool_number=pool.number,
         contact_number=route.contact_number,
         assistant_id=route.assistant_id,
+        window_open=window_open,
     )
 
 
