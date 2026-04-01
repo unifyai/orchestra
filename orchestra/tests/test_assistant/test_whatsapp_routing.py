@@ -94,26 +94,6 @@ def whatsapp_dao(dbsession: Session) -> WhatsAppRouteDAO:
     return WhatsAppRouteDAO(dbsession)
 
 
-@pytest.fixture
-def user_with_phone_only(dbsession: Session) -> User:
-    """User who has phone_number set but NOT whatsapp_number."""
-    ba = BillingAccount(credits=100)
-    dbsession.add(ba)
-    dbsession.flush()
-    user = User(
-        id=str(uuid.uuid4()),
-        email="phone_only@test.com",
-        name="Phone",
-        last_name="Only",
-        phone_number="+15559990000",
-        whatsapp_number=None,
-        billing_account_id=ba.id,
-    )
-    dbsession.add(user)
-    dbsession.flush()
-    return user
-
-
 # ============================================================================
 # 1. Pool number seeding
 # ============================================================================
@@ -345,43 +325,13 @@ class TestResolveInbound:
         assert result["assistant_id"] == a1.agent_id
         assert result["role"] == "owner"
 
-    def test_tier1b_phone_number_fallback(
-        self,
-        dbsession: Session,
-        whatsapp_dao,
-        user_with_phone_only,
-        pool_numbers,
-    ):
-        """Tier 1b: sender matches user.phone_number (no whatsapp_number set)."""
-        assistant = Assistant(user_id=user_with_phone_only.id, first_name="PhoneBot")
-        dbsession.add(assistant)
-        dbsession.flush()
-
-        dbsession.add(
-            AssistantContact(
-                assistant_id=assistant.agent_id,
-                contact_type="whatsapp",
-                contact_value=pool_numbers[0].number,
-                status="active",
-            ),
-        )
-        dbsession.flush()
-
-        result = whatsapp_dao.resolve_inbound(
-            pool_numbers[0].number,
-            user_with_phone_only.phone_number,
-        )
-        assert result is not None
-        assert result["assistant_id"] == assistant.agent_id
-        assert result["role"] == "owner"
-
     def test_whatsapp_number_priority_over_phone(
         self,
         dbsession: Session,
         whatsapp_dao,
         pool_numbers,
     ):
-        """Tier 1a (whatsapp_number) wins over Tier 1b (phone_number) on a different user."""
+        """Inbound routing matches whatsapp_number, not phone_number."""
         ba1 = BillingAccount(credits=100)
         ba2 = BillingAccount(credits=100)
         dbsession.add_all([ba1, ba2])
@@ -425,13 +375,13 @@ class TestResolveInbound:
         assert result["assistant_id"] == a_wa.agent_id
         assert result["role"] == "owner"
 
-    def test_ambiguous_phone_number_skips_tier1b(
+    def test_no_whatsapp_number_match_does_not_route(
         self,
         dbsession: Session,
         whatsapp_dao,
         pool_numbers,
     ):
-        """Two users share the same phone_number → Tier 1b is skipped (ambiguous)."""
+        """No whatsapp_number match means sender doesn't route via Tier 1."""
         ba1 = BillingAccount(credits=100)
         ba2 = BillingAccount(credits=100)
         dbsession.add_all([ba1, ba2])
