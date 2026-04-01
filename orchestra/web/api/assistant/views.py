@@ -93,21 +93,24 @@ from orchestra.web.api.assistant.schema import (
     VoiceGenerateRequest,
     VoiceRead,
 )
+from orchestra.web.api.utils import assistant_infra as assistant_infra_utils
 from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_phone_number,
     create_pubsub_topic,
-    delete_assistant_disk,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
     get_running_jobs,
     log_pre_hire_chat,
     reawaken_assistant,
-    stop_jobs,
+    teardown_assistant_runtime,
     wake_up_assistant,
     watch_email,
 )
+
+# Backwards-compatible module attribute for older tests that patch assistant cleanup.
+delete_assistant_disk = assistant_infra_utils.delete_assistant_disk
 
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
@@ -1582,17 +1585,6 @@ async def delete_assistant(
                     detail="You do not have permission to delete this assistant.",
                 )
 
-        # Suspend any jobs that might be currently running with that assistant
-        try:
-            response = await stop_jobs(
-                assistant_id,
-                deploy_env=assistant.deploy_env,
-            )
-            print(f"JOB STOPPED: {response['job_names']}")
-        except Exception as e:
-            logging.error(f"Failed to stop job: {str(e)}")
-            cleanup_errors.append(f"Failed to stop job: {str(e)}")
-
         # DB operations (fast, sequential, session-bound)
         # Delete the associated chat transcript context from the "Assistants" project
         try:
@@ -1651,18 +1643,14 @@ async def delete_assistant(
             active_contacts = []
             cleanup_errors.append(f"Failed to fetch assistant contacts: {str(e)}")
 
-        # Parallel infrastructure cleanup (all independent after stop_jobs)
-        async def _cleanup_disk():
-            # Delete persistent disk if assistant uses a pool VM
-            if assistant.desktop_mode in ("windows", "ubuntu"):
-                try:
-                    await delete_assistant_disk(
-                        str(assistant_id),
-                        deploy_env=assistant.deploy_env,
-                    )
-                except Exception as e:
-                    logging.error(f"Failed to delete assistant disk: {str(e)}")
-                    cleanup_errors.append(f"Failed to delete assistant disk: {str(e)}")
+        # Parallel infrastructure cleanup after the assistant has been staged for deletion.
+        async def _cleanup_runtime():
+            result = await teardown_assistant_runtime(
+                assistant_id,
+                deploy_env=assistant.deploy_env,
+                desktop_mode=assistant.desktop_mode,
+            )
+            cleanup_errors.extend(result.get("errors", []))
 
         async def _cleanup_gcs():
             # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
@@ -1730,17 +1718,6 @@ async def delete_assistant(
                 )
                 cleanup_errors.append(f"Failed to clean up GCS data: {str(e)}")
 
-        async def _cleanup_pubsub():
-            # Delete pubsub topic
-            try:
-                await delete_pubsub_topic(
-                    str(assistant_id),
-                    deploy_env=assistant.deploy_env,
-                )
-            except Exception as e:
-                cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
-            print(f"PUBSUB DELETED: {assistant_id}")
-
         async def _deprovision_contacts():
             async def _deprovision(ac):
                 try:
@@ -1772,9 +1749,8 @@ async def delete_assistant(
             await asyncio.gather(*[_deprovision(ac) for ac in active_contacts])
 
         await asyncio.gather(
-            _cleanup_disk(),
+            _cleanup_runtime(),
             _cleanup_gcs(),
-            _cleanup_pubsub(),
             _deprovision_contacts(),
         )
 
@@ -4885,6 +4861,7 @@ async def get_assistant_spending_limit(
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
+    # Allow org members to view limits for any assistant in their org.
     if assistant.user_id != user_id:
         if assistant.organization_id is not None:
             org_member_dao = OrganizationMemberDAO(session)
@@ -4961,7 +4938,7 @@ async def get_assistant_spend(
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if assistant.user_id != user_id:
-        # Allow org members to view spend for any assistant in their org
+        # Allow org members to view spend for any assistant in their org.
         if assistant.organization_id is not None:
             org_member_dao = OrganizationMemberDAO(session)
             member = org_member_dao.get_member(user_id, assistant.organization_id)
