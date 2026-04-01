@@ -135,13 +135,12 @@ def get_user(
         raise not_found("User ID")
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user_instance.id)
-    if api_key:
-        api_key_value = api_key[0][0].key
+    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
+    if personal_keys:
+        api_key_value = personal_keys[0][0].key
     else:
-        # User exists but has no API key — create one to self-heal
         logger.warning(
-            "User %s has no API key; generating one.",
+            "User %s has no personal API key; generating one.",
             user_instance.id,
         )
         new_key = generate_key()
@@ -204,13 +203,12 @@ def get_user_by_email(
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user_instance.id)
-    if api_key:
-        api_key_value = api_key[0][0].key
+    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
+    if personal_keys:
+        api_key_value = personal_keys[0][0].key
     else:
-        # User exists but has no API key — create one to self-heal
         logger.warning(
-            "User %s (%s) has no API key; generating one.",
+            "User %s (%s) has no personal API key; generating one.",
             user_instance.id,
             email,
         )
@@ -282,13 +280,12 @@ def get_user_by_account(
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user_instance.id)
-    if api_key:
-        api_key_value = api_key[0][0].key
+    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
+    if personal_keys:
+        api_key_value = personal_keys[0][0].key
     else:
-        # User exists but has no API key — create one to self-heal
         logger.warning(
-            "User %s has no API key; generating one.",
+            "User %s has no personal API key; generating one.",
             user_instance.id,
         )
         new_key = generate_key()
