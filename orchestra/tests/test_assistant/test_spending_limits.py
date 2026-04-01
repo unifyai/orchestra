@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
-from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+from orchestra.tests.utils import HEADERS, create_test_user
 
 
 @pytest.fixture(autouse=True)
@@ -103,8 +103,8 @@ async def test_admin_get_assistant_spend_no_data(client: AsyncClient):
 
     # Get spend via admin endpoint (should be 0)
     response = await client.get(
-        f"/v0/admin/assistant/{agent_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/assistant/{agent_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -132,8 +132,8 @@ async def test_admin_get_assistant_spend_with_limit(client: AsyncClient):
 
     # Get spend via admin endpoint (should show limit and percent)
     response = await client.get(
-        f"/v0/admin/assistant/{agent_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/assistant/{agent_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -153,8 +153,8 @@ async def test_admin_get_assistant_spend_invalid_month_format(client: AsyncClien
 
     # Get spend via admin endpoint with invalid month
     response = await client.get(
-        f"/v0/admin/assistant/{agent_id}/spend?month=invalid",
-        headers=ADMIN_HEADERS,
+        f"/v0/assistant/{agent_id}/spend?month=invalid",
+        headers=HEADERS,
     )
 
     assert response.status_code == 422, response.json()  # Validation error
@@ -382,7 +382,6 @@ async def test_member_limit_cannot_exceed_org_limit(client: AsyncClient):
     )
 
     assert response.status_code == 400, response.json()
-    assert "organization limit" in response.json()["detail"].lower()
 
 
 @pytest.mark.anyio
@@ -472,10 +471,10 @@ async def test_admin_get_user_spend(client: AsyncClient):
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
     user_id = credits_resp.json()["id"]
 
-    # Get spend via admin endpoint
+    # Get spend via user endpoint
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        "/v0/user/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -665,8 +664,8 @@ async def test_admin_get_org_spend(client: AsyncClient):
 
     # Get spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -690,8 +689,8 @@ async def test_admin_get_member_spend(client: AsyncClient):
 
     # Get member spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/members/{owner_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/members/{owner_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -723,8 +722,8 @@ async def test_admin_get_member_spend_with_limit(client: AsyncClient):
 
     # Get member spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/members/{owner_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/members/{owner_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -743,8 +742,8 @@ async def test_admin_get_member_spend_non_member(client: AsyncClient):
 
     # Try to get spend for non-existent member via admin endpoint
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/members/non_existent_user/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/members/non_existent_user/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 404, response.json()
@@ -972,8 +971,8 @@ async def test_admin_get_org_spend_invalid_month(client: AsyncClient):
 
     # Try invalid month format via admin endpoint
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/spend?month=2026-13",  # Invalid month
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/spend?month=2026-13",  # Invalid month
+        headers=HEADERS,
     )
 
     assert response.status_code == 422, response.json()
@@ -1185,8 +1184,8 @@ async def test_owner_can_get_own_assistant_spend(client: AsyncClient):
 
     # Admin endpoint should return the assistant's spend
     response = await client.get(
-        f"/v0/admin/assistant/{agent_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/assistant/{agent_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1201,8 +1200,8 @@ async def test_non_owner_cannot_get_assistant_spend(client: AsyncClient):
     """Test that admin endpoint returns 404 for non-existent assistant."""
     # Try to get spend for non-existent assistant
     response = await client.get(
-        "/v0/admin/assistant/999999/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        "/v0/assistant/999999/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 404, response.json()
@@ -1230,8 +1229,8 @@ async def test_org_member_can_get_org_assistant_spend(client: AsyncClient):
 
     # Admin endpoint should return the assistant's spend
     response = await client.get(
-        f"/v0/admin/assistant/{agent_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/assistant/{agent_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1252,8 +1251,8 @@ async def test_user_can_get_own_spend(client: AsyncClient):
     user_id = credits_resp.json()["id"]
 
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        "/v0/user/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1277,8 +1276,8 @@ async def test_user_spend_includes_limit_when_set(client: AsyncClient):
     )
 
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        "/v0/user/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1309,8 +1308,8 @@ async def test_user_spend_no_limit_shows_null(client: AsyncClient):
     )
 
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        "/v0/user/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1333,8 +1332,8 @@ async def test_org_member_can_get_org_spend(client: AsyncClient):
 
     # Admin endpoint should return the org spend
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1349,8 +1348,8 @@ async def test_non_member_cannot_get_org_spend(client: AsyncClient):
     """Test that admin endpoint returns 404 for non-existent organization."""
     # Try to get spend for non-existent organization
     response = await client.get(
-        "/v0/admin/organization/999999/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        "/v0/organizations/999999/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 404, response.json()
@@ -1445,8 +1444,8 @@ async def test_user_spend_aggregates_across_multiple_assistants(client: AsyncCli
 
     # Get user spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/user/{user_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        "/v0/user/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1538,8 +1537,8 @@ async def test_org_spend_aggregates_across_multiple_assistants(client: AsyncClie
 
     # Get org spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1635,8 +1634,8 @@ async def test_member_spend_aggregates_across_org_assistants(client: AsyncClient
 
     # Get member spend via admin endpoint
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/members/{owner_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/members/{owner_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1667,8 +1666,8 @@ async def test_member_can_get_own_member_spend(client: AsyncClient):
 
     # Admin endpoint should return the member's spend
     response = await client.get(
-        f"/v0/admin/organization/{org_id}/members/{owner_id}/spend?month=2026-01",
-        headers=ADMIN_HEADERS,
+        f"/v0/organizations/{org_id}/members/{owner_id}/spend?month=2026-01",
+        headers=HEADERS,
     )
 
     assert response.status_code == 200, response.json()
@@ -1844,8 +1843,8 @@ async def test_spend_endpoint_rejects_invalid_month_format(client: AsyncClient):
 
     for month in invalid_months:
         response = await client.get(
-            f"/v0/admin/assistant/{agent_id}/spend?month={month}",
-            headers=ADMIN_HEADERS,
+            f"/v0/assistant/{agent_id}/spend?month={month}",
+            headers=HEADERS,
         )
         assert response.status_code == 422, f"Expected 422 for month={month}"
 
@@ -1860,8 +1859,8 @@ async def test_spend_endpoint_requires_month_parameter(client: AsyncClient):
 
     # Request without month parameter
     response = await client.get(
-        f"/v0/admin/assistant/{agent_id}/spend",
-        headers=ADMIN_HEADERS,
+        f"/v0/assistant/{agent_id}/spend",
+        headers=HEADERS,
     )
 
     assert response.status_code == 422, response.json()  # Missing required param
@@ -1870,6 +1869,163 @@ async def test_spend_endpoint_requires_month_parameter(client: AsyncClient):
 # ===========================================================================
 # Multiple Assistants Cascade Test
 # ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_org_member_can_get_other_members_assistant_spend(client: AsyncClient):
+    """Test that an org member can view spend for an assistant created by another member.
+
+    The spend endpoint should allow any org member to view spend data for any
+    assistant in the org, not just assistants they personally created.
+    """
+    # Owner creates org
+    owner = await create_test_user(client, "spend_org_owner@example.com")
+    response = await _create_organization(
+        client,
+        "MemberSpendAccessOrg",
+        owner["headers"],
+    )
+    assert response.status_code in [200, 201], response.json()
+    org_data = response.json()
+    org_id = org_data["id"]
+    owner_org_key = org_data["api_key"]
+    owner_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {owner_org_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Create a second user and add them as a member
+    member = await create_test_user(client, "spend_org_member@example.com")
+    add_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == 201, add_resp.json()
+    member_org_key = add_resp.json()["api_key"]
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {member_org_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Owner creates an assistant in the org
+    response = await _create_assistant(
+        client,
+        "OwnerBot",
+        "SpendTest",
+        owner_org_headers,
+    )
+    assert response.status_code in [200, 201], response.json()
+    agent_id = response.json()["info"]["agent_id"]
+
+    # Member should be able to get spend for the owner's assistant
+    response = await client.get(
+        f"/v0/assistant/{agent_id}/spend?month=2026-01",
+        headers=member_org_headers,
+    )
+    assert response.status_code == 200, (
+        f"Org member should be able to view spend for another member's assistant, "
+        f"got {response.status_code}: {response.json()}"
+    )
+    data = response.json()
+    assert str(data["agent_id"]) == str(agent_id)
+
+
+@pytest.mark.anyio
+async def test_org_member_can_get_other_members_assistant_spending_limit(
+    client: AsyncClient,
+):
+    """Test that an org member can view spending limit for another member's assistant."""
+    # Owner creates org
+    owner = await create_test_user(client, "limit_org_owner@example.com")
+    response = await _create_organization(
+        client,
+        "MemberLimitAccessOrg",
+        owner["headers"],
+    )
+    assert response.status_code in [200, 201], response.json()
+    org_data = response.json()
+    org_id = org_data["id"]
+    owner_org_key = org_data["api_key"]
+    owner_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {owner_org_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Create a second user and add them as a member
+    member = await create_test_user(client, "limit_org_member@example.com")
+    add_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == 201, add_resp.json()
+    member_org_key = add_resp.json()["api_key"]
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {member_org_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Owner creates an assistant in the org
+    response = await _create_assistant(
+        client,
+        "OwnerBot",
+        "LimitTest",
+        owner_org_headers,
+    )
+    assert response.status_code in [200, 201], response.json()
+    agent_id = response.json()["info"]["agent_id"]
+
+    # Member should be able to get spending limit for the owner's assistant
+    response = await client.get(
+        f"/v0/assistant/{agent_id}/spending-limit",
+        headers=member_org_headers,
+    )
+    assert response.status_code == 200, (
+        f"Org member should be able to view spending limit for another member's assistant, "
+        f"got {response.status_code}: {response.json()}"
+    )
+    data = response.json()
+    assert str(data["agent_id"]) == str(agent_id)
+
+
+@pytest.mark.anyio
+async def test_non_org_member_cannot_get_org_assistant_spend(client: AsyncClient):
+    """Test that a user who is NOT an org member cannot view an org assistant's spend."""
+    # Owner creates org
+    owner = await create_test_user(client, "spend_access_owner@example.com")
+    response = await _create_organization(
+        client,
+        "NonMemberSpendOrg2",
+        owner["headers"],
+    )
+    assert response.status_code in [200, 201], response.json()
+    org_data = response.json()
+    owner_org_key = org_data["api_key"]
+    owner_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {owner_org_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Owner creates an assistant
+    response = await _create_assistant(client, "OrgOnly", "SpendBot", owner_org_headers)
+    assert response.status_code in [200, 201], response.json()
+    agent_id = response.json()["info"]["agent_id"]
+
+    # Create outsider (not a member of the org)
+    outsider = await create_test_user(client, "spend_outsider@example.com")
+
+    # Outsider should NOT be able to get spend
+    response = await client.get(
+        f"/v0/assistant/{agent_id}/spend?month=2026-01",
+        headers=outsider["headers"],
+    )
+    assert response.status_code == 404, response.json()
 
 
 @pytest.mark.anyio

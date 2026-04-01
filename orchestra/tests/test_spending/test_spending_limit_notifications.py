@@ -191,6 +191,7 @@ async def _trigger_spending_limit_notification(
     current_spend: float,
     month: str,
     limit_set_at: Optional[str] = None,
+    organization_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Call the spending limit notification endpoint."""
     payload = {
@@ -202,11 +203,13 @@ async def _trigger_spending_limit_notification(
     }
     if limit_set_at:
         payload["limit_set_at"] = limit_set_at
+    if organization_id is not None:
+        payload["organization_id"] = organization_id
 
     response = await client.post(
-        "/v0/admin/spending-limit-reached",
+        "/v0/user/spending-limit-reached",
         json=payload,
-        headers=ADMIN_HEADERS,
+        headers=HEADERS,
     )
     return {"status_code": response.status_code, "data": response.json()}
 
@@ -664,6 +667,7 @@ async def test_org_limit_and_member_limit_independent(
         limit_value=150.00,
         current_spend=150.00,
         month="2026-02",
+        organization_id=org_id,
     )
     assert result_member["data"]["notified"] is True
 
@@ -828,14 +832,13 @@ async def test_notification_with_null_limit_set_at_falls_back_to_dedupe(
 
 
 @pytest.mark.anyio
-async def test_notification_for_nonexistent_entity_returns_no_recipients(
+async def test_notification_for_nonexistent_entity_returns_not_found(
     client: AsyncClient,
     mock_email_sending: AsyncMock,
 ):
     """
     Scenario: Notification triggered for an entity that doesn't exist.
-    Expected: Returns 200 with notified=False and reason=no_recipients.
-    (Fire-and-forget pattern - we don't fail, just skip notification)
+    Expected: Returns 404 (user-auth endpoint validates ownership).
     """
     result = await _trigger_spending_limit_notification(
         client,
@@ -846,9 +849,7 @@ async def test_notification_for_nonexistent_entity_returns_no_recipients(
         month="2026-02",
     )
 
-    assert result["status_code"] == 200
-    assert result["data"]["notified"] is False
-    assert result["data"]["reason"] == "no_recipients"
+    assert result["status_code"] == 404
 
 
 @pytest.mark.anyio
@@ -1017,6 +1018,7 @@ async def test_org_limit_reached_then_member_limit_reached_both_notified(
         limit_value=100.00,
         current_spend=100.00,
         month="2026-02",
+        organization_id=org_id,
     )
     assert result_member["data"]["notified"] is True
 
@@ -1083,6 +1085,7 @@ async def test_hierarchical_limits_all_independent(
         limit_value=200.00,
         current_spend=200.00,
         month="2026-02",
+        organization_id=org_id,
     )
     assert result_member["data"]["notified"] is True
 
@@ -1114,6 +1117,7 @@ async def test_hierarchical_limits_all_independent(
         limit_value=200.00,
         current_spend=200.00,
         month="2026-02",
+        organization_id=org_id,
     )
     assert result_member_2["data"]["notified"] is False
 

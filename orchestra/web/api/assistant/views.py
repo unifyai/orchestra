@@ -4885,9 +4885,14 @@ async def get_assistant_spending_limit(
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
-    # Verify user owns the assistant
     if assistant.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Assistant not found.")
+        if assistant.organization_id is not None:
+            org_member_dao = OrganizationMemberDAO(session)
+            member = org_member_dao.get_member(user_id, assistant.organization_id)
+            if member is None:
+                raise HTTPException(status_code=404, detail="Assistant not found.")
+        else:
+            raise HTTPException(status_code=404, detail="Assistant not found.")
 
     # Get the limit
     monthly_cap = assistant_dao.get_spending_cap(agent_id)
@@ -4897,7 +4902,6 @@ async def get_assistant_spending_limit(
     if assistant.organization_id is not None:
         # Org assistant - check member and org limits
         from orchestra.db.dao.organization_dao import OrganizationDAO
-        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 
         org_dao = OrganizationDAO(session)
         org_member_dao = OrganizationMemberDAO(session)
@@ -4957,7 +4961,14 @@ async def get_assistant_spend(
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if assistant.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Assistant not found.")
+        # Allow org members to view spend for any assistant in their org
+        if assistant.organization_id is not None:
+            org_member_dao = OrganizationMemberDAO(session)
+            member = org_member_dao.get_member(user_id, assistant.organization_id)
+            if member is None:
+                raise HTTPException(status_code=404, detail="Assistant not found.")
+        else:
+            raise HTTPException(status_code=404, detail="Assistant not found.")
 
     cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
     limit = assistant_dao.get_spending_cap(agent_id)
