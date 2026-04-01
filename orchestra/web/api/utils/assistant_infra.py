@@ -449,6 +449,190 @@ async def stop_jobs(
     return {"success": True, "job_names": job_names}
 
 
+def _requires_assistant_disk_cleanup(desktop_mode: str | None) -> bool:
+    return desktop_mode in ("windows", "ubuntu")
+
+
+async def delete_assistant_session(
+    assistant_id: str,
+    deploy_env: str | None = None,
+):
+    """Delete the AssistantSession CR for an assistant."""
+    comms_url = _comms_url_for(deploy_env)
+    if not comms_url or not ADMIN_KEY:
+        return {"success": True, "skipped": True, "reason": "missing_comms_config"}
+
+    async with httpx.AsyncClient() as client:
+        response = await client.request(
+            "DELETE",
+            f"{comms_url}/infra/session/{assistant_id}",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def teardown_assistant_runtime(
+    assistant_id: str | int,
+    deploy_env: str | None = None,
+    desktop_mode: str | None = None,
+) -> dict:
+    """Best-effort runtime teardown for permanent assistant deletion flows."""
+    assistant_id = str(assistant_id)
+    cleanup_errors: list[str] = []
+
+    try:
+        await stop_jobs(assistant_id, deploy_env=deploy_env)
+    except Exception as e:
+        logging.error(f"Failed to stop jobs for assistant {assistant_id}: {e}")
+        cleanup_errors.append(f"Failed to stop job: {e}")
+
+    try:
+        await delete_assistant_session(assistant_id, deploy_env=deploy_env)
+    except Exception as e:
+        logging.error(f"Failed to delete AssistantSession for {assistant_id}: {e}")
+        cleanup_errors.append(f"Failed to delete AssistantSession: {e}")
+
+    try:
+        await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
+    except Exception as e:
+        logging.error(
+            f"Failed to delete pubsub topic for assistant {assistant_id}: {e}",
+        )
+        cleanup_errors.append(f"Failed to delete pubsub topic: {e}")
+
+    if _requires_assistant_disk_cleanup(desktop_mode):
+        try:
+            await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
+        except Exception as e:
+            logging.error(f"Failed to delete assistant disk for {assistant_id}: {e}")
+            cleanup_errors.append(f"Failed to delete assistant disk: {e}")
+
+    return {
+        "success": not cleanup_errors,
+        "assistant_id": assistant_id,
+        "errors": cleanup_errors,
+    }
+
+
+def teardown_assistant_runtime_sync(
+    assistant_id: str | int,
+    deploy_env: str | None = None,
+    desktop_mode: str | None = None,
+) -> dict:
+    """Blocking version of runtime teardown for post-commit service cleanup."""
+    assistant_id = str(assistant_id)
+    cleanup_errors: list[str] = []
+    comms_url = _comms_url_for(deploy_env)
+    if not comms_url or not ADMIN_KEY:
+        return {
+            "success": True,
+            "assistant_id": assistant_id,
+            "errors": cleanup_errors,
+            "skipped": True,
+            "reason": "missing_comms_config",
+        }
+
+    headers = {"Authorization": f"Bearer {ADMIN_KEY}"}
+
+    def _record_error(message: str, error: Exception) -> None:
+        logging.error("%s for assistant %s: %s", message, assistant_id, error)
+        cleanup_errors.append(f"{message}: {error}")
+
+    def _release_pool_vm_sync(client: httpx.Client) -> None:
+        try:
+            client.post(
+                f"{comms_url}/infra/vm/pool/release",
+                headers=headers,
+                json={"assistant_id": assistant_id},
+                timeout=0.1,
+            )
+        except httpx.TimeoutException:
+            logging.warning("release_pool_vm timed out for assistant %s", assistant_id)
+
+    with httpx.Client() as client:
+        try:
+            label = assistant_id.lower().replace("_", "-")
+            response = client.get(
+                f"{comms_url}/infra/jobs",
+                params={"label_selector": f"app=unity,assistant-id={label}"},
+                headers=headers,
+                timeout=10,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                running_job_names = [
+                    job["job_name"]
+                    for job in data.get("jobs", [])
+                    if job.get("status") == "Running"
+                ]
+                if running_job_names:
+                    stop_response = client.post(
+                        f"{comms_url}/infra/job/stop",
+                        data={"job_name": running_job_names[0]},
+                        headers=headers,
+                        timeout=20,
+                    )
+                    stop_response.raise_for_status()
+        except Exception as e:
+            _record_error("Failed to stop job", e)
+        finally:
+            try:
+                _release_pool_vm_sync(client)
+            except Exception as e:
+                _record_error("Failed to release pool VM", e)
+
+        try:
+            response = client.request(
+                "DELETE",
+                f"{comms_url}/infra/session/{assistant_id}",
+                headers=headers,
+                timeout=20,
+            )
+            response.raise_for_status()
+        except Exception as e:
+            _record_error("Failed to delete AssistantSession", e)
+
+        try:
+            client.request(
+                "DELETE",
+                f"{comms_url}/infra/pubsub/topic",
+                headers=headers,
+                data={"topic_name": f"unity-{assistant_id}{_env_suffix(deploy_env)}"},
+                timeout=0.1,
+            )
+        except httpx.TimeoutException:
+            logging.warning(
+                "delete_pubsub_topic timed out for assistant %s",
+                assistant_id,
+            )
+        except Exception as e:
+            _record_error("Failed to delete pubsub topic", e)
+
+        if _requires_assistant_disk_cleanup(desktop_mode):
+            try:
+                client.request(
+                    "DELETE",
+                    f"{comms_url}/infra/vm/pool/disk/{assistant_id}",
+                    headers=headers,
+                    timeout=0.1,
+                )
+            except httpx.TimeoutException:
+                logging.warning(
+                    "delete_assistant_disk timed out for assistant %s",
+                    assistant_id,
+                )
+            except Exception as e:
+                _record_error("Failed to delete assistant disk", e)
+
+    return {
+        "success": not cleanup_errors,
+        "assistant_id": assistant_id,
+        "errors": cleanup_errors,
+    }
+
+
 async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
     wake_up_url = _adapters_url_for(deploy_env) + "/assistant/wakeup"
     async with httpx.AsyncClient() as client:
