@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.models.orchestra_models import ApiKey as ApiKeyModel
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
@@ -38,7 +39,6 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     User,
 )
-from orchestra.db.models.orchestra_models import ApiKey as ApiKeyModel
 from orchestra.tests.utils import HEADERS, create_test_user
 
 # ============================================================================
@@ -158,11 +158,7 @@ def _ensure_user_has_contacts(dbsession: Session) -> None:
     import os
 
     api_key = os.getenv("AUTH_ACCOUNT_API_KEY", "")
-    row = (
-        dbsession.query(ApiKeyModel)
-        .filter(ApiKeyModel.key == api_key)
-        .first()
-    )
+    row = dbsession.query(ApiKeyModel).filter(ApiKeyModel.key == api_key).first()
     if row:
         user = dbsession.query(User).filter(User.id == row.user_id).first()
         if user:

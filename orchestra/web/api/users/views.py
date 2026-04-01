@@ -414,7 +414,10 @@ async def send_phone_verification(
         )
 
     if user_dao.check_verification_cooldown(
-        body.user_id, body.phone_number, body.phone_type, VERIFICATION_COOLDOWN_SECONDS,
+        body.user_id,
+        body.phone_number,
+        body.phone_type,
+        VERIFICATION_COOLDOWN_SECONDS,
     ):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -457,7 +460,9 @@ async def send_phone_verification(
                     detail="Failed to send verification SMS.",
                 )
             comms_data = response.json()
-            code = comms_data.get("verification_code") or comms_data.get("verificationCode")
+            code = comms_data.get("verification_code") or comms_data.get(
+                "verificationCode",
+            )
             if not code:
                 logger.error("Communication service did not return a verification code")
                 raise HTTPException(
@@ -473,11 +478,17 @@ async def send_phone_verification(
 
     code_hash = hashlib.sha256(code.encode()).hexdigest()
     user_dao.create_phone_verification(
-        body.user_id, body.phone_number, body.phone_type,
-        code_hash, VERIFICATION_EXPIRY_MINUTES,
+        body.user_id,
+        body.phone_number,
+        body.phone_type,
+        code_hash,
+        VERIFICATION_EXPIRY_MINUTES,
     )
 
-    return {"detail": "Verification code sent.", "expires_in_seconds": VERIFICATION_EXPIRY_MINUTES * 60}
+    return {
+        "detail": "Verification code sent.",
+        "expires_in_seconds": VERIFICATION_EXPIRY_MINUTES * 60,
+    }
 
 
 @admin_router.post("/user/phone/confirm-verification")
@@ -493,8 +504,11 @@ def confirm_phone_verification(
     """
     user_dao = UserDAO(session)
     success, message = user_dao.confirm_phone_verification(
-        body.user_id, body.phone_number, body.phone_type,
-        body.code, VERIFICATION_MAX_ATTEMPTS,
+        body.user_id,
+        body.phone_number,
+        body.phone_type,
+        body.code,
+        VERIFICATION_MAX_ATTEMPTS,
     )
 
     if not success:

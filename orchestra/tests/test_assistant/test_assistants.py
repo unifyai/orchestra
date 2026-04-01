@@ -1390,7 +1390,10 @@ async def test_update_assistant_contact_info_reawakens(
     mock_reawaken.reset_mock()
 
     # Update the contact's metadata via PUT /assistant/{id}/contact and expect reawaken
-    update_contact_payload = {"contact_type": "phone", "metadata": {"test_key": "test_val"}}
+    update_contact_payload = {
+        "contact_type": "phone",
+        "metadata": {"test_key": "test_val"},
+    }
     put_resp = await client.put(
         f"/v0/assistant/{assistant_id}/contact",
         json=update_contact_payload,
