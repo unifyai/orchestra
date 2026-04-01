@@ -13,6 +13,8 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from orchestra.web.api.utils.assistant_infra import teardown_assistant_runtime_sync
+
 logger = logging.getLogger(__name__)
 
 
@@ -206,9 +208,10 @@ class UserAccountCleanupService:
         stripe_customer_id = ba_info.stripe_customer_id if ba_info else None
         billing_account_id = ba_info.ba_id if ba_info else None
 
-        # Collect assistant IDs *before* deleting the user row (CASCADE will
-        # remove the assistants rows).  This list is used for GCS cleanup.
-        assistant_ids = self._get_user_assistant_ids(user_id)
+        # Collect assistant runtime metadata *before* deleting the user row
+        # (CASCADE will remove the assistants rows).
+        assistant_runtime_specs = self._get_user_assistant_runtime_specs(user_id)
+        assistant_ids = [int(spec["assistant_id"]) for spec in assistant_runtime_specs]
 
         # Soft-delete and deprovision all contacts for this user's personal
         # assistants *before* the CASCADE deletes the rows.
@@ -234,6 +237,10 @@ class UserAccountCleanupService:
         if stripe_customer_id:
             self._archive_stripe_customer(stripe_customer_id)
 
+        self._teardown_user_assistant_runtimes(
+            assistant_runtime_specs,
+            user_id=user_id,
+        )
         self._cleanup_user_data(user_id, assistant_ids)
 
         logger.info(f"Successfully deleted user account: {user_id}")
@@ -350,6 +357,67 @@ class UserAccountCleanupService:
             {"uid": user_id},
         ).fetchall()
         return [row[0] for row in rows] if rows else []
+
+    def _get_user_assistant_runtime_specs(
+        self,
+        user_id: str,
+    ) -> list[dict[str, str | int | None]]:
+        """
+        Return assistant runtime metadata owned by *user_id* before CASCADE delete.
+        """
+        rows = self.session.execute(
+            text(
+                "SELECT agent_id, deploy_env, desktop_mode "
+                "FROM assistants WHERE user_id = :uid",
+            ),
+            {"uid": user_id},
+        ).fetchall()
+        if not rows:
+            return []
+
+        specs: list[dict[str, str | int | None]] = []
+        for row in rows:
+            deploy_env = row[1] if len(row) > 1 else None
+            desktop_mode = row[2] if len(row) > 2 else None
+            specs.append(
+                {
+                    "assistant_id": row[0],
+                    "deploy_env": deploy_env,
+                    "desktop_mode": desktop_mode,
+                },
+            )
+        return specs
+
+    def _teardown_user_assistant_runtimes(
+        self,
+        assistant_runtime_specs: list[dict[str, str | int | None]],
+        *,
+        user_id: str,
+    ) -> None:
+        """Best-effort runtime teardown for assistants deleted with the user."""
+        for spec in assistant_runtime_specs:
+            try:
+                result = teardown_assistant_runtime_sync(
+                    spec["assistant_id"],
+                    deploy_env=spec["deploy_env"],
+                    desktop_mode=spec["desktop_mode"],
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed runtime teardown for assistant %s during user deletion %s: %s",
+                    spec["assistant_id"],
+                    user_id,
+                    e,
+                )
+                continue
+
+            if result.get("errors"):
+                logger.error(
+                    "Runtime teardown cleanup issues for assistant %s during user deletion %s: %s",
+                    spec["assistant_id"],
+                    user_id,
+                    result["errors"],
+                )
 
     def _cleanup_user_data(
         self,

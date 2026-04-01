@@ -56,6 +56,7 @@ from orchestra.web.api.organization.schema import (
     OrgSpendResponse,
 )
 from orchestra.web.api.users.views import generate_key
+from orchestra.web.api.utils.assistant_infra import teardown_assistant_runtime
 from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
 
@@ -524,12 +525,23 @@ async def delete_organization(
     # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
 
-    # Collect all assistant IDs *before* DB deletion (CASCADE removes them)
-    org_assistant_ids: list[int] = [
-        a.agent_id
-        for a in session.query(Assistant.agent_id)
+    # Collect assistant runtime metadata *before* DB deletion (CASCADE removes them)
+    org_assistant_specs = [
+        {
+            "assistant_id": agent_id,
+            "deploy_env": deploy_env,
+            "desktop_mode": desktop_mode,
+        }
+        for agent_id, deploy_env, desktop_mode in session.query(
+            Assistant.agent_id,
+            Assistant.deploy_env,
+            Assistant.desktop_mode,
+        )
         .filter(Assistant.organization_id == organization_id)
         .all()
+    ]
+    org_assistant_ids: list[int] = [
+        int(spec["assistant_id"]) for spec in org_assistant_specs
     ]
 
     # Deprovision and soft-delete all contacts for org assistants *before*
@@ -578,9 +590,24 @@ async def delete_organization(
             detail="Failed to delete organization",
         )
 
-    # Post-commit: clean up GCS data for every assistant that was in this org
+    # Post-commit: tear down runtime state and then clean up GCS data.
     try:
         bucket_service = BucketService()
+
+        if org_assistant_specs:
+            for spec in org_assistant_specs:
+                result = await teardown_assistant_runtime(
+                    spec["assistant_id"],
+                    deploy_env=spec["deploy_env"],
+                    desktop_mode=spec["desktop_mode"],
+                )
+                if result.get("errors"):
+                    logger.error(
+                        "Runtime teardown cleanup issues for assistant %s in deleted org %s: %s",
+                        spec["assistant_id"],
+                        organization_id,
+                        result["errors"],
+                    )
 
         if org_assistant_ids:
             for aid in org_assistant_ids:
@@ -879,16 +906,26 @@ async def remove_organization_member(
             detail="User is not a member of this organization",
         )
 
-    # Collect assistant IDs for this user in this org *before* they may be
-    # deleted by delete_unshared_resources_by_creator (needed for GCS cleanup).
-    member_assistant_ids: list[int] = [
-        a.agent_id
-        for a in session.query(Assistant.agent_id)
+    # Collect assistant runtime metadata *before* resources may be deleted.
+    member_assistant_specs = [
+        {
+            "assistant_id": agent_id,
+            "deploy_env": deploy_env,
+            "desktop_mode": desktop_mode,
+        }
+        for agent_id, deploy_env, desktop_mode in session.query(
+            Assistant.agent_id,
+            Assistant.deploy_env,
+            Assistant.desktop_mode,
+        )
         .filter(
             Assistant.user_id == user_id,
             Assistant.organization_id == organization_id,
         )
         .all()
+    ]
+    member_assistant_ids: list[int] = [
+        int(spec["assistant_id"]) for spec in member_assistant_specs
     ]
 
     # Remove member and clean up all associated data
@@ -962,8 +999,27 @@ async def remove_organization_member(
             aid for aid in member_assistant_ids if aid not in surviving_ids
         ]
         if deleted_assistant_ids:
+            deleted_assistant_specs = [
+                spec
+                for spec in member_assistant_specs
+                if spec["assistant_id"] in deleted_assistant_ids
+            ]
             try:
                 bucket_service = BucketService()
+                for spec in deleted_assistant_specs:
+                    result = await teardown_assistant_runtime(
+                        spec["assistant_id"],
+                        deploy_env=spec["deploy_env"],
+                        desktop_mode=spec["desktop_mode"],
+                    )
+                    if result.get("errors"):
+                        logger.error(
+                            "Runtime teardown cleanup issues for assistant %s after removing member %s from org %s: %s",
+                            spec["assistant_id"],
+                            user_id,
+                            organization_id,
+                            result["errors"],
+                        )
                 for aid in deleted_assistant_ids:
                     try:
                         bucket_service.delete_all_assistant_data(aid)
