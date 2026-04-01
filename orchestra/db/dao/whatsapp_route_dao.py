@@ -132,8 +132,7 @@ class WhatsAppRouteDAO:
     ) -> dict | None:
         """Resolve an inbound WhatsApp message to an assistant.
 
-        Tier 1a: match sender to User.whatsapp_number (unique, preferred).
-        Tier 1b: fall back to User.phone_number (skip if ambiguous).
+        Tier 1: match sender to User.whatsapp_number (unique, preferred).
         Tier 2:  static route table for external contacts.
 
         On success, atomically updates ``last_inbound_at`` on the
@@ -144,22 +143,8 @@ class WhatsAppRouteDAO:
         """
         now = datetime.now(timezone.utc)
 
-        # Tier 1a: explicit whatsapp_number match (unique index → at most 1)
+        # Tier 1: explicit whatsapp_number match (unique index → at most 1)
         user = self.session.query(User).filter(User.whatsapp_number == sender).first()
-
-        # Tier 1b: phone_number fallback (not unique → must handle ambiguity)
-        if not user:
-            phone_matches = (
-                self.session.query(User).filter(User.phone_number == sender).all()
-            )
-            if len(phone_matches) == 1:
-                user = phone_matches[0]
-            elif len(phone_matches) > 1:
-                logger.warning(
-                    "Ambiguous phone_number match for sender %s: %d users",
-                    sender,
-                    len(phone_matches),
-                )
 
         if user:
             # Find assistants this user can access that have WhatsApp
