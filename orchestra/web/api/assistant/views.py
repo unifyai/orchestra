@@ -93,7 +93,6 @@ from orchestra.web.api.assistant.schema import (
     VoiceGenerateRequest,
     VoiceRead,
 )
-from orchestra.web.api.utils import assistant_infra as assistant_infra_utils
 from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_phone_number,
@@ -108,9 +107,6 @@ from orchestra.web.api.utils.assistant_infra import (
     wake_up_assistant,
     watch_email,
 )
-
-# Backwards-compatible module attribute for older tests that patch assistant cleanup.
-delete_assistant_disk = assistant_infra_utils.delete_assistant_disk
 
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:

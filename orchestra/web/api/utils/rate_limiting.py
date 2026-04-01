@@ -122,10 +122,7 @@ def get_assistant_hiring_limit(
 
     account_age_days = (now - created_at).days if created_at else 0
 
-    from orchestra.db.models.orchestra_models import (
-        RECHARGE_TYPE_PROMO,
-        Recharge,
-    )
+    from orchestra.db.models.orchestra_models import RECHARGE_TYPE_PROMO, Recharge
 
     total_spend = 0.0
     ba_id = session.query(User.billing_account_id).filter(User.id == user_id).scalar()

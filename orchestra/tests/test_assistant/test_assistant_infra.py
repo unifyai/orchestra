@@ -42,10 +42,12 @@ def mock_all_infra(dbsession):
             return_value={"phoneNumber": "+15551234567"},
         ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
-        "delete_assistant_disk": AsyncMock(return_value={"success": True}),
         "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
+        "teardown_assistant_runtime": AsyncMock(
+            return_value={"success": True, "errors": []},
+        ),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
         "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
     }
@@ -896,7 +898,7 @@ async def test_delete_assistant_with_windows_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test deleting assistant with desktop_mode=windows calls release_pool_vm and delete_assistant_disk."""
+    """Test deleting assistant with desktop_mode=windows uses runtime teardown."""
     payload = {
         "first_name": "DeleteWindowsPool",
         "surname": "Test",
@@ -908,19 +910,16 @@ async def test_delete_assistant_with_windows_desktop_mode(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    mock_all_infra["release_pool_vm"].reset_mock()
-    mock_all_infra["delete_assistant_disk"].reset_mock()
-    mock_all_infra["delete_pubsub_topic"].reset_mock()
+    mock_all_infra["teardown_assistant_runtime"].reset_mock()
 
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    mock_all_infra["release_pool_vm"].assert_called()
-    mock_all_infra["delete_assistant_disk"].assert_called_once_with(
-        agent_id,
+    mock_all_infra["teardown_assistant_runtime"].assert_called_once_with(
+        int(agent_id),
         deploy_env=None,
+        desktop_mode="windows",
     )
-    mock_all_infra["delete_pubsub_topic"].assert_called_once()
 
 
 @pytest.mark.anyio
@@ -928,7 +927,7 @@ async def test_delete_assistant_with_ubuntu_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
 ):
-    """Test deleting assistant with desktop_mode=ubuntu calls release_pool_vm and delete_assistant_disk."""
+    """Test deleting assistant with desktop_mode=ubuntu uses runtime teardown."""
     payload = {
         "first_name": "DeleteUbuntuPool",
         "surname": "Test",
@@ -940,16 +939,13 @@ async def test_delete_assistant_with_ubuntu_desktop_mode(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    mock_all_infra["release_pool_vm"].reset_mock()
-    mock_all_infra["delete_assistant_disk"].reset_mock()
-    mock_all_infra["delete_pubsub_topic"].reset_mock()
+    mock_all_infra["teardown_assistant_runtime"].reset_mock()
 
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    mock_all_infra["release_pool_vm"].assert_called()
-    mock_all_infra["delete_assistant_disk"].assert_called_once_with(
-        agent_id,
+    mock_all_infra["teardown_assistant_runtime"].assert_called_once_with(
+        int(agent_id),
         deploy_env=None,
+        desktop_mode="ubuntu",
     )
-    mock_all_infra["delete_pubsub_topic"].assert_called_once()

@@ -585,6 +585,44 @@ class TestUserDeletionAttachmentCleanup:
             mock_bucket_service.delete_all_assistant_data.assert_any_call(10)
             mock_bucket_service.delete_all_assistant_data.assert_any_call(20)
 
+    def test_user_deletion_tears_down_assistant_runtimes(self):
+        """delete_user_account should tear down runtime state for each assistant."""
+        from orchestra.services.user_account_cleanup_service import (
+            UserAccountCleanupService,
+        )
+
+        mock_session = self._make_mock_session(assistant_ids=[10, 20])
+
+        with patch(
+            "orchestra.services.user_account_cleanup_service.teardown_assistant_runtime_sync",
+        ) as mock_runtime_teardown, patch(
+            "orchestra.services.bucket_service.BucketService",
+        ) as mock_bucket_cls:
+            mock_runtime_teardown.return_value = {"success": True, "errors": []}
+            mock_bucket_service = MagicMock()
+            mock_bucket_service.delete_all_assistant_data.return_value = {
+                "media": 0,
+                "recordings": 0,
+                "attachments": 0,
+            }
+            mock_bucket_cls.return_value = mock_bucket_service
+
+            service = UserAccountCleanupService(mock_session)
+            result = service.delete_user_account("user-123")
+
+            assert result.success is True
+            assert mock_runtime_teardown.call_count == 2
+            mock_runtime_teardown.assert_any_call(
+                10,
+                deploy_env=None,
+                desktop_mode=None,
+            )
+            mock_runtime_teardown.assert_any_call(
+                20,
+                deploy_env=None,
+                desktop_mode=None,
+            )
+
     def test_user_deletion_falls_back_to_legacy_cleanup_when_no_assistants(self):
         """When no assistants found, fall back to legacy user-prefix cleanup."""
         from orchestra.services.user_account_cleanup_service import (
