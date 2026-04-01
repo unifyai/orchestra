@@ -342,7 +342,7 @@ class UserDAO:
                 PhoneVerification.created_at >= cutoff,
             )
             .order_by(PhoneVerification.created_at.desc())
-            .limit(1)
+            .limit(1),
         ).scalar_one_or_none()
         return recent is not None
 
@@ -368,7 +368,7 @@ class UserDAO:
                 PhoneVerification.phone_number == phone_number,
                 PhoneVerification.phone_type == phone_type,
                 PhoneVerification.verified_at.is_(None),
-            )
+            ),
         )
 
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -379,7 +379,7 @@ class UserDAO:
                 phone_type=phone_type,
                 code_hash=code_hash,
                 expires_at=now + datetime.timedelta(minutes=expiry_minutes),
-            )
+            ),
         )
         self.session.commit()
 
@@ -411,7 +411,7 @@ class UserDAO:
                 PhoneVerification.verified_at.is_(None),
             )
             .order_by(PhoneVerification.created_at.desc())
-            .limit(1)
+            .limit(1),
         ).scalar_one_or_none()
 
         if not verification:
@@ -426,7 +426,10 @@ class UserDAO:
         if submitted_hash != verification.code_hash:
             self.session.commit()
             remaining = max_attempts - verification.attempts
-            return False, f"Incorrect verification code. {remaining} attempts remaining."
+            return (
+                False,
+                f"Incorrect verification code. {remaining} attempts remaining.",
+            )
 
         verification.verified_at = now
         self.session.commit()
@@ -462,11 +465,15 @@ class UserDAO:
             r = validate_phone_number(val)
             return r["formatted_phone_number"] if r["is_valid"] else val
 
-        current = _normalize(user.phone_number if phone_type == "phone" else user.whatsapp_number)
+        current = _normalize(
+            user.phone_number if phone_type == "phone" else user.whatsapp_number,
+        )
         if new_value == current or not new_value:
             return
 
-        other = _normalize(user.whatsapp_number if phone_type == "phone" else user.phone_number)
+        other = _normalize(
+            user.whatsapp_number if phone_type == "phone" else user.phone_number,
+        )
         if new_value == other:
             return
 
@@ -479,13 +486,13 @@ class UserDAO:
                 PhoneVerification.verified_at.isnot(None),
                 PhoneVerification.expires_at > now,
             )
-            .limit(1)
+            .limit(1),
         ).scalar_one_or_none()
 
         if not verified:
             label = "phone number" if phone_type == "phone" else "WhatsApp number"
             raise ValueError(
-                f"The new {label} must be verified before it can be saved."
+                f"The new {label} must be verified before it can be saved.",
             )
 
     def cleanup_phone_verifications(self, user_id: str) -> None:
@@ -493,7 +500,7 @@ class UserDAO:
         from sqlalchemy import delete as sa_delete
 
         self.session.execute(
-            sa_delete(PhoneVerification).where(PhoneVerification.user_id == user_id)
+            sa_delete(PhoneVerification).where(PhoneVerification.user_id == user_id),
         )
         self.session.commit()
 
