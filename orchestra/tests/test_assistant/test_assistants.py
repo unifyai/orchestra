@@ -1726,6 +1726,46 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_delete_assistant_invokes_runtime_teardown(client: AsyncClient):
+    payload = {
+        "first_name": "Runtime",
+        "surname": "Teardown",
+        "desktop_mode": "ubuntu",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = int(create_resp.json()["info"]["agent_id"])
+
+    with patch(
+        "orchestra.web.api.assistant.views.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.web.api.assistant.views.BucketService",
+    ) as MockBucketServiceClass:
+        mock_teardown.return_value = {"success": True, "errors": []}
+        mock_instance = MockBucketServiceClass.return_value
+        mock_instance.delete_assistant_file.return_value = True
+        mock_instance.delete_all_assistant_data.return_value = {
+            "media": 0,
+            "recordings": 0,
+            "attachments": 0,
+        }
+
+        del_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}",
+            headers=HEADERS,
+        )
+
+    assert del_resp.status_code == 200
+    mock_teardown.assert_awaited_once_with(
+        assistant_id,
+        deploy_env=None,
+        desktop_mode="ubuntu",
+    )
+
+
+@pytest.mark.anyio
 async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     client: AsyncClient,
 ):

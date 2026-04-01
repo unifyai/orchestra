@@ -38,16 +38,20 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.stop_jobs",
+        "orchestra.web.api.assistant.views.teardown_assistant_runtime",
         new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
+    ) as mock_runtime_teardown, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings, patch(
+        "orchestra.web.api.organization.views.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_org_runtime_teardown, patch(
         "orchestra.web.api.organization.views.BucketService",
     ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_stop_jobs.return_value = MagicMock(status_code=200)
+        mock_runtime_teardown.return_value = {"success": True, "errors": []}
+        mock_org_runtime_teardown.return_value = {"success": True, "errors": []}
         mock_settings.is_staging = True
 
         mock_bucket_instance = MagicMock()
@@ -58,7 +62,13 @@ def mock_assistant_infra_calls(request):
         }
         mock_bucket_cls.return_value = mock_bucket_instance
 
-        yield mock_wake_up, mock_reawaken, mock_stop_jobs, mock_bucket_cls
+        yield (
+            mock_wake_up,
+            mock_reawaken,
+            mock_runtime_teardown,
+            mock_org_runtime_teardown,
+            mock_bucket_cls,
+        )
 
 
 # =============================================================================
@@ -345,16 +355,26 @@ async def test_member_removal_deletes_unshared_assistant(
     assert assistant_before is not None, "Assistant should exist"
 
     # Remove member
-    remove_resp = await client.delete(
-        f"/v0/organizations/{org_id}/members/{member['id']}",
-        headers=owner["headers"],
-    )
+    with patch(
+        "orchestra.web.api.organization.views.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown:
+        mock_teardown.return_value = {"success": True, "errors": []}
+        remove_resp = await client.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
     assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
 
     # Verify assistant is deleted
     dbsession.expire_all()
     assistant_after = assistant_dao.get_assistant_by_agent_id(agent_id)
     assert assistant_after is None, "Unshared assistant should be deleted"
+    mock_teardown.assert_awaited_once_with(
+        agent_id,
+        deploy_env=None,
+        desktop_mode=None,
+    )
 
 
 # =============================================================================
@@ -1413,7 +1433,7 @@ async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
     mock_assistant_infra_calls,
 ):
     """Test that GCS data is cleaned up for assistants deleted during member removal."""
-    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    _, _, _, _, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
 
     owner = await create_test_user(client, "gcs_cleanup_owner@test.com")
@@ -1485,7 +1505,7 @@ async def test_member_removal_no_gcs_cleanup_for_shared_assistants(
     mock_assistant_infra_calls,
 ):
     """Test that GCS data is NOT cleaned up for assistants that survive member removal (shared)."""
-    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    _, _, _, _, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
 
     owner = await create_test_user(client, "gcs_shared_owner@test.com")
@@ -1571,7 +1591,7 @@ async def test_member_removal_gcs_failure_does_not_block(
     mock_assistant_infra_calls,
 ):
     """Test that GCS cleanup failure does not block member removal."""
-    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    _, _, _, _, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
     mock_bucket_instance.delete_all_assistant_data.side_effect = Exception(
         "GCS unreachable",

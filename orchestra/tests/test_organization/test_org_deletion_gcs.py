@@ -31,16 +31,20 @@ def mock_infra_and_bucket(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.stop_jobs",
+        "orchestra.web.api.assistant.views.teardown_assistant_runtime",
         new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
+    ) as mock_runtime_teardown, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings, patch(
+        "orchestra.web.api.organization.views.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_org_runtime_teardown, patch(
         "orchestra.web.api.organization.views.BucketService",
     ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_stop_jobs.return_value = MagicMock(status_code=200)
+        mock_runtime_teardown.return_value = {"success": True, "errors": []}
+        mock_org_runtime_teardown.return_value = {"success": True, "errors": []}
         mock_settings.is_staging = True
 
         mock_bucket_instance = MagicMock()
@@ -55,6 +59,7 @@ def mock_infra_and_bucket(request):
         yield {
             "bucket_cls": mock_bucket_cls,
             "bucket_instance": mock_bucket_instance,
+            "runtime_teardown": mock_org_runtime_teardown,
         }
 
 
