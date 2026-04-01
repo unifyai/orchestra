@@ -8,6 +8,7 @@ Implements the two-tier routing algorithm:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
@@ -135,8 +136,14 @@ class WhatsAppRouteDAO:
         Tier 1b: fall back to User.phone_number (skip if ambiguous).
         Tier 2:  static route table for external contacts.
 
+        On success, atomically updates ``last_inbound_at`` on the
+        corresponding route row (creating one if needed for Tier 1)
+        so the 24h session window can be computed on outbound.
+
         Returns ``{"assistant_id": int, "role": str}`` or ``None``.
         """
+        now = datetime.now(timezone.utc)
+
         # Tier 1a: explicit whatsapp_number match (unique index → at most 1)
         user = self.session.query(User).filter(User.whatsapp_number == sender).first()
 
@@ -161,9 +168,10 @@ class WhatsAppRouteDAO:
                 user.id,
                 pool_number,
             )
+            assistant_id = None
             if len(accessible) == 1:
-                return {"assistant_id": accessible[0], "role": "owner"}
-            if len(accessible) > 1:
+                assistant_id = accessible[0]
+            elif len(accessible) > 1:
                 # Ambiguity — pick the most recently activated contact
                 latest = (
                     self.session.query(AssistantContact.assistant_id)
@@ -177,7 +185,11 @@ class WhatsAppRouteDAO:
                     .first()
                 )
                 if latest:
-                    return {"assistant_id": latest[0], "role": "owner"}
+                    assistant_id = latest[0]
+
+            if assistant_id is not None:
+                self._touch_inbound(pool_number, sender, assistant_id, now)
+                return {"assistant_id": assistant_id, "role": "owner"}
 
         # Tier 2: static route table
         pool = self.get_pool_number_by_value(pool_number)
@@ -193,9 +205,43 @@ class WhatsAppRouteDAO:
             .first()
         )
         if route:
+            route.last_inbound_at = now
+            self.session.flush()
             return {"assistant_id": route.assistant_id, "role": "contact"}
 
         return None
+
+    def _touch_inbound(
+        self,
+        pool_number_str: str,
+        contact_number: str,
+        assistant_id: int,
+        now: datetime,
+    ) -> None:
+        """Record an inbound timestamp on the route row, creating it if needed."""
+        pool = self.get_pool_number_by_value(pool_number_str)
+        if pool is None:
+            return
+
+        route = (
+            self.session.query(WhatsAppRoute)
+            .filter(
+                WhatsAppRoute.pool_number_id == pool.id,
+                WhatsAppRoute.contact_number == contact_number,
+            )
+            .first()
+        )
+        if route:
+            route.last_inbound_at = now
+        else:
+            route = WhatsAppRoute(
+                pool_number_id=pool.id,
+                contact_number=contact_number,
+                assistant_id=assistant_id,
+                last_inbound_at=now,
+            )
+            self.session.add(route)
+        self.session.flush()
 
     def _find_accessible_assistants(
         self,
