@@ -364,16 +364,31 @@ def update_user(
         r = validate_phone_number(val)
         return r["formatted_phone_number"] if r["is_valid"] else val
 
-    user_dao.update(
-        id=updated_user.user_id,
-        name=updated_user.name,
-        last_name=updated_user.last_name,
-        job_title=updated_user.job_title,
-        bio=updated_user.bio,
-        timezone=updated_user.timezone,
-        phone_number=_normalize_phone(updated_user.phone_number),
-        whatsapp_number=_normalize_phone(updated_user.whatsapp_number),
-    )
+    # Only pass fields that were explicitly provided in the request body.
+    # Fields not sent by the client default to None in the Pydantic model,
+    # but user_dao.update() uses ... (Ellipsis) as a sentinel for "not
+    # provided". Passing None for unset fields would overwrite existing
+    # values with NULL.
+    provided = updated_user.model_fields_set
+    update_kwargs: dict = {"id": updated_user.user_id}
+    if "name" in provided:
+        update_kwargs["name"] = updated_user.name
+    if "last_name" in provided:
+        update_kwargs["last_name"] = updated_user.last_name
+    if "job_title" in provided:
+        update_kwargs["job_title"] = updated_user.job_title
+    if "bio" in provided:
+        update_kwargs["bio"] = updated_user.bio
+    if "timezone" in provided:
+        update_kwargs["timezone"] = updated_user.timezone
+    if "phone_number" in provided:
+        update_kwargs["phone_number"] = _normalize_phone(updated_user.phone_number)
+    if "whatsapp_number" in provided:
+        update_kwargs["whatsapp_number"] = _normalize_phone(
+            updated_user.whatsapp_number,
+        )
+
+    user_dao.update(**update_kwargs)
 
     user_dao.cleanup_phone_verifications(updated_user.user_id)
 
