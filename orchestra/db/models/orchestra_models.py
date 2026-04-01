@@ -2563,6 +2563,7 @@ class WhatsAppRoute(Base):
         nullable=False,
     )
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_inbound_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     pool_number = relationship("WhatsAppPoolNumber")
     assistant = relationship("Assistant")

@@ -8,11 +8,13 @@ Covers:
 5. Admin endpoints: resolve, assign, route, delete, pool
 6. User.whatsapp_number field (unique partial index)
 7. Multi-user / multi-assistant conflict resolution
+8. 24h window: last_inbound_at tracking and window_open computation
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import status
@@ -889,6 +891,7 @@ class TestAdminEndpoints:
         )
         assert route_resp.status_code == status.HTTP_200_OK
         assert route_resp.json()["pool_number"] == pool_number
+        assert route_resp.json()["window_open"] is False
 
         # Resolve inbound reply
         resolve_resp = await client.get(
@@ -1155,3 +1158,247 @@ class TestPoolNumberCRUD:
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         assert "active assistant" in resp.json()["detail"]
+
+
+# ============================================================================
+# 11. 24h Window: last_inbound_at tracking
+# ============================================================================
+
+
+class TestLastInboundAt:
+    """DAO-level tests for last_inbound_at updates during resolve_inbound."""
+
+    def test_tier2_resolve_sets_last_inbound_at(
+        self,
+        dbsession: Session,
+        whatsapp_dao,
+        assistant_for_user,
+        pool_numbers,
+    ):
+        """Tier 2 resolve updates last_inbound_at on the existing route."""
+        route = WhatsAppRoute(
+            pool_number_id=pool_numbers[0].id,
+            contact_number="+15558888888",
+            assistant_id=assistant_for_user.agent_id,
+        )
+        dbsession.add(route)
+        dbsession.flush()
+        assert route.last_inbound_at is None
+
+        whatsapp_dao.resolve_inbound(pool_numbers[0].number, "+15558888888")
+
+        dbsession.refresh(route)
+        assert route.last_inbound_at is not None
+        assert (datetime.now(timezone.utc) - route.last_inbound_at) < timedelta(
+            seconds=5,
+        )
+
+    def test_tier1_resolve_creates_route_with_last_inbound_at(
+        self,
+        dbsession: Session,
+        whatsapp_dao,
+        user_with_whatsapp,
+        assistant_for_user,
+        pool_numbers,
+    ):
+        """Tier 1 resolve creates a route row with last_inbound_at set."""
+        dbsession.add(
+            AssistantContact(
+                assistant_id=assistant_for_user.agent_id,
+                contact_type="whatsapp",
+                contact_value=pool_numbers[0].number,
+                status="active",
+            ),
+        )
+        dbsession.flush()
+
+        # No route row should exist yet
+        existing = (
+            dbsession.query(WhatsAppRoute)
+            .filter(
+                WhatsAppRoute.contact_number == user_with_whatsapp.whatsapp_number,
+            )
+            .first()
+        )
+        assert existing is None
+
+        result = whatsapp_dao.resolve_inbound(
+            pool_numbers[0].number,
+            user_with_whatsapp.whatsapp_number,
+        )
+        assert result is not None
+        assert result["role"] == "owner"
+
+        # Route row should now exist with last_inbound_at
+        route = (
+            dbsession.query(WhatsAppRoute)
+            .filter(
+                WhatsAppRoute.contact_number == user_with_whatsapp.whatsapp_number,
+            )
+            .first()
+        )
+        assert route is not None
+        assert route.last_inbound_at is not None
+        assert route.assistant_id == assistant_for_user.agent_id
+
+    def test_repeated_inbound_updates_timestamp(
+        self,
+        dbsession: Session,
+        whatsapp_dao,
+        assistant_for_user,
+        pool_numbers,
+    ):
+        """Multiple inbound messages keep updating last_inbound_at."""
+        route = WhatsAppRoute(
+            pool_number_id=pool_numbers[0].id,
+            contact_number="+15551111111",
+            assistant_id=assistant_for_user.agent_id,
+            last_inbound_at=datetime.now(timezone.utc) - timedelta(hours=48),
+        )
+        dbsession.add(route)
+        dbsession.flush()
+
+        old_ts = route.last_inbound_at
+        whatsapp_dao.resolve_inbound(pool_numbers[0].number, "+15551111111")
+
+        dbsession.refresh(route)
+        assert route.last_inbound_at > old_ts
+
+
+class TestWindowOpen:
+    """Endpoint-level tests for window_open in POST /whatsapp/route."""
+
+    @pytest.mark.anyio
+    async def test_route_window_closed_no_inbound(
+        self,
+        client: AsyncClient,
+        test_assistant,
+        dbsession: Session,
+    ):
+        """window_open is False when no inbound has been received."""
+        assistant_id = test_assistant["agent_id"]
+
+        assign_resp = await client.post(
+            "/v0/admin/whatsapp/assign",
+            json={"assistant_id": assistant_id},
+            headers=ADMIN_HEADERS,
+        )
+        pool_number = assign_resp.json()["pool_number"]
+
+        contact_dao = AssistantContactDAO(dbsession)
+        contact_dao.upsert_assistant_contact(
+            assistant_id=assistant_id,
+            contact_type="whatsapp",
+            contact_value=pool_number,
+        )
+        dbsession.commit()
+
+        route_resp = await client.post(
+            "/v0/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": "+15552222222"},
+            headers=ADMIN_HEADERS,
+        )
+        assert route_resp.status_code == status.HTTP_200_OK
+        assert route_resp.json()["window_open"] is False
+
+    @pytest.mark.anyio
+    async def test_route_window_open_after_inbound(
+        self,
+        client: AsyncClient,
+        test_assistant,
+        dbsession: Session,
+    ):
+        """window_open is True after an inbound message is resolved."""
+        assistant_id = test_assistant["agent_id"]
+
+        assign_resp = await client.post(
+            "/v0/admin/whatsapp/assign",
+            json={"assistant_id": assistant_id},
+            headers=ADMIN_HEADERS,
+        )
+        pool_number = assign_resp.json()["pool_number"]
+
+        contact_dao = AssistantContactDAO(dbsession)
+        contact_dao.upsert_assistant_contact(
+            assistant_id=assistant_id,
+            contact_type="whatsapp",
+            contact_value=pool_number,
+        )
+        dbsession.commit()
+
+        external = "+15553333333"
+
+        # Create outbound route first
+        await client.post(
+            "/v0/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": external},
+            headers=ADMIN_HEADERS,
+        )
+
+        # Simulate inbound reply (resolve updates last_inbound_at)
+        resolve_resp = await client.get(
+            "/v0/admin/whatsapp/resolve",
+            params={"pool_number": pool_number, "sender": external},
+            headers=ADMIN_HEADERS,
+        )
+        assert resolve_resp.status_code == status.HTTP_200_OK
+
+        # Now the route endpoint should report window_open=True
+        route_resp = await client.post(
+            "/v0/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": external},
+            headers=ADMIN_HEADERS,
+        )
+        assert route_resp.status_code == status.HTTP_200_OK
+        assert route_resp.json()["window_open"] is True
+
+    @pytest.mark.anyio
+    async def test_route_window_closed_after_24h(
+        self,
+        client: AsyncClient,
+        test_assistant,
+        dbsession: Session,
+    ):
+        """window_open is False when last inbound was > 24h ago."""
+        assistant_id = test_assistant["agent_id"]
+
+        assign_resp = await client.post(
+            "/v0/admin/whatsapp/assign",
+            json={"assistant_id": assistant_id},
+            headers=ADMIN_HEADERS,
+        )
+        pool_number = assign_resp.json()["pool_number"]
+
+        contact_dao = AssistantContactDAO(dbsession)
+        contact_dao.upsert_assistant_contact(
+            assistant_id=assistant_id,
+            contact_type="whatsapp",
+            contact_value=pool_number,
+        )
+        dbsession.commit()
+
+        external = "+15554444444"
+
+        # Create outbound route
+        await client.post(
+            "/v0/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": external},
+            headers=ADMIN_HEADERS,
+        )
+
+        # Manually backdate last_inbound_at to 25 hours ago
+        route = (
+            dbsession.query(WhatsAppRoute)
+            .filter(WhatsAppRoute.contact_number == external)
+            .first()
+        )
+        route.last_inbound_at = datetime.now(timezone.utc) - timedelta(hours=25)
+        dbsession.commit()
+
+        route_resp = await client.post(
+            "/v0/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": external},
+            headers=ADMIN_HEADERS,
+        )
+        assert route_resp.status_code == status.HTTP_200_OK
+        assert route_resp.json()["window_open"] is False
