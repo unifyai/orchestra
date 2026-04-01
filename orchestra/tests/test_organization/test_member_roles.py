@@ -1011,6 +1011,7 @@ async def test_list_members_by_api_key_with_org_key(client: AsyncClient):
         assert "bio" in m
         assert "timezone" in m
         assert "phone_number" in m
+        assert "whatsapp_number" in m
 
 
 @pytest.mark.anyio
@@ -1031,14 +1032,15 @@ async def test_list_members_by_api_key_with_personal_key(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_list_members_includes_phone_number(client: AsyncClient):
-    """Test that listing org members includes phone_number field."""
+async def test_list_members_includes_phone_and_whatsapp_number(client: AsyncClient):
+    """Test that listing org members includes phone_number and whatsapp_number fields."""
     # Create owner
     owner = await create_test_user(client, "phone_test_owner@test.com")
 
-    # Create a user with phone_number via admin endpoint
+    # Create a user with phone_number and whatsapp_number via admin endpoint
     phone_user_email = "phone_test_member@test.com"
     phone_number = "+14155551234"
+    whatsapp_number = "+14155559999"
     create_response = await client.post(
         "/v0/admin/user",
         json={
@@ -1046,6 +1048,7 @@ async def test_list_members_includes_phone_number(client: AsyncClient):
             "name": "Phone",
             "last_name": "User",
             "phone_number": phone_number,
+            "whatsapp_number": whatsapp_number,
         },
         headers=ADMIN_HEADERS,
     )
@@ -1099,28 +1102,31 @@ async def test_list_members_includes_phone_number(client: AsyncClient):
     )
     assert phone_member is not None
 
-    # Verify phone_number is included and correct
-    assert "phone_number" in phone_member
+    # Verify phone_number and whatsapp_number are included and correct
     assert phone_member["phone_number"] == phone_number
+    assert phone_member["whatsapp_number"] == whatsapp_number
 
-    # Also verify owner (without phone) has phone_number field as None
+    # Also verify owner (without phone/whatsapp) has both fields as None
     owner_member = next(
         (m for m in members if m["user_id"] == owner["id"]),
         None,
     )
     assert owner_member is not None
-    assert "phone_number" in owner_member
     assert owner_member["phone_number"] is None
+    assert owner_member["whatsapp_number"] is None
 
 
 @pytest.mark.anyio
-async def test_update_member_role_includes_phone_number(client: AsyncClient):
-    """Test that updating member role returns phone_number in response."""
+async def test_update_member_role_includes_phone_and_whatsapp_number(
+    client: AsyncClient,
+):
+    """Test that updating member role returns phone_number and whatsapp_number in response."""
     owner = await create_test_user(client, "role_phone_owner@test.com")
 
-    # Create a user with phone_number
+    # Create a user with phone_number and whatsapp_number
     phone_user_email = "role_phone_member@test.com"
     phone_number = "+442071234567"
+    whatsapp_number = "+442071239999"
     create_response = await client.post(
         "/v0/admin/user",
         json={
@@ -1128,6 +1134,7 @@ async def test_update_member_role_includes_phone_number(client: AsyncClient):
             "name": "Role",
             "last_name": "Phone",
             "phone_number": phone_number,
+            "whatsapp_number": whatsapp_number,
         },
         headers=ADMIN_HEADERS,
     )
@@ -1160,6 +1167,6 @@ async def test_update_member_role_includes_phone_number(client: AsyncClient):
 
     updated_member = update_response.json()
 
-    # Verify phone_number is in the response
-    assert "phone_number" in updated_member
+    # Verify phone_number and whatsapp_number are in the response
     assert updated_member["phone_number"] == phone_number
+    assert updated_member["whatsapp_number"] == whatsapp_number
