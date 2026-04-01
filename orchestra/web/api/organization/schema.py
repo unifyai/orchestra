@@ -117,6 +117,7 @@ class OrganizationMemberResponse(BaseModel):
     bio: Optional[str] = None
     timezone: Optional[str] = None
     phone_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

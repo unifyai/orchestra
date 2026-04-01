@@ -168,6 +168,7 @@ class OrganizationMemberDAO:
                 User.bio.label("user_bio"),
                 User.timezone.label("user_timezone"),
                 User.phone_number.label("user_phone_number"),
+                User.whatsapp_number.label("user_whatsapp_number"),
             )
             .join(User, OrganizationMember.user_id == User.id)
             .join(Role, OrganizationMember.role_id == Role.id)
@@ -200,6 +201,7 @@ class OrganizationMemberDAO:
                     "bio": row.user_bio,
                     "timezone": row.user_timezone,
                     "phone_number": row.user_phone_number,
+                    "whatsapp_number": row.user_whatsapp_number,
                 },
             )
 
@@ -231,6 +233,7 @@ class OrganizationMemberDAO:
                 User.bio.label("user_bio"),
                 User.timezone.label("user_timezone"),
                 User.phone_number.label("user_phone_number"),
+                User.whatsapp_number.label("user_whatsapp_number"),
             )
             .join(User, OrganizationMember.user_id == User.id)
             .join(Role, OrganizationMember.role_id == Role.id)
@@ -263,6 +266,7 @@ class OrganizationMemberDAO:
             "bio": row.user_bio,
             "timezone": row.user_timezone,
             "phone_number": row.user_phone_number,
+            "whatsapp_number": row.user_whatsapp_number,
         }
 
     def update_member_role(
