@@ -17,6 +17,7 @@ M. User.whatsapp_number (model + API)
 N. Pool Number CRUD endpoints
 O. 24h window tracking (DAO + endpoint level)
 P. Admin endpoint flows (assign → resolve, route → resolve, delete)
+Q. General success paths (happy-path flows without conflicts)
 """
 
 from __future__ import annotations
@@ -2496,3 +2497,193 @@ class TestAdminEndpointFlows:
             headers=ADMIN_HEADERS,
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ============================================================================
+# Group Q: General Success Paths (happy-path flows without conflicts)
+# ============================================================================
+
+
+class TestGeneralSuccessPaths:
+    """Positive-path tests that verify the system works under normal operation."""
+
+    def test_outbound_creates_route_and_inbound_resolves(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """DAO round-trip: create outbound route → inbound from that contact resolves."""
+        user = _make_user(dbsession, "roundtrip@test.com", "+15550700001")
+        assistant = _make_assistant(dbsession, user, "RoundTrip")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        external = "+15550799999"
+        route, resolution = dao.get_or_create_route(assistant.agent_id, external)
+        assert resolution is None
+
+        result = dao.resolve_inbound(pool_numbers[0].number, external)
+        assert result is not None
+        assert result["assistant_id"] == assistant.agent_id
+        assert result["role"] == "contact"
+
+    def test_one_assistant_multiple_contacts(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """One assistant routes to several contacts; each inbound resolves correctly."""
+        user = _make_user(dbsession, "multi@test.com", "+15550710001")
+        assistant = _make_assistant(dbsession, user, "MultiBot")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        contacts = ["+15550711111", "+15550722222", "+15550733333"]
+        for c in contacts:
+            route, res = dao.get_or_create_route(assistant.agent_id, c)
+            assert res is None
+            assert route.contact_number == c
+            assert route.assistant_id == assistant.agent_id
+
+        for c in contacts:
+            result = dao.resolve_inbound(pool_numbers[0].number, c)
+            assert result["assistant_id"] == assistant.agent_id
+            assert result["role"] == "contact"
+
+    def test_org_member_inbound_routes_to_org_assistant(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """Org member messages the pool → Tier 1 routes to org assistant."""
+        owner = _make_user(dbsession, "orgowner@test.com", "+15550720001")
+        member = _make_user(dbsession, "orgmember@test.com", "+15550720002")
+        org = _make_org(dbsession, owner, "HappyOrg")
+        _add_org_member(dbsession, org, member)
+
+        assistant = _make_assistant(dbsession, owner, "OrgBot", org_id=org.id)
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        result = dao.resolve_inbound(pool_numbers[0].number, "+15550720002")
+        assert result is not None
+        assert result["assistant_id"] == assistant.agent_id
+        assert result["role"] == "owner"
+
+    def test_two_users_shared_pool_route_isolation(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """Two users share a pool, each routes to a different contact — no conflict, correct isolation."""
+        u1 = _make_user(dbsession, "iso1@test.com", "+15550730001")
+        u2 = _make_user(dbsession, "iso2@test.com", "+15550730002")
+        a1 = _make_assistant(dbsession, u1, "Bot1")
+        a2 = _make_assistant(dbsession, u2, "Bot2")
+        _enable_whatsapp(dbsession, a1, pool_numbers[0])
+        _enable_whatsapp(dbsession, a2, pool_numbers[0])
+
+        contact_a = "+15550731111"
+        contact_b = "+15550732222"
+
+        r1, res1 = dao.get_or_create_route(a1.agent_id, contact_a)
+        r2, res2 = dao.get_or_create_route(a2.agent_id, contact_b)
+        assert res1 is None
+        assert res2 is None
+
+        result_a = dao.resolve_inbound(pool_numbers[0].number, contact_a)
+        assert result_a["assistant_id"] == a1.agent_id
+        assert result_a["role"] == "contact"
+
+        result_b = dao.resolve_inbound(pool_numbers[0].number, contact_b)
+        assert result_b["assistant_id"] == a2.agent_id
+        assert result_b["role"] == "contact"
+
+    def test_get_or_create_route_returns_complete_route(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """Successful route creation returns a fully populated route object."""
+        user = _make_user(dbsession, "complete@test.com", "+15550740001")
+        assistant = _make_assistant(dbsession, user, "CompleteBot")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        external = "+15550749999"
+        route, resolution = dao.get_or_create_route(assistant.agent_id, external)
+
+        assert resolution is None
+        assert route.id is not None
+        assert route.pool_number_id == pool_numbers[0].id
+        assert route.contact_number == external
+        assert route.assistant_id == assistant.agent_id
+        assert route.pool_number.number == pool_numbers[0].number
+
+
+class TestFullLifecycleAPI:
+    """API-level end-to-end: pool provisioning → message exchange → window check."""
+
+    @pytest.fixture
+    async def _test_user(self, client: AsyncClient):
+        return await create_test_user(client, "lifecycle@test.com")
+
+    @pytest.fixture
+    async def _test_assistant(self, _test_user, dbsession: Session):
+        assistant = Assistant(user_id=_test_user["id"], first_name="LifecycleBot")
+        dbsession.add(assistant)
+        dbsession.commit()
+        return {"agent_id": assistant.agent_id}
+
+    async def test_full_lifecycle_pool_to_window(
+        self,
+        client: AsyncClient,
+        _test_assistant,
+        dbsession: Session,
+    ):
+        """Add pool → assign → create route → resolve inbound → verify window opens."""
+        assistant_id = _test_assistant["agent_id"]
+
+        assign_resp = await client.post(
+            "/v0/admin/whatsapp/assign",
+            json={"assistant_id": assistant_id},
+            headers=ADMIN_HEADERS,
+        )
+        assert assign_resp.status_code == status.HTTP_200_OK
+        pool_number = assign_resp.json()["pool_number"]
+
+        contact_dao = AssistantContactDAO(dbsession)
+        contact_dao.upsert_assistant_contact(
+            assistant_id=assistant_id,
+            contact_type="whatsapp",
+            contact_value=pool_number,
+        )
+        dbsession.commit()
+
+        external = "+15550750001"
+        route_resp = await client.post(
+            "/v0/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": external},
+            headers=ADMIN_HEADERS,
+        )
+        assert route_resp.status_code == status.HTTP_200_OK
+        assert route_resp.json()["window_open"] is False
+        assert route_resp.json()["conflict_resolved"] is False
+
+        resolve_resp = await client.get(
+            "/v0/admin/whatsapp/resolve",
+            params={"pool_number": pool_number, "sender": external},
+            headers=ADMIN_HEADERS,
+        )
+        assert resolve_resp.status_code == status.HTTP_200_OK
+        assert resolve_resp.json()["assistant_id"] == assistant_id
+        assert resolve_resp.json()["role"] == "contact"
+
+        route_resp2 = await client.post(
+            "/v0/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": external},
+            headers=ADMIN_HEADERS,
+        )
+        assert route_resp2.status_code == status.HTTP_200_OK
+        assert route_resp2.json()["window_open"] is True
