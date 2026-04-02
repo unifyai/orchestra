@@ -1786,7 +1786,9 @@ async def test_delete_assistant_processes_cleanup_tasks(
 async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     client: AsyncClient,
 ):
-    """Recording cleanup failures should not prevent assistant deletion."""
+    """GCS cleanup failures must not prevent assistant deletion or surface in the
+    user-facing response.  Cleanup runs in a background task after the response
+    is sent, so errors are logged but not returned to the caller."""
     payload = {
         "first_name": "Resilient",
         "surname": "Assistant",
@@ -1810,5 +1812,5 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
             headers=HEADERS,
         )
         assert del_resp.status_code == 200
-        assert "cleanup issues" in del_resp.json()["info"]
-        assert "GCS" in del_resp.json()["info"]
+        # GCS errors happen in the background and must not appear in the response.
+        assert del_resp.json()["info"] == "Assistant deleted successfully"

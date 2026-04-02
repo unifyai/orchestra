@@ -11,6 +11,7 @@ from typing import List, Optional
 import mutagen
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -1542,6 +1543,77 @@ async def update_assistant_contact(
     )
 
 
+async def _cleanup_after_assistant_delete(
+    session_factory,
+    cleanup_task_ids: list[int],
+    profile_photo: str | None,
+    profile_video: str | None,
+    assistant_id: int,
+    is_staging: bool,
+) -> None:
+    """Run runtime teardown and GCS cleanup after the delete response is sent.
+
+    Runs as a FastAPI BackgroundTask so the user gets an immediate response.
+    Any failures here are already recorded in the durable AssistantCleanupTask
+    queue and will be retried by the cleanup cron job.
+    """
+    bucket_service = BucketService()
+
+    if cleanup_task_ids:
+        bg_session = session_factory()
+        try:
+            await process_assistant_cleanup_tasks(bg_session, task_ids=cleanup_task_ids)
+        except Exception as exc:
+            logging.error(
+                "Background runtime cleanup failed for assistant %s: %s",
+                assistant_id,
+                exc,
+            )
+        finally:
+            bg_session.close()
+
+    if profile_photo and profile_photo.startswith("gs://"):
+        try:
+            await asyncio.to_thread(bucket_service.delete_assistant_file, profile_photo)
+        except Exception as e_gcs:
+            logging.error(
+                "Background GCS photo cleanup failed for assistant %s: %s",
+                assistant_id,
+                e_gcs,
+            )
+
+    if profile_video and profile_video.startswith("gs://"):
+        try:
+            await asyncio.to_thread(bucket_service.delete_assistant_file, profile_video)
+        except Exception as e_gcs:
+            logging.error(
+                "Background GCS video cleanup failed for assistant %s: %s",
+                assistant_id,
+                e_gcs,
+            )
+
+    try:
+        cleanup_counts = await asyncio.to_thread(
+            bucket_service.delete_all_assistant_data,
+            assistant_id,
+            is_staging=is_staging,
+        )
+        total = sum(cleanup_counts.values())
+        if total > 0:
+            print(
+                f"GCS CLEANUP: {total} file(s) deleted "
+                f"(media={cleanup_counts['media']}, "
+                f"recordings={cleanup_counts['recordings']}, "
+                f"attachments={cleanup_counts['attachments']})",
+            )
+    except Exception as e:
+        logging.error(
+            "Background GCS data cleanup failed for assistant %s: %s",
+            assistant_id,
+            e,
+        )
+
+
 @router.delete(
     "/assistant/{assistant_id}",
     status_code=status.HTTP_200_OK,
@@ -1568,23 +1640,24 @@ async def update_assistant_contact(
 async def delete_assistant(
     assistant_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
     Delete an assistant and queue durable cleanup for external runtime resources.
 
-    The assistant row is removed transactionally, then runtime/contact cleanup is
-    attempted immediately and left queued for retries if any external step is
-    incomplete.
+    Contacts are deprovisioned inline (before the DB delete) so the same
+    transaction can soft-mark successes. Runtime teardown and GCS cleanup run
+    after the response is returned so the user is not blocked waiting for them.
+    Any steps that fail are recorded in the durable AssistantCleanupTask queue
+    and retried by the cleanup cron job.
     """
-    bucket_service = BucketService()
     dao = AssistantDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request.state, "organization_id", None)
     cleanup_errors: list[str] = []
-    cleanup_task_ids: list[int] = []
 
     try:
         assistant = dao.get_assistant_by_id(
@@ -1657,6 +1730,9 @@ async def delete_assistant(
                 f"Failed to delete assistant context(s): {str(e_ctx)}",
             )
 
+        # Deprovision contacts inline so successes can be soft-deleted in the
+        # same transaction.  Failures are captured in cleanup_spec and persisted
+        # in the durable task queue below for background retry.
         contact_dao = AssistantContactDAO(session)
         active_contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
         cleanup_spec = build_cleanup_spec_from_assistant(assistant, active_contacts)
@@ -1695,60 +1771,19 @@ async def delete_assistant(
         )
         session.commit()
 
-        if cleanup_task_ids:
-            cleanup_summary = await process_assistant_cleanup_tasks(
-                session,
-                task_ids=cleanup_task_ids,
-            )
-            cleanup_errors.extend(cleanup_summary["errors"])
-
-        if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
-            try:
-                deleted_from_gcs = await asyncio.to_thread(
-                    bucket_service.delete_assistant_file,
-                    assistant.profile_photo,
-                )
-                if not deleted_from_gcs:
-                    cleanup_errors.append("Failed to delete profile photo from GCS")
-            except Exception as e_gcs:
-                logging.error(
-                    f"Failed to delete profile photo {assistant.profile_photo} for assistant {assistant_id}: {str(e_gcs)}",
-                )
-                cleanup_errors.append(f"Failed to delete profile photo: {str(e_gcs)}")
-
-        if assistant.profile_video and assistant.profile_video.startswith("gs://"):
-            try:
-                deleted_from_gcs = await asyncio.to_thread(
-                    bucket_service.delete_assistant_file,
-                    assistant.profile_video,
-                )
-                if not deleted_from_gcs:
-                    cleanup_errors.append("Failed to delete profile video from GCS")
-            except Exception as e_gcs:
-                logging.error(
-                    f"Failed to delete profile video {assistant.profile_video} for assistant {assistant_id}: {str(e_gcs)}",
-                )
-                cleanup_errors.append(f"Failed to delete profile video: {str(e_gcs)}")
-
-        try:
-            cleanup_counts = await asyncio.to_thread(
-                bucket_service.delete_all_assistant_data,
-                assistant_id,
-                is_staging=settings.is_staging,
-            )
-            total = sum(cleanup_counts.values())
-            if total > 0:
-                print(
-                    f"GCS CLEANUP: {total} file(s) deleted "
-                    f"(media={cleanup_counts['media']}, "
-                    f"recordings={cleanup_counts['recordings']}, "
-                    f"attachments={cleanup_counts['attachments']})",
-                )
-        except Exception as e:
-            logging.error(
-                f"Failed to clean up GCS data for assistant {assistant_id}: {str(e)}",
-            )
-            cleanup_errors.append(f"Failed to clean up GCS data: {str(e)}")
+        # Schedule runtime teardown and GCS cleanup to run after the response
+        # is sent.  The durable task queue guarantees eventual cleanup even if
+        # the background task fails or the process restarts before it runs.
+        session_factory = request.app.state.db_session_factory
+        background_tasks.add_task(
+            _cleanup_after_assistant_delete,
+            session_factory,
+            cleanup_task_ids,
+            assistant.profile_photo,
+            assistant.profile_video,
+            assistant_id,
+            settings.is_staging,
+        )
 
         response_msg = "Assistant deleted successfully"
         if cleanup_errors:
