@@ -1,0 +1,95 @@
+name: Cleanup Assistant Runtime Tasks
+
+on:
+  schedule:
+    # Every 30 minutes to drain retryable assistant cleanup work.
+  - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Maximum number of cleanup tasks to process per run'
+        required: false
+        default: '50'
+
+jobs:
+  cleanup_assistant_runtime_production:
+    name: Cleanup Assistant Runtime Tasks (Production)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Process assistant cleanup queue
+      run: |
+        LIMIT="${{ github.event.inputs.limit || '50' }}"
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/cleanup/assistant-runtime?limit=${LIMIT}" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Assistant runtime cleanup failed with status $http_code"
+          exit 1
+        fi
+
+        processed=$(echo "$body" | jq -r '.processed // 0')
+        completed=$(echo "$body" | jq -r '.completed // 0')
+        retried=$(echo "$body" | jq -r '.retried // 0')
+        failed=$(echo "$body" | jq -r '.failed // 0')
+
+        echo "::notice::Processed $processed cleanup task(s): $completed completed, $retried scheduled for retry, $failed permanently failed"
+
+        if [ "$retried" -gt 0 ]; then
+          echo "::warning::$retried assistant cleanup task(s) still need retry"
+        fi
+
+        if [ "$failed" -gt 0 ]; then
+          echo "::error::$failed assistant cleanup task(s) reached terminal failure"
+          echo "$body" | jq '.errors // []'
+          exit 1
+        fi
+
+  cleanup_assistant_runtime_staging:
+    name: Cleanup Assistant Runtime Tasks (Staging)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Process assistant cleanup queue
+      run: |
+        LIMIT="${{ github.event.inputs.limit || '50' }}"
+
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.staging.internal.saas.unify.ai/v0/admin/cleanup/assistant-runtime?limit=${LIMIT}" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Assistant runtime cleanup (staging) failed with status $http_code"
+          exit 1
+        fi
+
+        processed=$(echo "$body" | jq -r '.processed // 0')
+        completed=$(echo "$body" | jq -r '.completed // 0')
+        retried=$(echo "$body" | jq -r '.retried // 0')
+        failed=$(echo "$body" | jq -r '.failed // 0')
+
+        echo "::notice::Processed $processed cleanup task(s): $completed completed, $retried scheduled for retry, $failed permanently failed"
+
+        if [ "$retried" -gt 0 ]; then
+          echo "::warning::$retried assistant cleanup task(s) still need retry in staging"
+        fi
+
+        if [ "$failed" -gt 0 ]; then
+          echo "::error::$failed assistant cleanup task(s) reached terminal failure in staging"
+          echo "$body" | jq '.errors // []'
+          exit 1
+        fi
