@@ -544,17 +544,22 @@ class TestUserDeletionAttachmentCleanup:
         mock_ba_info.ba_id = None
         mock_ba_info.stripe_customer_id = None
 
-        mock_session.execute.return_value.fetchone.side_effect = [
+        mock_execute_result = MagicMock()
+        mock_execute_result.fetchone.side_effect = [
             mock_result,  # check_deletion_blockers
             mock_ba_info,  # billing account lookup
         ]
+        mock_session.execute.return_value = mock_execute_result
 
         # -- _get_user_assistant_ids result (fetchall) --
         if assistant_ids is not None:
-            rows = [(aid,) for aid in assistant_ids]
+            assistant_rows = [(aid, None, None, None, None) for aid in assistant_ids]
         else:
-            rows = []
-        mock_session.execute.return_value.fetchall.return_value = rows
+            assistant_rows = []
+        mock_execute_result.fetchall.side_effect = [
+            assistant_rows,
+            [],
+        ]
 
         return mock_session
 
@@ -585,8 +590,9 @@ class TestUserDeletionAttachmentCleanup:
             mock_bucket_service.delete_all_assistant_data.assert_any_call(10)
             mock_bucket_service.delete_all_assistant_data.assert_any_call(20)
 
-    def test_user_deletion_tears_down_assistant_runtimes(self):
-        """delete_user_account should tear down runtime state for each assistant."""
+    def test_user_deletion_enqueues_runtime_cleanup_tasks(self):
+        """delete_user_account should enqueue durable cleanup for each assistant."""
+        from orchestra.services.assistant_cleanup_service import CleanupSource
         from orchestra.services.user_account_cleanup_service import (
             UserAccountCleanupService,
         )
@@ -594,11 +600,10 @@ class TestUserDeletionAttachmentCleanup:
         mock_session = self._make_mock_session(assistant_ids=[10, 20])
 
         with patch(
-            "orchestra.services.user_account_cleanup_service.teardown_assistant_runtime_sync",
-        ) as mock_runtime_teardown, patch(
+            "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
+        ) as mock_enqueue_cleanup, patch(
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
-            mock_runtime_teardown.return_value = {"success": True, "errors": []}
             mock_bucket_service = MagicMock()
             mock_bucket_service.delete_all_assistant_data.return_value = {
                 "media": 0,
@@ -611,16 +616,12 @@ class TestUserDeletionAttachmentCleanup:
             result = service.delete_user_account("user-123")
 
             assert result.success is True
-            assert mock_runtime_teardown.call_count == 2
-            mock_runtime_teardown.assert_any_call(
-                10,
-                deploy_env=None,
-                desktop_mode=None,
-            )
-            mock_runtime_teardown.assert_any_call(
-                20,
-                deploy_env=None,
-                desktop_mode=None,
+            mock_enqueue_cleanup.assert_called_once()
+            cleanup_specs = mock_enqueue_cleanup.call_args.args[1]
+            assert sorted(spec.assistant_id for spec in cleanup_specs) == [10, 20]
+            assert (
+                mock_enqueue_cleanup.call_args.kwargs["source_flow"]
+                == CleanupSource.USER_DELETE
             )
 
     def test_user_deletion_falls_back_to_legacy_cleanup_when_no_assistants(self):
