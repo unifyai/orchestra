@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import List
+from typing import Any, List
 
 import httpx
 
@@ -9,6 +9,51 @@ COMMS_URL_PREVIEW = os.environ.get("UNITY_COMMS_URL_PREVIEW")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
+
+PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
+
+
+def _safe_json(response: httpx.Response) -> dict[str, Any]:
+    """Return response JSON when present, otherwise an empty object."""
+    try:
+        return response.json()
+    except ValueError:
+        return {}
+
+
+def _cleanup_step_result(
+    name: str,
+    *,
+    success: bool,
+    response: dict[str, Any] | None = None,
+    error: str | None = None,
+    skipped: bool = False,
+    timed_out: bool = False,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Normalize one cleanup step into a small serializable status payload."""
+    step = {"name": name, "success": success}
+    if response is not None:
+        step["response"] = response
+    if error is not None:
+        step["error"] = error
+    if skipped:
+        step["skipped"] = True
+    if timed_out:
+        step["timed_out"] = True
+    if reason is not None:
+        step["reason"] = reason
+    return step
+
+
+def _cleanup_errors_from_steps(steps: dict[str, dict[str, Any]]) -> list[str]:
+    """Flatten failed step payloads into human-readable error strings."""
+    errors: list[str] = []
+    for step_name, step in steps.items():
+        if not step.get("success"):
+            message = step.get("error") or step.get("reason") or "cleanup incomplete"
+            errors.append(f"{step_name}: {message}")
+    return errors
 
 
 def _comms_url_for(deploy_env: str | None) -> str:
@@ -191,6 +236,7 @@ async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
             json={"PhoneNumber": phone_number},
             timeout=20,
         )
+        response.raise_for_status()
         return response.json()
 
 
@@ -245,6 +291,7 @@ async def delete_email(email: str, deploy_env: str | None = None):
             json={"primary_email": email},
             timeout=20,
         )
+        response.raise_for_status()
         return response.json()
 
 
@@ -302,6 +349,104 @@ async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
             )
 
 
+async def _request_cleanup_step(
+    *,
+    name: str,
+    deploy_env: str | None,
+    method: str,
+    path: str,
+    data: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+    timeout: float = PERMANENT_CLEANUP_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Execute one async cleanup request and capture timeout/error state."""
+    comms_url = _comms_url_for(deploy_env)
+    if not comms_url or not ADMIN_KEY:
+        return _cleanup_step_result(
+            name,
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method,
+                f"{comms_url}{path}",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                data=data,
+                json=json_body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return _cleanup_step_result(
+                name,
+                success=True,
+                response=_safe_json(response),
+            )
+    except httpx.TimeoutException:
+        logging.warning("%s timed out", name)
+        return _cleanup_step_result(
+            name,
+            success=False,
+            timed_out=True,
+            error="request timed out",
+        )
+    except Exception as exc:
+        logging.error("%s failed: %s", name, exc)
+        return _cleanup_step_result(name, success=False, error=str(exc))
+
+
+def _request_cleanup_step_sync(
+    *,
+    name: str,
+    deploy_env: str | None,
+    method: str,
+    path: str,
+    data: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+    timeout: float = PERMANENT_CLEANUP_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Synchronous variant of ``_request_cleanup_step`` for blocking callers."""
+    comms_url = _comms_url_for(deploy_env)
+    if not comms_url or not ADMIN_KEY:
+        return _cleanup_step_result(
+            name,
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+
+    try:
+        with httpx.Client() as client:
+            response = client.request(
+                method,
+                f"{comms_url}{path}",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                data=data,
+                json=json_body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return _cleanup_step_result(
+                name,
+                success=True,
+                response=_safe_json(response),
+            )
+    except httpx.TimeoutException:
+        logging.warning("%s timed out", name)
+        return _cleanup_step_result(
+            name,
+            success=False,
+            timed_out=True,
+            error="request timed out",
+        )
+    except Exception as exc:
+        logging.error("%s failed: %s", name, exc)
+        return _cleanup_step_result(name, success=False, error=str(exc))
+
+
 async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     """
     Delete a pubsub topic for the assistant by making a DELETE request to the comms endpoint.
@@ -313,59 +458,37 @@ async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
-    comms_url = _comms_url_for(deploy_env)
     topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.request(
-                "DELETE",
-                f"{comms_url}/infra/pubsub/topic",
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                data={"topic_name": topic_name},
-                timeout=0.1,
-            )
-            return response.json()
-        except httpx.TimeoutException:
-            logging.warning(
-                f"delete_pubsub_topic timed out for assistant {assistant_id}",
-            )
-            return {"success": True, "timed_out": True}
+    return await _request_cleanup_step(
+        name="delete_pubsub_topic",
+        deploy_env=deploy_env,
+        method="DELETE",
+        path="/infra/pubsub/topic",
+        data={"topic_name": topic_name},
+    )
 
 
 async def release_pool_vm(assistant_id: str, deploy_env: str | None = None):
     """Release any pool VM assigned to this assistant back to idle.
     Idempotent — no-ops if no VM is assigned.
     """
-    comms_url = _comms_url_for(deploy_env)
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{comms_url}/infra/vm/pool/release",
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                json={"assistant_id": assistant_id},
-                timeout=0.1,
-            )
-            return response.json()
-    except httpx.TimeoutException:
-        logging.warning(f"release_pool_vm timed out for assistant {assistant_id}")
-        return {"success": True, "timed_out": True}
+    return await _request_cleanup_step(
+        name="release_pool_vm",
+        deploy_env=deploy_env,
+        method="POST",
+        path="/infra/vm/pool/release",
+        json_body={"assistant_id": assistant_id},
+    )
 
 
 async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None):
     """Delete an assistant's persistent disk (permanent unhire cleanup)."""
-    comms_url = _comms_url_for(deploy_env)
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                "DELETE",
-                f"{comms_url}/infra/vm/pool/disk/{assistant_id}",
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                timeout=0.1,
-            )
-            return response.json()
-    except httpx.TimeoutException:
-        logging.warning(f"delete_assistant_disk timed out for assistant {assistant_id}")
-        return {"success": True, "timed_out": True}
+    return await _request_cleanup_step(
+        name="delete_assistant_disk",
+        deploy_env=deploy_env,
+        method="DELETE",
+        path=f"/infra/vm/pool/disk/{assistant_id}",
+    )
 
 
 async def get_social_platforms_costs():
@@ -379,6 +502,9 @@ async def get_social_platforms_costs():
             timeout=20,
         )
         return response.json()
+
+
+RUNTIME_JOB_LOOKBACK_HOURS = 36
 
 
 async def get_running_jobs(
@@ -404,7 +530,10 @@ async def get_running_jobs(
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{comms_url}/infra/jobs",
-                params={"label_selector": f"app=unity,assistant-id={label}"},
+                params={
+                    "label_selector": f"app=unity,assistant-id={label}",
+                    "hours": RUNTIME_JOB_LOOKBACK_HOURS,
+                },
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
                 timeout=10,
             )
@@ -426,27 +555,134 @@ async def stop_jobs(
     deploy_env: str | None = None,
 ):
     """
-    Stop a job and release any assigned pool VM.
+    Stop a running Unity job and release any assigned pool VM.
 
-    Args:
-        assistant_id: The assistant ID to stop jobs for
-        deploy_env: 'preview' for preview stack, None for native environment.
+    Returns structured step results so permanent-delete callers can distinguish
+    "nothing was running" from "cleanup timed out".
     """
+    assistant_id = str(assistant_id)
+    steps: dict[str, dict[str, Any]] = {}
+    job_names: list[str] = []
     comms_url = _comms_url_for(deploy_env)
-    job_names = await get_running_jobs(assistant_id, deploy_env)
-    if len(job_names) > 0:
+
+    if not comms_url or not ADMIN_KEY:
+        skipped = _cleanup_step_result(
+            "discover_jobs",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        steps["discover_jobs"] = skipped
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        steps["release_pool_vm"] = _cleanup_step_result(
+            "release_pool_vm",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        return {"success": True, "job_names": [], "steps": steps, "errors": []}
+
+    label = assistant_id.lower().replace("_", "-")
+    try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{comms_url}/infra/job/stop",
-                data={"job_name": job_names[0]},
+            response = await client.get(
+                f"{comms_url}/infra/jobs",
+                params={
+                    "label_selector": f"app=unity,assistant-id={label}",
+                    "hours": RUNTIME_JOB_LOOKBACK_HOURS,
+                },
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                timeout=20,
+                timeout=10,
             )
             response.raise_for_status()
+            data = response.json()
+            job_names = [
+                job["job_name"]
+                for job in data.get("jobs", [])
+                if job.get("status") == "Running"
+            ]
+            steps["discover_jobs"] = _cleanup_step_result(
+                "discover_jobs",
+                success=True,
+                response={"job_names": job_names},
+            )
 
-    await release_pool_vm(str(assistant_id), deploy_env=deploy_env)
+            if job_names:
+                try:
+                    stop_response = await client.post(
+                        f"{comms_url}/infra/job/stop",
+                        data={"job_name": job_names[0]},
+                        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                        timeout=20,
+                    )
+                    stop_response.raise_for_status()
+                    steps["stop_job"] = _cleanup_step_result(
+                        "stop_job",
+                        success=True,
+                        response=_safe_json(stop_response),
+                    )
+                except httpx.TimeoutException:
+                    steps["stop_job"] = _cleanup_step_result(
+                        "stop_job",
+                        success=False,
+                        timed_out=True,
+                        error="request timed out",
+                    )
+                except Exception as exc:
+                    steps["stop_job"] = _cleanup_step_result(
+                        "stop_job",
+                        success=False,
+                        error=str(exc),
+                    )
+            else:
+                steps["stop_job"] = _cleanup_step_result(
+                    "stop_job",
+                    success=True,
+                    skipped=True,
+                    reason="no_running_jobs",
+                )
+    except httpx.TimeoutException:
+        steps["discover_jobs"] = _cleanup_step_result(
+            "discover_jobs",
+            success=False,
+            timed_out=True,
+            error="request timed out",
+        )
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="job_discovery_incomplete",
+        )
+    except Exception as exc:
+        steps["discover_jobs"] = _cleanup_step_result(
+            "discover_jobs",
+            success=False,
+            error=str(exc),
+        )
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="job_discovery_failed",
+        )
 
-    return {"success": True, "job_names": job_names}
+    steps["release_pool_vm"] = await release_pool_vm(
+        assistant_id,
+        deploy_env=deploy_env,
+    )
+    errors = _cleanup_errors_from_steps(steps)
+    return {
+        "success": not errors,
+        "job_names": job_names,
+        "steps": steps,
+        "errors": errors,
+    }
 
 
 def _requires_assistant_disk_cleanup(desktop_mode: str | None) -> bool:
@@ -457,20 +693,14 @@ async def delete_assistant_session(
     assistant_id: str,
     deploy_env: str | None = None,
 ):
-    """Delete the AssistantSession CR for an assistant."""
-    comms_url = _comms_url_for(deploy_env)
-    if not comms_url or not ADMIN_KEY:
-        return {"success": True, "skipped": True, "reason": "missing_comms_config"}
-
-    async with httpx.AsyncClient() as client:
-        response = await client.request(
-            "DELETE",
-            f"{comms_url}/infra/session/{assistant_id}",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=20,
-        )
-        response.raise_for_status()
-        return response.json()
+    """Delete the AssistantSession CR for an assistant as a tracked step."""
+    return await _request_cleanup_step(
+        name="delete_assistant_session",
+        deploy_env=deploy_env,
+        method="DELETE",
+        path=f"/infra/session/{assistant_id}",
+        timeout=20,
+    )
 
 
 async def teardown_assistant_runtime(
@@ -478,41 +708,33 @@ async def teardown_assistant_runtime(
     deploy_env: str | None = None,
     desktop_mode: str | None = None,
 ) -> dict:
-    """Best-effort runtime teardown for permanent assistant deletion flows."""
+    """Runtime teardown with explicit step-level incomplete states."""
     assistant_id = str(assistant_id)
-    cleanup_errors: list[str] = []
-
-    try:
-        await stop_jobs(assistant_id, deploy_env=deploy_env)
-    except Exception as e:
-        logging.error(f"Failed to stop jobs for assistant {assistant_id}: {e}")
-        cleanup_errors.append(f"Failed to stop job: {e}")
-
-    try:
-        await delete_assistant_session(assistant_id, deploy_env=deploy_env)
-    except Exception as e:
-        logging.error(f"Failed to delete AssistantSession for {assistant_id}: {e}")
-        cleanup_errors.append(f"Failed to delete AssistantSession: {e}")
-
-    try:
-        await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
-    except Exception as e:
-        logging.error(
-            f"Failed to delete pubsub topic for assistant {assistant_id}: {e}",
-        )
-        cleanup_errors.append(f"Failed to delete pubsub topic: {e}")
-
+    stop_result = await stop_jobs(assistant_id, deploy_env=deploy_env)
+    session_step = await delete_assistant_session(assistant_id, deploy_env=deploy_env)
+    topic_step = await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
     if _requires_assistant_disk_cleanup(desktop_mode):
-        try:
-            await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
-        except Exception as e:
-            logging.error(f"Failed to delete assistant disk for {assistant_id}: {e}")
-            cleanup_errors.append(f"Failed to delete assistant disk: {e}")
+        disk_step = await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
+    else:
+        disk_step = _cleanup_step_result(
+            "delete_assistant_disk",
+            success=True,
+            skipped=True,
+            reason="desktop_mode_does_not_require_disk_cleanup",
+        )
 
+    steps = {
+        **stop_result["steps"],
+        "delete_assistant_session": session_step,
+        "delete_pubsub_topic": topic_step,
+        "delete_assistant_disk": disk_step,
+    }
+    errors = _cleanup_errors_from_steps(steps)
     return {
-        "success": not cleanup_errors,
+        "success": not errors,
         "assistant_id": assistant_id,
-        "errors": cleanup_errors,
+        "steps": steps,
+        "errors": errors,
     }
 
 
@@ -521,115 +743,150 @@ def teardown_assistant_runtime_sync(
     deploy_env: str | None = None,
     desktop_mode: str | None = None,
 ) -> dict:
-    """Blocking version of runtime teardown for post-commit service cleanup."""
+    """Blocking version of runtime teardown with explicit step states."""
     assistant_id = str(assistant_id)
-    cleanup_errors: list[str] = []
     comms_url = _comms_url_for(deploy_env)
     if not comms_url or not ADMIN_KEY:
         return {
             "success": True,
             "assistant_id": assistant_id,
-            "errors": cleanup_errors,
             "skipped": True,
             "reason": "missing_comms_config",
+            "errors": [],
+            "steps": {},
         }
 
     headers = {"Authorization": f"Bearer {ADMIN_KEY}"}
+    steps: dict[str, dict[str, Any]] = {}
+    job_names: list[str] = []
 
-    def _record_error(message: str, error: Exception) -> None:
-        logging.error("%s for assistant %s: %s", message, assistant_id, error)
-        cleanup_errors.append(f"{message}: {error}")
-
-    def _release_pool_vm_sync(client: httpx.Client) -> None:
-        try:
-            client.post(
-                f"{comms_url}/infra/vm/pool/release",
-                headers=headers,
-                json={"assistant_id": assistant_id},
-                timeout=0.1,
-            )
-        except httpx.TimeoutException:
-            logging.warning("release_pool_vm timed out for assistant %s", assistant_id)
-
-    with httpx.Client() as client:
-        try:
+    try:
+        with httpx.Client() as client:
             label = assistant_id.lower().replace("_", "-")
             response = client.get(
                 f"{comms_url}/infra/jobs",
-                params={"label_selector": f"app=unity,assistant-id={label}"},
+                params={
+                    "label_selector": f"app=unity,assistant-id={label}",
+                    "hours": RUNTIME_JOB_LOOKBACK_HOURS,
+                },
                 headers=headers,
                 timeout=10,
             )
-            if response.status_code == 200:
-                data = response.json()
-                running_job_names = [
-                    job["job_name"]
-                    for job in data.get("jobs", [])
-                    if job.get("status") == "Running"
-                ]
-                if running_job_names:
+            response.raise_for_status()
+            data = response.json()
+            job_names = [
+                job["job_name"]
+                for job in data.get("jobs", [])
+                if job.get("status") == "Running"
+            ]
+            steps["discover_jobs"] = _cleanup_step_result(
+                "discover_jobs",
+                success=True,
+                response={"job_names": job_names},
+            )
+            if job_names:
+                try:
                     stop_response = client.post(
                         f"{comms_url}/infra/job/stop",
-                        data={"job_name": running_job_names[0]},
+                        data={"job_name": job_names[0]},
                         headers=headers,
                         timeout=20,
                     )
                     stop_response.raise_for_status()
-        except Exception as e:
-            _record_error("Failed to stop job", e)
-        finally:
-            try:
-                _release_pool_vm_sync(client)
-            except Exception as e:
-                _record_error("Failed to release pool VM", e)
-
-        try:
-            response = client.request(
-                "DELETE",
-                f"{comms_url}/infra/session/{assistant_id}",
-                headers=headers,
-                timeout=20,
-            )
-            response.raise_for_status()
-        except Exception as e:
-            _record_error("Failed to delete AssistantSession", e)
-
-        try:
-            client.request(
-                "DELETE",
-                f"{comms_url}/infra/pubsub/topic",
-                headers=headers,
-                data={"topic_name": f"unity-{assistant_id}{_env_suffix(deploy_env)}"},
-                timeout=0.1,
-            )
-        except httpx.TimeoutException:
-            logging.warning(
-                "delete_pubsub_topic timed out for assistant %s",
-                assistant_id,
-            )
-        except Exception as e:
-            _record_error("Failed to delete pubsub topic", e)
-
-        if _requires_assistant_disk_cleanup(desktop_mode):
-            try:
-                client.request(
-                    "DELETE",
-                    f"{comms_url}/infra/vm/pool/disk/{assistant_id}",
-                    headers=headers,
-                    timeout=0.1,
+                    steps["stop_job"] = _cleanup_step_result(
+                        "stop_job",
+                        success=True,
+                        response=_safe_json(stop_response),
+                    )
+                except httpx.TimeoutException:
+                    steps["stop_job"] = _cleanup_step_result(
+                        "stop_job",
+                        success=False,
+                        timed_out=True,
+                        error="request timed out",
+                    )
+                except Exception as exc:
+                    steps["stop_job"] = _cleanup_step_result(
+                        "stop_job",
+                        success=False,
+                        error=str(exc),
+                    )
+            else:
+                steps["stop_job"] = _cleanup_step_result(
+                    "stop_job",
+                    success=True,
+                    skipped=True,
+                    reason="no_running_jobs",
                 )
-            except httpx.TimeoutException:
-                logging.warning(
-                    "delete_assistant_disk timed out for assistant %s",
-                    assistant_id,
-                )
-            except Exception as e:
-                _record_error("Failed to delete assistant disk", e)
+    except httpx.TimeoutException:
+        steps["discover_jobs"] = _cleanup_step_result(
+            "discover_jobs",
+            success=False,
+            timed_out=True,
+            error="request timed out",
+        )
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="job_discovery_incomplete",
+        )
+    except Exception as exc:
+        steps["discover_jobs"] = _cleanup_step_result(
+            "discover_jobs",
+            success=False,
+            error=str(exc),
+        )
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="job_discovery_failed",
+        )
 
+    steps["release_pool_vm"] = _request_cleanup_step_sync(
+        name="release_pool_vm",
+        deploy_env=deploy_env,
+        method="POST",
+        path="/infra/vm/pool/release",
+        json_body={"assistant_id": assistant_id},
+    )
+    steps["delete_assistant_session"] = _request_cleanup_step_sync(
+        name="delete_assistant_session",
+        deploy_env=deploy_env,
+        method="DELETE",
+        path=f"/infra/session/{assistant_id}",
+        timeout=20,
+    )
+    steps["delete_pubsub_topic"] = _request_cleanup_step_sync(
+        name="delete_pubsub_topic",
+        deploy_env=deploy_env,
+        method="DELETE",
+        path="/infra/pubsub/topic",
+        data={"topic_name": f"unity-{assistant_id}{_env_suffix(deploy_env)}"},
+    )
+    if _requires_assistant_disk_cleanup(desktop_mode):
+        steps["delete_assistant_disk"] = _request_cleanup_step_sync(
+            name="delete_assistant_disk",
+            deploy_env=deploy_env,
+            method="DELETE",
+            path=f"/infra/vm/pool/disk/{assistant_id}",
+        )
+    else:
+        steps["delete_assistant_disk"] = _cleanup_step_result(
+            "delete_assistant_disk",
+            success=True,
+            skipped=True,
+            reason="desktop_mode_does_not_require_disk_cleanup",
+        )
+
+    errors = _cleanup_errors_from_steps(steps)
     return {
-        "success": not cleanup_errors,
+        "success": not errors,
         "assistant_id": assistant_id,
-        "errors": cleanup_errors,
+        "job_names": job_names,
+        "steps": steps,
+        "errors": errors,
     }
 
 

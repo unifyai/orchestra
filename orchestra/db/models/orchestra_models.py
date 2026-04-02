@@ -2683,3 +2683,47 @@ class ConflictEvent(Base):
         Index("ix_conflict_events_status", "status"),
         Index("ix_conflict_events_trigger_assistant", "trigger_assistant_id"),
     )
+
+
+class AssistantCleanupTask(Base):
+    """Retryable cleanup work item for assistant runtime/contact deletion.
+
+    A task is created before an owner row is irreversibly deleted. The payload
+    stores the minimum retry state needed to finish runtime teardown and contact
+    deprovisioning outside the original request lifecycle.
+    """
+
+    __tablename__ = "assistant_cleanup_tasks"
+
+    id = Column(Integer, primary_key=True)
+    assistant_id = Column(Integer, nullable=False)
+    deploy_env = Column(String, nullable=True)
+    desktop_mode = Column(String, nullable=True)
+    source_flow = Column(String, nullable=False)
+    cleanup_payload = Column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'{}'::jsonb"),
+    )
+    status = Column(String, nullable=False, default="pending", server_default="pending")
+    attempt_count = Column(Integer, nullable=False, server_default=sa.text("0"))
+    last_error = Column(String, nullable=True)
+    last_result = Column(JSONB, nullable=True)
+    next_retry_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    processing_started_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    completed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="ck_assistant_cleanup_task_status",
+        ),
+        Index("ix_assistant_cleanup_tasks_status", "status", "next_retry_at"),
+        Index("ix_assistant_cleanup_tasks_assistant", "assistant_id"),
+    )

@@ -117,8 +117,8 @@ class OrganizationDAO:
         Also deletes the associated BillingAccount (which cascades to
         recharges, credit card fingerprints, etc.).
 
-        Note: Stripe customer archival is handled by the caller (view layer)
-        as a post-commit, best-effort operation.
+        Note: The caller owns the surrounding transaction and the post-commit
+        cleanup work (Stripe archival, durable runtime cleanup, etc.).
 
         :param id: Organization ID.
         :raises ValueError: If the organization doesn't exist or deletion fails.
@@ -133,9 +133,8 @@ class OrganizationDAO:
                     text("DELETE FROM billing_account WHERE id = :ba_id"),
                     {"ba_id": billing_account_id},
                 )
-            self.session.commit()
+            self.session.flush()
         except Exception:
-            self.session.rollback()
             raise ValueError
 
     def get(self, id: int) -> Optional[Organization]:

@@ -99,14 +99,29 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
 
     Calls the appropriate infra deletion function (Twilio / Google Workspace).
     """
+    from sqlalchemy.orm import object_session
+
     from orchestra.web.api.utils.assistant_infra import (
         delete_email,
         delete_phone_number,
     )
 
+    deploy_env = None
+    session = object_session(contact)
+    if session:
+        assistant = (
+            session.query(Assistant)
+            .filter(
+                Assistant.agent_id == contact.assistant_id,
+            )
+            .first()
+        )
+        if assistant is not None:
+            deploy_env = assistant.deploy_env
+
     if contact.contact_type == "phone":
         if contact.contact_value:
-            await delete_phone_number(contact.contact_value)
+            await delete_phone_number(contact.contact_value, deploy_env=deploy_env)
             logger.info(
                 "Deprovisioned phone %s (contact %d)",
                 contact.contact_value,
@@ -114,18 +129,15 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
             )
     elif contact.contact_type == "email":
         if contact.contact_value:
-            await delete_email(contact.contact_value)
+            await delete_email(contact.contact_value, deploy_env=deploy_env)
             logger.info(
                 "Deprovisioned email %s (contact %d)",
                 contact.contact_value,
                 contact.id,
             )
     elif contact.contact_type == "whatsapp":
-        from sqlalchemy.orm import object_session
-
         from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
-        session = object_session(contact)
         if session:
             dao = SharedPoolDAO(session)
             deleted = dao.delete_routes_for_assistant(contact.assistant_id)

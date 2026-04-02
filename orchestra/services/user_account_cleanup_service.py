@@ -13,7 +13,12 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from orchestra.web.api.utils.assistant_infra import teardown_assistant_runtime_sync
+from orchestra.services.assistant_cleanup_service import (
+    AssistantCleanupSpec,
+    CleanupSource,
+    ContactCleanupSpec,
+    enqueue_cleanup_tasks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -208,14 +213,14 @@ class UserAccountCleanupService:
         stripe_customer_id = ba_info.stripe_customer_id if ba_info else None
         billing_account_id = ba_info.ba_id if ba_info else None
 
-        # Collect assistant runtime metadata *before* deleting the user row
-        # (CASCADE will remove the assistants rows).
-        assistant_runtime_specs = self._get_user_assistant_runtime_specs(user_id)
-        assistant_ids = [int(spec["assistant_id"]) for spec in assistant_runtime_specs]
-
-        # Soft-delete and deprovision all contacts for this user's personal
-        # assistants *before* the CASCADE deletes the rows.
-        self._deprovision_user_contacts(user_id)
+        assistant_cleanup_specs = self._get_user_assistant_cleanup_specs(user_id)
+        assistant_ids = [int(spec.assistant_id) for spec in assistant_cleanup_specs]
+        if assistant_cleanup_specs:
+            enqueue_cleanup_tasks(
+                self.session,
+                assistant_cleanup_specs,
+                source_flow=CleanupSource.USER_DELETE,
+            )
 
         self._delete_user_table_dependencies(user_id, billing_account_id)
 
@@ -237,10 +242,6 @@ class UserAccountCleanupService:
         if stripe_customer_id:
             self._archive_stripe_customer(stripe_customer_id)
 
-        self._teardown_user_assistant_runtimes(
-            assistant_runtime_specs,
-            user_id=user_id,
-        )
         self._cleanup_user_data(user_id, assistant_ids)
 
         logger.info(f"Successfully deleted user account: {user_id}")
@@ -261,68 +262,6 @@ class UserAccountCleanupService:
         cascade-deleted when the billing_account row is removed.
         """
         # Currently no non-cascading tables reference user.id directly.
-
-    def _deprovision_user_contacts(self, user_id: str) -> None:
-        """Soft-delete and deprovision all contacts for the user's personal assistants.
-
-        Must be called *before* the user row is deleted (CASCADE would
-        hard-delete the contact rows otherwise).
-
-        Deprovisioning (Twilio / Google Workspace API calls) is best-effort
-        – failures are logged but do not block user deletion.
-        """
-        try:
-            from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
-
-            contact_dao = AssistantContactDAO(self.session)
-
-            # Collect personal assistant IDs
-            assistant_ids = [
-                row[0]
-                for row in self.session.execute(
-                    text(
-                        "SELECT agent_id FROM assistants "
-                        "WHERE user_id = :uid AND organization_id IS NULL",
-                    ),
-                    {"uid": user_id},
-                ).fetchall()
-            ]
-            if not assistant_ids:
-                return
-
-            # Fetch active contacts before soft-deleting
-            active_contacts = contact_dao.get_active_contacts_for_assistants(
-                assistant_ids,
-            )
-
-            # Deprovision external resources (best-effort)
-            import asyncio
-
-            from orchestra.routines.assistant_contact_suspension import (
-                _deprovision_contact,
-            )
-
-            for contact in active_contacts:
-                try:
-                    asyncio.get_event_loop().run_until_complete(
-                        _deprovision_contact(contact),
-                    )
-                except RuntimeError:
-                    # No event loop – create one
-                    asyncio.run(_deprovision_contact(contact))
-                except Exception as e:
-                    logger.error(
-                        f"Failed to deprovision {contact.contact_type} "
-                        f"({contact.contact_value}) for user {user_id}: {e}",
-                    )
-
-            # Soft-delete all contact rows
-            contact_dao.soft_delete_contacts_for_user(user_id)
-
-        except Exception as e:
-            logger.error(
-                f"Failed to deprovision contacts for user {user_id}: {e}",
-            )
 
     def _archive_stripe_customer(self, stripe_customer_id: str) -> None:
         """
@@ -358,66 +297,56 @@ class UserAccountCleanupService:
         ).fetchall()
         return [row[0] for row in rows] if rows else []
 
-    def _get_user_assistant_runtime_specs(
+    def _get_user_assistant_cleanup_specs(
         self,
         user_id: str,
-    ) -> list[dict[str, str | int | None]]:
-        """
-        Return assistant runtime metadata owned by *user_id* before CASCADE delete.
-        """
-        rows = self.session.execute(
+    ) -> list[AssistantCleanupSpec]:
+        """Return cleanup specs for personal assistants owned by *user_id*."""
+        assistant_rows = self.session.execute(
             text(
-                "SELECT agent_id, deploy_env, desktop_mode "
-                "FROM assistants WHERE user_id = :uid",
+                """
+                SELECT agent_id, deploy_env, desktop_mode, profile_photo, profile_video
+                FROM assistants
+                WHERE user_id = :uid AND organization_id IS NULL
+                """,
             ),
             {"uid": user_id},
         ).fetchall()
-        if not rows:
+        if not assistant_rows:
             return []
 
-        specs: list[dict[str, str | int | None]] = []
-        for row in rows:
-            deploy_env = row[1] if len(row) > 1 else None
-            desktop_mode = row[2] if len(row) > 2 else None
-            specs.append(
-                {
-                    "assistant_id": row[0],
-                    "deploy_env": deploy_env,
-                    "desktop_mode": desktop_mode,
-                },
+        assistant_ids = [int(row[0]) for row in assistant_rows]
+        contact_rows = self.session.execute(
+            text(
+                """
+                SELECT assistant_id, id, contact_type, contact_value
+                FROM assistant_contacts
+                WHERE assistant_id = ANY(:assistant_ids) AND status != 'deleted'
+                """,
+            ),
+            {"assistant_ids": assistant_ids},
+        ).fetchall()
+        contacts_by_assistant_id: dict[int, list[ContactCleanupSpec]] = {}
+        for row in contact_rows:
+            contacts_by_assistant_id.setdefault(int(row[0]), []).append(
+                ContactCleanupSpec(
+                    contact_type=row[2],
+                    contact_value=row[3],
+                    contact_id=row[1],
+                ),
             )
-        return specs
 
-    def _teardown_user_assistant_runtimes(
-        self,
-        assistant_runtime_specs: list[dict[str, str | int | None]],
-        *,
-        user_id: str,
-    ) -> None:
-        """Best-effort runtime teardown for assistants deleted with the user."""
-        for spec in assistant_runtime_specs:
-            try:
-                result = teardown_assistant_runtime_sync(
-                    spec["assistant_id"],
-                    deploy_env=spec["deploy_env"],
-                    desktop_mode=spec["desktop_mode"],
-                )
-            except Exception as e:
-                logger.error(
-                    "Failed runtime teardown for assistant %s during user deletion %s: %s",
-                    spec["assistant_id"],
-                    user_id,
-                    e,
-                )
-                continue
-
-            if result.get("errors"):
-                logger.error(
-                    "Runtime teardown cleanup issues for assistant %s during user deletion %s: %s",
-                    spec["assistant_id"],
-                    user_id,
-                    result["errors"],
-                )
+        return [
+            AssistantCleanupSpec(
+                assistant_id=int(row[0]),
+                deploy_env=row[1],
+                desktop_mode=row[2],
+                profile_photo=row[3],
+                profile_video=row[4],
+                contacts=contacts_by_assistant_id.get(int(row[0]), []),
+            )
+            for row in assistant_rows
+        ]
 
     def _cleanup_user_data(
         self,
