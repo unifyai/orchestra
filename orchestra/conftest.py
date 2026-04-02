@@ -236,6 +236,10 @@ def fastapi_app(
     # Required for SQLAlchemy instrumentation in setup_opentelemetry
     application.state.db_engine = _engine
 
+    # Expose a session factory so endpoints that schedule background tasks can
+    # open independent sessions after the response is sent (mirrors production).
+    application.state.db_session_factory = sessionmaker(bind=_engine)
+
     # Set up OTel tracing (idempotent - TracerProvider created once per process)
     # This enables trace capture during tests when ORCHESTRA_LOG_DIR is set
     setup_opentelemetry(application)
