@@ -346,7 +346,10 @@ async def create_assistant(
 
     This endpoint allows users to create a personalized assistant with specific
     attributes like name, age, and operational limits. Each assistant is tied
-    to the authenticated user's account. Creating an assistant incurs a credit cost.
+    to the authenticated user's account. When called with an organization API
+    key, the assistant lives inside that organization but still records the
+    caller as its creator/lifecycle owner. Creating an assistant incurs a
+    credit cost.
     """
     user_id = request.state.user_id
     user_dao = UserDAO(session)
@@ -430,7 +433,8 @@ async def create_assistant(
             deploy_env=assistant_in.deploy_env,
         )
 
-        # For org assistants, grant Owner role to creator
+        # Org assistants retain the creator in `user_id`; org access is granted
+        # separately through resource access so other members can collaborate.
         if organization_id is not None:
             owner_role = role_dao.get_by_name("Owner", organization_id=None)
             if owner_role:

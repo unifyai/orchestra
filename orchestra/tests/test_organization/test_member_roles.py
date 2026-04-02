@@ -1,5 +1,7 @@
 """Tests for Phase 4: Member Role Management."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient
@@ -9,6 +11,11 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    AssistantContact,
+    SharedPoolNumber,
+)
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
@@ -126,6 +133,99 @@ async def test_add_member_with_admin_role(
         "org:write",
     )
     assert has_org_write is True
+
+
+@pytest.mark.anyio
+async def test_add_member_propagates_preview_deploy_env_for_pool_conflicts(
+    client: AsyncClient,
+    dbsession,
+):
+    """Preview personal assistants should notify/reawaken via the preview stack."""
+    owner = await create_test_user(client, "preview_conflict_owner@test.com")
+    joiner = await create_test_user(client, "preview_conflict_joiner@test.com")
+
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Preview Conflict Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    dbsession.query(SharedPoolNumber).delete()
+    dbsession.flush()
+    dbsession.add_all(
+        [
+            SharedPoolNumber(number="+18507990111", platform="whatsapp"),
+            SharedPoolNumber(number="+18507990112", platform="whatsapp"),
+        ],
+    )
+    dbsession.flush()
+
+    org_assistant = Assistant(
+        user_id=owner["id"],
+        first_name="OrgBot",
+        organization_id=org_id,
+    )
+    preview_personal_assistant = Assistant(
+        user_id=joiner["id"],
+        first_name="PreviewBot",
+        deploy_env="preview",
+    )
+    dbsession.add_all([org_assistant, preview_personal_assistant])
+    dbsession.flush()
+
+    dbsession.add_all(
+        [
+            AssistantContact(
+                assistant_id=org_assistant.agent_id,
+                contact_type="whatsapp",
+                contact_value="+18507990111",
+                status="active",
+            ),
+            AssistantContact(
+                assistant_id=preview_personal_assistant.agent_id,
+                contact_type="whatsapp",
+                contact_value="+18507990111",
+                status="active",
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    with patch(
+        "orchestra.web.api.utils.assistant_infra.notify_pool_reassignment",
+        new_callable=AsyncMock,
+    ) as mock_notify, patch(
+        "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
+        new_callable=AsyncMock,
+    ) as mock_reawaken:
+        add_response = await client.post(
+            f"/v0/organizations/{org_id}/members",
+            json={"user_id": joiner["id"]},
+            headers=owner["headers"],
+        )
+
+    assert add_response.status_code == status.HTTP_201_CREATED, add_response.text
+
+    moved_contact = (
+        dbsession.query(AssistantContact)
+        .filter(
+            AssistantContact.assistant_id == preview_personal_assistant.agent_id,
+            AssistantContact.contact_type == "whatsapp",
+            AssistantContact.status == "active",
+        )
+        .first()
+    )
+    assert moved_contact is not None
+    assert moved_contact.contact_value == "+18507990112"
+
+    mock_notify.assert_awaited_once()
+    assert mock_notify.await_args.kwargs["deploy_env"] == "preview"
+    mock_reawaken.assert_awaited_once_with(
+        str(preview_personal_assistant.agent_id),
+        deploy_env="preview",
+    )
 
 
 @pytest.mark.anyio

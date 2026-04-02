@@ -41,6 +41,7 @@ class ConflictResolution:
     affected_assistant_ids: list[int]
     old_pool_assignments: dict[int, str]  # assistant_id → old pool number
     new_pool_assignments: dict[int, str]  # assistant_id → new pool number
+    assistant_deploy_envs: dict[int, str | None] = field(default_factory=dict)
     notification_recipients: list[dict] = field(default_factory=list)
     conflict_event_id: int | None = None
 
@@ -479,6 +480,7 @@ class SharedPoolDAO:
             affected_assistant_ids=[initiator_assistant_id],
             old_pool_assignments={initiator_assistant_id: old_number},
             new_pool_assignments={initiator_assistant_id: new_number},
+            assistant_deploy_envs={initiator_assistant_id: assistant.deploy_env},
         )
         resolution.notification_recipients = self._gather_notification_recipients(
             [initiator_assistant_id],
@@ -527,6 +529,10 @@ class SharedPoolDAO:
             affected_assistant_ids=[initiator_assistant_id, other_assistant_id],
             old_pool_assignments=assignments_old,
             new_pool_assignments=assignments_new,
+            assistant_deploy_envs={
+                initiator_assistant_id: assistants[initiator_assistant_id].deploy_env,
+                other_assistant_id: assistants[other_assistant_id].deploy_env,
+            },
         )
         resolution.notification_recipients = self._gather_notification_recipients(
             [initiator_assistant_id, other_assistant_id],
@@ -722,6 +728,7 @@ class SharedPoolDAO:
                 affected_assistant_ids=[personal_aid],
                 old_pool_assignments={personal_aid: old_number},
                 new_pool_assignments={personal_aid: new_number},
+                assistant_deploy_envs={personal_aid: assistant.deploy_env},
             )
             resolution.notification_recipients = self._gather_notification_recipients(
                 [personal_aid],

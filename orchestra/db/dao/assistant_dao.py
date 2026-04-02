@@ -28,6 +28,11 @@ class AssistantDAO:
 
     Supports both personal assistants (organization_id is NULL) and
     organizational assistants (organization_id is set).
+
+    Organizational assistants use a creator-owned lifecycle model:
+    ``user_id`` remains the creating user for lineage, cleanup, and
+    creator-scoped listings, while ``organization_id`` defines the
+    collaborative org scope and RBAC context.
     """
 
     def __init__(self, session: Session):
@@ -61,8 +66,10 @@ class AssistantDAO:
         If organization_id is provided, creates an organizational assistant.
         If organization_id is None, creates a personal assistant.
 
-        :param user_id: The user ID (creator for org assistants, owner for personal).
-        :param organization_id: Optional organization ID for org assistants.
+        :param user_id: Personal assistants: owner. Org assistants:
+            creator/lifecycle owner retained on the row.
+        :param organization_id: Optional organization scope for org assistants.
+            None means a personal assistant.
         :return: The created Assistant.
         """
 
@@ -108,7 +115,9 @@ class AssistantDAO:
 
         For org assistants (organization_id is set):
             Returns assistant if organization_id matches.
-            The user_id check is skipped since org members may access org assistants.
+            The user_id check is skipped because ``user_id`` remains creator
+            metadata for org assistants, while access is governed by org scope
+            and permission checks.
 
         :param user_id: User ID (used for personal assistant lookup).
         :param agent_id: Assistant agent ID.
@@ -166,7 +175,7 @@ class AssistantDAO:
 
         For org API key (organization_id is set):
             Returns only assistants in that org where user_id matches
-            (assistants created by this user in the org).
+            (creator-owned listing semantics for org assistants).
 
         :param user_id: User ID.
         :param organization_id: Organization ID from API key context (None = personal).
