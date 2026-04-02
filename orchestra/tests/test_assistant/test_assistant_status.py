@@ -11,7 +11,10 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.tests.utils import ADMIN_HEADERS
-from orchestra.web.api.utils.assistant_infra import get_running_jobs
+from orchestra.web.api.utils.assistant_infra import (
+    RUNTIME_JOB_LOOKBACK_HOURS,
+    get_running_jobs,
+)
 
 # =============================================================================
 # get_running_jobs unit tests
@@ -63,6 +66,7 @@ async def test_get_running_jobs_returns_running_job_names():
     assert (
         "app=unity,assistant-id=abc" in call_kwargs.kwargs["params"]["label_selector"]
     )
+    assert call_kwargs.kwargs["params"]["hours"] == RUNTIME_JOB_LOOKBACK_HOURS
 
 
 @pytest.mark.anyio
@@ -238,17 +242,23 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.teardown_assistant_runtime",
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_runtime_teardown, patch(
+    ) as mock_cleanup_tasks, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_runtime_teardown.return_value = {"success": True, "errors": []}
+        mock_cleanup_tasks.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         mock_settings.is_staging = True
 
-        yield mock_wake_up, mock_reawaken, mock_runtime_teardown
+        yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
 
 
 @pytest.mark.anyio
