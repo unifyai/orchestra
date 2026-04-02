@@ -2687,3 +2687,140 @@ class TestFullLifecycleAPI:
         )
         assert route_resp2.status_code == status.HTTP_200_OK
         assert route_resp2.json()["window_open"] is True
+
+
+# ============================================================================
+# Group Q: Identity-Claim Route Cleanup
+# ============================================================================
+
+
+class TestRouteCleanupOnIdentityClaim:
+    """When an external contact number is claimed as a platform user identity,
+    all existing Tier 2 routes targeting that number must be removed.
+
+    Numbers passed to UserDAO.create/update must pass libphonenumber validation,
+    so we use valid US numbers (650 area code) for the whatsapp_number parameter.
+    Route contact_numbers bypass validation (direct DB), so they can be anything.
+    We use the same number for both to test the cleanup path.
+    """
+
+    def test_create_user_cleans_stale_routes(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """user_dao.create() with whatsapp_number deletes routes for that number."""
+        from orchestra.db.dao.user_dao import UserDAO
+
+        owner = _make_user(dbsession, "ic_owner@test.com", "+15550901111")
+        assistant = _make_assistant(dbsession, owner, "ICBot")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        external = "+16502530101"
+        dao.get_or_create_route(assistant.agent_id, external)
+        dbsession.flush()
+
+        assert len(dao.get_routes_for_assistant(assistant.agent_id)) == 1
+
+        user_dao = UserDAO(dbsession)
+        user_dao.create(email="newcomer@test.com", whatsapp_number=external)
+        dbsession.flush()
+
+        assert len(dao.get_routes_for_assistant(assistant.agent_id)) == 0
+
+    def test_update_user_cleans_stale_routes(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """user_dao.update() with a new whatsapp_number deletes routes for that number."""
+        from orchestra.db.dao.user_dao import UserDAO
+
+        owner = _make_user(dbsession, "ic_owner2@test.com", "+15550903333")
+        assistant = _make_assistant(dbsession, owner, "ICBot2")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        external = "+16502530102"
+        dao.get_or_create_route(assistant.agent_id, external)
+        dbsession.flush()
+
+        bystander = _make_user(dbsession, "bystander@test.com")
+        assert bystander.whatsapp_number is None
+
+        user_dao = UserDAO(dbsession)
+        user_dao.update(bystander.id, whatsapp_number=external)
+
+        assert len(dao.get_routes_for_assistant(assistant.agent_id)) == 0
+
+    def test_cleanup_across_multiple_pools(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """Routes on different pools are all cleaned when a number is claimed."""
+        from orchestra.db.dao.user_dao import UserDAO
+
+        u1 = _make_user(dbsession, "ic_mp1@test.com", "+15550905555")
+        u2 = _make_user(dbsession, "ic_mp2@test.com", "+15550906666")
+        a1 = _make_assistant(dbsession, u1, "MP1")
+        a2 = _make_assistant(dbsession, u2, "MP2")
+        _enable_whatsapp(dbsession, a1, pool_numbers[0])
+        _enable_whatsapp(dbsession, a2, pool_numbers[1])
+
+        external = "+16502530103"
+        dao.get_or_create_route(a1.agent_id, external)
+        dao.get_or_create_route(a2.agent_id, external)
+        dbsession.flush()
+
+        assert len(dao.get_routes_for_assistant(a1.agent_id)) == 1
+        assert len(dao.get_routes_for_assistant(a2.agent_id)) == 1
+
+        user_dao = UserDAO(dbsession)
+        user_dao.create(email="claimer@test.com", whatsapp_number=external)
+        dbsession.flush()
+
+        assert len(dao.get_routes_for_assistant(a1.agent_id)) == 0
+        assert len(dao.get_routes_for_assistant(a2.agent_id)) == 0
+
+    def test_resolve_inbound_after_identity_claim(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+    ):
+        """After identity claim, inbound no longer routes to the old assistant."""
+        from orchestra.db.dao.user_dao import UserDAO
+
+        owner = _make_user(dbsession, "ic_resolve@test.com", "+15550908888")
+        assistant = _make_assistant(dbsession, owner, "ResBot")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        external = "+16502530104"
+        dao.get_or_create_route(assistant.agent_id, external)
+        dbsession.flush()
+
+        result_before = dao.resolve_inbound(pool_numbers[0].number, external)
+        assert result_before is not None
+        assert result_before["assistant_id"] == assistant.agent_id
+
+        user_dao = UserDAO(dbsession)
+        user_dao.create(email="claimed@test.com", whatsapp_number=external)
+        dbsession.flush()
+
+        result_after = dao.resolve_inbound(pool_numbers[0].number, external)
+        assert result_after is None
+
+    def test_cleanup_noop_when_no_routes(self, dbsession: Session):
+        """Setting whatsapp_number with no existing routes doesn't error."""
+        from orchestra.db.dao.user_dao import UserDAO
+
+        user_dao = UserDAO(dbsession)
+        user = user_dao.create(
+            email="noop_claim@test.com",
+            whatsapp_number="+16502530105",
+        )
+        dbsession.flush()
+        assert user.whatsapp_number == "+16502530105"
