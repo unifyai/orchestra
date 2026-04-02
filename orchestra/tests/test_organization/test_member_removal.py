@@ -20,7 +20,12 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
-from orchestra.db.models.orchestra_models import ResourceAccess, TeamMember
+from orchestra.db.models.orchestra_models import (
+    AssistantCleanupTask,
+    AssistantContact,
+    ResourceAccess,
+    TeamMember,
+)
 from orchestra.tests.utils import create_test_user
 
 
@@ -38,20 +43,32 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.teardown_assistant_runtime",
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_runtime_teardown, patch(
+    ) as mock_assistant_cleanup, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings, patch(
-        "orchestra.web.api.organization.views.teardown_assistant_runtime",
+        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_org_runtime_teardown, patch(
+    ) as mock_org_cleanup, patch(
         "orchestra.web.api.organization.views.BucketService",
     ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_runtime_teardown.return_value = {"success": True, "errors": []}
-        mock_org_runtime_teardown.return_value = {"success": True, "errors": []}
+        mock_assistant_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
+        mock_org_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         mock_settings.is_staging = True
 
         mock_bucket_instance = MagicMock()
@@ -65,8 +82,8 @@ def mock_assistant_infra_calls(request):
         yield (
             mock_wake_up,
             mock_reawaken,
-            mock_runtime_teardown,
-            mock_org_runtime_teardown,
+            mock_assistant_cleanup,
+            mock_org_cleanup,
             mock_bucket_cls,
         )
 
@@ -356,10 +373,16 @@ async def test_member_removal_deletes_unshared_assistant(
 
     # Remove member
     with patch(
-        "orchestra.web.api.organization.views.teardown_assistant_runtime",
+        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_teardown:
-        mock_teardown.return_value = {"success": True, "errors": []}
+    ) as mock_cleanup:
+        mock_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         remove_resp = await client.delete(
             f"/v0/organizations/{org_id}/members/{member['id']}",
             headers=owner["headers"],
@@ -370,11 +393,108 @@ async def test_member_removal_deletes_unshared_assistant(
     dbsession.expire_all()
     assistant_after = assistant_dao.get_assistant_by_agent_id(agent_id)
     assert assistant_after is None, "Unshared assistant should be deleted"
-    mock_teardown.assert_awaited_once_with(
-        agent_id,
-        deploy_env=None,
-        desktop_mode=None,
+    mock_cleanup.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_member_removal_deprovisions_contacts_before_deleting_unshared_assistant(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "contact_cleanup_owner@test.com")
+    member = await create_test_user(client, "contact_cleanup_member@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Contact Cleanup Org"},
+        headers=owner["headers"],
     )
+    org_id = org_resp.json()["id"]
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="Cleanup",
+        surname="Target",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+
+    dbsession.add_all(
+        [
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="phone",
+                contact_value="+15551110000",
+            ),
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="email",
+                contact_value="cleanup-member@assistant.unify.ai",
+            ),
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="whatsapp",
+                contact_value="+15552220000",
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.delete_phone_number",
+        new_callable=AsyncMock,
+    ) as mock_delete_phone, patch(
+        "orchestra.services.assistant_cleanup_service.delete_email",
+        new_callable=AsyncMock,
+    ) as mock_delete_email, patch(
+        "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.delete_routes_for_assistant",
+        return_value=1,
+    ) as mock_delete_routes:
+        remove_resp = await client.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
+
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+    mock_delete_phone.assert_awaited_once_with("+15551110000", deploy_env=None)
+    mock_delete_email.assert_awaited_once_with(
+        "cleanup-member@assistant.unify.ai",
+        deploy_env=None,
+    )
+    mock_delete_routes.assert_called_once_with(agent_id)
+
+    dbsession.expire_all()
+    cleanup_task = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == agent_id)
+        .one()
+    )
+    assert cleanup_task.status == "pending"
 
 
 # =============================================================================

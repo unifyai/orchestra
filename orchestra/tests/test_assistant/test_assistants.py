@@ -6,6 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.models.orchestra_models import AssistantCleanupTask
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
@@ -207,8 +208,12 @@ async def test_list_assistants_after_create(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_weekly_limit_only(client: AsyncClient):
+async def test_update_weekly_limit_only(
+    client: AsyncClient,
+    mock_assistant_infra_calls,
+):
     # Create assistant, then `PATCH /v0/assistant/{id}/config` weekly_limit only -> updated
+    _, mock_reawaken = mock_assistant_infra_calls
     payload = {
         "first_name": "Eve",
         "surname": "Adams",
@@ -241,6 +246,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
     assert updated["timezone"] == payload["timezone"]
     assert updated["phone"] is None
     assert updated["email"] is None
+    mock_reawaken.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -350,8 +356,9 @@ async def test_delete_assistant_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_about_only(client: AsyncClient):
+async def test_update_about_only(client: AsyncClient, mock_assistant_infra_calls):
     # Create assistant, then `PATCH /v0/assistant/{id}/config` about only -> updated
+    _, mock_reawaken = mock_assistant_infra_calls
     payload = {
         "first_name": "Hannah",
         "surname": "Kim",
@@ -379,6 +386,7 @@ async def test_update_about_only(client: AsyncClient):
     assert updated["nationality"] == payload["nationality"]
     assert updated["phone"] is None
     assert updated["email"] is None
+    mock_reawaken.assert_called_once_with(str(aid), deploy_env=None)
 
 
 @pytest.mark.anyio
@@ -1726,7 +1734,10 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_invokes_runtime_teardown(client: AsyncClient):
+async def test_delete_assistant_processes_cleanup_tasks(
+    client: AsyncClient,
+    dbsession: Session,
+):
     payload = {
         "first_name": "Runtime",
         "surname": "Teardown",
@@ -1738,12 +1749,18 @@ async def test_delete_assistant_invokes_runtime_teardown(client: AsyncClient):
     assistant_id = int(create_resp.json()["info"]["agent_id"])
 
     with patch(
-        "orchestra.web.api.assistant.views.teardown_assistant_runtime",
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_teardown, patch(
+    ) as mock_process_cleanup, patch(
         "orchestra.web.api.assistant.views.BucketService",
     ) as MockBucketServiceClass:
-        mock_teardown.return_value = {"success": True, "errors": []}
+        mock_process_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         mock_instance = MockBucketServiceClass.return_value
         mock_instance.delete_assistant_file.return_value = True
         mock_instance.delete_all_assistant_data.return_value = {
@@ -1758,11 +1775,11 @@ async def test_delete_assistant_invokes_runtime_teardown(client: AsyncClient):
         )
 
     assert del_resp.status_code == 200
-    mock_teardown.assert_awaited_once_with(
-        assistant_id,
-        deploy_env=None,
-        desktop_mode="ubuntu",
-    )
+    mock_process_cleanup.assert_awaited_once()
+    assert mock_process_cleanup.await_args.kwargs["task_ids"]
+    cleanup_task = dbsession.query(AssistantCleanupTask).one()
+    assert cleanup_task.assistant_id == assistant_id
+    assert cleanup_task.status == "pending"
 
 
 @pytest.mark.anyio
