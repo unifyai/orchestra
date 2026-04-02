@@ -749,7 +749,55 @@ async def add_organization_member(
                     grantee_id=member_data.user_id,
                 )
 
+        # Check for shared-pool conflicts introduced by the new membership
+        from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+        pool_dao = SharedPoolDAO(session)
+        pool_conflicts = pool_dao.detect_membership_conflicts(
+            member_data.user_id,
+            organization_id,
+        )
+        pool_resolutions = []
+        if pool_conflicts:
+            pool_resolutions = pool_dao.resolve_membership_conflicts(pool_conflicts)
+
         session.commit()
+
+        # Send notifications + reawaken after commit (non-blocking)
+        if pool_resolutions:
+            from orchestra.web.api.utils.assistant_infra import (
+                notify_pool_reassignment,
+                reawaken_assistant,
+            )
+
+            for res in pool_resolutions:
+                for aid in res.affected_assistant_ids:
+                    old_num = res.old_pool_assignments.get(aid, "")
+                    new_num = res.new_pool_assignments.get(aid, "")
+                    try:
+                        await notify_pool_reassignment(
+                            res.conflict_event_id,
+                            old_num,
+                            new_num,
+                            res.notification_recipients,
+                            session,
+                        )
+                    except Exception as e_notify:
+                        logger.warning(
+                            "Failed to send pool reassignment notification "
+                            "for conflict %d: %s",
+                            res.conflict_event_id,
+                            e_notify,
+                        )
+                    try:
+                        await reawaken_assistant(str(aid))
+                    except Exception as e_reawaken:
+                        logger.warning(
+                            "Failed to reawaken assistant %d after "
+                            "pool reassignment: %s",
+                            aid,
+                            e_reawaken,
+                        )
 
         return {
             "message": "Member added successfully",
@@ -884,6 +932,12 @@ async def remove_organization_member(
         # 6. Remove member from organization
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
+
+        # 7. Clean up shared-pool routes for the departing member
+        from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+        pool_dao = SharedPoolDAO(session)
+        pool_dao.cleanup_departed_member_routes(user_id, organization_id)
 
         session.commit()
     except Exception as e:
@@ -1713,7 +1767,55 @@ async def accept_invite(
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
 
+        # Check for shared-pool conflicts introduced by the new membership
+        from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+        pool_dao = SharedPoolDAO(session)
+        pool_conflicts = pool_dao.detect_membership_conflicts(
+            user_id,
+            invite.organization_id,
+        )
+        pool_resolutions = []
+        if pool_conflicts:
+            pool_resolutions = pool_dao.resolve_membership_conflicts(pool_conflicts)
+
         session.commit()
+
+        # Send pool reassignment notifications after commit (non-blocking)
+        if pool_resolutions:
+            from orchestra.web.api.utils.assistant_infra import (
+                notify_pool_reassignment,
+                reawaken_assistant,
+            )
+
+            for res in pool_resolutions:
+                for aid in res.affected_assistant_ids:
+                    old_num = res.old_pool_assignments.get(aid, "")
+                    new_num = res.new_pool_assignments.get(aid, "")
+                    try:
+                        await notify_pool_reassignment(
+                            res.conflict_event_id,
+                            old_num,
+                            new_num,
+                            res.notification_recipients,
+                            session,
+                        )
+                    except Exception as e_notify:
+                        logger.warning(
+                            "Failed to send pool reassignment notification "
+                            "for conflict %d: %s",
+                            res.conflict_event_id,
+                            e_notify,
+                        )
+                    try:
+                        await reawaken_assistant(str(aid))
+                    except Exception as e_reawaken:
+                        logger.warning(
+                            "Failed to reawaken assistant %d after "
+                            "pool reassignment: %s",
+                            aid,
+                            e_reawaken,
+                        )
 
         # Trigger contact sync for all org assistants (non-blocking)
         from orchestra.db.dao.assistant_dao import AssistantDAO

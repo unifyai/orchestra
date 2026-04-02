@@ -74,13 +74,9 @@ async def assign_whatsapp_pool_number(
 ) -> dict:
     """Assign a WhatsApp pool number to an assistant via the local DAO.
 
-    This replaces the old flow that called the Communication service's
-    ``/whatsapp/assign`` endpoint.  Pool assignment is now handled
-    entirely within Orchestra.
-
     Returns a dict with ``pool_number`` and ``assistant_id``.
     """
-    from orchestra.db.dao.whatsapp_route_dao import WhatsAppRouteDAO
+    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
     from orchestra.db.models.orchestra_models import Assistant, OrganizationMember
 
     assistant = (
@@ -89,7 +85,6 @@ async def assign_whatsapp_pool_number(
     if not assistant:
         raise ValueError(f"Assistant {assistant_id} not found.")
 
-    # Determine accessible users
     user_ids = [assistant.user_id]
     if assistant.organization_id is not None:
         members = (
@@ -103,7 +98,7 @@ async def assign_whatsapp_pool_number(
             if uid not in user_ids:
                 user_ids.append(uid)
 
-    dao = WhatsAppRouteDAO(session)
+    dao = SharedPoolDAO(session)
     pool = dao.assign_pool_number(assistant_id, user_ids)
     return {"pool_number": pool.number, "assistant_id": assistant_id}
 
@@ -140,10 +135,41 @@ async def delete_whatsapp_routes(
 
     Returns the number of routes deleted.
     """
-    from orchestra.db.dao.whatsapp_route_dao import WhatsAppRouteDAO
+    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
-    dao = WhatsAppRouteDAO(session)
+    dao = SharedPoolDAO(session)
     return dao.delete_routes_for_assistant(assistant_id)
+
+
+async def notify_pool_reassignment(
+    conflict_event_id: int,
+    old_number: str,
+    new_number: str,
+    recipients: list[dict],
+    session,
+    deploy_env: str | None = None,
+) -> dict:
+    """Send template-based WhatsApp notifications for a pool number change.
+
+    Each recipient dict must contain: ``to``, ``user_name``, ``agent_name``.
+    Returns per-recipient message SIDs for delivery tracking.
+    """
+    comms_url = _comms_url_for(deploy_env)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{comms_url}/whatsapp/notify",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "from_number": old_number,
+                "recipients": recipients,
+                "old_contact": old_number,
+                "new_contact": new_number,
+                "callback_id": str(conflict_event_id),
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
 
 
 async def delete_phone_number(phone_number: str, deploy_env: str | None = None):

@@ -123,11 +123,11 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
     elif contact.contact_type == "whatsapp":
         from sqlalchemy.orm import object_session
 
-        from orchestra.db.dao.whatsapp_route_dao import WhatsAppRouteDAO
+        from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
         session = object_session(contact)
         if session:
-            dao = WhatsAppRouteDAO(session)
+            dao = SharedPoolDAO(session)
             deleted = dao.delete_routes_for_assistant(contact.assistant_id)
             logger.info(
                 "WhatsApp contact %s cleared (contact %d, %d routes deleted)",
