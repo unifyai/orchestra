@@ -27,6 +27,11 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     User,
 )
+from orchestra.services.assistant_cleanup_service import (
+    DEFAULT_CLEANUP_TASK_BATCH_SIZE,
+    MAX_CLEANUP_TASK_BATCH_SIZE,
+    process_assistant_cleanup_tasks,
+)
 from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     AssistantContactCostRead,
@@ -1522,6 +1527,34 @@ def admin_cleanup_expired_invites(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to cleanup expired invites: {str(e)}",
+        )
+
+
+@router.post(
+    "/cleanup/assistant-runtime",
+    summary="Admin: Process durable assistant cleanup tasks",
+    description="Run the Orchestra-owned retry queue for assistant runtime cleanup.",
+)
+async def admin_process_assistant_cleanup_tasks(
+    limit: int = Query(
+        DEFAULT_CLEANUP_TASK_BATCH_SIZE,
+        ge=1,
+        le=MAX_CLEANUP_TASK_BATCH_SIZE,
+    ),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Drain the assistant cleanup retry queue for a bounded batch of tasks."""
+    try:
+        result = await process_assistant_cleanup_tasks(session, limit=limit)
+        return {
+            **result,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process assistant cleanup tasks: {str(e)}",
         )
 
 
