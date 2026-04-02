@@ -20,6 +20,7 @@ from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    AssistantCleanupTask,
     BillingAccount,
     Organization,
     Recharge,
@@ -1528,6 +1529,45 @@ def admin_cleanup_expired_invites(
             status_code=500,
             detail=f"Failed to cleanup expired invites: {str(e)}",
         )
+
+
+@router.get(
+    "/cleanup/assistant-runtime",
+    summary="Admin: Inspect durable assistant cleanup tasks",
+    description="List queued assistant cleanup tasks, optionally filtered by assistant_id.",
+)
+def admin_list_assistant_cleanup_tasks(
+    assistant_id: int | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Return cleanup task rows for observability and integration testing."""
+    query = session.query(AssistantCleanupTask)
+    if assistant_id is not None:
+        query = query.filter(AssistantCleanupTask.assistant_id == assistant_id)
+    if status is not None:
+        query = query.filter(AssistantCleanupTask.status == status)
+    tasks = query.order_by(AssistantCleanupTask.created_at.desc()).limit(limit).all()
+    return {
+        "tasks": [
+            {
+                "id": t.id,
+                "assistant_id": t.assistant_id,
+                "status": t.status,
+                "source_flow": t.source_flow,
+                "attempt_count": t.attempt_count,
+                "last_error": t.last_error,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                "next_retry_at": (
+                    t.next_retry_at.isoformat() if t.next_retry_at else None
+                ),
+            }
+            for t in tasks
+        ],
+        "count": len(tasks),
+    }
 
 
 @router.post(
