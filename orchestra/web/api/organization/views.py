@@ -29,6 +29,13 @@ from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Recharge, RechargeStatus
+from orchestra.services.assistant_cleanup_service import (
+    CleanupSource,
+    build_cleanup_specs_for_assistants,
+    deprovision_assistant_contacts,
+    enqueue_cleanup_tasks,
+    process_assistant_cleanup_tasks,
+)
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.web.api.organization.schema import (
@@ -56,7 +63,6 @@ from orchestra.web.api.organization.schema import (
     OrgSpendResponse,
 )
 from orchestra.web.api.users.views import generate_key
-from orchestra.web.api.utils.assistant_infra import teardown_assistant_runtime
 from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
 
@@ -444,10 +450,11 @@ async def delete_organization(
     _: None = Depends(check_org_mfa_enforcement()),
 ) -> None:
     """
-    Delete an organization.
+    Delete an organization and enqueue durable runtime cleanup for its assistants.
 
-    Requires org:delete permission (typically only Owner role has this).
-    This will also delete all associated data (projects, members, etc.).
+    The database deletion happens in one transaction. Runtime/contact cleanup is
+    attempted immediately after commit and retried later from the cleanup queue
+    if any external step times out or fails.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
@@ -525,63 +532,49 @@ async def delete_organization(
     # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
 
-    # Collect assistant runtime metadata *before* DB deletion (CASCADE removes them)
-    org_assistant_specs = [
-        {
-            "assistant_id": agent_id,
-            "deploy_env": deploy_env,
-            "desktop_mode": desktop_mode,
-        }
-        for agent_id, deploy_env, desktop_mode in session.query(
-            Assistant.agent_id,
-            Assistant.deploy_env,
-            Assistant.desktop_mode,
-        )
+    org_assistants = (
+        session.query(Assistant)
         .filter(Assistant.organization_id == organization_id)
         .all()
-    ]
-    org_assistant_ids: list[int] = [
-        int(spec["assistant_id"]) for spec in org_assistant_specs
-    ]
+    )
+    org_assistant_ids = [int(assistant.agent_id) for assistant in org_assistants]
+    org_cleanup_specs = build_cleanup_specs_for_assistants(session, org_assistants)
+    cleanup_task_ids: list[int] = []
 
-    # Deprovision and soft-delete all contacts for org assistants *before*
-    # CASCADE deletes the rows.  Best-effort – don't block org deletion.
-    if org_assistant_ids:
+    if org_cleanup_specs:
         try:
-            from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
-            from orchestra.routines.assistant_contact_suspension import (
-                _deprovision_contact,
+            contact_result = await deprovision_assistant_contacts(
+                session,
+                org_cleanup_specs,
+                soft_delete_successes=True,
             )
-
-            contact_dao = AssistantContactDAO(session)
-            active_contacts = contact_dao.get_active_contacts_for_assistants(
-                org_assistant_ids,
-            )
-            for contact in active_contacts:
-                try:
-                    import asyncio
-
-                    asyncio.get_event_loop().run_until_complete(
-                        _deprovision_contact(contact),
-                    )
-                except RuntimeError:
-                    import asyncio
-
-                    asyncio.run(_deprovision_contact(contact))
-                except Exception as e:
-                    logger.error(
-                        f"Failed to deprovision {contact.contact_type} "
-                        f"({contact.contact_value}) for org {organization_id}: {e}",
-                    )
-            contact_dao.soft_delete_contacts_for_organization(organization_id)
+            if contact_result["errors"]:
+                logger.error(
+                    "Contact deprovision issues while deleting org %s: %s",
+                    organization_id,
+                    contact_result["errors"],
+                )
         except Exception as e:
             logger.error(
-                f"Failed to deprovision contacts for org {organization_id}: {e}",
+                "Failed to deprovision contacts for org %s before deletion: %s",
+                organization_id,
+                e,
+                exc_info=True,
             )
+
+        cleanup_task_ids = [
+            task.id
+            for task in enqueue_cleanup_tasks(
+                session,
+                org_cleanup_specs,
+                source_flow=CleanupSource.ORGANIZATION_DELETE,
+            )
+        ]
 
     # Delete organization (cascades to related tables)
     try:
         org_dao.delete(organization_id)
+        session.commit()
     except Exception as e:
         session.rollback()
         logger.error(f"Failed to delete organization: {e}", exc_info=True)
@@ -592,22 +585,19 @@ async def delete_organization(
 
     # Post-commit: tear down runtime state and then clean up GCS data.
     try:
-        bucket_service = BucketService()
-
-        if org_assistant_specs:
-            for spec in org_assistant_specs:
-                result = await teardown_assistant_runtime(
-                    spec["assistant_id"],
-                    deploy_env=spec["deploy_env"],
-                    desktop_mode=spec["desktop_mode"],
+        if cleanup_task_ids:
+            cleanup_summary = await process_assistant_cleanup_tasks(
+                session,
+                task_ids=cleanup_task_ids,
+            )
+            if cleanup_summary["errors"]:
+                logger.error(
+                    "Runtime cleanup task issues for deleted org %s: %s",
+                    organization_id,
+                    cleanup_summary["errors"],
                 )
-                if result.get("errors"):
-                    logger.error(
-                        "Runtime teardown cleanup issues for assistant %s in deleted org %s: %s",
-                        spec["assistant_id"],
-                        organization_id,
-                        result["errors"],
-                    )
+
+        bucket_service = BucketService()
 
         if org_assistant_ids:
             for aid in org_assistant_ids:
@@ -860,6 +850,10 @@ async def remove_organization_member(
 
     Automatically revokes all organization-specific API keys for the member.
     Personal API keys are NOT affected.
+
+    Any assistants that were only visible to the departing member are cleaned up
+    in two phases: deprovision/queue external cleanup first, then remove the
+    database rows in the same transaction.
     """
     requesting_user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
@@ -906,27 +900,8 @@ async def remove_organization_member(
             detail="User is not a member of this organization",
         )
 
-    # Collect assistant runtime metadata *before* resources may be deleted.
-    member_assistant_specs = [
-        {
-            "assistant_id": agent_id,
-            "deploy_env": deploy_env,
-            "desktop_mode": desktop_mode,
-        }
-        for agent_id, deploy_env, desktop_mode in session.query(
-            Assistant.agent_id,
-            Assistant.deploy_env,
-            Assistant.desktop_mode,
-        )
-        .filter(
-            Assistant.user_id == user_id,
-            Assistant.organization_id == organization_id,
-        )
-        .all()
-    ]
-    member_assistant_ids: list[int] = [
-        int(spec["assistant_id"]) for spec in member_assistant_specs
-    ]
+    cleanup_task_ids: list[int] = []
+    deleted_assistant_ids: list[int] = []
 
     # Remove member and clean up all associated data
     try:
@@ -938,39 +913,74 @@ async def remove_organization_member(
         user_row = user_dao.get_by_id(user_id)
         departing_user = user_row[0] if user_row else None
 
-        # 1. Delete unshared resources created by this user
-        resource_access_dao.delete_unshared_resources_by_creator(
+        # 1. Discover unshared resources created by this user
+        unshared_resources = resource_access_dao.get_unshared_resources_by_creator(
             user_id,
             organization_id,
         )
+        deleted_assistants = list(unshared_resources["assistants"])
+        deleted_assistant_ids = [
+            int(assistant.agent_id) for assistant in deleted_assistants
+        ]
+        deleted_cleanup_specs = build_cleanup_specs_for_assistants(
+            session,
+            deleted_assistants,
+        )
+        if deleted_cleanup_specs:
+            contact_result = await deprovision_assistant_contacts(
+                session,
+                deleted_cleanup_specs,
+                soft_delete_successes=True,
+            )
+            if contact_result["errors"]:
+                logger.error(
+                    "Contact deprovision issues while removing member %s from org %s: %s",
+                    user_id,
+                    organization_id,
+                    contact_result["errors"],
+                )
+            cleanup_task_ids = [
+                task.id
+                for task in enqueue_cleanup_tasks(
+                    session,
+                    deleted_cleanup_specs,
+                    source_flow=CleanupSource.ORGANIZATION_MEMBER_REMOVAL,
+                )
+            ]
 
-        # 2. Remove user from all org teams
+        # 2. Delete unshared resources created by this user
+        resource_access_dao.delete_unshared_resources(
+            unshared_resources,
+            organization_id=organization_id,
+        )
+
+        # 3. Remove user from all org teams
         team_dao.remove_user_from_all_org_teams(user_id, organization_id)
 
-        # 3. Revoke resource access grants (for shared resources user had access to)
+        # 4. Revoke resource access grants (for shared resources user had access to)
         resource_access_dao.revoke_user_access_for_organization(
             user_id,
             organization_id,
         )
 
-        # 4. Mark user's Contact log as non-system (is_system=False)
+        # 5. Mark user's Contact log as non-system (is_system=False)
         if departing_user and departing_user.email:
             contact_sync_service.mark_member_contact_as_non_system(
                 organization_id=organization_id,
                 email=departing_user.email,
             )
 
-        # 5. Revoke organization API keys (personal keys are NOT affected)
+        # 6. Revoke organization API keys (personal keys are NOT affected)
         api_key_dao.revoke_organization_keys(
             user_id=user_id,
             organization_id=organization_id,
         )
 
-        # 6. Remove member from organization
+        # 7. Remove member from organization
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 
-        # 7. Clean up shared-pool routes for the departing member
+        # 8. Clean up shared-pool routes for the departing member
         from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
         pool_dao = SharedPoolDAO(session)
@@ -985,59 +995,40 @@ async def remove_organization_member(
             detail="Failed to remove member",
         )
 
-    # Post-commit: clean up GCS data for deleted assistants (best-effort).
-    # Only assistants that were actually removed from the DB need cleanup.
-    # After commit, check which assistant IDs no longer exist.
-    if member_assistant_ids:
-        surviving_ids = {
-            a.agent_id
-            for a in session.query(Assistant.agent_id)
-            .filter(Assistant.agent_id.in_(member_assistant_ids))
-            .all()
-        }
-        deleted_assistant_ids = [
-            aid for aid in member_assistant_ids if aid not in surviving_ids
-        ]
-        if deleted_assistant_ids:
-            deleted_assistant_specs = [
-                spec
-                for spec in member_assistant_specs
-                if spec["assistant_id"] in deleted_assistant_ids
-            ]
-            try:
-                bucket_service = BucketService()
-                for spec in deleted_assistant_specs:
-                    result = await teardown_assistant_runtime(
-                        spec["assistant_id"],
-                        deploy_env=spec["deploy_env"],
-                        desktop_mode=spec["desktop_mode"],
+    if cleanup_task_ids:
+        cleanup_summary = await process_assistant_cleanup_tasks(
+            session,
+            task_ids=cleanup_task_ids,
+        )
+        if cleanup_summary["errors"]:
+            logger.error(
+                "Runtime cleanup task issues after removing member %s from org %s: %s",
+                user_id,
+                organization_id,
+                cleanup_summary["errors"],
+            )
+
+    if deleted_assistant_ids:
+        try:
+            bucket_service = BucketService()
+            for aid in deleted_assistant_ids:
+                try:
+                    bucket_service.delete_all_assistant_data(aid)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to clean up GCS data for assistant {aid} "
+                        f"(member removal, org {organization_id}): {e}",
                     )
-                    if result.get("errors"):
-                        logger.error(
-                            "Runtime teardown cleanup issues for assistant %s after removing member %s from org %s: %s",
-                            spec["assistant_id"],
-                            user_id,
-                            organization_id,
-                            result["errors"],
-                        )
-                for aid in deleted_assistant_ids:
-                    try:
-                        bucket_service.delete_all_assistant_data(aid)
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to clean up GCS data for assistant {aid} "
-                            f"(member removal, org {organization_id}): {e}",
-                        )
-                logger.info(
-                    f"Cleaned up GCS data for {len(deleted_assistant_ids)} "
-                    f"assistant(s) after removing member {user_id} from "
-                    f"org {organization_id}",
-                )
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize BucketService for member removal "
-                    f"GCS cleanup (user {user_id}, org {organization_id}): {e}",
-                )
+            logger.info(
+                f"Cleaned up GCS data for {len(deleted_assistant_ids)} "
+                f"assistant(s) after removing member {user_id} from "
+                f"org {organization_id}",
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to initialize BucketService for member removal "
+                f"GCS cleanup (user {user_id}, org {organization_id}): {e}",
+            )
 
     return None
 

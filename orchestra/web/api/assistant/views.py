@@ -52,6 +52,13 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.lib.billing import get_billing_entity
+from orchestra.services.assistant_cleanup_service import (
+    CleanupSource,
+    build_cleanup_spec_from_assistant,
+    deprovision_assistant_contacts,
+    enqueue_cleanup_tasks,
+    process_assistant_cleanup_tasks,
+)
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
@@ -103,7 +110,6 @@ from orchestra.web.api.utils.assistant_infra import (
     get_running_jobs,
     log_pre_hire_chat,
     reawaken_assistant,
-    teardown_assistant_runtime,
     wake_up_assistant,
     watch_email,
 )
@@ -124,6 +130,33 @@ admin_router = APIRouter()
 demo_router = APIRouter()
 
 _prediction_owners: dict[str, str] = {}
+
+RUNTIME_FACING_ASSISTANT_UPDATE_FIELDS = frozenset(
+    {
+        "first_name",
+        "surname",
+        "age",
+        "nationality",
+        "about",
+        "timezone",
+        "desktop_mode",
+        "user_desktop_id",
+        "user_desktop_filesys_sync",
+        "voice_id",
+        "voice_provider",
+    },
+)
+
+
+def _runtime_update_requires_reawaken(
+    existing_assistant: Assistant,
+    update_data: dict,
+) -> bool:
+    """Return True when a PATCH changes fields consumed by runtime startup/update."""
+    for field_name in RUNTIME_FACING_ASSISTANT_UPDATE_FIELDS.intersection(update_data):
+        if getattr(existing_assistant, field_name, None) != update_data[field_name]:
+            return True
+    return False
 
 
 def _build_assistant_read(
@@ -574,14 +607,14 @@ async def create_assistant(
                 rollback_errors = []
 
                 if created_pubsub:
-                    try:
-                        await delete_pubsub_topic(
-                            str(assistant_id),
-                            deploy_env=assistant.deploy_env,
-                        )
-                    except Exception as e:
+                    result = await delete_pubsub_topic(
+                        str(assistant_id),
+                        deploy_env=assistant.deploy_env,
+                    )
+                    if not result.get("success"):
                         rollback_errors.append(
-                            f"Failed to delete pubsub topic: {str(e)}",
+                            "Failed to delete pubsub topic: "
+                            f"{result.get('error') or result.get('reason') or 'cleanup incomplete'}",
                         )
                 print(f"PUBSUB DELETED: {assistant_id}")
 
@@ -1538,10 +1571,11 @@ async def delete_assistant(
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
-    Delete an assistant by ID for the authenticated user.
+    Delete an assistant and queue durable cleanup for external runtime resources.
 
-    Permanently removes the specified assistant from the user's account or organization.
-    This action cannot be undone. Associated GCS profile photos will also be deleted.
+    The assistant row is removed transactionally, then runtime/contact cleanup is
+    attempted immediately and left queued for retries if any external step is
+    incomplete.
     """
     bucket_service = BucketService()
     dao = AssistantDAO(session)
@@ -1549,9 +1583,10 @@ async def delete_assistant(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request.state, "organization_id", None)
-    cleanup_errors = []
+    cleanup_errors: list[str] = []
+    cleanup_task_ids: list[int] = []
+
     try:
-        # First get the assistant to retrieve infrastructure details including GCS photo URL
         assistant = dao.get_assistant_by_id(
             user_id=request.state.user_id,
             agent_id=assistant_id,
@@ -1566,7 +1601,6 @@ async def delete_assistant(
                 detail="Assistant not found.",
             )
 
-        # For org assistants, check assistant:delete permission
         if organization_id is not None:
             resource_access_dao = ResourceAccessDAO(session)
             has_permission = resource_access_dao.check_user_permission(
@@ -1581,12 +1615,9 @@ async def delete_assistant(
                     detail="You do not have permission to delete this assistant.",
                 )
 
-        # DB operations (fast, sequential, session-bound)
-        # Delete the associated chat transcript context from the "Assistants" project
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
             if organization_id is not None:
-                # Org context: lookup directly by org_id + name (no user access check needed)
                 assistants_project = (
                     session.query(Project)
                     .filter(
@@ -1596,7 +1627,6 @@ async def delete_assistant(
                     .first()
                 )
             else:
-                # Personal context: use user access check
                 assistants_project = project_dao.get_by_user_and_name(
                     user_id=request.state.user_id,
                     name=ASSISTANTS_PROJECT_NAME,
@@ -1617,10 +1647,8 @@ async def delete_assistant(
                     )
                     .all()
                 )
-                if contexts_to_delete:
-                    for context_to_del in contexts_to_delete:
-                        context_dao.delete(context_to_del.id)
-
+                for context_to_del in contexts_to_delete:
+                    context_dao.delete(context_to_del.id)
         except Exception as e_ctx:
             logging.error(
                 f"Failed to stage context deletion for assistant {assistant_id}: {str(e_ctx)}",
@@ -1629,166 +1657,102 @@ async def delete_assistant(
                 f"Failed to delete assistant context(s): {str(e_ctx)}",
             )
 
-        # Fetch active contacts before parallel cleanup (DB read)
         contact_dao = AssistantContactDAO(session)
-        try:
-            active_contacts = contact_dao.get_active_contacts_for_assistant(
-                assistant_id,
-            )
-        except Exception as e:
-            active_contacts = []
-            cleanup_errors.append(f"Failed to fetch assistant contacts: {str(e)}")
+        active_contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+        cleanup_spec = build_cleanup_spec_from_assistant(assistant, active_contacts)
 
-        # Parallel infrastructure cleanup after the assistant has been staged for deletion.
-        async def _cleanup_runtime():
-            result = await teardown_assistant_runtime(
-                assistant_id,
-                deploy_env=assistant.deploy_env,
-                desktop_mode=assistant.desktop_mode,
-            )
-            cleanup_errors.extend(result.get("errors", []))
-
-        async def _cleanup_gcs():
-            # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
-            if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
-                try:
-                    deleted_from_gcs = await asyncio.to_thread(
-                        bucket_service.delete_assistant_file,
-                        assistant.profile_photo,
-                    )
-                    if not deleted_from_gcs:
-                        logging.error(
-                            f"Profile photo {assistant.profile_photo} for assistant {assistant_id} was not deleted from GCS.",
-                        )
-                        cleanup_errors.append(
-                            f"Failed to delete profile photo from GCS",
-                        )
-                except Exception as e_gcs:
-                    logging.error(
-                        f"Failed to delete profile photo {assistant.profile_photo} for assistant {assistant_id}: {str(e_gcs)}",
-                    )
-                    cleanup_errors.append(
-                        f"Failed to delete profile photo: {str(e_gcs)}",
-                    )
-
-            # Delete GCS profile video if it exists
-            if assistant.profile_video and assistant.profile_video.startswith("gs://"):
-                try:
-                    deleted_from_gcs = await asyncio.to_thread(
-                        bucket_service.delete_assistant_file,
-                        assistant.profile_video,
-                    )
-                    if not deleted_from_gcs:
-                        logging.error(
-                            f"Profile video {assistant.profile_video} for assistant {assistant_id} was not deleted from GCS.",
-                        )
-                        cleanup_errors.append(
-                            f"Failed to delete profile video from GCS",
-                        )
-                except Exception as e_gcs:
-                    logging.error(
-                        f"Failed to delete profile video {assistant.profile_video} for assistant {assistant_id}: {str(e_gcs)}",
-                    )
-                    cleanup_errors.append(
-                        f"Failed to delete profile video: {str(e_gcs)}",
-                    )
-
-            # Delete all assistant GCS data (recordings, media, attachments) under {assistant_id}/
-            try:
-                cleanup_counts = await asyncio.to_thread(
-                    bucket_service.delete_all_assistant_data,
-                    assistant_id,
-                    is_staging=settings.is_staging,
-                )
-                total = sum(cleanup_counts.values())
-                if total > 0:
-                    print(
-                        f"GCS CLEANUP: {total} file(s) deleted "
-                        f"(media={cleanup_counts['media']}, "
-                        f"recordings={cleanup_counts['recordings']}, "
-                        f"attachments={cleanup_counts['attachments']})",
-                    )
-            except Exception as e:
-                logging.error(
-                    f"Failed to clean up GCS data for assistant {assistant_id}: {str(e)}",
-                )
-                cleanup_errors.append(f"Failed to clean up GCS data: {str(e)}")
-
-        async def _deprovision_contacts():
-            async def _deprovision(ac):
-                try:
-                    if ac.contact_type == "phone" and ac.contact_value:
-                        await delete_phone_number(
-                            ac.contact_value,
-                            deploy_env=assistant.deploy_env,
-                        )
-                        print(f"PHONE DELETED: {ac.contact_value}")
-                    elif ac.contact_type == "email" and ac.contact_value:
-                        await delete_email(
-                            ac.contact_value,
-                            deploy_env=assistant.deploy_env,
-                        )
-                        print(f"EMAIL DELETED: {ac.contact_value}")
-                    elif ac.contact_type == "whatsapp":
-                        from orchestra.web.api.utils.assistant_infra import (
-                            delete_whatsapp_routes,
-                        )
-
-                        await delete_whatsapp_routes(assistant_id, session)
-                        print(f"WHATSAPP ROUTES DELETED: {assistant_id}")
-                except Exception as e:
-                    cleanup_errors.append(
-                        f"Failed to deprovision {ac.contact_type} "
-                        f"({ac.contact_value}): {str(e)}",
-                    )
-
-            await asyncio.gather(*[_deprovision(ac) for ac in active_contacts])
-
-        await asyncio.gather(
-            _cleanup_runtime(),
-            _cleanup_gcs(),
-            _deprovision_contacts(),
+        contact_result = await deprovision_assistant_contacts(
+            session,
+            [cleanup_spec],
+            soft_delete_successes=True,
         )
+        cleanup_errors.extend(contact_result["errors"])
 
-        # DB finalization (fast, sequential, session-bound)
-        # Soft-delete all contacts from AssistantContact table
-        try:
-            contact_dao.soft_delete_all_contacts_for_assistant(assistant_id)
-        except Exception as e:
-            cleanup_errors.append(f"Failed to clean up assistant contacts: {str(e)}")
-
-        # Delete demo assistant metadata if this is a demo assistant
-        if assistant.demo_id:
-            try:
-                demo_meta = (
-                    session.query(DemoAssistantMeta)
-                    .filter(
-                        DemoAssistantMeta.id == assistant.demo_id,
-                    )
-                    .first()
-                )
-                if demo_meta:
-                    session.delete(demo_meta)
-            except Exception as e:
-                cleanup_errors.append(f"Failed to delete demo metadata: {str(e)}")
-
-        # Finally delete the assistant record
-        try:
-            dao.delete_assistant(
-                user_id=request.state.user_id,
-                agent_id=assistant_id,
-                organization_id=organization_id,
+        cleanup_task_ids = [
+            task.id
+            for task in enqueue_cleanup_tasks(
+                session,
+                [cleanup_spec],
+                source_flow=CleanupSource.ASSISTANT_DELETE,
             )
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
+        ]
 
-        # Commit the entire transaction
+        if assistant.demo_id:
+            demo_meta = (
+                session.query(DemoAssistantMeta)
+                .filter(
+                    DemoAssistantMeta.id == assistant.demo_id,
+                )
+                .first()
+            )
+            if demo_meta:
+                session.delete(demo_meta)
+
+        dao.delete_assistant(
+            user_id=request.state.user_id,
+            agent_id=assistant_id,
+            organization_id=organization_id,
+        )
         session.commit()
+
+        if cleanup_task_ids:
+            cleanup_summary = await process_assistant_cleanup_tasks(
+                session,
+                task_ids=cleanup_task_ids,
+            )
+            cleanup_errors.extend(cleanup_summary["errors"])
+
+        if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
+            try:
+                deleted_from_gcs = await asyncio.to_thread(
+                    bucket_service.delete_assistant_file,
+                    assistant.profile_photo,
+                )
+                if not deleted_from_gcs:
+                    cleanup_errors.append("Failed to delete profile photo from GCS")
+            except Exception as e_gcs:
+                logging.error(
+                    f"Failed to delete profile photo {assistant.profile_photo} for assistant {assistant_id}: {str(e_gcs)}",
+                )
+                cleanup_errors.append(f"Failed to delete profile photo: {str(e_gcs)}")
+
+        if assistant.profile_video and assistant.profile_video.startswith("gs://"):
+            try:
+                deleted_from_gcs = await asyncio.to_thread(
+                    bucket_service.delete_assistant_file,
+                    assistant.profile_video,
+                )
+                if not deleted_from_gcs:
+                    cleanup_errors.append("Failed to delete profile video from GCS")
+            except Exception as e_gcs:
+                logging.error(
+                    f"Failed to delete profile video {assistant.profile_video} for assistant {assistant_id}: {str(e_gcs)}",
+                )
+                cleanup_errors.append(f"Failed to delete profile video: {str(e_gcs)}")
+
+        try:
+            cleanup_counts = await asyncio.to_thread(
+                bucket_service.delete_all_assistant_data,
+                assistant_id,
+                is_staging=settings.is_staging,
+            )
+            total = sum(cleanup_counts.values())
+            if total > 0:
+                print(
+                    f"GCS CLEANUP: {total} file(s) deleted "
+                    f"(media={cleanup_counts['media']}, "
+                    f"recordings={cleanup_counts['recordings']}, "
+                    f"attachments={cleanup_counts['attachments']})",
+                )
+        except Exception as e:
+            logging.error(
+                f"Failed to clean up GCS data for assistant {assistant_id}: {str(e)}",
+            )
+            cleanup_errors.append(f"Failed to clean up GCS data: {str(e)}")
 
         response_msg = "Assistant deleted successfully"
         if cleanup_errors:
             response_msg += f" (with some cleanup issues: {'; '.join(cleanup_errors)})"
-
         return InfoResponse(info=response_msg)
     except HTTPException:
         logging.warning(
@@ -1966,6 +1930,10 @@ async def update_assistant_config(
             update_data["monthly_spending_cap"] = Decimal(
                 str(update.monthly_spending_cap),
             )
+        runtime_update_requires_reawaken = _runtime_update_requires_reawaken(
+            existing_assistant,
+            update_data,
+        )
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
@@ -2004,6 +1972,20 @@ async def update_assistant_config(
                 )
 
         session.commit()
+        session.refresh(updated)
+
+        if runtime_update_requires_reawaken:
+            try:
+                await reawaken_assistant(
+                    str(assistant_id),
+                    deploy_env=updated.deploy_env,
+                )
+            except Exception as e:
+                logging.warning(
+                    "Failed to reawaken assistant %s after runtime config update: %s",
+                    assistant_id,
+                    e,
+                )
 
         return InfoResponse(
             info=_build_assistant_read(updated, session),
