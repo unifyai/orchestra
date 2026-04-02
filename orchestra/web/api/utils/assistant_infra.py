@@ -379,6 +379,14 @@ async def _request_cleanup_step(
                 json=json_body,
                 timeout=timeout,
             )
+            if response.status_code == 404:
+                # Resource already gone — idempotent cleanup success.
+                return _cleanup_step_result(
+                    name,
+                    success=True,
+                    skipped=True,
+                    reason="not_found",
+                )
             response.raise_for_status()
             return _cleanup_step_result(
                 name,
@@ -428,6 +436,14 @@ def _request_cleanup_step_sync(
                 json=json_body,
                 timeout=timeout,
             )
+            if response.status_code == 404:
+                # Resource already gone — idempotent cleanup success.
+                return _cleanup_step_result(
+                    name,
+                    success=True,
+                    skipped=True,
+                    reason="not_found",
+                )
             response.raise_for_status()
             return _cleanup_step_result(
                 name,
@@ -478,6 +494,7 @@ async def release_pool_vm(assistant_id: str, deploy_env: str | None = None):
         method="POST",
         path="/infra/vm/pool/release",
         json_body={"assistant_id": assistant_id},
+        timeout=30.0,
     )
 
 
