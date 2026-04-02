@@ -788,6 +788,23 @@ class SharedPoolDAO:
             .all()
         )
 
+    def cleanup_routes_for_contact_number(self, contact_number: str) -> list[int]:
+        """Remove all Tier 2 routes targeting a contact number.
+
+        Called when a contact number is claimed as a platform user identity,
+        invalidating any existing external-contact routes.
+        """
+        routes = (
+            self.session.query(SharedPlatformRoute)
+            .filter(SharedPlatformRoute.contact_number == contact_number)
+            .all()
+        )
+        affected = list({r.assistant_id for r in routes})
+        for r in routes:
+            self.session.delete(r)
+        self.session.flush()
+        return affected
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
