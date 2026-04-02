@@ -2515,17 +2515,23 @@ class ApiMessage(Base):
     completed_at = Column(TIMESTAMP, nullable=True)
 
 
-class WhatsAppPoolNumber(Base):
-    """Platform-owned WhatsApp numbers shared across assistants.
+class SharedPoolNumber(Base):
+    """Platform-owned contact identifiers shared across assistants.
 
-    Each row represents a Twilio-registered WhatsApp sender that can be
-    assigned to multiple assistants.  The pool is small (currently 2 numbers)
-    and managed at the platform level.
+    Each row represents a registered sender (e.g. a Twilio WhatsApp number,
+    an Instagram bot account) that can be assigned to multiple assistants.
+    The pool is small and managed at the platform level.
     """
 
-    __tablename__ = "whatsapp_pool_numbers"
+    __tablename__ = "shared_pool_numbers"
 
     id = Column(Integer, primary_key=True)
+    platform = Column(
+        String,
+        nullable=False,
+        default="whatsapp",
+        server_default="whatsapp",
+    )
     number = Column(String, nullable=False, unique=True)
     status = Column(String, nullable=False, default="active", server_default="active")
     twilio_sender_sid = Column(String, nullable=True)
@@ -2534,26 +2540,26 @@ class WhatsAppPoolNumber(Base):
     __table_args__ = (
         sa.CheckConstraint(
             "status IN ('active', 'inactive')",
-            name="ck_whatsapp_pool_number_status",
+            name="ck_shared_pool_number_status",
         ),
     )
 
 
-class WhatsAppRoute(Base):
+class SharedPlatformRoute(Base):
     """Maps (pool_number, external_contact) → assistant for inbound routing.
 
     Only used for external contacts (non-platform-users).  Platform users
-    are routed dynamically via ``user.whatsapp_number`` lookups (Tier 1).
-    Routes are created when an assistant sends an outbound WhatsApp message
+    are routed dynamically via user identity lookups (Tier 1).
+    Routes are created when an assistant sends an outbound message
     to an external contact, establishing a permanent reply path.
     """
 
-    __tablename__ = "whatsapp_routes"
+    __tablename__ = "shared_platform_routes"
 
     id = Column(Integer, primary_key=True)
     pool_number_id = Column(
         Integer,
-        ForeignKey("whatsapp_pool_numbers.id", ondelete="CASCADE"),
+        ForeignKey("shared_pool_numbers.id", ondelete="CASCADE"),
         nullable=False,
     )
     contact_number = Column(String, nullable=False)
@@ -2565,7 +2571,7 @@ class WhatsAppRoute(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_inbound_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
-    pool_number = relationship("WhatsAppPoolNumber")
+    pool_number = relationship("SharedPoolNumber")
     assistant = relationship("Assistant")
 
     __table_args__ = (
@@ -2575,12 +2581,105 @@ class WhatsAppRoute(Base):
             name="uq_pool_contact",
         ),
         Index(
-            "ix_whatsapp_routes_assistant",
+            "ix_shared_routes_assistant",
             "assistant_id",
             "contact_number",
         ),
         Index(
-            "ix_whatsapp_routes_contact",
+            "ix_shared_routes_contact",
             "contact_number",
         ),
+    )
+
+
+class DecommissionedRoute(Base):
+    """Tracks old (pool_number, contact) pairs after conflict reassignment.
+
+    When an assistant is reassigned to a new pool number, its old routes
+    are recorded here so that inbound messages to the old number can be
+    answered with an auto-reply instead of being silently dropped.
+    """
+
+    __tablename__ = "decommissioned_routes"
+
+    id = Column(Integer, primary_key=True)
+    platform = Column(String, nullable=False)
+    pool_number_id = Column(
+        Integer,
+        ForeignKey("shared_pool_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    contact_identifier = Column(String, nullable=False)
+    old_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    new_pool_number_id = Column(
+        Integer,
+        ForeignKey("shared_pool_numbers.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    decommissioned_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    pool_number = relationship("SharedPoolNumber", foreign_keys=[pool_number_id])
+    new_pool_number = relationship(
+        "SharedPoolNumber",
+        foreign_keys=[new_pool_number_id],
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_decommissioned_routes_lookup",
+            "pool_number_id",
+            "contact_identifier",
+        ),
+    )
+
+
+class ConflictEvent(Base):
+    """Audit log for shared-pool conflict resolutions.
+
+    Records every conflict detection + resolution, including the pool
+    reassignments performed and the delivery status of WhatsApp
+    notifications sent to affected users.
+    """
+
+    __tablename__ = "conflict_events"
+
+    id = Column(Integer, primary_key=True)
+    platform = Column(String, nullable=False)
+    conflict_type = Column(String, nullable=False)
+    trigger_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    affected_assistant_ids = Column(JSONB, nullable=False)
+    old_pool_assignments = Column(JSONB, nullable=False)
+    new_pool_assignments = Column(JSONB, nullable=False)
+    notification_recipients = Column(JSONB, nullable=True)
+    notification_status = Column(JSONB, nullable=True)
+    status = Column(
+        String,
+        nullable=False,
+        default="notifying",
+        server_default="notifying",
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    resolved_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    trigger_assistant = relationship("Assistant")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "conflict_type IN ('contact_overlap', 'user_to_user', 'org_membership')",
+            name="ck_conflict_event_type",
+        ),
+        sa.CheckConstraint(
+            "status IN ('notifying', 'resolved', 'notification_failed', 'failed')",
+            name="ck_conflict_event_status",
+        ),
+        Index("ix_conflict_events_status", "status"),
+        Index("ix_conflict_events_trigger_assistant", "trigger_assistant_id"),
     )
