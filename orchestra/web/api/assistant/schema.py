@@ -57,6 +57,11 @@ class UnifyMessage(BaseModel):
 class AssistantCreate(BaseModel):
     """
     Schema for creating a new assistant.
+
+    When this request is made with an organization API key, the assistant is
+    created inside that organization but still records the calling user as its
+    creator/lifecycle owner. Organization access is layered on through
+    ``organization_id`` and org RBAC, not by rewriting ``user_id``.
     """
 
     first_name: Optional[str] = Field(
@@ -215,6 +220,9 @@ class AssistantCreate(BaseModel):
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
+
+    For organization-scoped assistants, ``user_id`` is the creator/lifecycle
+    owner and ``organization_id`` is the org access scope.
     """
 
     user_desktop_url: Optional[str] = Field(
@@ -234,12 +242,19 @@ class AssistantRead(AssistantCreate):
     )
     user_id: str = Field(
         ...,
-        description="ID of the user who created/owns the assistant",
+        description=(
+            "ID of the creating user. For org assistants this remains the "
+            "creator/lifecycle owner, while org access is governed separately "
+            "by organization_id and RBAC."
+        ),
         example="123",
     )
     organization_id: Optional[int] = Field(
         None,
-        description="Organization ID if this is an organizational assistant, None for personal assistants",
+        description=(
+            "Organization access scope for org assistants. Null means the "
+            "assistant is personal rather than organization-scoped."
+        ),
         example=None,
     )
     created_at: datetime = Field(

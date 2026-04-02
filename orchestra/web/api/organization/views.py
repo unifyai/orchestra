@@ -25,6 +25,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.shared_pool_dao import ConflictResolution
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
@@ -70,6 +71,54 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 admin_router = APIRouter()
+
+
+async def _run_pool_resolution_followups(
+    pool_resolutions: List[ConflictResolution],
+    session: Session,
+) -> None:
+    """Send notifications and runtime refreshes for assistants moved post-commit.
+
+    The follow-up calls must use the affected assistant's ``deploy_env`` so
+    preview-routed assistants talk to the preview comms/adapters stack.
+    """
+    if not pool_resolutions:
+        return
+
+    from orchestra.web.api.utils.assistant_infra import (
+        notify_pool_reassignment,
+        reawaken_assistant,
+    )
+
+    for res in pool_resolutions:
+        for aid in res.affected_assistant_ids:
+            old_num = res.old_pool_assignments.get(aid, "")
+            new_num = res.new_pool_assignments.get(aid, "")
+            deploy_env = res.assistant_deploy_envs.get(aid)
+            try:
+                await notify_pool_reassignment(
+                    res.conflict_event_id,
+                    old_num,
+                    new_num,
+                    res.notification_recipients,
+                    session,
+                    deploy_env=deploy_env,
+                )
+            except Exception as e_notify:
+                logger.warning(
+                    "Failed to send pool reassignment notification "
+                    "for conflict %d: %s",
+                    res.conflict_event_id,
+                    e_notify,
+                )
+            try:
+                await reawaken_assistant(str(aid), deploy_env=deploy_env)
+            except Exception as e_reawaken:
+                logger.warning(
+                    "Failed to reawaken assistant %d after " "pool reassignment: %s",
+                    aid,
+                    e_reawaken,
+                )
 
 
 @router.post(
@@ -780,41 +829,7 @@ async def add_organization_member(
 
         session.commit()
 
-        # Send notifications + reawaken after commit (non-blocking)
-        if pool_resolutions:
-            from orchestra.web.api.utils.assistant_infra import (
-                notify_pool_reassignment,
-                reawaken_assistant,
-            )
-
-            for res in pool_resolutions:
-                for aid in res.affected_assistant_ids:
-                    old_num = res.old_pool_assignments.get(aid, "")
-                    new_num = res.new_pool_assignments.get(aid, "")
-                    try:
-                        await notify_pool_reassignment(
-                            res.conflict_event_id,
-                            old_num,
-                            new_num,
-                            res.notification_recipients,
-                            session,
-                        )
-                    except Exception as e_notify:
-                        logger.warning(
-                            "Failed to send pool reassignment notification "
-                            "for conflict %d: %s",
-                            res.conflict_event_id,
-                            e_notify,
-                        )
-                    try:
-                        await reawaken_assistant(str(aid))
-                    except Exception as e_reawaken:
-                        logger.warning(
-                            "Failed to reawaken assistant %d after "
-                            "pool reassignment: %s",
-                            aid,
-                            e_reawaken,
-                        )
+        await _run_pool_resolution_followups(pool_resolutions, session)
 
         return {
             "message": "Member added successfully",
@@ -1828,41 +1843,7 @@ async def accept_invite(
 
         session.commit()
 
-        # Send pool reassignment notifications after commit (non-blocking)
-        if pool_resolutions:
-            from orchestra.web.api.utils.assistant_infra import (
-                notify_pool_reassignment,
-                reawaken_assistant,
-            )
-
-            for res in pool_resolutions:
-                for aid in res.affected_assistant_ids:
-                    old_num = res.old_pool_assignments.get(aid, "")
-                    new_num = res.new_pool_assignments.get(aid, "")
-                    try:
-                        await notify_pool_reassignment(
-                            res.conflict_event_id,
-                            old_num,
-                            new_num,
-                            res.notification_recipients,
-                            session,
-                        )
-                    except Exception as e_notify:
-                        logger.warning(
-                            "Failed to send pool reassignment notification "
-                            "for conflict %d: %s",
-                            res.conflict_event_id,
-                            e_notify,
-                        )
-                    try:
-                        await reawaken_assistant(str(aid))
-                    except Exception as e_reawaken:
-                        logger.warning(
-                            "Failed to reawaken assistant %d after "
-                            "pool reassignment: %s",
-                            aid,
-                            e_reawaken,
-                        )
+        await _run_pool_resolution_followups(pool_resolutions, session)
 
         # Trigger contact sync for all org assistants (non-blocking)
         from orchestra.db.dao.assistant_dao import AssistantDAO
