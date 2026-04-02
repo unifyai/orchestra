@@ -305,7 +305,14 @@ class UserDAO:
                             f"Invalid WhatsApp number: {result['error']}",
                         )
                     whatsapp_number = result["formatted_phone_number"]
+                old_wa = entry.whatsapp_number
                 setattr(entry, "whatsapp_number", whatsapp_number)
+                if whatsapp_number is not None and whatsapp_number != old_wa:
+                    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+                    SharedPoolDAO(self.session).cleanup_routes_for_contact_number(
+                        whatsapp_number,
+                    )
             if queries_enabled is not ...:
                 setattr(entry, "queries_enabled", queries_enabled)
             if evaluations_enabled is not ...:
