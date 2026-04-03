@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import time
 from typing import Any, List
 
 import httpx
@@ -11,6 +13,8 @@ ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
+RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS = 90.0
+RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS = 3.0
 
 
 def _safe_json(response: httpx.Response) -> dict[str, Any]:
@@ -572,7 +576,7 @@ async def stop_jobs(
     deploy_env: str | None = None,
 ):
     """
-    Stop a running Unity job and release any assigned pool VM.
+    Stop any running Unity job for the assistant.
 
     Returns structured step results so permanent-delete callers can distinguish
     "nothing was running" from "cleanup timed out".
@@ -592,12 +596,6 @@ async def stop_jobs(
         steps["discover_jobs"] = skipped
         steps["stop_job"] = _cleanup_step_result(
             "stop_job",
-            success=True,
-            skipped=True,
-            reason="missing_comms_config",
-        )
-        steps["release_pool_vm"] = _cleanup_step_result(
-            "release_pool_vm",
             success=True,
             skipped=True,
             reason="missing_comms_config",
@@ -689,10 +687,6 @@ async def stop_jobs(
             reason="job_discovery_failed",
         )
 
-    steps["release_pool_vm"] = await release_pool_vm(
-        assistant_id,
-        deploy_env=deploy_env,
-    )
     errors = _cleanup_errors_from_steps(steps)
     return {
         "success": not errors,
@@ -720,6 +714,51 @@ async def delete_assistant_session(
     )
 
 
+async def wait_for_runtime_cleanup(
+    assistant_id: str,
+    deploy_env: str | None = None,
+    *,
+    timeout: float = RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS,
+    poll_interval: float = RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS,
+) -> dict[str, Any]:
+    """Poll Comms until the assistant no longer has live runtime resources."""
+    deadline = time.monotonic() + timeout
+    last_status: dict[str, Any] = {}
+
+    while True:
+        status_step = await _request_cleanup_step(
+            name="runtime_status",
+            deploy_env=deploy_env,
+            method="GET",
+            path=f"/infra/runtime/{assistant_id}",
+            timeout=20,
+        )
+        if not status_step.get("success"):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=False,
+                error=status_step.get("error") or "runtime status request failed",
+            )
+
+        last_status = status_step.get("response", {})
+        if last_status.get("runtime_cleanup_complete"):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=True,
+                response=last_status,
+            )
+
+        if time.monotonic() >= deadline:
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=False,
+                response=last_status,
+                reason="runtime_cleanup_in_progress",
+            )
+
+        await asyncio.sleep(poll_interval)
+
+
 async def teardown_assistant_runtime(
     assistant_id: str | int,
     deploy_env: str | None = None,
@@ -729,20 +768,61 @@ async def teardown_assistant_runtime(
     assistant_id = str(assistant_id)
     stop_result = await stop_jobs(assistant_id, deploy_env=deploy_env)
     session_step = await delete_assistant_session(assistant_id, deploy_env=deploy_env)
-    topic_step = await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
-    if _requires_assistant_disk_cleanup(desktop_mode):
-        disk_step = await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
+    if not session_step.get("success"):
+        release_step = _cleanup_step_result(
+            "release_pool_vm",
+            success=True,
+            skipped=True,
+            reason="assistant_session_delete_incomplete",
+        )
+        wait_step = _cleanup_step_result(
+            "wait_for_runtime_cleanup",
+            success=True,
+            skipped=True,
+            reason="assistant_session_delete_incomplete",
+        )
+    elif session_step.get("response", {}).get("deleted"):
+        release_step = _cleanup_step_result(
+            "release_pool_vm",
+            success=True,
+            skipped=True,
+            reason="assistant_session_finalizer_owns_release",
+        )
+        wait_step = await wait_for_runtime_cleanup(assistant_id, deploy_env=deploy_env)
     else:
+        release_step = await release_pool_vm(assistant_id, deploy_env=deploy_env)
+        wait_step = await wait_for_runtime_cleanup(assistant_id, deploy_env=deploy_env)
+
+    if wait_step.get("success"):
+        topic_step = await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
+        if _requires_assistant_disk_cleanup(desktop_mode):
+            disk_step = await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
+        else:
+            disk_step = _cleanup_step_result(
+                "delete_assistant_disk",
+                success=True,
+                skipped=True,
+                reason="desktop_mode_does_not_require_disk_cleanup",
+            )
+    else:
+        topic_step = _cleanup_step_result(
+            "delete_pubsub_topic",
+            success=True,
+            skipped=True,
+            reason="runtime_cleanup_incomplete",
+        )
         disk_step = _cleanup_step_result(
             "delete_assistant_disk",
             success=True,
             skipped=True,
-            reason="desktop_mode_does_not_require_disk_cleanup",
+            reason="runtime_cleanup_incomplete",
         )
 
     steps = {
         **stop_result["steps"],
+        "release_pool_vm": release_step,
         "delete_assistant_session": session_step,
+        "wait_for_runtime_cleanup": wait_step,
         "delete_pubsub_topic": topic_step,
         "delete_assistant_disk": disk_step,
     }
@@ -753,6 +833,51 @@ async def teardown_assistant_runtime(
         "steps": steps,
         "errors": errors,
     }
+
+
+def _wait_for_runtime_cleanup_sync(
+    assistant_id: str,
+    deploy_env: str | None = None,
+    *,
+    timeout: float = RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS,
+    poll_interval: float = RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS,
+) -> dict[str, Any]:
+    """Synchronous variant of ``wait_for_runtime_cleanup``."""
+    deadline = time.monotonic() + timeout
+    last_status: dict[str, Any] = {}
+
+    while True:
+        status_step = _request_cleanup_step_sync(
+            name="runtime_status",
+            deploy_env=deploy_env,
+            method="GET",
+            path=f"/infra/runtime/{assistant_id}",
+            timeout=20,
+        )
+        if not status_step.get("success"):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=False,
+                error=status_step.get("error") or "runtime status request failed",
+            )
+
+        last_status = status_step.get("response", {})
+        if last_status.get("runtime_cleanup_complete"):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=True,
+                response=last_status,
+            )
+
+        if time.monotonic() >= deadline:
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=False,
+                response=last_status,
+                reason="runtime_cleanup_in_progress",
+            )
+
+        time.sleep(poll_interval)
 
 
 def teardown_assistant_runtime_sync(
@@ -861,13 +986,6 @@ def teardown_assistant_runtime_sync(
             reason="job_discovery_failed",
         )
 
-    steps["release_pool_vm"] = _request_cleanup_step_sync(
-        name="release_pool_vm",
-        deploy_env=deploy_env,
-        method="POST",
-        path="/infra/vm/pool/release",
-        json_body={"assistant_id": assistant_id},
-    )
     steps["delete_assistant_session"] = _request_cleanup_step_sync(
         name="delete_assistant_session",
         deploy_env=deploy_env,
@@ -875,26 +993,77 @@ def teardown_assistant_runtime_sync(
         path=f"/infra/session/{assistant_id}",
         timeout=20,
     )
-    steps["delete_pubsub_topic"] = _request_cleanup_step_sync(
-        name="delete_pubsub_topic",
-        deploy_env=deploy_env,
-        method="DELETE",
-        path="/infra/pubsub/topic",
-        data={"topic_name": f"unity-{assistant_id}{_env_suffix(deploy_env)}"},
-    )
-    if _requires_assistant_disk_cleanup(desktop_mode):
-        steps["delete_assistant_disk"] = _request_cleanup_step_sync(
-            name="delete_assistant_disk",
+    if not steps["delete_assistant_session"].get("success"):
+        steps["release_pool_vm"] = _cleanup_step_result(
+            "release_pool_vm",
+            success=True,
+            skipped=True,
+            reason="assistant_session_delete_incomplete",
+        )
+        steps["wait_for_runtime_cleanup"] = _cleanup_step_result(
+            "wait_for_runtime_cleanup",
+            success=True,
+            skipped=True,
+            reason="assistant_session_delete_incomplete",
+        )
+    elif steps["delete_assistant_session"].get("response", {}).get("deleted"):
+        steps["release_pool_vm"] = _cleanup_step_result(
+            "release_pool_vm",
+            success=True,
+            skipped=True,
+            reason="assistant_session_finalizer_owns_release",
+        )
+        steps["wait_for_runtime_cleanup"] = _wait_for_runtime_cleanup_sync(
+            assistant_id,
             deploy_env=deploy_env,
-            method="DELETE",
-            path=f"/infra/vm/pool/disk/{assistant_id}",
         )
     else:
+        steps["release_pool_vm"] = _request_cleanup_step_sync(
+            name="release_pool_vm",
+            deploy_env=deploy_env,
+            method="POST",
+            path="/infra/vm/pool/release",
+            json_body={"assistant_id": assistant_id},
+        )
+        steps["wait_for_runtime_cleanup"] = _wait_for_runtime_cleanup_sync(
+            assistant_id,
+            deploy_env=deploy_env,
+        )
+
+    if steps["wait_for_runtime_cleanup"].get("success"):
+        steps["delete_pubsub_topic"] = _request_cleanup_step_sync(
+            name="delete_pubsub_topic",
+            deploy_env=deploy_env,
+            method="DELETE",
+            path="/infra/pubsub/topic",
+            data={"topic_name": f"unity-{assistant_id}{_env_suffix(deploy_env)}"},
+        )
+        if _requires_assistant_disk_cleanup(desktop_mode):
+            steps["delete_assistant_disk"] = _request_cleanup_step_sync(
+                name="delete_assistant_disk",
+                deploy_env=deploy_env,
+                method="DELETE",
+                path=f"/infra/vm/pool/disk/{assistant_id}",
+            )
+        else:
+            steps["delete_assistant_disk"] = _cleanup_step_result(
+                "delete_assistant_disk",
+                success=True,
+                skipped=True,
+                reason="desktop_mode_does_not_require_disk_cleanup",
+            )
+    else:
+        steps["delete_pubsub_topic"] = _cleanup_step_result(
+            "delete_pubsub_topic",
+            success=True,
+            skipped=True,
+            reason="runtime_cleanup_incomplete",
+        )
         steps["delete_assistant_disk"] = _cleanup_step_result(
             "delete_assistant_disk",
             success=True,
             skipped=True,
-            reason="desktop_mode_does_not_require_disk_cleanup",
+            reason="runtime_cleanup_incomplete",
         )
 
     errors = _cleanup_errors_from_steps(steps)
