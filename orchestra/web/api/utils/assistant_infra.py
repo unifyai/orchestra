@@ -502,6 +502,21 @@ async def release_pool_vm(assistant_id: str, deploy_env: str | None = None):
     )
 
 
+async def stop_assistant_session_runtime(
+    assistant_id: str,
+    deploy_env: str | None = None,
+):
+    """Patch the AssistantSession desired state to ``Stopped``."""
+
+    return await _request_cleanup_step(
+        name="stop_assistant_session_runtime",
+        deploy_env=deploy_env,
+        method="POST",
+        path=f"/infra/session/{assistant_id}/stop",
+        timeout=20.0,
+    )
+
+
 async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None):
     """Delete an assistant's persistent disk (permanent unhire cleanup)."""
     return await _request_cleanup_step(
@@ -766,34 +781,39 @@ async def teardown_assistant_runtime(
 ) -> dict:
     """Runtime teardown with explicit step-level incomplete states."""
     assistant_id = str(assistant_id)
-    stop_result = await stop_jobs(assistant_id, deploy_env=deploy_env)
-    session_step = await delete_assistant_session(assistant_id, deploy_env=deploy_env)
-    if not session_step.get("success"):
-        release_step = _cleanup_step_result(
-            "release_pool_vm",
-            success=True,
-            skipped=True,
-            reason="assistant_session_delete_incomplete",
-        )
+    stop_session_step = await stop_assistant_session_runtime(
+        assistant_id,
+        deploy_env=deploy_env,
+    )
+    if not stop_session_step.get("success"):
         wait_step = _cleanup_step_result(
             "wait_for_runtime_cleanup",
             success=True,
             skipped=True,
-            reason="assistant_session_delete_incomplete",
+            reason="assistant_session_stop_incomplete",
         )
-    elif session_step.get("response", {}).get("deleted"):
-        release_step = _cleanup_step_result(
-            "release_pool_vm",
+        session_step = _cleanup_step_result(
+            "delete_assistant_session",
             success=True,
             skipped=True,
-            reason="assistant_session_finalizer_owns_release",
+            reason="assistant_session_stop_incomplete",
         )
-        wait_step = await wait_for_runtime_cleanup(assistant_id, deploy_env=deploy_env)
     else:
-        release_step = await release_pool_vm(assistant_id, deploy_env=deploy_env)
         wait_step = await wait_for_runtime_cleanup(assistant_id, deploy_env=deploy_env)
+        if wait_step.get("success"):
+            session_step = await delete_assistant_session(
+                assistant_id,
+                deploy_env=deploy_env,
+            )
+        else:
+            session_step = _cleanup_step_result(
+                "delete_assistant_session",
+                success=True,
+                skipped=True,
+                reason="runtime_cleanup_incomplete",
+            )
 
-    if wait_step.get("success"):
+    if wait_step.get("success") and session_step.get("success"):
         topic_step = await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
         if _requires_assistant_disk_cleanup(desktop_mode):
             disk_step = await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
@@ -819,8 +839,7 @@ async def teardown_assistant_runtime(
         )
 
     steps = {
-        **stop_result["steps"],
-        "release_pool_vm": release_step,
+        "stop_assistant_session_runtime": stop_session_step,
         "delete_assistant_session": session_step,
         "wait_for_runtime_cleanup": wait_step,
         "delete_pubsub_topic": topic_step,
@@ -900,137 +919,50 @@ def teardown_assistant_runtime_sync(
 
     headers = {"Authorization": f"Bearer {ADMIN_KEY}"}
     steps: dict[str, dict[str, Any]] = {}
-    job_names: list[str] = []
-
-    try:
-        with httpx.Client() as client:
-            label = assistant_id.lower().replace("_", "-")
-            response = client.get(
-                f"{comms_url}/infra/jobs",
-                params={
-                    "label_selector": f"app=unity,assistant-id={label}",
-                    "hours": RUNTIME_JOB_LOOKBACK_HOURS,
-                },
-                headers=headers,
-                timeout=10,
-            )
-            response.raise_for_status()
-            data = response.json()
-            job_names = [
-                job["job_name"]
-                for job in data.get("jobs", [])
-                if job.get("status") == "Running"
-            ]
-            steps["discover_jobs"] = _cleanup_step_result(
-                "discover_jobs",
-                success=True,
-                response={"job_names": job_names},
-            )
-            if job_names:
-                try:
-                    stop_response = client.post(
-                        f"{comms_url}/infra/job/stop",
-                        data={"job_name": job_names[0]},
-                        headers=headers,
-                        timeout=20,
-                    )
-                    stop_response.raise_for_status()
-                    steps["stop_job"] = _cleanup_step_result(
-                        "stop_job",
-                        success=True,
-                        response=_safe_json(stop_response),
-                    )
-                except httpx.TimeoutException:
-                    steps["stop_job"] = _cleanup_step_result(
-                        "stop_job",
-                        success=False,
-                        timed_out=True,
-                        error="request timed out",
-                    )
-                except Exception as exc:
-                    steps["stop_job"] = _cleanup_step_result(
-                        "stop_job",
-                        success=False,
-                        error=str(exc),
-                    )
-            else:
-                steps["stop_job"] = _cleanup_step_result(
-                    "stop_job",
-                    success=True,
-                    skipped=True,
-                    reason="no_running_jobs",
-                )
-    except httpx.TimeoutException:
-        steps["discover_jobs"] = _cleanup_step_result(
-            "discover_jobs",
-            success=False,
-            timed_out=True,
-            error="request timed out",
-        )
-        steps["stop_job"] = _cleanup_step_result(
-            "stop_job",
-            success=True,
-            skipped=True,
-            reason="job_discovery_incomplete",
-        )
-    except Exception as exc:
-        steps["discover_jobs"] = _cleanup_step_result(
-            "discover_jobs",
-            success=False,
-            error=str(exc),
-        )
-        steps["stop_job"] = _cleanup_step_result(
-            "stop_job",
-            success=True,
-            skipped=True,
-            reason="job_discovery_failed",
-        )
-
-    steps["delete_assistant_session"] = _request_cleanup_step_sync(
-        name="delete_assistant_session",
+    steps["stop_assistant_session_runtime"] = _request_cleanup_step_sync(
+        name="stop_assistant_session_runtime",
         deploy_env=deploy_env,
-        method="DELETE",
-        path=f"/infra/session/{assistant_id}",
+        method="POST",
+        path=f"/infra/session/{assistant_id}/stop",
         timeout=20,
     )
-    if not steps["delete_assistant_session"].get("success"):
-        steps["release_pool_vm"] = _cleanup_step_result(
-            "release_pool_vm",
-            success=True,
-            skipped=True,
-            reason="assistant_session_delete_incomplete",
-        )
+    if not steps["stop_assistant_session_runtime"].get("success"):
         steps["wait_for_runtime_cleanup"] = _cleanup_step_result(
             "wait_for_runtime_cleanup",
             success=True,
             skipped=True,
-            reason="assistant_session_delete_incomplete",
+            reason="assistant_session_stop_incomplete",
         )
-    elif steps["delete_assistant_session"].get("response", {}).get("deleted"):
-        steps["release_pool_vm"] = _cleanup_step_result(
-            "release_pool_vm",
+        steps["delete_assistant_session"] = _cleanup_step_result(
+            "delete_assistant_session",
             success=True,
             skipped=True,
-            reason="assistant_session_finalizer_owns_release",
-        )
-        steps["wait_for_runtime_cleanup"] = _wait_for_runtime_cleanup_sync(
-            assistant_id,
-            deploy_env=deploy_env,
+            reason="assistant_session_stop_incomplete",
         )
     else:
-        steps["release_pool_vm"] = _request_cleanup_step_sync(
-            name="release_pool_vm",
-            deploy_env=deploy_env,
-            method="POST",
-            path="/infra/vm/pool/release",
-            json_body={"assistant_id": assistant_id},
-        )
         steps["wait_for_runtime_cleanup"] = _wait_for_runtime_cleanup_sync(
             assistant_id,
             deploy_env=deploy_env,
         )
+        if steps["wait_for_runtime_cleanup"].get("success"):
+            steps["delete_assistant_session"] = _request_cleanup_step_sync(
+                name="delete_assistant_session",
+                deploy_env=deploy_env,
+                method="DELETE",
+                path=f"/infra/session/{assistant_id}",
+                timeout=20,
+            )
+        else:
+            steps["delete_assistant_session"] = _cleanup_step_result(
+                "delete_assistant_session",
+                success=True,
+                skipped=True,
+                reason="runtime_cleanup_incomplete",
+            )
 
-    if steps["wait_for_runtime_cleanup"].get("success"):
+    if steps["wait_for_runtime_cleanup"].get("success") and steps[
+        "delete_assistant_session"
+    ].get("success"):
         steps["delete_pubsub_topic"] = _request_cleanup_step_sync(
             name="delete_pubsub_topic",
             deploy_env=deploy_env,
@@ -1070,7 +1002,6 @@ def teardown_assistant_runtime_sync(
     return {
         "success": not errors,
         "assistant_id": assistant_id,
-        "job_names": job_names,
         "steps": steps,
         "errors": errors,
     }
