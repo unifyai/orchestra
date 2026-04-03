@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -13,9 +13,9 @@ from orchestra.web.api.utils import assistant_infra
 @pytest.mark.anyio
 async def test_teardown_assistant_runtime_reports_incomplete_steps():
     with patch(
-        "orchestra.web.api.utils.assistant_infra.stop_jobs",
+        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
         new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
+    ) as mock_stop_session, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
         new_callable=AsyncMock,
     ) as mock_delete_session, patch(
@@ -28,23 +28,18 @@ async def test_teardown_assistant_runtime_reports_incomplete_steps():
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
     ) as mock_delete_disk:
-        mock_stop_jobs.return_value = {
+        mock_stop_session.return_value = {
+            "name": "stop_assistant_session_runtime",
             "success": True,
-            "job_names": [],
-            "steps": {
-                "discover_jobs": {"success": True},
-                "stop_job": {"success": True, "skipped": True},
-            },
-            "errors": [],
+        }
+        mock_wait_for_runtime_cleanup.return_value = {
+            "name": "wait_for_runtime_cleanup",
+            "success": True,
         }
         mock_delete_session.return_value = {
             "name": "delete_assistant_session",
             "success": True,
             "response": {"deleted": True},
-        }
-        mock_wait_for_runtime_cleanup.return_value = {
-            "name": "wait_for_runtime_cleanup",
-            "success": True,
         }
         mock_delete_topic.return_value = {
             "name": "delete_pubsub_topic",
@@ -62,31 +57,24 @@ async def test_teardown_assistant_runtime_reports_incomplete_steps():
     assert result["success"] is False
     assert "delete_pubsub_topic: request timed out" in result["errors"]
     assert result["steps"]["delete_pubsub_topic"]["timed_out"] is True
-    assert (
-        result["steps"]["release_pool_vm"]["reason"]
-        == "assistant_session_finalizer_owns_release"
-    )
+    assert result["steps"]["stop_assistant_session_runtime"]["success"] is True
 
 
 def test_teardown_assistant_runtime_sync_reports_incomplete_steps():
-    mock_client = MagicMock()
-    mock_jobs_response = MagicMock()
-    mock_jobs_response.raise_for_status.return_value = None
-    mock_jobs_response.json.return_value = {"jobs": []}
-    mock_client.get.return_value = mock_jobs_response
-
     with patch.object(assistant_infra, "COMMS_URL", "https://comms.test"), patch.object(
         assistant_infra,
         "ADMIN_KEY",
         "test-key",
     ), patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.Client",
-    ) as mock_httpx_client, patch(
         "orchestra.web.api.utils.assistant_infra._request_cleanup_step_sync",
     ) as mock_request_step:
-        mock_httpx_client.return_value.__enter__.return_value = mock_client
 
         def _step(*, name, **_kwargs):
+            if name == "stop_assistant_session_runtime":
+                return {
+                    "name": name,
+                    "success": True,
+                }
             if name == "delete_assistant_session":
                 return {
                     "name": name,
@@ -118,17 +106,14 @@ def test_teardown_assistant_runtime_sync_reports_incomplete_steps():
 
 
 @pytest.mark.anyio
-async def test_teardown_assistant_runtime_releases_directly_when_session_missing():
+async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup():
     with patch(
-        "orchestra.web.api.utils.assistant_infra.stop_jobs",
+        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
         new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
+    ) as mock_stop_session, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
         new_callable=AsyncMock,
     ) as mock_delete_session, patch(
-        "orchestra.web.api.utils.assistant_infra.release_pool_vm",
-        new_callable=AsyncMock,
-    ) as mock_release_pool_vm, patch(
         "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
         new_callable=AsyncMock,
     ) as mock_wait_for_runtime_cleanup, patch(
@@ -138,29 +123,20 @@ async def test_teardown_assistant_runtime_releases_directly_when_session_missing
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
     ) as mock_delete_disk:
-        mock_stop_jobs.return_value = {
-            "success": True,
-            "job_names": [],
-            "steps": {
-                "discover_jobs": {"success": True},
-                "stop_job": {"success": True, "skipped": True},
-            },
-            "errors": [],
-        }
-        mock_delete_session.return_value = {
-            "name": "delete_assistant_session",
-            "success": True,
-            "skipped": True,
-            "reason": "not_found",
-        }
-        mock_release_pool_vm.return_value = {
-            "name": "release_pool_vm",
+        mock_stop_session.return_value = {
+            "name": "stop_assistant_session_runtime",
             "success": True,
         }
         mock_wait_for_runtime_cleanup.return_value = {
             "name": "wait_for_runtime_cleanup",
             "success": True,
             "response": {"runtime_cleanup_complete": True},
+        }
+        mock_delete_session.return_value = {
+            "name": "delete_assistant_session",
+            "success": True,
+            "skipped": True,
+            "reason": "not_found",
         }
         mock_delete_topic.return_value = {
             "name": "delete_pubsub_topic",
@@ -177,7 +153,7 @@ async def test_teardown_assistant_runtime_releases_directly_when_session_missing
         )
 
     assert result["success"] is True
-    mock_release_pool_vm.assert_awaited_once_with("42", deploy_env=None)
+    mock_stop_session.assert_awaited_once_with("42", deploy_env=None)
 
 
 @pytest.mark.anyio
