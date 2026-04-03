@@ -211,11 +211,6 @@ def _make_assistant(
         first_name=first_name,
         surname=surname,
         organization_id=organization_id,
-        phone=phone,
-        email=email,
-        user_phone=user_phone,
-        assistant_whatsapp_number=assistant_whatsapp_number,
-        user_whatsapp_number=user_whatsapp_number,
     )
     dbsession.add(a)
     dbsession.flush()
