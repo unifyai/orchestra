@@ -270,7 +270,7 @@ async def test_get_user_by_account_missing_api_key(client: AsyncClient, dbsessio
     user_id = response.json()["id"]
 
     # Link an OAuth account to the user
-    url = "/v0/admin/account"
+    url = "/v0/admin/auth/account"
     account_params = {
         "user_id": user_id,
         "provider": "google",
