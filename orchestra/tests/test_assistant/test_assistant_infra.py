@@ -15,6 +15,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
+from orchestra.db.models.orchestra_models import AssistantCleanupTask
 from orchestra.tests.utils import HEADERS
 
 
@@ -45,9 +46,16 @@ def mock_all_infra(dbsession):
         "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
-        "teardown_assistant_runtime": AsyncMock(
-            return_value={"success": True, "errors": []},
+        "process_assistant_cleanup_tasks": AsyncMock(
+            return_value={
+                "processed": 1,
+                "completed": 1,
+                "retried": 0,
+                "failed": 0,
+                "errors": [],
+            },
         ),
+        "_cleanup_after_assistant_delete": AsyncMock(return_value=None),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
         "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
     }
@@ -897,8 +905,9 @@ async def test_create_assistant_with_ubuntu_desktop_mode(
 async def test_delete_assistant_with_windows_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
+    dbsession,
 ):
-    """Test deleting assistant with desktop_mode=windows uses runtime teardown."""
+    """Test deleting assistant with desktop_mode=windows queues durable cleanup."""
     payload = {
         "first_name": "DeleteWindowsPool",
         "surname": "Test",
@@ -910,24 +919,28 @@ async def test_delete_assistant_with_windows_desktop_mode(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    mock_all_infra["teardown_assistant_runtime"].reset_mock()
+    mock_all_infra["_cleanup_after_assistant_delete"].reset_mock()
 
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    mock_all_infra["teardown_assistant_runtime"].assert_called_once_with(
-        int(agent_id),
-        deploy_env=None,
-        desktop_mode="windows",
+    cleanup_tasks = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == int(agent_id))
+        .all()
     )
+    assert cleanup_tasks
+    assert cleanup_tasks[-1].desktop_mode == "windows"
+    mock_all_infra["_cleanup_after_assistant_delete"].assert_awaited()
 
 
 @pytest.mark.anyio
 async def test_delete_assistant_with_ubuntu_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
+    dbsession,
 ):
-    """Test deleting assistant with desktop_mode=ubuntu uses runtime teardown."""
+    """Test deleting assistant with desktop_mode=ubuntu queues durable cleanup."""
     payload = {
         "first_name": "DeleteUbuntuPool",
         "surname": "Test",
@@ -939,13 +952,16 @@ async def test_delete_assistant_with_ubuntu_desktop_mode(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    mock_all_infra["teardown_assistant_runtime"].reset_mock()
+    mock_all_infra["_cleanup_after_assistant_delete"].reset_mock()
 
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    mock_all_infra["teardown_assistant_runtime"].assert_called_once_with(
-        int(agent_id),
-        deploy_env=None,
-        desktop_mode="ubuntu",
+    cleanup_tasks = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == int(agent_id))
+        .all()
     )
+    assert cleanup_tasks
+    assert cleanup_tasks[-1].desktop_mode == "ubuntu"
+    mock_all_infra["_cleanup_after_assistant_delete"].assert_awaited()
