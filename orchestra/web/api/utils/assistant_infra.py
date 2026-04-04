@@ -586,6 +586,31 @@ async def get_running_jobs(
     ]
 
 
+async def get_runtime_status(
+    assistant_id: str,
+    deploy_env: str | None = None,
+) -> dict[str, Any] | None:
+    """Read the Comms runtime aggregate for one assistant."""
+
+    comms_url = _comms_url_for(deploy_env)
+    if not comms_url or not ADMIN_KEY:
+        return None
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{comms_url}/infra/runtime/{assistant_id}",
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                return None
+            data = _safe_json(response)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return None
+
+
 async def stop_jobs(
     assistant_id: str,
     deploy_env: str | None = None,

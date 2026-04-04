@@ -109,7 +109,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    get_running_jobs,
+    get_runtime_status,
     log_pre_hire_chat,
     reawaken_assistant,
     wake_up_assistant,
@@ -4178,10 +4178,13 @@ async def admin_get_assistant_status(
     Get the live status of an assistant's dedicated service.
     """
     try:
-        job_names = await get_running_jobs(assistant_id)
-        if len(job_names) > 0:
+        runtime_status = await get_runtime_status(assistant_id)
+        active_job_names = []
+        if runtime_status is not None:
+            active_job_names = list(runtime_status.get("active_job_names") or [])
+        if active_job_names:
             return InfoResponse(
-                info=AssistantStatus(running=True, job_name=job_names[0]),
+                info=AssistantStatus(running=True, job_name=active_job_names[0]),
             )
         else:
             return InfoResponse(info=AssistantStatus(running=False, job_name=None))
