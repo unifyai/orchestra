@@ -1,7 +1,8 @@
 """
 Tests for the assistant status system:
 1. get_running_jobs — queries K8s via the comms service
-2. admin_get_assistant_status — the admin endpoint that returns online/offline
+2. get_runtime_status — reads the Comms runtime aggregate
+3. admin_get_assistant_status — the admin endpoint that returns online/offline
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +15,7 @@ from orchestra.tests.utils import ADMIN_HEADERS
 from orchestra.web.api.utils.assistant_infra import (
     RUNTIME_JOB_LOOKBACK_HOURS,
     get_running_jobs,
+    get_runtime_status,
 )
 
 # =============================================================================
@@ -224,6 +226,43 @@ async def test_get_running_jobs_normalizes_assistant_id():
     assert "assistant-id=abc-def-123" in call_kwargs.kwargs["params"]["label_selector"]
 
 
+@pytest.mark.anyio
+async def test_get_runtime_status_returns_payload():
+    mock_resp = _mock_response(
+        200,
+        {
+            "assistant_id": "abc",
+            "assistant_session_exists": True,
+            "assistant_session_phase": "Active",
+            "active_job_names": ["unity-abc-2026-03-19"],
+        },
+    )
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with patch(
+        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        return_value=mock_client,
+    ), patch(
+        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+        "http://comms:8000",
+    ), patch(
+        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+        "test-key",
+    ):
+        result = await get_runtime_status("abc")
+
+    assert result is not None
+    assert result["active_job_names"] == ["unity-abc-2026-03-19"]
+    mock_client.get.assert_called_once_with(
+        "http://comms:8000/infra/runtime/abc",
+        headers={"Authorization": "Bearer test-key"},
+        timeout=10,
+    )
+
+
 # =============================================================================
 # admin_get_assistant_status endpoint tests
 # =============================================================================
@@ -264,9 +303,13 @@ def mock_assistant_infra_calls(request):
 @pytest.mark.anyio
 async def test_status_endpoint_running(client: AsyncClient):
     with patch(
-        "orchestra.web.api.assistant.views.get_running_jobs",
+        "orchestra.web.api.assistant.views.get_runtime_status",
         new_callable=AsyncMock,
-        return_value=["unity-job-123"],
+        return_value={
+            "assistant_session_exists": True,
+            "assistant_session_phase": "Active",
+            "active_job_names": ["unity-job-123"],
+        },
     ):
         resp = await client.get(
             "/v0/admin/assistant/test-id/status",
@@ -282,9 +325,13 @@ async def test_status_endpoint_running(client: AsyncClient):
 @pytest.mark.anyio
 async def test_status_endpoint_offline(client: AsyncClient):
     with patch(
-        "orchestra.web.api.assistant.views.get_running_jobs",
+        "orchestra.web.api.assistant.views.get_runtime_status",
         new_callable=AsyncMock,
-        return_value=[],
+        return_value={
+            "assistant_session_exists": True,
+            "assistant_session_phase": "Released",
+            "active_job_names": [],
+        },
     ):
         resp = await client.get(
             "/v0/admin/assistant/test-id/status",
@@ -300,7 +347,7 @@ async def test_status_endpoint_offline(client: AsyncClient):
 @pytest.mark.anyio
 async def test_status_endpoint_error(client: AsyncClient):
     with patch(
-        "orchestra.web.api.assistant.views.get_running_jobs",
+        "orchestra.web.api.assistant.views.get_runtime_status",
         new_callable=AsyncMock,
         side_effect=RuntimeError("comms exploded"),
     ):
