@@ -274,15 +274,22 @@ async def process_assistant_cleanup_tasks(
 ) -> dict:
     """Process queued cleanup tasks and persist retry/completion state."""
     now = datetime.now(timezone.utc)
-    query = session.query(AssistantCleanupTask).filter(
-        AssistantCleanupTask.status.in_(RETRYABLE_CLEANUP_TASK_STATUSES),
-        or_(
-            AssistantCleanupTask.next_retry_at.is_(None),
-            AssistantCleanupTask.next_retry_at <= now,
-        ),
-    )
     if task_ids:
-        query = query.filter(AssistantCleanupTask.id.in_(task_ids))
+        # Explicit task processing is used by the in-request/background cleanup
+        # loop and must keep re-driving the same tasks even if a prior attempt
+        # scheduled a later retry. The cron path below still honors next_retry_at.
+        query = session.query(AssistantCleanupTask).filter(
+            AssistantCleanupTask.status.in_(RETRYABLE_CLEANUP_TASK_STATUSES),
+            AssistantCleanupTask.id.in_(task_ids),
+        )
+    else:
+        query = session.query(AssistantCleanupTask).filter(
+            AssistantCleanupTask.status.in_(RETRYABLE_CLEANUP_TASK_STATUSES),
+            or_(
+                AssistantCleanupTask.next_retry_at.is_(None),
+                AssistantCleanupTask.next_retry_at <= now,
+            ),
+        )
 
     tasks = query.order_by(AssistantCleanupTask.created_at.asc()).limit(limit).all()
     summary = {
