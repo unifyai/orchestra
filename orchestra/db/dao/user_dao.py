@@ -14,6 +14,7 @@ from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_PROMO,
     Assistant,
     BillingAccount,
+    PhoneVerification,
     Recharge,
     RechargeStatus,
     User,
