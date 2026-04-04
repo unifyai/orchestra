@@ -43,6 +43,25 @@ from orchestra.web.application import get_app
 from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
 
 
+def _detach_hnsw_indexes(meta) -> list[tuple[Any, Any]]:
+    """Temporarily remove HNSW indexes from metadata for local pytest DB setup."""
+
+    removed_indexes = []
+    for table in meta.tables.values():
+        for index in list(table.indexes):
+            if index.dialect_options["postgresql"].get("using") == "hnsw":
+                table.indexes.remove(index)
+                removed_indexes.append((table, index))
+    return removed_indexes
+
+
+def _restore_detached_indexes(removed_indexes: list[tuple[Any, Any]]) -> None:
+    """Restore indexes removed from metadata after test DB creation."""
+
+    for table, index in removed_indexes:
+        table.indexes.add(index)
+
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     """
@@ -78,7 +97,11 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     engine = create_engine(url, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    meta.create_all(engine)
+    removed_hnsw_indexes = _detach_hnsw_indexes(meta)
+    try:
+        meta.create_all(engine)
+    finally:
+        _restore_detached_indexes(removed_hnsw_indexes)
     with engine.begin() as conn:
         # Create the hamming_distance function for tests
         conn.execute(

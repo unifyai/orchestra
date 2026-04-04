@@ -29,17 +29,23 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.teardown_assistant_runtime",
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_runtime_teardown, patch(
+    ) as mock_cleanup_tasks, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_runtime_teardown.return_value = {"success": True, "errors": []}
+        mock_cleanup_tasks.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         mock_settings.is_staging = True
 
-        yield mock_wake_up, mock_reawaken, mock_runtime_teardown
+        yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
 
 
 # =============================================================================
