@@ -43,6 +43,7 @@ from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    AssistantCleanupTask,
     Context,
     DemoAssistantMeta,
     LogEvent,
@@ -114,6 +115,9 @@ from orchestra.web.api.utils.assistant_infra import (
     wake_up_assistant,
     watch_email,
 )
+
+ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
+ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
 
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
@@ -1564,17 +1568,60 @@ async def _cleanup_after_assistant_delete(
     bucket_service = BucketService()
 
     if cleanup_task_ids:
-        bg_session = session_factory()
-        try:
-            await process_assistant_cleanup_tasks(bg_session, task_ids=cleanup_task_ids)
-        except Exception as exc:
-            logging.error(
-                "Background runtime cleanup failed for assistant %s: %s",
-                assistant_id,
-                exc,
-            )
-        finally:
-            bg_session.close()
+        deadline = time.monotonic() + ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS
+        while True:
+            bg_session = session_factory()
+            try:
+                result = await process_assistant_cleanup_tasks(
+                    bg_session,
+                    task_ids=cleanup_task_ids,
+                )
+                tasks = (
+                    bg_session.query(AssistantCleanupTask)
+                    .filter(AssistantCleanupTask.id.in_(cleanup_task_ids))
+                    .all()
+                )
+                task_states = [
+                    {
+                        "id": task.id,
+                        "status": task.status,
+                        "attempt_count": task.attempt_count,
+                        "last_error": task.last_error,
+                        "next_retry_at": (
+                            task.next_retry_at.isoformat()
+                            if task.next_retry_at is not None
+                            else None
+                        ),
+                    }
+                    for task in tasks
+                ]
+                logging.info(
+                    "Assistant %s cleanup loop result=%s task_states=%s",
+                    assistant_id,
+                    result,
+                    task_states,
+                )
+                if tasks and all(
+                    task.status in {"completed", "failed"} for task in tasks
+                ):
+                    break
+                if time.monotonic() >= deadline:
+                    logging.warning(
+                        "Assistant %s cleanup loop timed out after %.0fs",
+                        assistant_id,
+                        ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS,
+                    )
+                    break
+            except Exception as exc:
+                logging.error(
+                    "Background runtime cleanup failed for assistant %s: %s",
+                    assistant_id,
+                    exc,
+                )
+                break
+            finally:
+                bg_session.close()
+            await asyncio.sleep(ASSISTANT_DELETE_CLEANUP_POLL_SECONDS)
 
     if profile_photo and profile_photo.startswith("gs://"):
         try:
