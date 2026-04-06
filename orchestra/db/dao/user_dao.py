@@ -128,6 +128,14 @@ class UserDAO:
             store_prompts=True,
         )
         self.session.add(user)
+        self.session.flush()
+
+        if whatsapp_number is not None:
+            from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+            SharedPoolDAO(self.session).cleanup_routes_for_contact_number(
+                whatsapp_number,
+            )
 
         if credits > 0:
             recharge = Recharge(

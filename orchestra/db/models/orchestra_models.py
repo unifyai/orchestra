@@ -2571,6 +2571,10 @@ class SharedPlatformRoute(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_inbound_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    call_permission_status = Column(String, nullable=True)
+    call_permission_granted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    call_permission_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
     pool_number = relationship("SharedPoolNumber")
     assistant = relationship("Assistant")
 
