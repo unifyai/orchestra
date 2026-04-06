@@ -628,47 +628,38 @@ class UserDAO:
 
     def get_cumulative_spend(self, user_id: str, month: str) -> float:
         """
-        Get user's cumulative spend for a given month.
+        Get user's cumulative spend for a given month (personal workspace).
+
+        Queries the credit_transaction ledger for debits attributed to this
+        user on their personal billing account.
 
         :param user_id: User ID.
         :param month: Month in YYYY-MM format.
         :return: Cumulative spend for the month.
         """
-        from sqlalchemy import cast, func
-        from sqlalchemy.types import Float
+        from datetime import datetime
 
-        from orchestra.db.models.orchestra_models import (
-            Context,
-            LogEvent,
-            LogEventContext,
-            Project,
+        from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+        from orchestra.db.models.orchestra_models import User
+
+        user = self.session.query(User).filter(User.id == user_id).first()
+        if not user or not user.billing_account_id:
+            return 0.0
+
+        year, mon = map(int, month.split("-"))
+        month_start = datetime(year, mon, 1)
+        if mon == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, mon + 1, 1)
+
+        dao = CreditTransactionDAO(self.session)
+        return dao.get_total_spend(
+            user.billing_account_id,
+            month_start,
+            month_end,
+            user_id=user_id,
         )
-
-        result = (
-            self.session.query(
-                func.coalesce(
-                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
-                    0.0,
-                ).label("spend"),
-            )
-            .select_from(LogEvent)
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .join(Context, LogEventContext.context_id == Context.id)
-            .join(Project, Context.project_id == Project.id)
-            .filter(
-                Project.name == "Assistants",
-                Project.user_id == user_id,
-                Project.organization_id.is_(None),
-                Context.name == "All/Spending/Monthly",
-                LogEvent.data.op("->>")("_user_id") == user_id,
-                LogEvent.data.op("->>")("month") == month,
-            )
-            .first()
-        )
-
-        if result and result.spend:
-            return float(result.spend)
-        return 0.0
 
     # =========================================================================
     # ORGANIZATION MEMBERSHIP HELPERS
