@@ -18,6 +18,7 @@ N. Pool Number CRUD endpoints
 O. 24h window tracking (DAO + endpoint level)
 P. Admin endpoint flows (assign → resolve, route → resolve, delete)
 Q. General success paths (happy-path flows without conflicts)
+R. Call permission (DAO + endpoints)
 """
 
 from __future__ import annotations
@@ -2824,3 +2825,274 @@ class TestRouteCleanupOnIdentityClaim:
         )
         dbsession.flush()
         assert user.whatsapp_number == "+16502530105"
+
+
+# ============================================================================
+# Group R: Call Permission
+# ============================================================================
+
+
+class TestCallPermissionDAO:
+    """DAO-level tests for update_call_permission / check_call_permission."""
+
+    @pytest.fixture
+    def route_setup(self, dbsession: Session, dao, pool_numbers):
+        user = _make_user(dbsession, "callperm@test.com")
+        assistant = _make_assistant(dbsession, user, "CallBot")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+        contact = "+15559990001"
+        route, _ = dao.get_or_create_route(assistant.agent_id, contact)
+        dbsession.flush()
+        return pool_numbers[0].number, contact, route
+
+    def test_update_accepted_sets_expiry(
+        self,
+        dbsession: Session,
+        dao,
+        route_setup,
+    ):
+        pool_num, contact, _ = route_setup
+        route = dao.update_call_permission(pool_num, contact, "accepted")
+        assert route.call_permission_status == "accepted"
+        assert route.call_permission_granted_at is not None
+        assert route.call_permission_expires_at is not None
+        delta = route.call_permission_expires_at - route.call_permission_granted_at
+        assert timedelta(days=6, hours=23) < delta <= timedelta(days=7, seconds=5)
+
+    def test_update_rejected_clears_timestamps(
+        self,
+        dbsession: Session,
+        dao,
+        route_setup,
+    ):
+        pool_num, contact, _ = route_setup
+        dao.update_call_permission(pool_num, contact, "accepted")
+        route = dao.update_call_permission(pool_num, contact, "rejected")
+        assert route.call_permission_status == "rejected"
+        assert route.call_permission_granted_at is None
+        assert route.call_permission_expires_at is None
+
+    def test_check_returns_true_when_accepted_and_valid(
+        self,
+        dao,
+        route_setup,
+    ):
+        pool_num, contact, _ = route_setup
+        dao.update_call_permission(pool_num, contact, "accepted")
+        permitted, expires_at = dao.check_call_permission(pool_num, contact)
+        assert permitted is True
+        assert expires_at is not None
+
+    def test_check_returns_false_when_expired(
+        self,
+        dbsession: Session,
+        dao,
+        route_setup,
+    ):
+        pool_num, contact, route = route_setup
+        dao.update_call_permission(pool_num, contact, "accepted")
+        route.call_permission_expires_at = datetime.now(timezone.utc) - timedelta(
+            hours=1,
+        )
+        dbsession.flush()
+        permitted, expires_at = dao.check_call_permission(pool_num, contact)
+        assert permitted is False
+        assert expires_at is not None
+
+    def test_check_returns_false_when_rejected(self, dao, route_setup):
+        pool_num, contact, _ = route_setup
+        dao.update_call_permission(pool_num, contact, "rejected")
+        permitted, expires_at = dao.check_call_permission(pool_num, contact)
+        assert permitted is False
+        assert expires_at is None
+
+    def test_check_returns_false_when_never_requested(self, dao, route_setup):
+        pool_num, contact, _ = route_setup
+        permitted, expires_at = dao.check_call_permission(pool_num, contact)
+        assert permitted is False
+        assert expires_at is None
+
+    def test_check_returns_false_when_no_route(self, dao):
+        permitted, expires_at = dao.check_call_permission(
+            "+10000000000",
+            "+19999999999",
+        )
+        assert permitted is False
+        assert expires_at is None
+
+    def test_update_returns_none_when_no_route(self, dao):
+        result = dao.update_call_permission("+10000000000", "+19999999999", "accepted")
+        assert result is None
+
+    def test_permission_survives_re_accept(
+        self,
+        dbsession: Session,
+        dao,
+        route_setup,
+    ):
+        pool_num, contact, _ = route_setup
+        dao.update_call_permission(pool_num, contact, "accepted")
+        first_granted = dao._get_route_by_numbers(
+            pool_num,
+            contact,
+        ).call_permission_granted_at
+
+        route = dao.update_call_permission(pool_num, contact, "accepted")
+        assert route.call_permission_status == "accepted"
+        assert route.call_permission_granted_at >= first_granted
+        delta = route.call_permission_expires_at - route.call_permission_granted_at
+        assert timedelta(days=6, hours=23) < delta <= timedelta(days=7, seconds=5)
+
+
+class TestCallPermissionEndpoints:
+    """Endpoint-level tests for POST/GET /admin/whatsapp/call-permission."""
+
+    @pytest.fixture
+    def route_setup(self, dbsession: Session, dao, pool_numbers):
+        user = _make_user(dbsession, "callperm_api@test.com")
+        assistant = _make_assistant(dbsession, user, "CallBotAPI")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+        contact = "+15559990010"
+        dao.get_or_create_route(assistant.agent_id, contact)
+        dbsession.commit()
+        return pool_numbers[0].number, contact
+
+    async def test_post_accepted_returns_expiry(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        resp = await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "accepted",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert data["expires_at"] is not None
+
+    async def test_get_permitted_true(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "accepted",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        resp = await client.get(
+            "/v0/admin/whatsapp/call-permission",
+            params={"pool_number": pool_num, "contact_number": contact},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["permitted"] is True
+        assert data["expires_at"] is not None
+
+    async def test_get_permitted_false_no_permission(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        resp = await client.get(
+            "/v0/admin/whatsapp/call-permission",
+            params={"pool_number": pool_num, "contact_number": contact},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["permitted"] is False
+        assert data["expires_at"] is None
+
+    async def test_post_rejected_clears_permission(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "accepted",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "rejected",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        resp = await client.get(
+            "/v0/admin/whatsapp/call-permission",
+            params={"pool_number": pool_num, "contact_number": contact},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["permitted"] is False
+
+    async def test_post_invalid_status_rejected(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        resp = await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "maybe",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    async def test_post_no_route_returns_404(
+        self,
+        client: AsyncClient,
+    ):
+        resp = await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": "+10000000000",
+                "contact_number": "+19999999999",
+                "status": "accepted",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_get_no_route_returns_permitted_false(
+        self,
+        client: AsyncClient,
+    ):
+        resp = await client.get(
+            "/v0/admin/whatsapp/call-permission",
+            params={
+                "pool_number": "+10000000000",
+                "contact_number": "+19999999999",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["permitted"] is False

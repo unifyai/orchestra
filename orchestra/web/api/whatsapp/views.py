@@ -113,6 +113,21 @@ class ConflictEventResponse(BaseModel):
     resolved_at: Optional[str]
 
 
+class CallPermissionUpdateRequest(BaseModel):
+    pool_number: str = Field(..., description="Pool number (E.164).")
+    contact_number: str = Field(..., description="External contact number (E.164).")
+    status: str = Field(
+        ...,
+        description="Permission status: 'accepted' or 'rejected'.",
+        pattern="^(accepted|rejected)$",
+    )
+
+
+class CallPermissionResponse(BaseModel):
+    permitted: bool
+    expires_at: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -387,6 +402,64 @@ def list_conflict_events(
         )
         for e in events
     ]
+
+
+# ---------------------------------------------------------------------------
+# Call permission endpoints
+# ---------------------------------------------------------------------------
+
+
+@admin_router.post("/whatsapp/call-permission")
+def update_call_permission(
+    body: CallPermissionUpdateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Store a call permission response from a contact.
+
+    Called by Communication when a contact accepts or rejects a voice
+    call permission template.
+    """
+    dao = SharedPoolDAO(session)
+    route = dao.update_call_permission(
+        body.pool_number,
+        body.contact_number,
+        body.status,
+    )
+    if route is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No route found for this pool/contact pair.",
+        )
+    session.commit()
+    return {
+        "pool_number": body.pool_number,
+        "contact_number": body.contact_number,
+        "status": body.status,
+        "expires_at": (
+            route.call_permission_expires_at.isoformat()
+            if route.call_permission_expires_at
+            else None
+        ),
+    }
+
+
+@admin_router.get("/whatsapp/call-permission")
+def check_call_permission(
+    pool_number: str = Query(..., description="Pool number (E.164)."),
+    contact_number: str = Query(..., description="Contact number (E.164)."),
+    session: Session = Depends(get_db_session),
+) -> CallPermissionResponse:
+    """Check whether a contact has granted voice call permission.
+
+    Called by Communication before placing an outbound WhatsApp call
+    to decide between direct call vs. invite template.
+    """
+    dao = SharedPoolDAO(session)
+    permitted, expires_at = dao.check_call_permission(pool_number, contact_number)
+    return CallPermissionResponse(
+        permitted=permitted,
+        expires_at=expires_at.isoformat() if expires_at else None,
+    )
 
 
 # ---------------------------------------------------------------------------
