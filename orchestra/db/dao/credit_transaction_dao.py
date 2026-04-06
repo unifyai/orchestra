@@ -148,6 +148,7 @@ class CreditTransactionDAO:
         interval: str = "day",
         *,
         category: str | None = None,
+        categories: list[str] | None = None,
         assistant_id: int | None = None,
         user_id: str | None = None,
     ) -> list[tuple[datetime, float]]:
@@ -158,6 +159,8 @@ class CreditTransactionDAO:
 
         Args:
             interval: One of ``minute``, ``hour``, ``day``, ``month``, ``year``.
+            category: Single category filter (mutually exclusive with *categories*).
+            categories: List of allowed categories (mutually exclusive with *category*).
         """
         bucket = func.date_trunc(interval, CreditTransaction.at)
         q = (
@@ -176,6 +179,8 @@ class CreditTransactionDAO:
         )
         if category:
             q = q.filter(CreditTransaction.category == category)
+        elif categories:
+            q = q.filter(CreditTransaction.category.in_(categories))
         if assistant_id is not None:
             q = q.filter(CreditTransaction.assistant_id == assistant_id)
         if user_id is not None:
