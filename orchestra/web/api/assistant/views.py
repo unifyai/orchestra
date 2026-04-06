@@ -1138,14 +1138,8 @@ async def create_assistant_contact(
 
     contact_type = contact_request.contact_type
 
-    if contact_type == "whatsapp":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="WhatsApp contacts are not yet available. Coming soon!",
-        )
-
-    # 2. Require verified profile number for phone contacts
-    if contact_type in ("phone",):
+    # 2. Require verified profile number for phone/whatsapp contacts
+    if contact_type in ("phone", "whatsapp"):
         user_dao = UserDAO(session)
         user_rows = user_dao.filter(id=user_id)
         if not user_rows:
