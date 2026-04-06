@@ -18,6 +18,7 @@ from orchestra.web.api.plot.validation import (
     VALID_SCALES,
     VALID_SORT_ORDER,
 )
+from orchestra.web.api.utils.http_client import get_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -389,40 +390,39 @@ async def infer_plot_config(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{orchestra_url}/v0/chat/completions",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
+        client = get_async_client()
+        response = await client.post(
+            f"{orchestra_url}/v0/chat/completions",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=30.0,
+        )
+
+        if response.status_code != 200:
+            error_detail = response.json().get("detail", response.text)
+            raise PlotConfigInferenceError(
+                f"LLM request failed with status {response.status_code}: {error_detail}",
             )
 
-            if response.status_code != 200:
-                error_detail = response.json().get("detail", response.text)
-                raise PlotConfigInferenceError(
-                    f"LLM request failed with status {response.status_code}: {error_detail}",
-                )
+        data = response.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content")
 
-            data = response.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content")
+        if not content:
+            raise PlotConfigInferenceError("No response content from LLM")
 
-            if not content:
-                raise PlotConfigInferenceError("No response content from LLM")
+        parsed = _parse_llm_response(content)
 
-            # Parse the JSON response
-            parsed = _parse_llm_response(content)
+        validated = validate_plot_config(parsed, available_fields, field_types)
 
-            # Validate and apply fallbacks
-            validated = validate_plot_config(parsed, available_fields, field_types)
+        logger.info(
+            f"Inferred plot config: type={validated.get('type')}, "
+            f"confidence={validated.get('confidence')}",
+        )
 
-            logger.info(
-                f"Inferred plot config: type={validated.get('type')}, "
-                f"confidence={validated.get('confidence')}",
-            )
-
-            return validated
+        return validated
 
     except httpx.RequestError as e:
         raise PlotConfigInferenceError(f"HTTP request failed: {e}") from e

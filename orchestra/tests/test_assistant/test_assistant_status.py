@@ -22,6 +22,8 @@ from orchestra.web.api.utils.assistant_infra import (
 # get_running_jobs unit tests
 # =============================================================================
 
+_GET_CLIENT_PATH = "orchestra.web.api.utils.assistant_infra.get_async_client"
+
 
 def _mock_response(status_code: int, json_data: dict) -> MagicMock:
     resp = MagicMock()
@@ -46,12 +48,10 @@ async def test_get_running_jobs_returns_running_job_names():
         },
     )
     mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        _GET_CLIENT_PATH,
         return_value=mock_client,
     ), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
@@ -92,12 +92,10 @@ async def test_get_running_jobs_filters_out_completed_jobs():
         },
     )
     mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        _GET_CLIENT_PATH,
         return_value=mock_client,
     ), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
@@ -115,12 +113,10 @@ async def test_get_running_jobs_filters_out_completed_jobs():
 async def test_get_running_jobs_empty_jobs_list():
     mock_resp = _mock_response(200, {"success": True, "jobs": []})
     mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        _GET_CLIENT_PATH,
         return_value=mock_client,
     ), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
@@ -138,12 +134,10 @@ async def test_get_running_jobs_empty_jobs_list():
 async def test_get_running_jobs_comms_returns_500():
     mock_resp = _mock_response(500, {"detail": "Internal Server Error"})
     mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        _GET_CLIENT_PATH,
         return_value=mock_client,
     ), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
@@ -160,12 +154,10 @@ async def test_get_running_jobs_comms_returns_500():
 @pytest.mark.anyio
 async def test_get_running_jobs_comms_unreachable():
     mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
     with patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        _GET_CLIENT_PATH,
         return_value=mock_client,
     ), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
@@ -206,12 +198,10 @@ async def test_get_running_jobs_normalizes_assistant_id():
     """assistant-id labels are lowercased with underscores replaced by hyphens."""
     mock_resp = _mock_response(200, {"success": True, "jobs": []})
     mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        _GET_CLIENT_PATH,
         return_value=mock_client,
     ), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
@@ -238,12 +228,10 @@ async def test_get_runtime_status_returns_payload():
         },
     )
     mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(return_value=mock_resp)
 
     with patch(
-        "orchestra.web.api.utils.assistant_infra.httpx.AsyncClient",
+        _GET_CLIENT_PATH,
         return_value=mock_client,
     ), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",

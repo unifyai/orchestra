@@ -2,7 +2,6 @@ import datetime
 import logging
 import os
 
-import httpx
 from fastapi import Depends, File, Form, HTTPException, Path, UploadFile, status
 from fastapi.routing import APIRouter
 from sqlalchemy.orm import Session
@@ -19,6 +18,7 @@ from orchestra.web.api.messages.schema import (
     MessageStatus,
 )
 from orchestra.web.api.utils.gcp import parse_gcs_url
+from orchestra.web.api.utils.http_client import get_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -94,17 +94,17 @@ async def _dispatch_to_adapters(
         payload["attachments"] = attachments
     if tags:
         payload["tags"] = tags
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{adapters_url}/api/message",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json=payload,
-            timeout=30,
+    client = get_async_client()
+    response = await client.post(
+        f"{adapters_url}/api/message",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json=payload,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        logger.error(
+            f"Adapter dispatch failed: {response.status_code} {response.text}",
         )
-        if response.status_code != 200:
-            logger.error(
-                f"Adapter dispatch failed: {response.status_code} {response.text}",
-            )
 
 
 def _to_status(msg) -> MessageStatus:
@@ -175,20 +175,20 @@ async def upload_attachment(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File size exceeds {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB limit.",
         )
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{adapters_url}/unify/attachment",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            files={
-                "file": (
-                    file.filename,
-                    file_content,
-                    file.content_type or "application/octet-stream",
-                ),
-            },
-            data={"assistant_id": str(assistant_id)},
-            timeout=60,
-        )
+    client = get_async_client()
+    resp = await client.post(
+        f"{adapters_url}/unify/attachment",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        files={
+            "file": (
+                file.filename,
+                file_content,
+                file.content_type or "application/octet-stream",
+            ),
+        },
+        data={"assistant_id": str(assistant_id)},
+        timeout=60,
+    )
     if resp.status_code != 200:
         logger.error(f"Attachment upload failed: {resp.status_code} {resp.text}")
         raise HTTPException(

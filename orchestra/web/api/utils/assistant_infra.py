@@ -6,6 +6,8 @@ from typing import Any, List
 
 import httpx
 
+from orchestra.web.api.utils.http_client import get_async_client
+
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 COMMS_URL_PREVIEW = os.environ.get("UNITY_COMMS_URL_PREVIEW")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
@@ -98,23 +100,24 @@ async def create_phone_number(
     voice_url = adapters_url + "/twilio/call"
     sms_url = adapters_url + "/twilio/sms"
     status_callback = adapters_url + "/twilio/call-status"
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        try:
-            response = await client.post(
-                f"{comms_url}/phone/create",
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                json={
-                    "voice_url": voice_url,
-                    "sms_url": sms_url,
-                    "status_callback": status_callback,
-                    "phone_country": phone_country,
-                },
-            )
-            return response.json()
-        except httpx.TimeoutException:
-            raise Exception(
-                "Phone creation timed out - comms service may be cold starting",
-            )
+    client = get_async_client()
+    try:
+        response = await client.post(
+            f"{comms_url}/phone/create",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "voice_url": voice_url,
+                "sms_url": sms_url,
+                "status_callback": status_callback,
+                "phone_country": phone_country,
+            },
+            timeout=90.0,
+        )
+        return response.json()
+    except httpx.TimeoutException:
+        raise Exception(
+            "Phone creation timed out - comms service may be cold starting",
+        )
 
 
 async def assign_whatsapp_pool_number(
@@ -163,17 +166,17 @@ async def register_whatsapp_sender(
     """
     comms_url = _comms_url_for(deploy_env)
     callback_url = _adapters_url_for(deploy_env) + "/twilio/whatsapp"
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{comms_url}/whatsapp/create",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "phone_number": phone_number,
-                "callback_url": callback_url,
-            },
-            timeout=20,
-        )
-        return response.json()
+    client = get_async_client()
+    response = await client.post(
+        f"{comms_url}/whatsapp/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={
+            "phone_number": phone_number,
+            "callback_url": callback_url,
+        },
+        timeout=20,
+    )
+    return response.json()
 
 
 async def delete_whatsapp_routes(
@@ -204,21 +207,21 @@ async def notify_pool_reassignment(
     Returns per-recipient message SIDs for delivery tracking.
     """
     comms_url = _comms_url_for(deploy_env)
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{comms_url}/whatsapp/notify",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "from_number": old_number,
-                "recipients": recipients,
-                "old_contact": old_number,
-                "new_contact": new_number,
-                "callback_id": str(conflict_event_id),
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_async_client()
+    response = await client.post(
+        f"{comms_url}/whatsapp/notify",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={
+            "from_number": old_number,
+            "recipients": recipients,
+            "old_contact": old_number,
+            "new_contact": new_number,
+            "callback_id": str(conflict_event_id),
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
@@ -232,16 +235,16 @@ async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
         JSON response from the phone deletion endpoint
     """
     comms_url = _comms_url_for(deploy_env)
-    async with httpx.AsyncClient() as client:
-        response = await client.request(
-            "DELETE",
-            f"{comms_url}/phone/delete",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={"PhoneNumber": phone_number},
-            timeout=20,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_async_client()
+    response = await client.request(
+        "DELETE",
+        f"{comms_url}/phone/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={"PhoneNumber": phone_number},
+        timeout=20,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def create_email(
@@ -262,18 +265,18 @@ async def create_email(
         Response from the email creation endpoint
     """
     comms_url = _comms_url_for(deploy_env)
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{comms_url}/gmail/create",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "local": local,
-                "first_name": first_name,
-                "last_name": last_name,
-            },
-            timeout=20,
-        )
-        return response.json()
+    client = get_async_client()
+    response = await client.post(
+        f"{comms_url}/gmail/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={
+            "local": local,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
+        timeout=20,
+    )
+    return response.json()
 
 
 async def delete_email(email: str, deploy_env: str | None = None):
@@ -287,16 +290,16 @@ async def delete_email(email: str, deploy_env: str | None = None):
         JSON response from the email deletion endpoint
     """
     comms_url = _comms_url_for(deploy_env)
-    async with httpx.AsyncClient() as client:
-        response = await client.request(
-            "DELETE",
-            f"{comms_url}/gmail/delete",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={"primary_email": email},
-            timeout=20,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_async_client()
+    response = await client.request(
+        "DELETE",
+        f"{comms_url}/gmail/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={"primary_email": email},
+        timeout=20,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def watch_email(email: str, deploy_env: str | None = None):
@@ -311,18 +314,17 @@ async def watch_email(email: str, deploy_env: str | None = None):
         JSON response from the email watch endpoint
     """
     comms_url = _comms_url_for(deploy_env)
-    print(f"Watching email: {email}")
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{comms_url}/gmail/watch",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "primary_email": email,
-                "topic": f"gmail-notifications{_env_suffix(deploy_env)}",
-            },
-            timeout=20,
-        )
-        return response.json()
+    client = get_async_client()
+    response = await client.post(
+        f"{comms_url}/gmail/watch",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={
+            "primary_email": email,
+            "topic": f"gmail-notifications{_env_suffix(deploy_env)}",
+        },
+        timeout=20,
+    )
+    return response.json()
 
 
 async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
@@ -338,19 +340,19 @@ async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     """
     comms_url = _comms_url_for(deploy_env)
     topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f"{comms_url}/infra/pubsub/topic",
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                data={"topic_name": topic_name},
-                timeout=30,
-            )
-            return response.json()
-        except httpx.TimeoutException:
-            raise Exception(
-                "Pubsub topic creation timed out - comms service may be cold starting",
-            )
+    client = get_async_client()
+    try:
+        response = await client.post(
+            f"{comms_url}/infra/pubsub/topic",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            data={"topic_name": topic_name},
+            timeout=30,
+        )
+        return response.json()
+    except httpx.TimeoutException:
+        raise Exception(
+            "Pubsub topic creation timed out - comms service may be cold starting",
+        )
 
 
 async def _request_cleanup_step(
@@ -374,29 +376,28 @@ async def _request_cleanup_step(
         )
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.request(
-                method,
-                f"{comms_url}{path}",
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                data=data,
-                json=json_body,
-                timeout=timeout,
-            )
-            if response.status_code == 404:
-                # Resource already gone — idempotent cleanup success.
-                return _cleanup_step_result(
-                    name,
-                    success=True,
-                    skipped=True,
-                    reason="not_found",
-                )
-            response.raise_for_status()
+        client = get_async_client()
+        response = await client.request(
+            method,
+            f"{comms_url}{path}",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            data=data,
+            json=json_body,
+            timeout=timeout,
+        )
+        if response.status_code == 404:
             return _cleanup_step_result(
                 name,
                 success=True,
-                response=_safe_json(response),
+                skipped=True,
+                reason="not_found",
             )
+        response.raise_for_status()
+        return _cleanup_step_result(
+            name,
+            success=True,
+            response=_safe_json(response),
+        )
     except httpx.TimeoutException:
         logging.warning("%s timed out", name)
         return _cleanup_step_result(
@@ -531,13 +532,13 @@ async def get_social_platforms_costs():
     """
     Fetch available social platforms and their costs.
     """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{COMMS_URL}/social/available-platforms",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=20,
-        )
-        return response.json()
+    client = get_async_client()
+    response = await client.get(
+        f"{COMMS_URL}/social/available-platforms",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=20,
+    )
+    return response.json()
 
 
 RUNTIME_JOB_LOOKBACK_HOURS = 36
@@ -563,20 +564,26 @@ async def get_running_jobs(
 
     try:
         label = str(assistant_id).lower().replace("_", "-")
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{comms_url}/infra/jobs",
-                params={
-                    "label_selector": f"app=unity,assistant-id={label}",
-                    "hours": RUNTIME_JOB_LOOKBACK_HOURS,
-                },
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                timeout=10,
+        client = get_async_client()
+        response = await client.get(
+            f"{comms_url}/infra/jobs",
+            params={
+                "label_selector": f"app=unity,assistant-id={label}",
+                "hours": RUNTIME_JOB_LOOKBACK_HOURS,
+            },
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            logging.warning(
+                "get_running_jobs: comms returned %d for assistant %s",
+                response.status_code,
+                assistant_id,
             )
-            if response.status_code != 200:
-                return []
-            data = response.json()
+            return []
+        data = response.json()
     except Exception:
+        logging.exception("get_running_jobs failed for assistant %s", assistant_id)
         return []
 
     return [
@@ -597,17 +604,23 @@ async def get_runtime_status(
         return None
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{comms_url}/infra/runtime/{assistant_id}",
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                timeout=10,
+        client = get_async_client()
+        response = await client.get(
+            f"{comms_url}/infra/runtime/{assistant_id}",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            logging.warning(
+                "get_runtime_status: comms returned %d for assistant %s",
+                response.status_code,
+                assistant_id,
             )
-            if response.status_code != 200:
-                return None
-            data = _safe_json(response)
-            return data if isinstance(data, dict) else {}
+            return None
+        data = _safe_json(response)
+        return data if isinstance(data, dict) else {}
     except Exception:
+        logging.exception("get_runtime_status failed for assistant %s", assistant_id)
         return None
 
 
@@ -644,63 +657,63 @@ async def stop_jobs(
 
     label = assistant_id.lower().replace("_", "-")
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{comms_url}/infra/jobs",
-                params={
-                    "label_selector": f"app=unity,assistant-id={label}",
-                    "hours": RUNTIME_JOB_LOOKBACK_HOURS,
-                },
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                timeout=10,
-            )
-            response.raise_for_status()
-            data = response.json()
-            job_names = [
-                job["job_name"]
-                for job in data.get("jobs", [])
-                if job.get("status") == "Running"
-            ]
-            steps["discover_jobs"] = _cleanup_step_result(
-                "discover_jobs",
-                success=True,
-                response={"job_names": job_names},
-            )
+        client = get_async_client()
+        response = await client.get(
+            f"{comms_url}/infra/jobs",
+            params={
+                "label_selector": f"app=unity,assistant-id={label}",
+                "hours": RUNTIME_JOB_LOOKBACK_HOURS,
+            },
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        job_names = [
+            job["job_name"]
+            for job in data.get("jobs", [])
+            if job.get("status") == "Running"
+        ]
+        steps["discover_jobs"] = _cleanup_step_result(
+            "discover_jobs",
+            success=True,
+            response={"job_names": job_names},
+        )
 
-            if job_names:
-                try:
-                    stop_response = await client.post(
-                        f"{comms_url}/infra/job/stop",
-                        data={"job_name": job_names[0]},
-                        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                        timeout=20,
-                    )
-                    stop_response.raise_for_status()
-                    steps["stop_job"] = _cleanup_step_result(
-                        "stop_job",
-                        success=True,
-                        response=_safe_json(stop_response),
-                    )
-                except httpx.TimeoutException:
-                    steps["stop_job"] = _cleanup_step_result(
-                        "stop_job",
-                        success=False,
-                        timed_out=True,
-                        error="request timed out",
-                    )
-                except Exception as exc:
-                    steps["stop_job"] = _cleanup_step_result(
-                        "stop_job",
-                        success=False,
-                        error=str(exc),
-                    )
-            else:
+        if job_names:
+            try:
+                stop_response = await client.post(
+                    f"{comms_url}/infra/job/stop",
+                    data={"job_name": job_names[0]},
+                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                    timeout=20,
+                )
+                stop_response.raise_for_status()
                 steps["stop_job"] = _cleanup_step_result(
                     "stop_job",
                     success=True,
-                    skipped=True,
-                    reason="no_running_jobs",
+                    response=_safe_json(stop_response),
                 )
+            except httpx.TimeoutException:
+                steps["stop_job"] = _cleanup_step_result(
+                    "stop_job",
+                    success=False,
+                    timed_out=True,
+                    error="request timed out",
+                )
+            except Exception as exc:
+                steps["stop_job"] = _cleanup_step_result(
+                    "stop_job",
+                    success=False,
+                    error=str(exc),
+                )
+        else:
+            steps["stop_job"] = _cleanup_step_result(
+                "stop_job",
+                success=True,
+                skipped=True,
+                reason="no_running_jobs",
+            )
     except httpx.TimeoutException:
         steps["discover_jobs"] = _cleanup_step_result(
             "discover_jobs",
@@ -1034,13 +1047,13 @@ def teardown_assistant_runtime_sync(
 
 async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
     wake_up_url = _adapters_url_for(deploy_env) + "/assistant/wakeup"
-    async with httpx.AsyncClient() as client:
-        return await client.post(
-            wake_up_url,
-            data={"assistant_id": assistant_id},
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=20,
-        )
+    client = get_async_client()
+    return await client.post(
+        wake_up_url,
+        data={"assistant_id": assistant_id},
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=20,
+    )
 
 
 async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
@@ -1053,15 +1066,15 @@ async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
         The JSON response from the webhook.
     """
     reawaken_url = _adapters_url_for(deploy_env) + "/assistant/update"
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            reawaken_url,
-            data={"assistant_id": assistant_id},
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=20,
-        )
-        response.raise_for_status()  # Raise an exception for bad status codes
-        return response.json()
+    client = get_async_client()
+    response = await client.post(
+        reawaken_url,
+        data={"assistant_id": assistant_id},
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def log_pre_hire_chat(
@@ -1080,18 +1093,18 @@ async def log_pre_hire_chat(
     """
     log_pre_hire_chat_url = _adapters_url_for(deploy_env) + "/unity/pre-hire"
     payload = {"assistant_id": assistant_id, "body": messages}
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            log_pre_hire_chat_url,
-            headers={
-                "Authorization": f"Bearer {ADMIN_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=20,
-        )
-        response.raise_for_status()
-        return {"status": "success"}
+    client = get_async_client()
+    response = await client.post(
+        log_pre_hire_chat_url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    response.raise_for_status()
+    return {"status": "success"}
 
 
 async def trigger_contact_sync(
@@ -1108,19 +1121,19 @@ async def trigger_contact_sync(
         JSON response from the webhook
     """
     url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {ADMIN_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "assistant_id": assistant_id,
-                "event_type": "sync_contacts",
-                "message": "Contacts sync triggered.",
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        return response.json()
+    client = get_async_client()
+    response = await client.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "assistant_id": assistant_id,
+            "event_type": "sync_contacts",
+            "message": "Contacts sync triggered.",
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    return response.json()
