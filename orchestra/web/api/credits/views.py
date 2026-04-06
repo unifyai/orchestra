@@ -190,12 +190,16 @@ def get_transaction_history(
     category: Optional[str] = Query(None),
     assistant_id: Optional[int] = Query(None),
     filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    start_date: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}-\d{2}"),
     session=Depends(get_db_session),
 ) -> TransactionHistoryResponse:
     """Paginated credit transaction history for the current billing account.
 
     Filters are scoped to the billing account resolved from the API key.
     Use ``user_id`` to see spending by a specific member in an org context.
+    Use ``start_date`` / ``end_date`` (ISO date strings) to restrict the
+    time window (inclusive start, exclusive end).
     """
     from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
 
@@ -209,6 +213,13 @@ def get_transaction_history(
     except ValueError:
         raise HTTPException(status_code=400, detail="Billing is not set up")
 
+    since = None
+    until = None
+    if start_date:
+        since = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    if end_date:
+        until = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
     txn_dao = CreditTransactionDAO(session)
     rows = txn_dao.get_transactions(
         billing_entity.billing_account_id,
@@ -217,6 +228,8 @@ def get_transaction_history(
         category=category,
         assistant_id=assistant_id,
         user_id=filter_user_id,
+        since=since,
+        until=until,
     )
 
     return TransactionHistoryResponse(

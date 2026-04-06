@@ -163,13 +163,16 @@ def upgrade() -> None:
         """),
     )
 
-    # 5. Backfill from LLM cost events in the Assistants project
+    # 5. Backfill from LLM cost events in the Assistants project.
+    # DISTINCT ON (le.id) avoids duplicates from the log_event_context
+    # many-to-many join. LEFT JOIN on "user" includes org-owned projects
+    # where project.user_id IS NULL.
     conn.execute(
         sa.text("""
             INSERT INTO credit_transaction
                 (billing_account_id, at, amount, balance_after, category,
                  assistant_id, user_id, organization_id, description, detail)
-            SELECT
+            SELECT DISTINCT ON (le.id)
                 COALESCE(o.billing_account_id, u.billing_account_id),
                 le.created_at,
                 -(le.data->>'billed_cost')::numeric,
@@ -178,7 +181,7 @@ def upgrade() -> None:
                 (le.data->>'_assistant_id')::integer,
                 le.data->>'_user_id',
                 p.organization_id,
-                COALESCE(le.data->'request'->>'model', 'LLM') || ' call',
+                'Assistant work',
                 jsonb_build_object(
                     'event', 'backfill_llm',
                     'log_event_id', le.id,
@@ -189,14 +192,14 @@ def upgrade() -> None:
             JOIN log_event_context lec ON le.id = lec.log_event_id
             JOIN context c ON lec.context_id = c.id
             JOIN project p ON c.project_id = p.id
-            JOIN "user" u ON p.user_id = u.id
+            LEFT JOIN "user" u ON p.user_id = u.id
             LEFT JOIN organization o ON p.organization_id = o.id
             WHERE p.name = 'Assistants'
               AND c.name LIKE '%/Events/LLM'
               AND le.data->>'billed_cost' IS NOT NULL
               AND (le.data->>'billed_cost')::numeric > 0
               AND COALESCE(o.billing_account_id, u.billing_account_id) IS NOT NULL
-            ON CONFLICT DO NOTHING
+            ORDER BY le.id
         """),
     )
 
@@ -211,7 +214,8 @@ def downgrade() -> None:
                 'backfill_hire',
                 'backfill_contact_setup',
                 'backfill_levy',
-                'backfill_llm'
+                'backfill_llm',
+                'backfill_org_llm'
             )
         """),
     )
