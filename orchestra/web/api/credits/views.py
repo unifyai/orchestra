@@ -1,10 +1,11 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
+from fastapi.responses import JSONResponse
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
@@ -308,3 +309,74 @@ def get_spending_breakdown(
         total=total,
         by_category=breakdown,
     )
+
+
+@router.get("/credits/spending/timeseries")
+def get_spending_timeseries(
+    request_fastapi: Request,
+    start_date: str = Query(..., regex=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: str = Query(..., regex=r"^\d{4}-\d{2}-\d{2}$"),
+    group_by: str = Query("day"),
+    category: Optional[str] = Query(None),
+    assistant_id: Optional[int] = Query(None),
+    filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    session=Depends(get_db_session),
+) -> JSONResponse:
+    """Time-bucketed spending from the credit ledger.
+
+    Returns ``{ "<timestamp>": { "sum": <float> }, ... }`` — the same
+    shape as ``/v0/logs/metric/sum`` so the console chart can consume it
+    without transformation changes.
+
+    ``group_by`` accepts either the raw interval (``day``, ``month``, …)
+    or the console-style granularity prefix (``time_day``, ``time_month``,
+    …).
+    """
+    from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+    _VALID_INTERVALS = {"minute", "hour", "day", "month", "year"}
+
+    _GRANULARITY_MAP = {
+        "time_minute": "minute",
+        "time_hour": "hour",
+        "time_day": "day",
+        "time_month": "month",
+        "time_year": "year",
+    }
+
+    interval = _GRANULARITY_MAP.get(group_by, group_by)
+    if interval not in _VALID_INTERVALS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid group_by value. Must be one of: {', '.join(sorted(_VALID_INTERVALS))}",
+        )
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    # end_date is inclusive — advance to next day for exclusive upper bound
+    end = datetime.strptime(end_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc,
+    ) + timedelta(days=1)
+
+    txn_dao = CreditTransactionDAO(session)
+    rows = txn_dao.get_spending_timeseries(
+        billing_entity.billing_account_id,
+        start,
+        end,
+        interval=interval,
+        category=category,
+        assistant_id=assistant_id,
+        user_id=filter_user_id,
+    )
+
+    result = {bucket.isoformat(): {"sum": total} for bucket, total in rows}
+    return JSONResponse(content=result)
