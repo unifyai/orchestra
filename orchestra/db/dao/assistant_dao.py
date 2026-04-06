@@ -742,60 +742,46 @@ class AssistantDAO:
         """
         Get assistant's cumulative spend for a given month.
 
-        Queries the Assistants project logs for spending data.
+        Queries the credit_transaction ledger for debits attributed to this
+        assistant within the calendar month.
 
         :param agent_id: Assistant agent ID.
         :param month: Month in YYYY-MM format.
         :return: Cumulative spend for the month (0.0 if no spend data).
         """
-        from sqlalchemy import cast, func
-        from sqlalchemy.types import Float
+        from datetime import datetime
 
-        from orchestra.db.models.orchestra_models import (
-            Context,
-            LogEvent,
-            LogEventContext,
-            Project,
-        )
+        from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+        from orchestra.db.models.orchestra_models import Organization, User
 
         assistant = self.get_assistant_by_agent_id(agent_id)
         if not assistant:
             return 0.0
 
-        # Build query based on whether assistant is personal or organizational
-        query = (
-            self.session.query(
-                func.coalesce(
-                    cast(LogEvent.data.op("->>")("cumulative_spend"), Float),
-                    0.0,
-                ).label("spend"),
-            )
-            .select_from(LogEvent)
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .join(Context, LogEventContext.context_id == Context.id)
-            .join(Project, Context.project_id == Project.id)
-            .filter(
-                Project.name == "Assistants",
-                Context.name == "All/Spending/Monthly",
-                LogEvent.data.op("->>")("_assistant_id") == str(agent_id),
-                LogEvent.data.op("->>")("month") == month,
-            )
-        )
-
-        # Add project ownership filter based on whether assistant is personal or org
+        # Resolve billing account
         if assistant.organization_id:
-            query = query.filter(Project.organization_id == assistant.organization_id)
-        else:
-            query = query.filter(
-                Project.organization_id.is_(None),
-                Project.user_id == assistant.user_id,
+            org = (
+                self.session.query(Organization)
+                .filter(Organization.id == assistant.organization_id)
+                .first()
             )
+            ba_id = org.billing_account_id if org else None
+        else:
+            user = self.session.query(User).filter(User.id == assistant.user_id).first()
+            ba_id = user.billing_account_id if user else None
 
-        result = query.first()
+        if ba_id is None:
+            return 0.0
 
-        if result and result.spend:
-            return float(result.spend)
-        return 0.0
+        year, mon = map(int, month.split("-"))
+        month_start = datetime(year, mon, 1)
+        if mon == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, mon + 1, 1)
+
+        dao = CreditTransactionDAO(self.session)
+        return dao.get_total_spend(ba_id, month_start, month_end, assistant_id=agent_id)
 
     def generate_unique_email_local(
         self,
