@@ -61,6 +61,11 @@ class OpenAIService:
         if not settings.openai_api_key:
             raise ValueError("openai_api_key is not set in settings.")
         self.client = OpenAI(api_key=settings.openai_api_key)
+        transport = httpx.HTTPTransport(retries=3)
+        self._http_client = httpx.Client(
+            transport=transport,
+            timeout=httpx.Timeout(30.0),
+        )
 
     def analyze_image(self, image_url: str) -> ImageAnalysisResponse:
         """
@@ -122,30 +127,27 @@ class OpenAIService:
         """
         # 1. Download audio
         try:
-            with httpx.Client() as client:
-                response = client.get(audio_url)
-                response.raise_for_status()
-                audio_bytes = response.content
-                content_type = response.headers.get(
-                    "content-type",
-                    "application/octet-stream",
-                )
+            response = self._http_client.get(audio_url)
+            response.raise_for_status()
+            audio_bytes = response.content
+            content_type = response.headers.get(
+                "content-type",
+                "application/octet-stream",
+            )
 
-                # Guess extension from MIME type to satisfy OpenAI API's format check.
-                extension = mimetypes.guess_extension(content_type)
-                if not extension:
-                    # Fallback for common audio types if guess fails
-                    if "wav" in content_type:
-                        extension = ".wav"
-                    elif "mpeg" in content_type:
-                        extension = ".mp3"
-                    elif "mp4" in content_type:
-                        extension = ".m4a"
-                    else:
-                        extension = ".tmp"  # Fallback that may fail
+            extension = mimetypes.guess_extension(content_type)
+            if not extension:
+                if "wav" in content_type:
+                    extension = ".wav"
+                elif "mpeg" in content_type:
+                    extension = ".mp3"
+                elif "mp4" in content_type:
+                    extension = ".m4a"
+                else:
+                    extension = ".tmp"
 
-                filename = f"audio{extension}"
-                audio_file = (filename, io.BytesIO(audio_bytes))
+            filename = f"audio{extension}"
+            audio_file = (filename, io.BytesIO(audio_bytes))
 
         except httpx.RequestError as e:
             logging.error(f"Failed to download audio from {audio_url}: {e}")

@@ -30,6 +30,8 @@ class CartesiaService:
             "Authorization": f"Bearer {settings.cartesia_api_key}",
             "Content-Type": "application/json",
         }
+        transport = httpx.HTTPTransport(retries=3)
+        self._client = httpx.Client(transport=transport, timeout=LONG_OPERATION_TIMEOUT)
 
     def _handle_audio_response(self, response: httpx.Response) -> bytes:
         if not (200 <= response.status_code < 300):
@@ -97,13 +99,12 @@ class CartesiaService:
         request_headers.pop("Content-Type", None)
 
         try:
-            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = client.post(
-                    url,
-                    data=data,
-                    files=files,
-                    headers=request_headers,
-                )
+            response = self._client.post(
+                url,
+                data=data,
+                files=files,
+                headers=request_headers,
+            )
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise CartesiaAPIError(
@@ -118,8 +119,7 @@ class CartesiaService:
         """
         url = f"{self.base_url}/voices/{voice_id}"
         try:
-            with httpx.Client() as client:
-                response = client.delete(url, headers=self.headers)
+            response = self._client.delete(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise CartesiaAPIError(
@@ -134,8 +134,7 @@ class CartesiaService:
         """
         url = f"{self.base_url}/voices"
         try:
-            with httpx.Client() as client:
-                response = client.get(url, headers=self.headers)
+            response = self._client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise CartesiaAPIError(
@@ -150,8 +149,7 @@ class CartesiaService:
         """
         url = f"{self.base_url}/voices/{id}"
         try:
-            with httpx.Client() as client:
-                response = client.get(url, headers=self.headers)
+            response = self._client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise CartesiaAPIError(
@@ -222,8 +220,12 @@ class CartesiaService:
             payload["language"] = language
 
         try:
-            with httpx.Client(timeout=TTS_TIMEOUT) as client:
-                response = client.post(url, json=payload, headers=self.headers)
+            response = self._client.post(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=TTS_TIMEOUT,
+            )
             audio_bytes = self._handle_audio_response(response)
             return audio_bytes, content_type
         except httpx.RequestError as e:

@@ -417,6 +417,8 @@ async def send_phone_verification(
 
     import httpx
 
+    from orchestra.web.api.utils.http_client import get_async_client
+
     user_dao = UserDAO(session)
     user_rows = user_dao.filter(id=body.user_id)
     if not user_rows:
@@ -449,38 +451,39 @@ async def send_phone_verification(
         )
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{comms_url}/social/verify",
-                headers={
-                    "Authorization": f"Bearer {admin_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "platform": body.phone_type,
-                    "account_identifier": body.phone_number,
-                },
+        client = get_async_client()
+        response = await client.post(
+            f"{comms_url}/social/verify",
+            headers={
+                "Authorization": f"Bearer {admin_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "platform": "phone",
+                "account_identifier": body.phone_number,
+            },
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            logger.error(
+                "Communication service returned %s: %s",
+                response.status_code,
+                response.text,
             )
-            if response.status_code != 200:
-                logger.error(
-                    "Communication service returned %s: %s",
-                    response.status_code,
-                    response.text,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Failed to send verification SMS.",
-                )
-            comms_data = response.json()
-            code = comms_data.get("verification_code") or comms_data.get(
-                "verificationCode",
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to send verification SMS.",
             )
-            if not code:
-                logger.error("Communication service did not return a verification code")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Failed to send verification SMS.",
-                )
+        comms_data = response.json()
+        code = comms_data.get("verification_code") or comms_data.get(
+            "verificationCode",
+        )
+        if not code:
+            logger.error("Communication service did not return a verification code")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to send verification SMS.",
+            )
     except httpx.HTTPError as exc:
         logger.error("Failed to reach communication service: %s", exc)
         raise HTTPException(
