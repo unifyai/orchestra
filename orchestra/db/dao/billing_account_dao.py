@@ -1,8 +1,10 @@
 """Data Access Object for BillingAccount operations."""
 
+from __future__ import annotations
+
 import decimal
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -17,6 +19,7 @@ from orchestra.db.models.orchestra_models import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 # Minimum auto-recharge amount ($25 to avoid tiny invoices)
 MIN_AUTORECHARGE_AMOUNT = decimal.Decimal("25")
@@ -176,6 +179,13 @@ class BillingAccountDAO:
         self,
         billing_account_id: int,
         quantity: float,
+        *,
+        category: str = "recharge",
+        assistant_id: int | None = None,
+        user_id: str | None = None,
+        organization_id: int | None = None,
+        description: str | None = None,
+        detail: dict[str, Any] | None = None,
     ) -> Optional[decimal.Decimal]:
         """
         Add credits to a billing account.
@@ -183,12 +193,17 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
-        Balance transitions are tracked automatically — a billing event
-        is published after the session commits if the balance crossed
-        zero in either direction.
+        A :class:`CreditTransaction` ledger row is inserted atomically
+        in the same transaction.
 
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to add.
+        :param category: Ledger category (``'recharge'``, ``'promo'``, etc.).
+        :param assistant_id: Optional assistant context.
+        :param user_id: Optional acting user.
+        :param organization_id: Optional organization context.
+        :param description: Human-readable description.
+        :param detail: Category-specific JSONB metadata.
         :return: New credit balance, or None if not found.
         """
         from orchestra.lib.billing_events import (
@@ -204,12 +219,32 @@ class BillingAccountDAO:
         new_credits = ba.credits + decimal.Decimal(str(quantity))
         ba.credits = new_credits
         track_balance_after(self.session, billing_account_id, new_credits)
+
+        self._record_transaction(
+            billing_account_id=billing_account_id,
+            amount=decimal.Decimal(str(quantity)),
+            balance_after=new_credits,
+            category=category,
+            assistant_id=assistant_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            description=description,
+            detail=detail,
+        )
+
         return new_credits
 
     def deduct_credits(
         self,
         billing_account_id: int,
         quantity: float,
+        *,
+        category: str = "other",
+        assistant_id: int | None = None,
+        user_id: str | None = None,
+        organization_id: int | None = None,
+        description: str | None = None,
+        detail: dict[str, Any] | None = None,
     ) -> Optional[decimal.Decimal]:
         """
         Deduct credits from a billing account.
@@ -217,12 +252,17 @@ class BillingAccountDAO:
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
-        Balance transitions are tracked automatically — a billing event
-        is published after the session commits if the balance crossed
-        zero in either direction.
+        A :class:`CreditTransaction` ledger row is inserted atomically
+        in the same transaction.
 
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to deduct.
+        :param category: Ledger category (``'llm'``, ``'hire'``, ``'media'``, etc.).
+        :param assistant_id: Optional assistant context.
+        :param user_id: Optional acting user.
+        :param organization_id: Optional organization context.
+        :param description: Human-readable description.
+        :param detail: Category-specific JSONB metadata.
         :return: New credit balance, or None if not found.
         """
         from orchestra.lib.billing_events import (
@@ -245,7 +285,55 @@ class BillingAccountDAO:
 
         ba.credits = new_credits
         track_balance_after(self.session, billing_account_id, new_credits)
+
+        amount = decimal.Decimal(str(quantity))
+
+        self._record_transaction(
+            billing_account_id=billing_account_id,
+            amount=-amount,
+            balance_after=new_credits,
+            category=category,
+            assistant_id=assistant_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            description=description,
+            detail=detail,
+        )
+
         return new_credits
+
+    # ------------------------------------------------------------------
+    # Ledger helpers
+    # ------------------------------------------------------------------
+
+    def _record_transaction(
+        self,
+        *,
+        billing_account_id: int,
+        amount: decimal.Decimal,
+        balance_after: decimal.Decimal,
+        category: str,
+        assistant_id: int | None = None,
+        user_id: str | None = None,
+        organization_id: int | None = None,
+        description: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Insert a :class:`CreditTransaction` row."""
+        from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+        txn_dao = CreditTransactionDAO(self.session)
+        txn_dao.insert(
+            billing_account_id=billing_account_id,
+            amount=amount,
+            balance_after=balance_after,
+            category=category,
+            assistant_id=assistant_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            description=description,
+            detail=detail,
+        )
 
     # =========================================================================
     # STRIPE
@@ -516,13 +604,22 @@ class BillingAccountDAO:
             )
 
         track_balance_before(self.session, billing_account_id, ba.credits)
-        ba.credits = ba.credits + decimal.Decimal(str(credit_amount))
+        amount = decimal.Decimal(str(credit_amount))
+        ba.credits = ba.credits + amount
         track_balance_after(self.session, billing_account_id, ba.credits)
+
+        self._record_transaction(
+            billing_account_id=billing_account_id,
+            amount=amount,
+            balance_after=ba.credits,
+            category="promo",
+            description="Promotional credit grant",
+        )
 
         recharge = Recharge(
             billing_account_id=billing_account_id,
             type=RECHARGE_TYPE_PROMO,
-            quantity=decimal.Decimal(str(credit_amount)),
+            quantity=amount,
             amount_usd=decimal.Decimal("0"),
             status=RechargeStatus.PAID,
         )
