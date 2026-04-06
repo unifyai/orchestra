@@ -198,7 +198,9 @@ class BillingAccountDAO:
 
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to add.
-        :param category: Ledger category (``'recharge'``, ``'promo'``, etc.).
+        :param category: Ledger category.  Public inflows use ``'recharge'``,
+            ``'promo'``, ``'refund'``, ``'dispute'``.  Internal reconciliation
+            routines may use free-form diagnostic categories.
         :param assistant_id: Optional assistant context.
         :param user_id: Optional acting user.
         :param organization_id: Optional organization context.
@@ -257,7 +259,9 @@ class BillingAccountDAO:
 
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to deduct.
-        :param category: Ledger category (``'llm'``, ``'hire'``, ``'media'``, etc.).
+        :param category: Ledger category.  Public spending uses ``'llm'``,
+            ``'hire'``, ``'resources'``, ``'media'``.  Internal reconciliation
+            routines may use free-form diagnostic categories.
         :param assistant_id: Optional assistant context.
         :param user_id: Optional acting user.
         :param organization_id: Optional organization context.
