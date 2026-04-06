@@ -1,7 +1,9 @@
 import logging
+from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -12,6 +14,9 @@ from orchestra.web.api.credits.schema import (
     CreditsResponse,
     DeductCreditsRequest,
     DeductCreditsResponse,
+    SpendingBreakdownResponse,
+    TransactionHistoryResponse,
+    TransactionItem,
 )
 
 router = APIRouter()
@@ -136,6 +141,12 @@ def deduct_credits(
         session,
         billing_entity,
         Decimal(str(request.amount)),
+        category=request.category,
+        assistant_id=request.assistant_id,
+        user_id=request.user_id or user_id,
+        organization_id=organization_id,
+        description=request.description,
+        detail=request.detail,
     )
 
     # Trigger auto-recharge if credits fell below threshold
@@ -165,4 +176,122 @@ def deduct_credits(
         previous_credits=current_credits,
         deducted=request.amount,
         current_credits=float(new_balance),
+    )
+
+
+@router.get(
+    "/credits/transactions",
+    response_model=TransactionHistoryResponse,
+)
+def get_transaction_history(
+    request_fastapi: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    category: Optional[str] = Query(None),
+    assistant_id: Optional[int] = Query(None),
+    filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    session=Depends(get_db_session),
+) -> TransactionHistoryResponse:
+    """Paginated credit transaction history for the current billing account.
+
+    Filters are scoped to the billing account resolved from the API key.
+    Use ``user_id`` to see spending by a specific member in an org context.
+    """
+    from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    txn_dao = CreditTransactionDAO(session)
+    rows = txn_dao.get_transactions(
+        billing_entity.billing_account_id,
+        limit=limit,
+        offset=offset,
+        category=category,
+        assistant_id=assistant_id,
+        user_id=filter_user_id,
+    )
+
+    return TransactionHistoryResponse(
+        transactions=[
+            TransactionItem(
+                id=r.id,
+                at=r.at,
+                amount=float(r.amount),
+                balance_after=(
+                    float(r.balance_after) if r.balance_after is not None else None
+                ),
+                category=r.category,
+                assistant_id=r.assistant_id,
+                user_id=r.user_id,
+                organization_id=r.organization_id,
+                description=r.description,
+                detail=r.detail,
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.get(
+    "/credits/spending",
+    response_model=SpendingBreakdownResponse,
+)
+def get_spending_breakdown(
+    request_fastapi: Request,
+    month: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}$"),
+    assistant_id: Optional[int] = Query(None),
+    filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    session=Depends(get_db_session),
+) -> SpendingBreakdownResponse:
+    """Monthly spending breakdown by category, queried from the credit ledger.
+
+    Uses the composite index ``(billing_account_id, category, at)``
+    so aggregation only touches relevant rows.
+
+    Use ``user_id`` to see spending by a specific member in an org context.
+    """
+    from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    if month is None:
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    year, mon = map(int, month.split("-"))
+    month_start = datetime(year, mon, 1, tzinfo=timezone.utc)
+    if mon == 12:
+        month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        month_end = datetime(year, mon + 1, 1, tzinfo=timezone.utc)
+
+    txn_dao = CreditTransactionDAO(session)
+    breakdown = txn_dao.get_spending_by_category(
+        billing_entity.billing_account_id,
+        month_start,
+        month_end,
+        assistant_id=assistant_id,
+        user_id=filter_user_id,
+    )
+    total = sum(breakdown.values())
+
+    return SpendingBreakdownResponse(
+        month=month,
+        total=total,
+        by_category=breakdown,
     )

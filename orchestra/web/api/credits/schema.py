@@ -1,5 +1,6 @@
+from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, field_validator, validator
 
@@ -23,9 +24,19 @@ class DeductCreditsRequest(BaseModel):
 
     Attributes:
         amount (float): The amount of credits to deduct (must be positive).
+        category: Ledger category (defaults to ``'llm'`` for backward compat).
+        assistant_id: Optional assistant that incurred the cost.
+        user_id: Optional acting user (for org cost attribution).
+        description: Human-readable description of the charge.
+        detail: Arbitrary JSON metadata (model name, token counts, etc.).
     """
 
     amount: float
+    category: str = "llm"
+    assistant_id: int | None = None
+    user_id: str | None = None
+    description: str | None = None
+    detail: dict | None = None
 
     @field_validator("amount")
     @classmethod
@@ -63,3 +74,29 @@ class RechargeCreateSchema(BaseModel):
         if values.get("type") == "payment" and not v:
             raise ValueError("transaction_id required for prepaid payments")
         return v
+
+
+# --- Transaction history & spending breakdown ---
+
+
+class TransactionItem(BaseModel):
+    id: int
+    at: datetime
+    amount: float
+    balance_after: Optional[float] = None
+    category: str
+    assistant_id: Optional[int] = None
+    user_id: Optional[str] = None
+    organization_id: Optional[int] = None
+    description: Optional[str] = None
+    detail: Optional[dict] = None
+
+
+class TransactionHistoryResponse(BaseModel):
+    transactions: list[TransactionItem]
+
+
+class SpendingBreakdownResponse(BaseModel):
+    month: str
+    total: float
+    by_category: dict[str, float]

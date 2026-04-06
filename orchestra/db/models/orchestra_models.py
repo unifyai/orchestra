@@ -2689,6 +2689,54 @@ class ConflictEvent(Base):
     )
 
 
+class CreditTransaction(Base):
+    """Append-only ledger of every credit movement on a billing account.
+
+    Positive ``amount`` = credits added (recharge, promo, dispute-won).
+    Negative ``amount`` = credits spent (LLM, media, setup, resources, refund, dispute).
+
+    ``balance_after`` is a snapshot captured in the same DB transaction
+    as the balance update so it can be used for reconciliation:
+    the latest row's ``balance_after`` must always equal
+    ``billing_account.credits``.  NULL for historical backfills
+    where the running balance cannot be reliably reconstructed.
+    """
+
+    __tablename__ = "credit_transaction"
+
+    id = Column(BigInteger, primary_key=True)
+    billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    # Financial
+    amount = Column(Numeric, nullable=False)
+    balance_after = Column(Numeric, nullable=True)
+
+    # Dimensions (indexed for fast filtering)
+    category = Column(String, nullable=False)
+    assistant_id = Column(Integer, nullable=True)
+    user_id = Column(String, nullable=True)
+    organization_id = Column(Integer, nullable=True)
+
+    description = Column(String, nullable=True)
+    detail = Column(JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("ix_credit_txn_ba_at", "billing_account_id", "at"),
+        Index("ix_credit_txn_ba_category_at", "billing_account_id", "category", "at"),
+        Index("ix_credit_txn_assistant_category_at", "assistant_id", "category", "at"),
+        Index("ix_credit_txn_user_at", "user_id", "at"),
+    )
+
+
 class AssistantCleanupTask(Base):
     """Retryable cleanup work item for assistant runtime/contact deletion.
 

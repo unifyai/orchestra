@@ -330,7 +330,19 @@ def create_recharge_model(
 
     # Credit the billing account
     ba_dao = BillingAccountDAO(session)
-    ba_dao.add_credits(ba.id, float(new_recharge_object.quantity))
+    ba_dao.add_credits(
+        ba.id,
+        float(new_recharge_object.quantity),
+        category="recharge" if new_recharge_object.type != "promo" else "promo",
+        user_id=new_recharge_object.user_id,
+        organization_id=(
+            new_recharge_object.organization_id
+            if hasattr(new_recharge_object, "organization_id")
+            else None
+        ),
+        description=f"Admin recharge ({new_recharge_object.type})",
+        detail={"event": "admin_recharge", "type": new_recharge_object.type},
+    )
 
     # Calculate amount_usd and invoice_group
     amount_usd = new_recharge_object.quantity
