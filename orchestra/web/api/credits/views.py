@@ -367,6 +367,8 @@ def get_spending_timeseries(
         tzinfo=timezone.utc,
     ) + timedelta(days=1)
 
+    _SPENDING_CATEGORIES = ["llm", "hire", "resources", "media"]
+
     txn_dao = CreditTransactionDAO(session)
     rows = txn_dao.get_spending_timeseries(
         billing_entity.billing_account_id,
@@ -374,6 +376,7 @@ def get_spending_timeseries(
         end,
         interval=interval,
         category=category,
+        categories=None if category else _SPENDING_CATEGORIES,
         assistant_id=assistant_id,
         user_id=filter_user_id,
     )
