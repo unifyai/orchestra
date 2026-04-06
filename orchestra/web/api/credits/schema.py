@@ -4,6 +4,21 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, field_validator, validator
 
+# ---------------------------------------------------------------------------
+# Canonical ledger category sets
+# ---------------------------------------------------------------------------
+# Spending (debit) categories — used by external callers via the public API.
+SpendingCategory = Literal["llm", "hire", "resources", "media"]
+SPENDING_CATEGORIES: set[str] = {"llm", "hire", "resources", "media"}
+
+# Credit (inflow) categories — recharges, promos, dispute resolutions.
+CreditCategory = Literal["recharge", "promo", "refund", "dispute"]
+CREDIT_CATEGORIES: set[str] = {"recharge", "promo", "refund", "dispute"}
+
+# The union of both sets for reference; internal/reconciliation routines may
+# use free-form strings outside this set (e.g. "void", "stale_pending_recharge").
+PUBLIC_CATEGORIES: set[str] = SPENDING_CATEGORIES | CREDIT_CATEGORIES
+
 
 class CreditsResponse(BaseModel):
     """
@@ -24,7 +39,8 @@ class DeductCreditsRequest(BaseModel):
 
     Attributes:
         amount (float): The amount of credits to deduct (must be positive).
-        category: Ledger category (defaults to ``'llm'`` for backward compat).
+        category: Spending category — one of ``llm``, ``hire``,
+            ``resources``, or ``media``.
         assistant_id: Optional assistant that incurred the cost.
         user_id: Optional acting user (for org cost attribution).
         description: Human-readable description of the charge.
@@ -32,7 +48,7 @@ class DeductCreditsRequest(BaseModel):
     """
 
     amount: float
-    category: str = "llm"
+    category: SpendingCategory = "llm"
     assistant_id: int | None = None
     user_id: str | None = None
     description: str | None = None

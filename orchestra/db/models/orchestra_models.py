@@ -2692,8 +2692,14 @@ class ConflictEvent(Base):
 class CreditTransaction(Base):
     """Append-only ledger of every credit movement on a billing account.
 
-    Positive ``amount`` = credits added (recharge, promo, dispute-won).
-    Negative ``amount`` = credits spent (LLM, media, setup, resources, refund, dispute).
+    Positive ``amount`` = credits added (recharge, promo, refund, dispute).
+    Negative ``amount`` = credits spent (llm, hire, resources, media).
+
+    The public API constrains ``category`` to the canonical spending set
+    (``llm | hire | resources | media``) for debits and
+    (``recharge | promo | refund | dispute``) for credits.
+    Internal reconciliation routines may use additional diagnostic
+    categories (e.g. ``void``, ``stale_pending_recharge``).
 
     ``balance_after`` is a snapshot captured in the same DB transaction
     as the balance update so it can be used for reconciliation:
