@@ -140,6 +140,48 @@ class CreditTransactionDAO:
             q = q.filter(CreditTransaction.organization_id == organization_id)
         return float(q.scalar())
 
+    def get_spending_timeseries(
+        self,
+        billing_account_id: int,
+        start: datetime,
+        end: datetime,
+        interval: str = "day",
+        *,
+        category: str | None = None,
+        assistant_id: int | None = None,
+        user_id: str | None = None,
+    ) -> list[tuple[datetime, float]]:
+        """Spending aggregated per time bucket for chart display.
+
+        Only debits (negative amounts) are included; the returned values are
+        positive (absolute spend).  Uses PostgreSQL ``date_trunc`` for bucketing.
+
+        Args:
+            interval: One of ``minute``, ``hour``, ``day``, ``month``, ``year``.
+        """
+        bucket = func.date_trunc(interval, CreditTransaction.at)
+        q = (
+            self.session.query(
+                bucket.label("bucket"),
+                func.sum(-CreditTransaction.amount).label("total"),
+            )
+            .filter(
+                CreditTransaction.billing_account_id == billing_account_id,
+                CreditTransaction.amount < 0,
+                CreditTransaction.at >= start,
+                CreditTransaction.at < end,
+            )
+            .group_by(bucket)
+            .order_by(bucket)
+        )
+        if category:
+            q = q.filter(CreditTransaction.category == category)
+        if assistant_id is not None:
+            q = q.filter(CreditTransaction.assistant_id == assistant_id)
+        if user_id is not None:
+            q = q.filter(CreditTransaction.user_id == user_id)
+        return [(row.bucket, float(row.total)) for row in q.all()]
+
     def get_balance_check(self, billing_account_id: int) -> Optional[decimal.Decimal]:
         """Return ``SUM(amount)`` for all transactions — should equal ``credits``."""
         result = (
