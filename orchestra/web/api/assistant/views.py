@@ -693,7 +693,20 @@ async def create_assistant(
             from orchestra.lib.billing import deduct_credits
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(session, billing_entity, Decimal(str(total_creation_cost)))
+            deduct_credits(
+                session,
+                billing_entity,
+                Decimal(str(total_creation_cost)),
+                category="hire",
+                assistant_id=assistant.agent_id if assistant else None,
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Assistant creation",
+                detail={
+                    "event": "assistant_creation",
+                    "assistant_id": assistant.agent_id if assistant else None,
+                },
+            )
             session.commit()
         except Exception as e_commit:
             logging.error(
@@ -1326,7 +1339,22 @@ async def create_assistant_contact(
             from orchestra.lib.billing import deduct_credits
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(session, billing_entity, one_time_cost)
+            deduct_credits(
+                session,
+                billing_entity,
+                one_time_cost,
+                category="resources",
+                assistant_id=assistant_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                description=f"Contact setup ({contact_type})",
+                detail={
+                    "event": "contact_setup",
+                    "contact_id": contact.id if contact else None,
+                    "contact_type": contact_type,
+                    "provider": provider,
+                },
+            )
 
         session.commit()
 
@@ -3624,6 +3652,11 @@ async def generate_assistant_photo(
                 session,
                 billing_entity,
                 Decimal(str(settings.photo_generation_cost)),
+                category="media",
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Photo generation",
+                detail={"event": "photo_generate"},
             )
             session.commit()
 
@@ -3785,6 +3818,11 @@ async def edit_assistant_photo(
                 session,
                 edit_entity,
                 Decimal(str(settings.photo_generation_cost)),
+                category="media",
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Photo edit",
+                detail={"event": "photo_edit"},
             )
             session.commit()
 
@@ -4036,6 +4074,14 @@ async def animate_video_endpoint(
                 session,
                 billing_entity,
                 Decimal(str(video_cost)),
+                category="media",
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Video animation",
+                detail={
+                    "event": "video_animate",
+                    "duration_seconds": billable_duration,
+                },
             )
             session.commit()
 
