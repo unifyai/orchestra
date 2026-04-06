@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
@@ -811,6 +811,67 @@ class SharedPoolDAO:
             self.session.delete(r)
         self.session.flush()
         return affected
+
+    # ------------------------------------------------------------------
+    # Call permission
+    # ------------------------------------------------------------------
+
+    def _get_route_by_numbers(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> SharedPlatformRoute | None:
+        pool = self.get_pool_number_by_value(pool_number)
+        if pool is None:
+            return None
+        return (
+            self.session.query(SharedPlatformRoute)
+            .filter(
+                SharedPlatformRoute.pool_number_id == pool.id,
+                SharedPlatformRoute.contact_number == contact_number,
+            )
+            .first()
+        )
+
+    def update_call_permission(
+        self,
+        pool_number: str,
+        contact_number: str,
+        permission_status: str,
+    ) -> SharedPlatformRoute | None:
+        route = self._get_route_by_numbers(pool_number, contact_number)
+        if route is None:
+            return None
+
+        now = datetime.now(timezone.utc)
+        route.call_permission_status = permission_status
+        if permission_status == "accepted":
+            route.call_permission_granted_at = now
+            route.call_permission_expires_at = now + timedelta(days=7)
+        else:
+            route.call_permission_granted_at = None
+            route.call_permission_expires_at = None
+
+        self.session.flush()
+        return route
+
+    def check_call_permission(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> tuple[bool, datetime | None]:
+        """Returns (permitted, expires_at)."""
+        route = self._get_route_by_numbers(pool_number, contact_number)
+        if route is None:
+            return False, None
+        if route.call_permission_status != "accepted":
+            return False, None
+        if route.call_permission_expires_at is None:
+            return False, None
+        now = datetime.now(timezone.utc)
+        if route.call_permission_expires_at <= now:
+            return False, route.call_permission_expires_at
+        return True, route.call_permission_expires_at
 
     # ------------------------------------------------------------------
     # Private helpers
