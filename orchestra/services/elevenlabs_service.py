@@ -12,8 +12,8 @@ class ElevenLabsAPIError(HTTPException):
         super().__init__(status_code=status_code, detail=detail)
 
 
-LONG_OPERATION_TIMEOUT = httpx.Timeout(60.0)  # 60 seconds
-TTS_TIMEOUT = httpx.Timeout(30.0)  # Timeout for TTS requests
+LONG_OPERATION_TIMEOUT = httpx.Timeout(60.0)
+TTS_TIMEOUT = httpx.Timeout(30.0)
 
 
 class ElevenLabsService:
@@ -30,6 +30,8 @@ class ElevenLabsService:
             "xi-api-key": settings.elevenlabs_api_key,
             "Content-Type": "application/json",
         }
+        transport = httpx.HTTPTransport(retries=3)
+        self._client = httpx.Client(transport=transport, timeout=LONG_OPERATION_TIMEOUT)
 
     def _handle_audio_response(self, response: httpx.Response) -> bytes:
         if not (200 <= response.status_code < 300):
@@ -108,13 +110,12 @@ class ElevenLabsService:
         request_headers.pop("Content-Type", None)
 
         try:
-            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = client.post(
-                    url,
-                    data=data,
-                    files=files,
-                    headers=request_headers,
-                )
+            response = self._client.post(
+                url,
+                data=data,
+                files=files,
+                headers=request_headers,
+            )
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -129,8 +130,7 @@ class ElevenLabsService:
         """
         url = f"{self.v1_base_url}/voices/{voice_id}"
         try:
-            with httpx.Client() as client:
-                response = client.delete(url, headers=self.headers)
+            response = self._client.delete(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -145,8 +145,7 @@ class ElevenLabsService:
         """
         url = f"{self.v2_base_url}/voices"
         try:
-            with httpx.Client() as client:
-                response = client.get(url, headers=self.headers)
+            response = self._client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -161,8 +160,7 @@ class ElevenLabsService:
         """
         url = f"{self.v1_base_url}/voices/{voice_id}"
         try:
-            with httpx.Client() as client:
-                response = client.get(url, headers=self.headers)
+            response = self._client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -248,13 +246,13 @@ class ElevenLabsService:
         )
 
         try:
-            with httpx.Client(timeout=TTS_TIMEOUT) as client:
-                response = client.post(
-                    url,
-                    json=payload,
-                    headers=self.headers,
-                    params=params,
-                )
+            response = self._client.post(
+                url,
+                json=payload,
+                headers=self.headers,
+                params=params,
+                timeout=TTS_TIMEOUT,
+            )
             audio_bytes = self._handle_audio_response(response)
             return audio_bytes, determined_content_type
         except httpx.RequestError as e:
@@ -291,8 +289,7 @@ class ElevenLabsService:
         request_headers["Content-Type"] = "application/json"
 
         try:
-            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = client.post(url, json=payload, headers=request_headers)
+            response = self._client.post(url, json=payload, headers=request_headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -321,8 +318,7 @@ class ElevenLabsService:
             payload["labels"] = labels
 
         try:
-            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = client.post(url, json=payload, headers=self.headers)
+            response = self._client.post(url, json=payload, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
