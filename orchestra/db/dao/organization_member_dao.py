@@ -287,14 +287,12 @@ class OrganizationMemberDAO:
             member.role_id = role_id
             self.session.flush()
 
-    def delete(self, id: int):
-        try:
-            org_member = self.session.query(OrganizationMember).filter_by(id=id).one()
-            self.session.delete(org_member)
-            self.session.commit()
-        except:
-            self.session.rollback()
-            raise ValueError
+    def delete(self, id: int) -> None:
+        """Stage deletion of an organization member on the caller's transaction."""
+
+        org_member = self.session.query(OrganizationMember).filter_by(id=id).one()
+        self.session.delete(org_member)
+        self.session.flush()
 
     def count_members(self, organization_id: int) -> int:
         """
