@@ -180,6 +180,10 @@ class UserAccountCleanupService:
         3. Delete from user table (cascades all user.id FKs)
         4. Archive Stripe customer (post-commit, best-effort)
 
+        Assistant cleanup follows the creator-owned lifecycle model. Any org-
+        scoped assistants whose ``user_id`` points at this user cascade with the
+        user row and must be included in the same runtime/contact/GCS cleanup.
+
         :param user_id: The user's ID
         :param force_org_check: If True, skip organization ownership check
         :return: DeletionResult with success status and message
@@ -301,13 +305,18 @@ class UserAccountCleanupService:
         self,
         user_id: str,
     ) -> list[AssistantCleanupSpec]:
-        """Return cleanup specs for personal assistants owned by *user_id*."""
+        """Return cleanup specs for every assistant row that will cascade.
+
+        Org assistants remain creator-owned for lifecycle cleanup even though
+        they live inside an organization scope, so the deletion flow must
+        enqueue teardown for both personal and org assistants here.
+        """
         assistant_rows = self.session.execute(
             text(
                 """
                 SELECT agent_id, deploy_env, desktop_mode, profile_photo, profile_video
                 FROM assistants
-                WHERE user_id = :uid AND organization_id IS NULL
+                WHERE user_id = :uid
                 """,
             ),
             {"uid": user_id},
