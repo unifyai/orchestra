@@ -1780,7 +1780,7 @@ async def delete_assistant(
                 )
             if assistants_project:
                 assistant_context_id = str(assistant_id)
-                user_ctx = request.state.user_id
+                user_ctx = assistant.user_id
                 context_prefix = f"{user_ctx}/{assistant_context_id}"
                 contexts_to_delete = (
                     session.query(Context)
