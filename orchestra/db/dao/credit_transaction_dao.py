@@ -187,6 +187,62 @@ class CreditTransactionDAO:
             q = q.filter(CreditTransaction.user_id == user_id)
         return [(row.bucket, float(row.total)) for row in q.all()]
 
+    def get_aggregated_transactions(
+        self,
+        billing_account_id: int,
+        interval: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        category: str | None = None,
+        categories: list[str] | None = None,
+        assistant_id: int | None = None,
+        user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[tuple[datetime, str, float, int]]:
+        """Transactions aggregated by time bucket and category.
+
+        Returns ``(bucket, category, total, count)`` tuples sorted by
+        bucket descending, then category.  Only debits (negative amounts)
+        are included; returned totals are positive (absolute spend).
+
+        Args:
+            interval: One of ``minute``, ``hour``, ``day``, ``month``, ``year``.
+        """
+        bucket = func.date_trunc(interval, CreditTransaction.at)
+        q = (
+            self.session.query(
+                bucket.label("bucket"),
+                CreditTransaction.category,
+                func.sum(-CreditTransaction.amount).label("total"),
+                func.count().label("cnt"),
+            )
+            .filter(
+                CreditTransaction.billing_account_id == billing_account_id,
+                CreditTransaction.amount < 0,
+            )
+            .group_by(bucket, CreditTransaction.category)
+            .order_by(bucket.desc(), CreditTransaction.category)
+        )
+        if category:
+            q = q.filter(CreditTransaction.category == category)
+        elif categories:
+            q = q.filter(CreditTransaction.category.in_(categories))
+        if assistant_id is not None:
+            q = q.filter(CreditTransaction.assistant_id == assistant_id)
+        if user_id is not None:
+            q = q.filter(CreditTransaction.user_id == user_id)
+        if since is not None:
+            q = q.filter(CreditTransaction.at >= since)
+        if until is not None:
+            q = q.filter(CreditTransaction.at < until)
+
+        return [
+            (row.bucket, row.category, float(row.total), row.cnt)
+            for row in q.limit(limit).offset(offset).all()
+        ]
+
     def get_balance_check(self, billing_account_id: int) -> Optional[decimal.Decimal]:
         """Return ``SUM(amount)`` for all transactions — should equal ``credits``."""
         result = (

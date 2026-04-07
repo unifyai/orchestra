@@ -112,6 +112,19 @@ class TransactionHistoryResponse(BaseModel):
     transactions: list[TransactionItem]
 
 
+class AggregatedTransactionItem(BaseModel):
+    """A single row of time-bucketed spending aggregated by category."""
+
+    bucket: datetime
+    category: str
+    total: float
+    count: int
+
+
+class AggregatedTransactionHistoryResponse(BaseModel):
+    transactions: list[AggregatedTransactionItem]
+
+
 class SpendingBreakdownResponse(BaseModel):
     month: str
     total: float

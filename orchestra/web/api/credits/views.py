@@ -12,6 +12,8 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BillingAccount
 from orchestra.lib.billing import get_billing_entity, queue_auto_recharge
 from orchestra.web.api.credits.schema import (
+    AggregatedTransactionHistoryResponse,
+    AggregatedTransactionItem,
     CreditsResponse,
     DeductCreditsRequest,
     DeductCreditsResponse,
@@ -182,7 +184,6 @@ def deduct_credits(
 
 @router.get(
     "/credits/transactions",
-    response_model=TransactionHistoryResponse,
 )
 def get_transaction_history(
     request_fastapi: Request,
@@ -193,16 +194,24 @@ def get_transaction_history(
     filter_user_id: Optional[str] = Query(None, alias="user_id"),
     start_date: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}-\d{2}"),
     end_date: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}-\d{2}"),
+    group_by: Optional[str] = Query(None),
     session=Depends(get_db_session),
-) -> TransactionHistoryResponse:
+) -> TransactionHistoryResponse | AggregatedTransactionHistoryResponse:
     """Paginated credit transaction history for the current billing account.
 
     Filters are scoped to the billing account resolved from the API key.
     Use ``user_id`` to see spending by a specific member in an org context.
     Use ``start_date`` / ``end_date`` (ISO date strings) to restrict the
     time window (inclusive start, exclusive end).
+
+    When ``group_by`` is provided (e.g. ``day``, ``month``), transactions
+    are aggregated by time bucket and category instead of returned
+    individually.
     """
     from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+    _VALID_INTERVALS = {"minute", "hour", "day", "month", "year"}
+    _SPENDING_CATEGORIES = ["llm", "hire", "resources", "media"]
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -219,9 +228,42 @@ def get_transaction_history(
     if start_date:
         since = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     if end_date:
-        until = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        until = datetime.strptime(end_date, "%Y-%m-%d").replace(
+            tzinfo=timezone.utc,
+        ) + timedelta(days=1)
 
     txn_dao = CreditTransactionDAO(session)
+
+    if group_by:
+        if group_by not in _VALID_INTERVALS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid group_by value. Must be one of: {', '.join(sorted(_VALID_INTERVALS))}",
+            )
+        rows = txn_dao.get_aggregated_transactions(
+            billing_entity.billing_account_id,
+            group_by,
+            limit=limit,
+            offset=offset,
+            category=category,
+            categories=None if category else _SPENDING_CATEGORIES,
+            assistant_id=assistant_id,
+            user_id=filter_user_id,
+            since=since,
+            until=until,
+        )
+        return AggregatedTransactionHistoryResponse(
+            transactions=[
+                AggregatedTransactionItem(
+                    bucket=bucket,
+                    category=cat,
+                    total=total,
+                    count=count,
+                )
+                for bucket, cat, total, count in rows
+            ],
+        )
+
     rows = txn_dao.get_transactions(
         billing_entity.billing_account_id,
         limit=limit,
@@ -328,24 +370,13 @@ def get_spending_timeseries(
     shape as ``/v0/logs/metric/sum`` so the console chart can consume it
     without transformation changes.
 
-    ``group_by`` accepts either the raw interval (``day``, ``month``, …)
-    or the console-style granularity prefix (``time_day``, ``time_month``,
-    …).
+    ``group_by`` accepts the interval name directly (``day``, ``month``, …).
     """
     from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
 
     _VALID_INTERVALS = {"minute", "hour", "day", "month", "year"}
 
-    _GRANULARITY_MAP = {
-        "time_minute": "minute",
-        "time_hour": "hour",
-        "time_day": "day",
-        "time_month": "month",
-        "time_year": "year",
-    }
-
-    interval = _GRANULARITY_MAP.get(group_by, group_by)
-    if interval not in _VALID_INTERVALS:
+    if group_by not in _VALID_INTERVALS:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid group_by value. Must be one of: {', '.join(sorted(_VALID_INTERVALS))}",
@@ -374,7 +405,7 @@ def get_spending_timeseries(
         billing_entity.billing_account_id,
         start,
         end,
-        interval=interval,
+        interval=group_by,
         category=category,
         categories=None if category else _SPENDING_CATEGORIES,
         assistant_id=assistant_id,
