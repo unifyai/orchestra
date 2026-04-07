@@ -1046,6 +1046,12 @@ def teardown_assistant_runtime_sync(
 
 
 async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
+    """Post the wakeup webhook and return the adapter-edge response.
+
+    A ``200`` from adapters only means the wakeup request was accepted there.
+    AssistantSession creation and runtime convergence continue asynchronously in
+    communication after this call returns.
+    """
     wake_up_url = _adapters_url_for(deploy_env) + "/assistant/wakeup"
     client = get_async_client()
     return await client.post(
@@ -1058,7 +1064,11 @@ async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
 
 async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
     """
-    Triggers the assistant update webhook to reawaken or sync the assistant.
+    Trigger the assistant update webhook to reawaken or sync the assistant.
+
+    This only waits for adapters to accept the update request. Runtime
+    convergence still happens asynchronously downstream in communication.
+
     Args:
         assistant_id (str): The ID of the assistant to reawaken.
         deploy_env: 'preview' for preview stack, None for native environment.
