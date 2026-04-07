@@ -1724,6 +1724,11 @@ async def delete_assistant(
     after the response is returned so the user is not blocked waiting for them.
     Any steps that fail are recorded in the durable AssistantCleanupTask queue
     and retried by the cleanup cron job.
+
+    For Assistants project logs, deleting the creator-scoped context tree also
+    removes matching entries from user aggregate siblings (``*/All/*``) via
+    sibling cleanup. The topmost ``All/*`` contexts are intentionally preserved
+    as protected archives for billing and reporting.
     """
     dao = AssistantDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
@@ -1793,6 +1798,10 @@ async def delete_assistant(
                     )
                     .all()
                 )
+                # ContextDAO.delete() handles lower-tier sibling cleanup for
+                # Assistants contexts. It removes assistant-specific entries
+                # from user aggregates (*/All/*) but intentionally leaves the
+                # topmost All/* archive intact.
                 for context_to_del in contexts_to_delete:
                     context_dao.delete(context_to_del.id)
         except Exception as e_ctx:
