@@ -1667,6 +1667,10 @@ def delete_own_account(
     Requires email confirmation to prevent accidental deletion.
     Permanently removes all user data - this action cannot be undone.
 
+    Assistant deletion follows creator-owned lifecycle semantics. If this user
+    created org-scoped assistants, those assistant rows cascade with the user
+    row and are cleaned up by the same account-deletion flow.
+
     Blocked if:
     - User has pending bills
     - User owns organizations (must transfer ownership first)
