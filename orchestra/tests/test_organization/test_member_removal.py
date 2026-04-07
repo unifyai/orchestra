@@ -949,7 +949,8 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
 
     When member is removed and their unshared assistant is deleted:
     - Assistant-specific contexts (Tier 3) should be deleted
-    - Logs should be cleaned from sibling contexts (Tier 1 and Tier 2)
+    - Tier 2 user aggregates should be cleaned via sibling cleanup
+    - Tier 1 All/* should remain as the protected archive
     """
     owner = await create_test_user(
         client,
@@ -1062,7 +1063,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
             log["id"] for log in logs_resp.json()["logs"]
         ], f"Log should exist in {ctx}"
 
-    # Remove member - should delete assistant AND its logs from all contexts
+    # Remove member - should delete the assistant and clear lower-tier copies.
     remove_resp = await client.delete(
         f"/v0/organizations/{org_id}/members/{member['id']}",
         headers=owner["headers"],
@@ -1104,7 +1105,8 @@ async def test_member_removal_preserves_other_assistant_logs(
     Test that logs from OTHER assistants in shared contexts are preserved.
 
     When member A is removed and their assistant is deleted:
-    - Member A's assistant logs should be deleted from all contexts
+    - Member A's assistant logs should be removed from Tier 2 and Tier 3
+    - Member A's topmost All/* archive copy should remain
     - Member B's assistant logs in shared All/* contexts should NOT be affected
     """
     owner = await create_test_user(

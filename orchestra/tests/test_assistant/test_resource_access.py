@@ -1447,11 +1447,11 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
 
 
 @pytest.mark.anyio
-async def test_delete_org_assistant_cleans_3tier_contexts(
+async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
     client: AsyncClient,
     dbsession,
 ):
-    """Test that deleting an org assistant cleans up 3-tier contexts including All/*."""
+    """Delete cleans creator scopes and user aggregates but preserves All/*."""
     user = await create_test_user(
         client,
         "org_3tier_cleanup@test.com",
@@ -1485,8 +1485,7 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
     agent_id = assistant_info["agent_id"]
     assistant_name = str(agent_id)
 
-    # Set up 3-tier context structure using the actual user_id
-    # The delete endpoint uses context_prefix = f"{request.state.user_id}/{assistant_id}"
+    # Creator-scoped delete roots use the assistant owner's user_id.
     tier3_context = f"{user['id']}/{assistant_name}/Transcripts"
     tier2_context = f"{user['id']}/All/Transcripts"
     tier1_context = "All/Transcripts"
@@ -1579,7 +1578,7 @@ async def test_delete_org_assistant_by_other_member_cleans_creator_scoped_logs(
     client: AsyncClient,
     dbsession,
 ):
-    """Deleting an org assistant as another member must clean creator-scoped logs."""
+    """Cross-member delete cleans creator scopes but preserves the All/* archive."""
 
     owner = await create_test_user(
         client,
@@ -2729,12 +2728,12 @@ async def test_transfer_shared_context_to_existing_org_context(
 
 
 @pytest.mark.anyio
-async def test_transfer_org_to_personal_deletes_shared_context_logs(
+async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive(
     client: AsyncClient,
     dbsession,
 ):
     """
-    Test that logs in 3-tier shared contexts are cleaned when transferring org->personal.
+    Transfer-to-personal removes lower tiers while keeping the topmost archive.
 
     Uses 3-tier context hierarchy:
     - Tier 1: All/Transcripts (global aggregate)
@@ -2743,7 +2742,8 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
 
     When transferring an assistant from org to personal with delete_logs=True:
     - Assistant-specific contexts (Tier 3) should be deleted
-    - Logs should be cleaned from sibling contexts (Tier 1 and Tier 2) via context_dao.delete()
+    - Tier 2 user aggregates should be cleaned via context_dao.delete()
+    - Tier 1 All/* should remain as the protected archive
     """
     user = await create_test_user(
         client,
@@ -2866,7 +2866,8 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     Test that logs from OTHER assistants in shared contexts are preserved during transfer.
 
     When transferring assistant A with delete_logs=True:
-    - Assistant A's logs should be deleted from all contexts
+    - Assistant A's logs should be removed from Tier 2 and Tier 3
+    - Assistant A's topmost All/* archive copy should remain
     - Assistant B's logs in shared All/* contexts should NOT be affected
     """
     user = await create_test_user(
