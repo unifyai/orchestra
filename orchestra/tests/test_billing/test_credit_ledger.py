@@ -19,12 +19,22 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+from orchestra.db.models.orchestra_models import ApiKey
 from orchestra.tests.test_billing.conftest import (
     make_assistant,
     make_billing_account,
     make_contact,
     make_user_with_billing,
 )
+
+
+def _make_api_key(dbsession: Session, user) -> str:
+    """Create an API key for *user* and return the raw key string."""
+    key_value = f"test-key-{user.id}"
+    dbsession.add(ApiKey(user_id=user.id, key=key_value))
+    dbsession.flush()
+    return key_value
+
 
 # =========================================================================
 # CreditTransactionDAO
@@ -238,6 +248,239 @@ class TestCreditTransactionDAO:
             datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
         assert total == pytest.approx(15.0)
+
+    def test_get_aggregated_transactions_basic(self, dbsession: Session):
+        """Aggregation returns (bucket, category, total, count) tuples."""
+        ba = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-3"),
+            balance_after=Decimal("97"),
+            category="llm",
+        )
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-7"),
+            balance_after=Decimal("90"),
+            category="llm",
+        )
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-2"),
+            balance_after=Decimal("88"),
+            category="media",
+        )
+        dbsession.flush()
+
+        rows = dao.get_aggregated_transactions(ba.id, "day")
+        assert len(rows) >= 1
+
+        llm_rows = [r for r in rows if r[1] == "llm"]
+        media_rows = [r for r in rows if r[1] == "media"]
+
+        assert len(llm_rows) == 1
+        assert llm_rows[0][2] == pytest.approx(10.0)
+        assert llm_rows[0][3] == 2
+
+        assert len(media_rows) == 1
+        assert media_rows[0][2] == pytest.approx(2.0)
+        assert media_rows[0][3] == 1
+
+    def test_get_aggregated_transactions_excludes_credits(self, dbsession: Session):
+        """Only debits (negative amounts) are aggregated."""
+        ba = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-5"),
+            balance_after=Decimal("95"),
+            category="llm",
+        )
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("50"),
+            balance_after=Decimal("145"),
+            category="recharge",
+        )
+        dbsession.flush()
+
+        rows = dao.get_aggregated_transactions(ba.id, "day")
+        categories = [r[1] for r in rows]
+        assert "recharge" not in categories
+        assert "llm" in categories
+
+    def test_get_aggregated_transactions_filter_by_category(self, dbsession: Session):
+        ba = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-3"),
+            balance_after=Decimal("97"),
+            category="llm",
+        )
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-2"),
+            balance_after=Decimal("95"),
+            category="media",
+        )
+        dbsession.flush()
+
+        rows = dao.get_aggregated_transactions(ba.id, "day", category="llm")
+        assert len(rows) == 1
+        assert rows[0][1] == "llm"
+        assert rows[0][2] == pytest.approx(3.0)
+
+    def test_get_aggregated_transactions_filter_by_categories(self, dbsession: Session):
+        ba = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-3"),
+            balance_after=Decimal("97"),
+            category="llm",
+        )
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-2"),
+            balance_after=Decimal("95"),
+            category="media",
+        )
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-1"),
+            balance_after=Decimal("94"),
+            category="void",
+        )
+        dbsession.flush()
+
+        rows = dao.get_aggregated_transactions(
+            ba.id,
+            "day",
+            categories=["llm", "media"],
+        )
+        categories = {r[1] for r in rows}
+        assert categories == {"llm", "media"}
+
+    def test_get_aggregated_transactions_pagination(self, dbsession: Session):
+        ba = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        for cat in ["llm", "media", "hire", "resources"]:
+            dao.insert(
+                billing_account_id=ba.id,
+                amount=Decimal("-1"),
+                balance_after=None,
+                category=cat,
+            )
+        dbsession.flush()
+
+        page1 = dao.get_aggregated_transactions(ba.id, "day", limit=2, offset=0)
+        page2 = dao.get_aggregated_transactions(ba.id, "day", limit=2, offset=2)
+        assert len(page1) == 2
+        assert len(page2) == 2
+
+        all_categories = {r[1] for r in page1} | {r[1] for r in page2}
+        assert all_categories == {"hire", "llm", "media", "resources"}
+
+    def test_get_aggregated_transactions_filter_by_date_range(self, dbsession: Session):
+        ba = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-5"),
+            balance_after=None,
+            category="llm",
+        )
+        dbsession.flush()
+
+        now = datetime.now(timezone.utc)
+        rows_in_range = dao.get_aggregated_transactions(
+            ba.id,
+            "day",
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            until=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+        assert len(rows_in_range) == 1
+
+        rows_out_of_range = dao.get_aggregated_transactions(
+            ba.id,
+            "day",
+            since=datetime(2010, 1, 1, tzinfo=timezone.utc),
+            until=datetime(2011, 1, 1, tzinfo=timezone.utc),
+        )
+        assert len(rows_out_of_range) == 0
+
+    def test_get_aggregated_transactions_filter_by_assistant_and_user(
+        self,
+        dbsession: Session,
+    ):
+        ba = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-3"),
+            balance_after=None,
+            category="llm",
+            assistant_id=10,
+            user_id="alice",
+        )
+        dao.insert(
+            billing_account_id=ba.id,
+            amount=Decimal("-7"),
+            balance_after=None,
+            category="llm",
+            assistant_id=20,
+            user_id="bob",
+        )
+        dbsession.flush()
+
+        by_assistant = dao.get_aggregated_transactions(
+            ba.id,
+            "day",
+            assistant_id=10,
+        )
+        assert len(by_assistant) == 1
+        assert by_assistant[0][2] == pytest.approx(3.0)
+
+        by_user = dao.get_aggregated_transactions(ba.id, "day", user_id="bob")
+        assert len(by_user) == 1
+        assert by_user[0][2] == pytest.approx(7.0)
+
+    def test_get_aggregated_transactions_isolation(self, dbsession: Session):
+        """Aggregated queries should be scoped to the billing account."""
+        ba1 = make_billing_account(dbsession, credits=100)
+        ba2 = make_billing_account(dbsession, credits=100)
+        dao = CreditTransactionDAO(dbsession)
+
+        dao.insert(
+            billing_account_id=ba1.id,
+            amount=Decimal("-10"),
+            balance_after=None,
+            category="llm",
+        )
+        dao.insert(
+            billing_account_id=ba2.id,
+            amount=Decimal("-20"),
+            balance_after=None,
+            category="llm",
+        )
+        dbsession.flush()
+
+        ba1_rows = dao.get_aggregated_transactions(ba1.id, "day")
+        ba2_rows = dao.get_aggregated_transactions(ba2.id, "day")
+
+        assert len(ba1_rows) == 1
+        assert ba1_rows[0][2] == pytest.approx(10.0)
+        assert len(ba2_rows) == 1
+        assert ba2_rows[0][2] == pytest.approx(20.0)
 
     def test_get_balance_check(self, dbsession: Session):
         ba = make_billing_account(dbsession, credits=100)
@@ -502,6 +745,7 @@ class TestDeductCreditsEndpoint:
             f"api-deduct-{uuid.uuid4().hex[:8]}",
             credits=100,
         )
+        api_key = _make_api_key(dbsession, user)
         dbsession.commit()
 
         response = await client.post(
@@ -513,18 +757,18 @@ class TestDeductCreditsEndpoint:
                 "description": "API test deduction",
                 "detail": {"model": "gpt-4o-mini"},
             },
-            headers={"Authorization": f"Bearer test-key-{user.id}"},
+            headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            assert data["deducted"] == 5.0
-            assert data["current_credits"] == pytest.approx(95.0)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deducted"] == 5.0
+        assert data["current_credits"] == pytest.approx(95.0)
 
-            txn_dao = CreditTransactionDAO(dbsession)
-            txns = txn_dao.get_transactions(ba.id)
-            assert len(txns) >= 1
-            assert txns[0].category == "llm"
+        txn_dao = CreditTransactionDAO(dbsession)
+        txns = txn_dao.get_transactions(ba.id)
+        assert len(txns) >= 1
+        assert txns[0].category == "llm"
 
     @pytest.mark.anyio
     async def test_deduct_backward_compatible(self, client, dbsession: Session):
@@ -534,21 +778,22 @@ class TestDeductCreditsEndpoint:
             f"api-compat-{uuid.uuid4().hex[:8]}",
             credits=100,
         )
+        api_key = _make_api_key(dbsession, user)
         dbsession.commit()
 
         response = await client.post(
             "/v0/credits/deduct",
             json={"amount": 3.0},
-            headers={"Authorization": f"Bearer test-key-{user.id}"},
+            headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            assert data["deducted"] == 3.0
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deducted"] == 3.0
 
-            txn_dao = CreditTransactionDAO(dbsession)
-            txns = txn_dao.get_transactions(ba.id)
-            assert txns[0].category == "llm"
+        txn_dao = CreditTransactionDAO(dbsession)
+        txns = txn_dao.get_transactions(ba.id)
+        assert txns[0].category == "llm"
 
 
 # =========================================================================
@@ -628,6 +873,7 @@ class TestSpendingEndpoints:
             f"api-txns-{uuid.uuid4().hex[:8]}",
             credits=100,
         )
+        api_key = _make_api_key(dbsession, user)
 
         ba_dao = BillingAccountDAO(dbsession)
         ba_dao.deduct_credits(ba.id, 5.0, category="llm")
@@ -636,13 +882,142 @@ class TestSpendingEndpoints:
 
         response = await client.get(
             "/v0/credits/transactions",
-            headers={"Authorization": f"Bearer test-key-{user.id}"},
+            headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            assert "transactions" in data
-            assert len(data["transactions"]) == 2
+        assert response.status_code == 200
+        data = response.json()
+        assert "transactions" in data
+        assert len(data["transactions"]) == 2
+
+    @pytest.mark.anyio
+    async def test_transaction_history_aggregated(self, client, dbsession: Session):
+        """group_by param returns aggregated rows instead of individual ones."""
+        user, ba = make_user_with_billing(
+            dbsession,
+            f"api-agg-{uuid.uuid4().hex[:8]}",
+            credits=100,
+        )
+        api_key = _make_api_key(dbsession, user)
+
+        ba_dao = BillingAccountDAO(dbsession)
+        ba_dao.deduct_credits(ba.id, 5.0, category="llm")
+        ba_dao.deduct_credits(ba.id, 3.0, category="llm")
+        ba_dao.deduct_credits(ba.id, 2.0, category="media")
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/credits/transactions",
+            params={"group_by": "day"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "transactions" in data
+        txns = data["transactions"]
+        assert len(txns) >= 1
+
+        for txn in txns:
+            assert "bucket" in txn
+            assert "category" in txn
+            assert "total" in txn
+            assert "count" in txn
+
+        llm_rows = [t for t in txns if t["category"] == "llm"]
+        assert len(llm_rows) == 1
+        assert llm_rows[0]["total"] == pytest.approx(8.0)
+        assert llm_rows[0]["count"] == 2
+
+        media_rows = [t for t in txns if t["category"] == "media"]
+        assert len(media_rows) == 1
+        assert media_rows[0]["total"] == pytest.approx(2.0)
+        assert media_rows[0]["count"] == 1
+
+    @pytest.mark.anyio
+    async def test_transaction_history_aggregated_with_granularity_prefix(
+        self,
+        client,
+        dbsession: Session,
+    ):
+        """'month' is accepted as a group_by value."""
+        user, ba = make_user_with_billing(
+            dbsession,
+            f"api-agg-month-{uuid.uuid4().hex[:8]}",
+            credits=100,
+        )
+        api_key = _make_api_key(dbsession, user)
+
+        ba_dao = BillingAccountDAO(dbsession)
+        ba_dao.deduct_credits(ba.id, 1.0, category="llm")
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/credits/transactions",
+            params={"group_by": "month"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "transactions" in data
+        assert len(data["transactions"]) >= 1
+
+    @pytest.mark.anyio
+    async def test_transaction_history_aggregated_invalid_group_by(
+        self,
+        client,
+        dbsession: Session,
+    ):
+        """Invalid group_by value returns 400."""
+        user, ba = make_user_with_billing(
+            dbsession,
+            f"api-agg-bad-{uuid.uuid4().hex[:8]}",
+            credits=100,
+        )
+        api_key = _make_api_key(dbsession, user)
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/credits/transactions",
+            params={"group_by": "century"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 400
+
+    @pytest.mark.anyio
+    async def test_transaction_history_without_group_by_unchanged(
+        self,
+        client,
+        dbsession: Session,
+    ):
+        """Without group_by, response is unchanged (individual rows)."""
+        user, ba = make_user_with_billing(
+            dbsession,
+            f"api-no-agg-{uuid.uuid4().hex[:8]}",
+            credits=100,
+        )
+        api_key = _make_api_key(dbsession, user)
+
+        ba_dao = BillingAccountDAO(dbsession)
+        ba_dao.deduct_credits(ba.id, 5.0, category="llm")
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/credits/transactions",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "transactions" in data
+        txns = data["transactions"]
+        assert len(txns) >= 1
+        assert "id" in txns[0]
+        assert "at" in txns[0]
+        assert "amount" in txns[0]
+        assert "bucket" not in txns[0]
 
     @pytest.mark.anyio
     async def test_spending_breakdown_endpoint(self, client, dbsession: Session):
@@ -651,6 +1026,7 @@ class TestSpendingEndpoints:
             f"api-spending-{uuid.uuid4().hex[:8]}",
             credits=100,
         )
+        api_key = _make_api_key(dbsession, user)
 
         ba_dao = BillingAccountDAO(dbsession)
         ba_dao.deduct_credits(ba.id, 10.0, category="llm")
@@ -659,11 +1035,11 @@ class TestSpendingEndpoints:
 
         response = await client.get(
             "/v0/credits/spending",
-            headers={"Authorization": f"Bearer test-key-{user.id}"},
+            headers={"Authorization": f"Bearer {api_key}"},
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            assert "total" in data
-            assert "by_category" in data
-            assert data["total"] == pytest.approx(15.0)
+        assert response.status_code == 200
+        data = response.json()
+        assert "total" in data
+        assert "by_category" in data
+        assert data["total"] == pytest.approx(15.0)
