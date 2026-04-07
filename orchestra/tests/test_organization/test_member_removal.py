@@ -176,6 +176,50 @@ async def test_member_removal_revokes_resource_access(client: AsyncClient, dbses
     assert access_after is None, "ResourceAccess entry should be removed"
 
 
+@pytest.mark.anyio
+async def test_member_removal_rolls_back_if_pool_cleanup_fails(
+    client_concurrent: AsyncClient,
+):
+    """Member removal should stay atomic until shared-pool cleanup succeeds."""
+
+    owner = await create_test_user(client_concurrent, "rollback_owner@test.com")
+    member = await create_test_user(client_concurrent, "rollback_member@test.com")
+
+    org_resp = await client_concurrent.post(
+        "/v0/organizations",
+        json={"name": "Rollback Cleanup Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    add_member_resp = await client_concurrent.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_resp.status_code == status.HTTP_201_CREATED
+
+    with patch(
+        "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.cleanup_departed_member_routes",
+        side_effect=RuntimeError("simulated shared-pool cleanup failure"),
+    ):
+        remove_resp = await client_concurrent.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
+
+    assert remove_resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert remove_resp.json()["detail"] == "Failed to remove member"
+
+    members_resp = await client_concurrent.get(
+        f"/v0/organizations/{org_id}/members",
+        headers=owner["headers"],
+    )
+    assert members_resp.status_code == status.HTTP_200_OK
+    member_ids = {org_member["user_id"] for org_member in members_resp.json()}
+    assert member["id"] in member_ids
+
+
 # =============================================================================
 # TeamMember Cleanup Tests
 # =============================================================================
