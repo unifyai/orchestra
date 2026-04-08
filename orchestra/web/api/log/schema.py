@@ -611,6 +611,141 @@ class JoinLogsRequest(BaseModel):
     )
 
 
+class JoinQueryRequest(BaseModel):
+    """Execute a join and query/reduce the result in a single operation.
+
+    Combines the join specification (same as JoinLogsRequest minus
+    ``new_context`` / ``copy``) with post-join query parameters (filter,
+    sort, paginate, group, reduce).  No temporary context is created.
+
+    Two modes of operation:
+
+    * **Row mode** (``metric`` is ``None``): returns paginated rows from the
+      joined result, optionally filtered and sorted.  Accepts ``sorting``,
+      ``limit``, ``offset``, and ``filter_expr``.
+    * **Reduce mode** (``metric`` + ``key`` provided): returns aggregated
+      metric values, optionally grouped via ``group_by``.  Accepts
+      ``filter_expr`` and ``group_by``.
+
+    Not all parameters apply to both modes.  Invalid combinations are
+    rejected with an actionable error message pointing to the correct
+    endpoint or parameter combination.
+    """
+
+    # --- Join spec ---
+    pair_of_args: List[Dict[str, Any]] = Field(
+        ...,
+        description="Two sets of filtering criteria for logs to join. "
+        "Each dict may contain 'context', 'filter_expr', 'from_ids', 'exclude_ids'.",
+    )
+    join_expr: str = Field(
+        ...,
+        description="Join condition expression using aliases A and B, "
+        "e.g. 'A.user_id == B.user_id'.",
+    )
+    mode: str = Field(
+        default="inner",
+        description="Join type: 'inner', 'left', 'right', or 'outer'.",
+    )
+    columns: Optional[Union[Dict[str, str], List[str]]] = Field(
+        default=None,
+        description="Column specification for the joined result. "
+        "Dict maps 'A.col'→alias; list uses original names. "
+        "If omitted, all columns from both sides are merged.",
+    )
+    project_name: str = Field(..., description="Name of the project.")
+
+    # --- Post-join query ---
+    filter_expr: Optional[str] = Field(
+        default=None,
+        description="Boolean expression to filter the joined rows "
+        "(uses output column names). Applies to both modes.",
+    )
+    sorting: Optional[str] = Field(
+        default=None,
+        description="Row mode only. JSON-encoded dict mapping column names "
+        "to sort directions ('ascending'/'descending'). Note: sort comparisons "
+        "are text-based; numeric columns compare lexicographically.",
+    )
+    limit: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Row mode only. Maximum number of rows to return.",
+    )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Row mode only. Number of rows to skip.",
+    )
+    group_by: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Reduce mode only. Field(s) in the joined result to "
+        "group by before aggregation.",
+    )
+
+    # --- Reduction ---
+    metric: Optional[str] = Field(
+        default=None,
+        description="Reduce mode. Aggregation metric: count, sum, mean, "
+        "var, std, min, max, median, mode. Must be paired with ``key``.",
+    )
+    key: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Reduce mode. Column(s) to aggregate. "
+        "Must be paired with ``metric``.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_mode_args(self):
+        is_reduce = self.metric is not None
+        if is_reduce:
+            if self.key is None:
+                raise ValueError(
+                    "`key` is required when `metric` is set. "
+                    "Specify the column(s) to aggregate, e.g. key='amount'.",
+                )
+            if self.sorting is not None:
+                raise ValueError(
+                    "`sorting` only applies to row mode (metric=None). "
+                    "Reduce mode returns grouped aggregates which have no "
+                    "row order. To sort rows before aggregating, apply a "
+                    "pre-join filter via pair_of_args instead, or call "
+                    "POST /logs/join_query without `metric` to get sorted "
+                    "rows, then POST /logs/metric/{metric} on those results.",
+                )
+            if self.limit is not None:
+                raise ValueError(
+                    "`limit` only applies to row mode (metric=None). "
+                    "Reduce mode returns one value per group — all groups "
+                    "are always returned. To limit input rows before "
+                    "aggregating, use `filter_expr` or pre-join filters "
+                    "in `pair_of_args`.",
+                )
+            if self.offset != 0:
+                raise ValueError(
+                    "`offset` only applies to row mode (metric=None). "
+                    "Reduce mode returns one value per group — pagination "
+                    "does not apply. To paginate joined rows, call this "
+                    "endpoint without `metric` and use `limit`/`offset`.",
+                )
+        else:
+            if self.key is not None:
+                raise ValueError(
+                    "`key` only applies to reduce mode. Set `metric` "
+                    "(e.g. 'count', 'sum', 'mean') together with `key` "
+                    "to aggregate, or remove `key` to use row mode.",
+                )
+            if self.group_by is not None:
+                raise ValueError(
+                    "`group_by` only applies to reduce mode. Set `metric` "
+                    "and `key` together with `group_by` to get grouped "
+                    "aggregates. For row mode, use `sorting` to order "
+                    "results and `limit`/`offset` to paginate.",
+                )
+        return self
+
+
 class QueryLogsPostBody(BaseModel):
     """
     Request body for POST /logs/query endpoint.
