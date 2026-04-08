@@ -291,7 +291,12 @@ REDUCTION_METHODS = {
 
 
 def normalize_group_key(val) -> str:
-    """Normalize group key values for consistent formatting."""
+    """Normalize group key values for consistent formatting.
+
+    Numeric values are converted via float first (e.g. 11 -> "11.0") so
+    that integer and float representations are stable.  Booleans are
+    capitalised to match Python's ``str(True)`` -> ``"True"``.
+    """
     if val is None:
         return "None"
     if isinstance(val, (int, float)) and not isinstance(val, bool):
@@ -316,11 +321,17 @@ def build_grouped_result(
     use_shared = metric in SHARED_VALUE_SAFE_METRICS
     result: dict = {}
 
+    # Single-level grouping: flat dict keyed by normalised group value
     if len(gb_fields) == 1:
         for row in rows:
-            gk = normalize_group_key(row[0])
-            agg_v = row[-2]
-            raw_v = row[-1]
+            gk = normalize_group_key(row[0])  # group value
+            agg_v = row[-2]  # SQL aggregate result
+            raw_v = row[-1]  # array_agg of raw JSONB values
+
+            # If all raw values in the group are identical and the metric
+            # is idempotent (f([V,V,...,V]) == V), return the raw value
+            # directly as shared_value.  Otherwise fall back to the SQL
+            # aggregate and post-process it.
             shared = _reduce_shared_value(raw_v)
             entry: dict = {"shared_value": None, metric: None}
             if shared is not None and use_shared:
@@ -333,6 +344,7 @@ def build_grouped_result(
                 )
             result[gk] = entry
     else:
+        # Multi-level grouping: nested dicts
         for row in rows:
             cur = result
             for i in range(len(gb_fields) - 1):
@@ -341,8 +353,8 @@ def build_grouped_result(
                     cur[gk] = {}
                 cur = cur[gk]
             last_gk = normalize_group_key(row[len(gb_fields) - 1])
-            agg_v = row[-2]
-            raw_v = row[-1]
+            agg_v = row[-2]  # SQL aggregate result
+            raw_v = row[-1]  # array_agg of raw JSONB values
             shared = _reduce_shared_value(raw_v)
             entry = {"shared_value": None, metric: None}
             if shared is not None and use_shared:
@@ -916,6 +928,8 @@ def _compute_metric_for_key_grouped(
 
     agg_cast_expr = _build_cast_expr(key, field_types.get(key), LogEvent)
 
+    # Use -> (not ->>) to get JSONB values so Python converts them with
+    # correct types (e.g. "True" not "true", "11.0" not "11").
     group_exprs = [
         LogEvent.data.op("->")(field).label(f"group_{i}_val")
         for i, field in enumerate(group_by_fields)
@@ -931,6 +945,7 @@ def _compute_metric_for_key_grouped(
         )
         .select_from(LogEvent)
         .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        # Only include rows where the aggregation key exists in JSONB
         .filter(LogEvent.data.op("?")(literal(key)))
         .group_by(*group_exprs)
     )
