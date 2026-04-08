@@ -510,3 +510,161 @@ async def test_join_query_filtered_reduce_excludes_unused_fields(
     assert resp.status_code == 200
     result = resp.json()
     assert float(result) == 40.0
+
+
+# ===================================================================
+# shared_value bypass for count/sum -- regression tests
+# ===================================================================
+
+
+@pytest.mark.anyio
+async def test_join_query_count_ungrouped_single_row(client: AsyncClient, seeded):
+    """Count with a filter leaving 1 row must return 1, not the row's key value.
+
+    Before the fix, _reduce_shared_value saw a single-element array [V],
+    determined all values are identical, and returned V instead of count=1.
+    """
+    payload = _base_payload(
+        seeded,
+        metric="count",
+        key="amount",
+        filter_expr="amount == 40",
+    )
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    assert int(resp.json()) == 1
+
+
+@pytest.mark.anyio
+async def test_join_query_sum_ungrouped_identical_values(client: AsyncClient, seeded):
+    """Sum where all surviving rows have the same value must return N*V, not V.
+
+    Alice has two orders with amount=10 and amount=30; filter to name=='Alice'
+    gives amounts [10, 30] -> sum=40.  But if we filter to amount==10, only
+    Alice's single 10 survives -> sum should be 10, which coincidentally equals
+    the value.  Use amount==30 instead: one row survives -> sum=30.
+    To truly test N>1 with identical values, we filter on user_id==1 (Alice)
+    who has amounts 10+30=40.
+    """
+    payload = _base_payload(
+        seeded,
+        metric="sum",
+        key="user_id",
+        filter_expr="name == 'Alice'",
+    )
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    # Alice has user_id=1 on both rows -> sum should be 1+1=2, not 1
+    assert float(resp.json()) == 2.0
+
+
+@pytest.mark.anyio
+async def test_join_query_count_grouped_identical_values(client: AsyncClient, seeded):
+    """Grouped count: Alice group has 2 rows with identical user_id=1.
+
+    shared_value would return 1 (the user_id), but correct count is 2.
+    """
+    payload = _base_payload(
+        seeded,
+        metric="count",
+        key="user_id",
+        group_by="name",
+    )
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert _get_metric_val(result["Alice"], "count") == 2
+    assert _get_metric_val(result["Bob"], "count") == 1
+    assert _get_metric_val(result["Charlie"], "count") == 1
+
+
+@pytest.mark.anyio
+async def test_join_query_sum_grouped_identical_values(client: AsyncClient, seeded):
+    """Grouped sum on a field with identical values per group.
+
+    Alice has user_id=1 on both rows -> sum should be 2, not 1.
+    Bob has user_id=2 on one row -> sum should be 2.
+    """
+    payload = _base_payload(
+        seeded,
+        metric="sum",
+        key="user_id",
+        group_by="name",
+    )
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert float(_get_metric_val(result["Alice"], "sum")) == 2.0
+    assert float(_get_metric_val(result["Bob"], "sum")) == 2.0
+    assert float(_get_metric_val(result["Charlie"], "sum")) == 3.0
+
+
+@pytest.mark.anyio
+async def test_join_query_count_ungrouped_all_identical(client: AsyncClient, seeded):
+    """Count on a field where ALL rows have the same value.
+
+    All 4 joined rows have user_id present -> count should be 4.
+    """
+    payload = _base_payload(seeded, metric="count", key="city")
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    assert int(resp.json()) == 4
+
+
+@pytest.mark.anyio
+async def test_join_query_mean_ungrouped_single_row(client: AsyncClient, seeded):
+    """Mean with a single row -- shared_value IS correct here (V == mean of [V]).
+
+    Ensures the fix doesn't break metrics where shared_value is valid.
+    """
+    payload = _base_payload(
+        seeded,
+        metric="mean",
+        key="amount",
+        filter_expr="amount == 40",
+    )
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    assert float(resp.json()) == pytest.approx(40.0)
+
+
+@pytest.mark.anyio
+async def test_join_query_var_ungrouped_identical_values(client: AsyncClient, seeded):
+    """var_pop of identical values is 0.
+
+    Alice has user_id=[1,1] after join. shared_value would return 1,
+    but var_pop([1,1]) = 0.
+    """
+    payload = _base_payload(
+        seeded,
+        metric="var",
+        key="user_id",
+        filter_expr="name == 'Alice'",
+    )
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    assert float(resp.json()) == pytest.approx(0.0)
+
+
+@pytest.mark.anyio
+async def test_join_query_std_grouped_identical_values(client: AsyncClient, seeded):
+    """stddev_pop per group when all within-group values are identical.
+
+    Alice: user_id=[1,1] -> std=0
+    Bob:   user_id=[2]   -> std=0 (single value)
+    Charlie: user_id=[3] -> std=0 (single value)
+    """
+    payload = _base_payload(
+        seeded,
+        metric="std",
+        key="user_id",
+        group_by="name",
+    )
+    resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    result = resp.json()
+    for group in ["Alice", "Bob", "Charlie"]:
+        val = _get_metric_val(result[group], "std")
+        assert float(val) == pytest.approx(
+            0.0,
+        ), f"std of identical values in group {group} should be 0"
