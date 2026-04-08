@@ -1081,6 +1081,12 @@ class TestLevyResultStructure:
 class TestMonthlyInvoicer:
     """Tests for the invoice_month routine."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_configure_stripe(self, monkeypatch):
+        import orchestra.lib.billing
+
+        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
+
     def _make_recharge(
         self,
         dbsession: Session,
