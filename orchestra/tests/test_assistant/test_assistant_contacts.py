@@ -959,7 +959,6 @@ def mock_all_infra(dbsession):
             return_value=MagicMock(status_code=200, json=lambda: {}),
         ),
         "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
-        "stop_jobs": AsyncMock(return_value=MagicMock(status_code=200)),
     }
 
     wa_pool_mock = AsyncMock(return_value={"pool_number": "+15559876543"})
