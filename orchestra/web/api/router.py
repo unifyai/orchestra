@@ -22,6 +22,8 @@ from orchestra.web.api.assistant import admin_router as assistant_admin_router
 from orchestra.web.api.assistant import demo_router as assistant_demo_router
 from orchestra.web.api.assistant import router as assistant_router
 from orchestra.web.api.context.views import admin_router as context_admin_router
+from orchestra.web.api.dashboard.views import admin_router as dashboard_admin_router
+from orchestra.web.api.dashboard.views import router as dashboard_router
 from orchestra.web.api.dependencies import (
     auth_admin_key,
     auth_api_key,
@@ -139,6 +141,13 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
+    dashboard_admin_router,
+    prefix="/admin",
+    tags=["Dashboards"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
     plot_admin_router,
     prefix="/admin",
     tags=["Plots"],
@@ -205,6 +214,12 @@ api_router.include_router(
 api_router.include_router(
     log.router,
     tags=["Logs"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    dashboard_router,
+    tags=["Dashboards"],
+    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
