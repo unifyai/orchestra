@@ -58,6 +58,7 @@ from orchestra.web.api.log.schema import (
     DeleteLogEntryRequest,
     GetLogsMetricRequest,
     JoinLogsRequest,
+    JoinQueryRequest,
     QueryLogsPostBody,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
@@ -86,6 +87,7 @@ from .utils import (
     _get_log_event_ids_for_group_value,
     _get_logs_query,
     _join_logs,
+    _join_query_internal,
     _resolve_key_specific_filters,
     apply_group_threshold,
     compute_metric_bulk,
@@ -4786,6 +4788,177 @@ def join_logs(
         raise HTTPException(
             status_code=500,
             detail=f"Error performing join operation: {str(e)}",
+        )
+
+
+@router.post(
+    "/logs/join_query",
+    responses={
+        200: {
+            "description": "Join query executed successfully",
+        },
+        400: {
+            "description": "Bad Request",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Invalid join query parameters.",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+        },
+    },
+)
+def join_query(
+    request_fastapi: Request,
+    request: JoinQueryRequest,
+    session=Depends(get_db_session),
+):
+    """Execute a join and query or reduce the result without materialisation.
+
+    This endpoint combines ``POST /logs/join`` with ``GET /logs`` or
+    ``GET /logs/metric`` into a single operation.  No temporary context
+    is created; the join is evaluated as a SQL subquery and the
+    filter/sort/paginate/reduce operations are applied on top.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+    try:
+        project_obj = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project_name,
+            organization_id=organization_id,
+        )
+        project_id = project_obj.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project_name}' not found.",
+        )
+
+    if not isinstance(request.pair_of_args, list) or len(request.pair_of_args) != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="pair_of_args must be a list containing exactly two dictionaries.",
+        )
+
+    valid_modes = ["inner", "left", "right", "outer"]
+    if request.mode not in valid_modes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid join mode. Must be one of: {', '.join(valid_modes)}",
+        )
+
+    if not request.join_expr or not isinstance(request.join_expr, str):
+        raise HTTPException(
+            status_code=400,
+            detail="join_expr must be a non-empty string.",
+        )
+
+    is_reduce = request.metric is not None
+    if is_reduce:
+        if request.key is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "`key` is required when `metric` is set. "
+                    "Specify the column(s) to aggregate, e.g. key='amount'."
+                ),
+            )
+        if request.sorting is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "`sorting` only applies to row mode (metric=None). "
+                    "Reduce mode returns grouped aggregates which have no "
+                    "row order. To sort rows before aggregating, apply a "
+                    "pre-join filter via pair_of_args instead, or call "
+                    "POST /logs/join_query without `metric` to get sorted "
+                    "rows, then POST /logs/metric/{metric} on those results."
+                ),
+            )
+        if request.limit is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "`limit` only applies to row mode (metric=None). "
+                    "Reduce mode returns one value per group — all groups "
+                    "are always returned. To limit input rows before "
+                    "aggregating, use `filter_expr` or pre-join filters "
+                    "in `pair_of_args`."
+                ),
+            )
+        if request.offset != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "`offset` only applies to row mode (metric=None). "
+                    "Reduce mode returns one value per group — pagination "
+                    "does not apply. To paginate joined rows, call this "
+                    "endpoint without `metric` and use `limit`/`offset`."
+                ),
+            )
+    else:
+        if request.key is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "`key` only applies to reduce mode. Set `metric` "
+                    "(e.g. 'count', 'sum', 'mean') together with `key` "
+                    "to aggregate, or remove `key` to use row mode."
+                ),
+            )
+        if request.group_by is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "`group_by` only applies to reduce mode. Set `metric` "
+                    "and `key` together with `group_by` to get grouped "
+                    "aggregates. For row mode, use `sorting` to order "
+                    "results and `limit`/`offset` to paginate."
+                ),
+            )
+
+    try:
+        result = _join_query_internal(
+            project_id=project_id,
+            project_name=request.project_name,
+            pair_of_args=request.pair_of_args,
+            join_expr=request.join_expr,
+            mode=request.mode,
+            columns=request.columns,
+            filter_expr=request.filter_expr,
+            sorting=request.sorting,
+            limit=request.limit,
+            offset=request.offset,
+            group_by=request.group_by,
+            metric=request.metric,
+            key=request.key,
+            request_fastapi=request_fastapi,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
+        return result
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error performing join query: {str(e)}",
         )
 
 
