@@ -14,7 +14,7 @@ import os
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
@@ -319,19 +319,11 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
     with patch(
         "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
     ) as mock_enqueue_cleanup, patch(
-        "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_process_cleanup, patch(
+        "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
+    ) as mock_run_cleanup, patch(
         "orchestra.services.bucket_service.BucketService",
     ) as mock_bucket_cls:
         mock_enqueue_cleanup.return_value = [SimpleNamespace(id=901)]
-        mock_process_cleanup.return_value = {
-            "processed": 1,
-            "completed": 1,
-            "retried": 0,
-            "failed": 0,
-            "errors": [],
-        }
         mock_bucket = mock_bucket_cls.return_value
         mock_bucket.delete_all_assistant_data.return_value = {
             "media": 0,
@@ -348,17 +340,14 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
         )
 
     assert response.status_code == 200, response.json()
-    assert response.json()["runtime_cleanup_complete"] is True
-    assert response.json()["runtime_cleanup_summary"] == {
-        "processed": 1,
-        "completed": 1,
-        "retried": 0,
-        "failed": 0,
-        "errors": [],
-    }
+    assert response.json()["runtime_cleanup_complete"] is False
+    assert response.json()["runtime_cleanup_summary"] is None
     mock_enqueue_cleanup.assert_called_once()
-    mock_process_cleanup.assert_awaited_once()
-    assert mock_process_cleanup.call_args.kwargs == {"task_ids": [901]}
+    mock_run_cleanup.assert_called_once()
+    assert mock_run_cleanup.call_args.kwargs == {
+        "cleanup_task_ids": [901],
+        "user_id": member["id"],
+    }
     cleanup_specs = mock_enqueue_cleanup.call_args.args[1]
     assert [spec.assistant_id for spec in cleanup_specs] == [agent_id]
     assert (
@@ -384,10 +373,10 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
 
 
 @pytest.mark.anyio
-async def test_self_service_delete_reports_cleanup_still_in_progress(
+async def test_self_service_delete_schedules_background_runtime_cleanup(
     client: AsyncClient,
 ):
-    """Self-service delete surfaces retrying runtime cleanup instead of plain success."""
+    """Self-service delete returns promptly and kicks runtime cleanup to background."""
     from orchestra.services.assistant_cleanup_service import AssistantCleanupSpec
 
     email = "delete_cleanup_retry@test.com"
@@ -401,18 +390,10 @@ async def test_self_service_delete_reports_cleanup_still_in_progress(
         "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
         return_value=[SimpleNamespace(id=1234)],
     ), patch(
-        "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_process_cleanup, patch(
+        "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
+    ) as mock_run_cleanup, patch(
         "orchestra.services.bucket_service.BucketService",
     ) as mock_bucket_cls:
-        mock_process_cleanup.return_value = {
-            "processed": 1,
-            "completed": 0,
-            "retried": 1,
-            "failed": 0,
-            "errors": ["runtime cleanup still retrying"],
-        }
         mock_bucket = mock_bucket_cls.return_value
         mock_bucket.delete_all_assistant_data.return_value = {
             "media": 0,
@@ -431,16 +412,13 @@ async def test_self_service_delete_reports_cleanup_still_in_progress(
     assert response.status_code == 200, response.json()
     assert response.json()["success"] is True
     assert response.json()["runtime_cleanup_complete"] is False
-    assert response.json()["runtime_cleanup_summary"] == {
-        "processed": 1,
-        "completed": 0,
-        "retried": 1,
-        "failed": 0,
-        "errors": ["runtime cleanup still retrying"],
+    assert response.json()["runtime_cleanup_summary"] is None
+    assert response.json()["message"] == "Account deleted successfully"
+    mock_run_cleanup.assert_called_once()
+    assert mock_run_cleanup.call_args.kwargs == {
+        "cleanup_task_ids": [1234],
+        "user_id": user["id"],
     }
-    assert "in progress" in response.json()["message"].lower()
-    mock_process_cleanup.assert_awaited_once()
-    assert mock_process_cleanup.call_args.kwargs == {"task_ids": [1234]}
 
 
 @pytest.mark.anyio
