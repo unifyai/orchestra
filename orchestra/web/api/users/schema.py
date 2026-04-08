@@ -199,11 +199,23 @@ class CanDeleteAccountResponse(BaseModel):
     blockers: list[DeletionBlockerResponse]
 
 
+class RuntimeCleanupSummaryResponse(BaseModel):
+    """Result of the immediate post-delete assistant cleanup pass."""
+
+    processed: int
+    completed: int
+    retried: int
+    failed: int
+    errors: list[str]
+
+
 class AccountDeletionResponse(BaseModel):
     """Response after account deletion attempt."""
 
     success: bool
     message: str
+    runtime_cleanup_complete: bool = True
+    runtime_cleanup_summary: Optional[RuntimeCleanupSummaryResponse] = None
 
 
 # ============================================================================
