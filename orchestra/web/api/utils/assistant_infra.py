@@ -57,9 +57,69 @@ def _cleanup_errors_from_steps(steps: dict[str, dict[str, Any]]) -> list[str]:
     errors: list[str] = []
     for step_name, step in steps.items():
         if not step.get("success"):
-            message = step.get("error") or step.get("reason") or "cleanup incomplete"
-            errors.append(f"{step_name}: {message}")
+            errors.append(f"{step_name}: {_cleanup_step_message(step)}")
     return errors
+
+
+def _cleanup_step_message(step: dict[str, Any]) -> str:
+    """Return a human-readable summary for one cleanup step."""
+
+    return str(step.get("error") or step.get("reason") or "cleanup incomplete")
+
+
+def _step_response(step: dict[str, Any]) -> dict[str, Any]:
+    """Return a cleanup step's JSON body when present."""
+
+    response = step.get("response")
+    return response if isinstance(response, dict) else {}
+
+
+def _stop_step_reason(step: dict[str, Any]) -> str | None:
+    """Return the semantic stop reason from a cleanup step."""
+
+    reason = step.get("reason")
+    if reason:
+        return str(reason)
+    response_reason = _step_response(step).get("reason")
+    return str(response_reason) if response_reason else None
+
+
+def _stop_requires_sessionless_fallback(step: dict[str, Any]) -> bool:
+    """Return whether stop semantics say no AssistantSession existed."""
+
+    if not step.get("success"):
+        return False
+    return _stop_step_reason(step) == "not_found"
+
+
+def _runtime_vm_refs(runtime_status: dict[str, Any]) -> list[dict[str, str]]:
+    """Return de-duplicated VM refs from a runtime status payload."""
+
+    refs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for key in ("owned_vms", "other_owned_vms"):
+        for raw_vm in runtime_status.get(key) or []:
+            if not isinstance(raw_vm, dict):
+                continue
+            binding_id = str(raw_vm.get("binding_id", "") or "")
+            vm_name = str(raw_vm.get("vm_name", "") or "")
+            ref_key = (binding_id, vm_name)
+            if not binding_id or not vm_name or ref_key in seen:
+                continue
+            seen.add(ref_key)
+            refs.append({"binding_id": binding_id, "vm_name": vm_name})
+    return refs
+
+
+def _runtime_has_live_resources(runtime_status: dict[str, Any]) -> bool:
+    """Return whether the assistant still has live runtime resources."""
+
+    return bool(
+        runtime_status.get("active_job_names")
+        or runtime_status.get("owned_vms")
+        or runtime_status.get("other_owned_vms")
+        or runtime_status.get("disk_vm_name"),
+    )
 
 
 def _comms_url_for(deploy_env: str | None) -> str:
@@ -489,16 +549,70 @@ async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
     )
 
 
-async def release_pool_vm(assistant_id: str, deploy_env: str | None = None):
-    """Release any pool VM assigned to this assistant back to idle.
-    Idempotent — no-ops if no VM is assigned.
-    """
+async def release_pool_vm(
+    assistant_id: str,
+    binding_id: str,
+    *,
+    vm_name: str | None = None,
+    job_name: str | None = None,
+    release_generation: int | None = None,
+    deploy_env: str | None = None,
+):
+    """Release a pool VM using the binding-scoped comms contract."""
+
+    if bool(vm_name) == bool(job_name):
+        raise ValueError("Provide exactly one of vm_name or job_name for VM release")
+
+    payload: dict[str, Any] = {
+        "assistant_id": assistant_id,
+        "binding_id": binding_id,
+    }
+    if vm_name:
+        payload["vm_name"] = vm_name
+    if job_name:
+        payload["job_name"] = job_name
+    if release_generation is not None:
+        payload["release_generation"] = release_generation
     return await _request_cleanup_step(
         name="release_pool_vm",
         deploy_env=deploy_env,
         method="POST",
         path="/infra/vm/pool/release",
-        json_body={"assistant_id": assistant_id},
+        json_body=payload,
+        timeout=30.0,
+    )
+
+
+def release_pool_vm_sync(
+    assistant_id: str,
+    binding_id: str,
+    *,
+    vm_name: str | None = None,
+    job_name: str | None = None,
+    release_generation: int | None = None,
+    deploy_env: str | None = None,
+) -> dict[str, Any]:
+    """Synchronous binding-scoped pool release helper."""
+
+    if bool(vm_name) == bool(job_name):
+        raise ValueError("Provide exactly one of vm_name or job_name for VM release")
+
+    payload: dict[str, Any] = {
+        "assistant_id": assistant_id,
+        "binding_id": binding_id,
+    }
+    if vm_name:
+        payload["vm_name"] = vm_name
+    if job_name:
+        payload["job_name"] = job_name
+    if release_generation is not None:
+        payload["release_generation"] = release_generation
+    return _request_cleanup_step_sync(
+        name="release_pool_vm",
+        deploy_env=deploy_env,
+        method="POST",
+        path="/infra/vm/pool/release",
+        json_body=payload,
         timeout=30.0,
     )
 
@@ -681,32 +795,39 @@ async def stop_jobs(
         )
 
         if job_names:
-            try:
-                stop_response = await client.post(
-                    f"{comms_url}/infra/job/stop",
-                    data={"job_name": job_names[0]},
-                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    timeout=20,
-                )
-                stop_response.raise_for_status()
-                steps["stop_job"] = _cleanup_step_result(
-                    "stop_job",
-                    success=True,
-                    response=_safe_json(stop_response),
-                )
-            except httpx.TimeoutException:
-                steps["stop_job"] = _cleanup_step_result(
-                    "stop_job",
-                    success=False,
-                    timed_out=True,
-                    error="request timed out",
-                )
-            except Exception as exc:
-                steps["stop_job"] = _cleanup_step_result(
-                    "stop_job",
-                    success=False,
-                    error=str(exc),
-                )
+            stop_results: list[dict[str, Any]] = []
+            stop_errors: list[str] = []
+            timed_out = False
+            for job_name in job_names:
+                try:
+                    stop_response = await client.post(
+                        f"{comms_url}/infra/job/stop",
+                        data={"job_name": job_name},
+                        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                        timeout=20,
+                    )
+                    stop_response.raise_for_status()
+                    stop_results.append(
+                        {
+                            "job_name": job_name,
+                            "response": _safe_json(stop_response),
+                        },
+                    )
+                except httpx.TimeoutException:
+                    timed_out = True
+                    stop_errors.append(f"{job_name}: request timed out")
+                except Exception as exc:
+                    stop_errors.append(f"{job_name}: {exc}")
+            steps["stop_job"] = _cleanup_step_result(
+                "stop_job",
+                success=not stop_errors,
+                response={
+                    "job_names": job_names,
+                    "results": stop_results,
+                },
+                error="; ".join(stop_errors) if stop_errors else None,
+                timed_out=timed_out,
+            )
         else:
             steps["stop_job"] = _cleanup_step_result(
                 "stop_job",
@@ -767,6 +888,307 @@ async def delete_assistant_session(
     )
 
 
+async def _cleanup_sessionless_runtime(
+    assistant_id: str,
+    *,
+    deploy_env: str | None = None,
+) -> dict[str, Any]:
+    """Best-effort fallback when runtime exists without a current session."""
+
+    runtime_status_step = await _request_cleanup_step(
+        name="runtime_status",
+        deploy_env=deploy_env,
+        method="GET",
+        path=f"/infra/runtime/{assistant_id}",
+        timeout=20,
+    )
+    runtime_status = _step_response(runtime_status_step)
+    if not runtime_status_step.get("success"):
+        return _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="runtime_status_unavailable",
+            response={
+                "runtime_status_step": runtime_status_step,
+                "stop_jobs": _cleanup_step_result(
+                    "stop_job",
+                    success=True,
+                    skipped=True,
+                    reason="runtime_status_unavailable",
+                ),
+                "released_vms": [],
+                "errors": [_cleanup_step_message(runtime_status_step)],
+            },
+        )
+    if not _runtime_has_live_resources(runtime_status):
+        return _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="runtime_already_clean",
+            response={
+                "runtime_status": runtime_status,
+                "stop_jobs": _cleanup_step_result(
+                    "stop_job",
+                    success=True,
+                    skipped=True,
+                    reason="runtime_already_clean",
+                ),
+                "released_vms": [],
+                "errors": [],
+            },
+        )
+
+    stop_jobs_result = await stop_jobs(assistant_id, deploy_env=deploy_env)
+    release_steps: list[dict[str, Any]] = []
+    fallback_errors = list(stop_jobs_result.get("errors", []))
+    for vm_ref in _runtime_vm_refs(runtime_status):
+        release_step = await release_pool_vm(
+            assistant_id,
+            vm_ref["binding_id"],
+            vm_name=vm_ref["vm_name"],
+            deploy_env=deploy_env,
+        )
+        release_steps.append(
+            {
+                "binding_id": vm_ref["binding_id"],
+                "vm_name": vm_ref["vm_name"],
+                "step": release_step,
+            },
+        )
+        if not release_step.get("success"):
+            fallback_errors.append(
+                f"{vm_ref['vm_name']}: {_cleanup_step_message(release_step)}",
+            )
+
+    return _cleanup_step_result(
+        "sessionless_runtime_fallback",
+        success=True,
+        response={
+            "runtime_status": runtime_status,
+            "stop_jobs": stop_jobs_result,
+            "released_vms": release_steps,
+            "errors": fallback_errors,
+        },
+    )
+
+
+def _stop_jobs_sync(
+    assistant_id: str,
+    *,
+    deploy_env: str | None = None,
+) -> dict[str, Any]:
+    """Synchronous variant of ``stop_jobs`` used by blocking cleanup callers."""
+
+    assistant_id = str(assistant_id)
+    steps: dict[str, dict[str, Any]] = {}
+    job_names: list[str] = []
+    comms_url = _comms_url_for(deploy_env)
+
+    if not comms_url or not ADMIN_KEY:
+        skipped = _cleanup_step_result(
+            "discover_jobs",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        steps["discover_jobs"] = skipped
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        return {"success": True, "job_names": [], "steps": steps, "errors": []}
+
+    label = assistant_id.lower().replace("_", "-")
+    try:
+        with httpx.Client() as client:
+            response = client.get(
+                f"{comms_url}/infra/jobs",
+                params={
+                    "label_selector": f"app=unity,assistant-id={label}",
+                    "hours": RUNTIME_JOB_LOOKBACK_HOURS,
+                },
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+            job_names = [
+                job["job_name"]
+                for job in data.get("jobs", [])
+                if job.get("status") == "Running"
+            ]
+            steps["discover_jobs"] = _cleanup_step_result(
+                "discover_jobs",
+                success=True,
+                response={"job_names": job_names},
+            )
+
+            if job_names:
+                stop_results: list[dict[str, Any]] = []
+                stop_errors: list[str] = []
+                timed_out = False
+                for job_name in job_names:
+                    try:
+                        stop_response = client.post(
+                            f"{comms_url}/infra/job/stop",
+                            data={"job_name": job_name},
+                            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                            timeout=20,
+                        )
+                        stop_response.raise_for_status()
+                        stop_results.append(
+                            {
+                                "job_name": job_name,
+                                "response": _safe_json(stop_response),
+                            },
+                        )
+                    except httpx.TimeoutException:
+                        timed_out = True
+                        stop_errors.append(f"{job_name}: request timed out")
+                    except Exception as exc:
+                        stop_errors.append(f"{job_name}: {exc}")
+                steps["stop_job"] = _cleanup_step_result(
+                    "stop_job",
+                    success=not stop_errors,
+                    response={
+                        "job_names": job_names,
+                        "results": stop_results,
+                    },
+                    error="; ".join(stop_errors) if stop_errors else None,
+                    timed_out=timed_out,
+                )
+            else:
+                steps["stop_job"] = _cleanup_step_result(
+                    "stop_job",
+                    success=True,
+                    skipped=True,
+                    reason="no_running_jobs",
+                )
+    except httpx.TimeoutException:
+        steps["discover_jobs"] = _cleanup_step_result(
+            "discover_jobs",
+            success=False,
+            timed_out=True,
+            error="request timed out",
+        )
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="job_discovery_incomplete",
+        )
+    except Exception as exc:
+        steps["discover_jobs"] = _cleanup_step_result(
+            "discover_jobs",
+            success=False,
+            error=str(exc),
+        )
+        steps["stop_job"] = _cleanup_step_result(
+            "stop_job",
+            success=True,
+            skipped=True,
+            reason="job_discovery_failed",
+        )
+
+    errors = _cleanup_errors_from_steps(steps)
+    return {
+        "success": not errors,
+        "job_names": job_names,
+        "steps": steps,
+        "errors": errors,
+    }
+
+
+def _cleanup_sessionless_runtime_sync(
+    assistant_id: str,
+    *,
+    deploy_env: str | None = None,
+) -> dict[str, Any]:
+    """Blocking fallback when runtime exists without a current session."""
+
+    runtime_status_step = _request_cleanup_step_sync(
+        name="runtime_status",
+        deploy_env=deploy_env,
+        method="GET",
+        path=f"/infra/runtime/{assistant_id}",
+        timeout=20,
+    )
+    runtime_status = _step_response(runtime_status_step)
+    if not runtime_status_step.get("success"):
+        return _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="runtime_status_unavailable",
+            response={
+                "runtime_status_step": runtime_status_step,
+                "stop_jobs": _cleanup_step_result(
+                    "stop_job",
+                    success=True,
+                    skipped=True,
+                    reason="runtime_status_unavailable",
+                ),
+                "released_vms": [],
+                "errors": [_cleanup_step_message(runtime_status_step)],
+            },
+        )
+    if not _runtime_has_live_resources(runtime_status):
+        return _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="runtime_already_clean",
+            response={
+                "runtime_status": runtime_status,
+                "stop_jobs": _cleanup_step_result(
+                    "stop_job",
+                    success=True,
+                    skipped=True,
+                    reason="runtime_already_clean",
+                ),
+                "released_vms": [],
+                "errors": [],
+            },
+        )
+
+    stop_jobs_result = _stop_jobs_sync(assistant_id, deploy_env=deploy_env)
+    release_steps: list[dict[str, Any]] = []
+    fallback_errors = list(stop_jobs_result.get("errors", []))
+    for vm_ref in _runtime_vm_refs(runtime_status):
+        release_step = release_pool_vm_sync(
+            assistant_id,
+            vm_ref["binding_id"],
+            vm_name=vm_ref["vm_name"],
+            deploy_env=deploy_env,
+        )
+        release_steps.append(
+            {
+                "binding_id": vm_ref["binding_id"],
+                "vm_name": vm_ref["vm_name"],
+                "step": release_step,
+            },
+        )
+        if not release_step.get("success"):
+            fallback_errors.append(
+                f"{vm_ref['vm_name']}: {_cleanup_step_message(release_step)}",
+            )
+
+    return _cleanup_step_result(
+        "sessionless_runtime_fallback",
+        success=True,
+        response={
+            "runtime_status": runtime_status,
+            "stop_jobs": stop_jobs_result,
+            "released_vms": release_steps,
+            "errors": fallback_errors,
+        },
+    )
+
+
 async def wait_for_runtime_cleanup(
     assistant_id: str,
     deploy_env: str | None = None,
@@ -823,7 +1245,19 @@ async def teardown_assistant_runtime(
         assistant_id,
         deploy_env=deploy_env,
     )
+    fallback_step = _cleanup_step_result(
+        "sessionless_runtime_fallback",
+        success=True,
+        skipped=True,
+        reason="assistant_session_present",
+    )
     if not stop_session_step.get("success"):
+        fallback_step = _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="assistant_session_stop_incomplete",
+        )
         wait_step = _cleanup_step_result(
             "wait_for_runtime_cleanup",
             success=True,
@@ -837,6 +1271,11 @@ async def teardown_assistant_runtime(
             reason="assistant_session_stop_incomplete",
         )
     else:
+        if _stop_requires_sessionless_fallback(stop_session_step):
+            fallback_step = await _cleanup_sessionless_runtime(
+                assistant_id,
+                deploy_env=deploy_env,
+            )
         wait_step = await wait_for_runtime_cleanup(assistant_id, deploy_env=deploy_env)
         if wait_step.get("success"):
             session_step = await delete_assistant_session(
@@ -878,6 +1317,7 @@ async def teardown_assistant_runtime(
 
     steps = {
         "stop_assistant_session_runtime": stop_session_step,
+        "sessionless_runtime_fallback": fallback_step,
         "delete_assistant_session": session_step,
         "wait_for_runtime_cleanup": wait_step,
         "delete_pubsub_topic": topic_step,
@@ -955,7 +1395,6 @@ def teardown_assistant_runtime_sync(
             "steps": {},
         }
 
-    headers = {"Authorization": f"Bearer {ADMIN_KEY}"}
     steps: dict[str, dict[str, Any]] = {}
     steps["stop_assistant_session_runtime"] = _request_cleanup_step_sync(
         name="stop_assistant_session_runtime",
@@ -964,7 +1403,19 @@ def teardown_assistant_runtime_sync(
         path=f"/infra/session/{assistant_id}/stop",
         timeout=20,
     )
+    steps["sessionless_runtime_fallback"] = _cleanup_step_result(
+        "sessionless_runtime_fallback",
+        success=True,
+        skipped=True,
+        reason="assistant_session_present",
+    )
     if not steps["stop_assistant_session_runtime"].get("success"):
+        steps["sessionless_runtime_fallback"] = _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="assistant_session_stop_incomplete",
+        )
         steps["wait_for_runtime_cleanup"] = _cleanup_step_result(
             "wait_for_runtime_cleanup",
             success=True,
@@ -978,6 +1429,13 @@ def teardown_assistant_runtime_sync(
             reason="assistant_session_stop_incomplete",
         )
     else:
+        if _stop_requires_sessionless_fallback(
+            steps["stop_assistant_session_runtime"],
+        ):
+            steps["sessionless_runtime_fallback"] = _cleanup_sessionless_runtime_sync(
+                assistant_id,
+                deploy_env=deploy_env,
+            )
         steps["wait_for_runtime_cleanup"] = _wait_for_runtime_cleanup_sync(
             assistant_id,
             deploy_env=deploy_env,

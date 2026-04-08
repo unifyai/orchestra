@@ -1598,8 +1598,8 @@ async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
     dbsession,
     mock_assistant_infra_calls,
 ):
-    """Test that GCS data is cleaned up for assistants deleted during member removal."""
-    _, _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    """Deleted assistants leave GCS cleanup to the durable cleanup task path."""
+    _, _, _, mock_org_cleanup, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
 
     owner = await create_test_user(client, "gcs_cleanup_owner@test.com")
@@ -1649,7 +1649,7 @@ async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
     )
     dbsession.commit()
 
-    # Remove member - triggers assistant deletion AND GCS cleanup
+    # Remove member - triggers assistant deletion and durable cleanup
     remove_resp = await client.delete(
         f"/v0/organizations/{org_id}/members/{member['id']}",
         headers=owner["headers"],
@@ -1660,8 +1660,8 @@ async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
     dbsession.expire_all()
     assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
 
-    # Verify BucketService.delete_all_assistant_data was called for the deleted assistant
-    mock_bucket_instance.delete_all_assistant_data.assert_called_once_with(agent_id)
+    mock_org_cleanup.assert_awaited_once()
+    mock_bucket_instance.delete_all_assistant_data.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -1756,12 +1756,9 @@ async def test_member_removal_gcs_failure_does_not_block(
     dbsession,
     mock_assistant_infra_calls,
 ):
-    """Test that GCS cleanup failure does not block member removal."""
-    _, _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    """Durable cleanup retries do not block member removal responses."""
+    _, _, _, mock_org_cleanup, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
-    mock_bucket_instance.delete_all_assistant_data.side_effect = Exception(
-        "GCS unreachable",
-    )
 
     owner = await create_test_user(client, "gcs_fail_owner@test.com")
     member = await create_test_user(client, "gcs_fail_member@test.com")
@@ -1810,12 +1807,14 @@ async def test_member_removal_gcs_failure_does_not_block(
     )
     dbsession.commit()
 
-    # Remove member - GCS cleanup fails but endpoint should still succeed
+    # Remove member - cleanup retries remain asynchronous and must not block.
     remove_resp = await client.delete(
         f"/v0/organizations/{org_id}/members/{member['id']}",
         headers=owner["headers"],
     )
     assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+    mock_org_cleanup.assert_awaited_once()
+    mock_bucket_instance.delete_all_assistant_data.assert_not_called()
 
     # DB deletion should still have occurred
     dbsession.expire_all()

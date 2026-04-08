@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Utilities for enqueueing and retrying durable assistant cleanup."""
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,8 @@ from orchestra.db.models.orchestra_models import (
     AssistantCleanupTask,
     AssistantContact,
 )
+from orchestra.services.bucket_service import BucketService
+from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import (
     delete_email,
     delete_phone_number,
@@ -66,7 +69,11 @@ class ContactCleanupSpec:
 
 @dataclass
 class AssistantCleanupSpec:
-    """Serializable cleanup contract for one assistant deletion flow."""
+    """Serializable cleanup contract for one assistant deletion flow.
+
+    The payload is persisted before destructive owner-row deletes so retries can
+    finish runtime teardown, contact cleanup, and assistant GCS cleanup later.
+    """
 
     assistant_id: int
     deploy_env: str | None = None
@@ -260,6 +267,41 @@ def enqueue_cleanup_tasks(
     return tasks
 
 
+def _delete_assistant_gcs_data(spec: AssistantCleanupSpec) -> dict[str, object]:
+    """Delete assistant-scoped GCS data after runtime teardown is complete."""
+
+    errors: list[str] = []
+    deleted_counts = {"media": 0, "recordings": 0, "attachments": 0}
+    bucket_service = BucketService()
+
+    for field_name in ("profile_photo", "profile_video"):
+        gcs_url = getattr(spec, field_name)
+        if not gcs_url or not str(gcs_url).startswith("gs://"):
+            continue
+        try:
+            bucket_service.delete_assistant_file(str(gcs_url))
+        except Exception as exc:
+            errors.append(
+                f"Failed to delete {field_name} for assistant {spec.assistant_id}: {exc}",
+            )
+
+    try:
+        deleted_counts = bucket_service.delete_all_assistant_data(
+            spec.assistant_id,
+            is_staging=settings.is_staging,
+        )
+    except Exception as exc:
+        errors.append(
+            f"Failed to delete assistant GCS data for assistant {spec.assistant_id}: {exc}",
+        )
+
+    return {
+        "success": not errors,
+        "deleted_counts": deleted_counts,
+        "errors": errors,
+    }
+
+
 def _next_retry_at(attempt_count: int) -> datetime:
     """Compute the next retry time using a capped exponential backoff."""
     delay_minutes = min(60, BASE_RETRY_DELAY_MINUTES * (2 ** max(0, attempt_count - 1)))
@@ -272,7 +314,11 @@ async def process_assistant_cleanup_tasks(
     task_ids: list[int] | None = None,
     limit: int = DEFAULT_CLEANUP_TASK_BATCH_SIZE,
 ) -> dict:
-    """Process queued cleanup tasks and persist retry/completion state."""
+    """Process queued cleanup tasks and persist retry/completion state.
+
+    A task is only marked complete after runtime teardown, contact cleanup, and
+    assistant-scoped GCS deletion have all succeeded.
+    """
     now = datetime.now(timezone.utc)
     if task_ids:
         # Explicit task processing is used by the in-request/background cleanup
@@ -316,14 +362,29 @@ async def process_assistant_cleanup_tasks(
                 [spec],
                 soft_delete_successes=False,
             )
+            storage_result: dict[str, object]
             errors = [
                 *runtime_result.get("errors", []),
                 *contact_result.get("errors", []),
             ]
+            if errors:
+                storage_result = {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "runtime_or_contact_cleanup_incomplete",
+                    "errors": [],
+                }
+            else:
+                storage_result = await asyncio.to_thread(
+                    _delete_assistant_gcs_data,
+                    spec,
+                )
+                errors.extend(storage_result.get("errors", []))
             task.attempt_count += 1
             task.last_result = {
                 "runtime": runtime_result,
                 "contacts": contact_result,
+                "storage": storage_result,
             }
             task.cleanup_payload = spec.to_payload()
             if errors:
