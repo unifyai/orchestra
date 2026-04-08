@@ -11,6 +11,7 @@ Create Date: 2026-04-03 12:00:00.000000
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 revision = "add_dashboard_token"
 down_revision = "backfill_credit_ledger"
@@ -19,6 +20,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    conn = op.get_bind()
+    inspector = inspect(conn)
+
+    if "dashboard_token" in inspector.get_table_names():
+        return
+
     op.create_table(
         "dashboard_token",
         sa.Column("token", sa.String(12), primary_key=True),
