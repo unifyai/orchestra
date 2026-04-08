@@ -419,12 +419,13 @@ class UserAccountCleanupService:
         assistant_ids: list[int],
     ) -> None:
         """
-        Delete all GCS data for every assistant owned by a user, plus the
-        user's account photos.
+        Delete non-assistant GCS data for a user after account deletion.
 
-        *assistant_ids* is pre-fetched before the DB commit (since CASCADE
-        deletes the rows).  If the list is empty we fall back to the legacy
-        user-prefix cleanup.
+        Assistant-scoped media, recordings, and attachments are owned by the
+        durable ``AssistantCleanupTask`` queue so they are only deleted after
+        runtime teardown succeeds. This helper only handles account photos and,
+        when no assistants were queued, the legacy user-prefix attachment
+        cleanup.
 
         Best-effort operation – logs errors but never fails the deletion.
         """
@@ -433,27 +434,10 @@ class UserAccountCleanupService:
 
             bucket_service = BucketService()
 
-            if assistant_ids:
-                total = {"media": 0, "recordings": 0, "attachments": 0}
-                for aid in assistant_ids:
-                    try:
-                        counts = bucket_service.delete_all_assistant_data(aid)
-                        for key in total:
-                            total[key] += counts.get(key, 0)
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to cleanup GCS data for assistant {aid} "
-                            f"(user {user_id}): {e}",
-                        )
-                grand_total = sum(total.values())
-                if grand_total > 0:
-                    logger.info(
-                        f"Cleaned up {grand_total} GCS file(s) across "
-                        f"{len(assistant_ids)} assistant(s) for user {user_id}: {total}",
-                    )
-            else:
+            if not assistant_ids:
                 # Fallback: no assistants found (user had none, or they were
-                # already cleaned up).  Try the legacy user-prefix cleanup.
+                # already cleaned up through the durable queue). Try the legacy
+                # user-prefix cleanup.
                 deleted_count = bucket_service.delete_message_attachments_for_user(
                     user_id,
                 )

@@ -360,7 +360,8 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
         (contact.contact_type, contact.contact_value)
         for contact in cleanup_specs[0].contacts
     ] == [("phone", "+15550300123")]
-    mock_bucket.delete_all_assistant_data.assert_called_once_with(agent_id)
+    mock_bucket.delete_all_assistant_data.assert_not_called()
+    mock_bucket.delete_user_account_photos.assert_called_once_with(member["id"])
 
     dbsession.expire_all()
     assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
@@ -415,6 +416,8 @@ async def test_self_service_delete_schedules_background_runtime_cleanup(
     assert response.json()["runtime_cleanup_summary"] is None
     assert response.json()["message"] == "Account deleted successfully"
     mock_run_cleanup.assert_called_once()
+    mock_bucket.delete_all_assistant_data.assert_not_called()
+    mock_bucket.delete_user_account_photos.assert_called_once_with(user["id"])
     assert mock_run_cleanup.call_args.kwargs == {
         "cleanup_task_ids": [1234],
         "user_id": user["id"],

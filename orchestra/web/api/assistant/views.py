@@ -130,6 +130,15 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     return raw_phone
 
 
+def _open_request_session(request: Request) -> Session:
+    """Open a standalone session bound to the app's current engine."""
+
+    session_factory = request.app.state.db_session_factory
+    fresh_session: Session = session_factory()
+    fresh_session.info["request_state"] = request.state
+    return fresh_session
+
+
 router = APIRouter()
 admin_router = APIRouter()
 demo_router = APIRouter()
@@ -1308,12 +1317,10 @@ async def create_assistant_contact(
 
     # 6. Create AssistantContact row + update Assistant columns + deduct cost
     #    Wrap in try/except to rollback the external provisioning if DB fails.
+    refreshed_session = _open_request_session(request)
     try:
-        # Refresh session after potentially long infra operations
-        session.close()
-        session = next(get_db_session(request))
-        assistant_dao = AssistantDAO(session)
-        contact_dao = AssistantContactDAO(session)
+        assistant_dao = AssistantDAO(refreshed_session)
+        contact_dao = AssistantContactDAO(refreshed_session)
 
         # Re-fetch assistant with fresh session
         assistant = assistant_dao.get_assistant_by_id(
@@ -1356,10 +1363,10 @@ async def create_assistant_contact(
                 },
             )
 
-        session.commit()
+        refreshed_session.commit()
 
     except Exception as db_error:
-        session.rollback()
+        refreshed_session.rollback()
         logging.error(
             f"DB commit failed after provisioning {contact_type} for assistant "
             f"{assistant_id}: {db_error}. Rolling back external resource.",
@@ -1386,7 +1393,6 @@ async def create_assistant_contact(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save {contact_type} contact: {str(db_error)}",
         )
-
     # 8. Trigger reawaken so Unity picks up the new contact
     try:
         await reawaken_assistant(
@@ -1404,9 +1410,12 @@ async def create_assistant_contact(
         agent_id=assistant_id,
         organization_id=organization_id,
     )
-    return InfoResponse(
-        info=_build_assistant_read(assistant, session),
-    )
+    try:
+        return InfoResponse(
+            info=_build_assistant_read(assistant, refreshed_session),
+        )
+    finally:
+        refreshed_session.close()
 
 
 @router.get(
@@ -1576,19 +1585,15 @@ async def update_assistant_contact(
 async def _cleanup_after_assistant_delete(
     session_factory,
     cleanup_task_ids: list[int],
-    profile_photo: str | None,
-    profile_video: str | None,
     assistant_id: int,
-    is_staging: bool,
 ) -> None:
-    """Run runtime teardown and GCS cleanup after the delete response is sent.
+    """Re-drive durable cleanup tasks after the delete response is sent.
 
     Runs as a FastAPI BackgroundTask so the user gets an immediate response.
-    Any failures here are already recorded in the durable AssistantCleanupTask
-    queue and will be retried by the cleanup cron job.
+    Assistant-scoped GCS cleanup now happens inside ``process_assistant_cleanup_tasks``
+    once runtime teardown is complete, so this background task only re-drives
+    the durable queue toward completion.
     """
-    bucket_service = BucketService()
-
     if cleanup_task_ids:
         deadline = time.monotonic() + ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS
         while True:
@@ -1644,47 +1649,6 @@ async def _cleanup_after_assistant_delete(
             finally:
                 bg_session.close()
             await asyncio.sleep(ASSISTANT_DELETE_CLEANUP_POLL_SECONDS)
-
-    if profile_photo and profile_photo.startswith("gs://"):
-        try:
-            await asyncio.to_thread(bucket_service.delete_assistant_file, profile_photo)
-        except Exception as e_gcs:
-            logging.error(
-                "Background GCS photo cleanup failed for assistant %s: %s",
-                assistant_id,
-                e_gcs,
-            )
-
-    if profile_video and profile_video.startswith("gs://"):
-        try:
-            await asyncio.to_thread(bucket_service.delete_assistant_file, profile_video)
-        except Exception as e_gcs:
-            logging.error(
-                "Background GCS video cleanup failed for assistant %s: %s",
-                assistant_id,
-                e_gcs,
-            )
-
-    try:
-        cleanup_counts = await asyncio.to_thread(
-            bucket_service.delete_all_assistant_data,
-            assistant_id,
-            is_staging=is_staging,
-        )
-        total = sum(cleanup_counts.values())
-        if total > 0:
-            print(
-                f"GCS CLEANUP: {total} file(s) deleted "
-                f"(media={cleanup_counts['media']}, "
-                f"recordings={cleanup_counts['recordings']}, "
-                f"attachments={cleanup_counts['attachments']})",
-            )
-    except Exception as e:
-        logging.error(
-            "Background GCS data cleanup failed for assistant %s: %s",
-            assistant_id,
-            e,
-        )
 
 
 @router.delete(
@@ -1853,18 +1817,14 @@ async def delete_assistant(
         )
         session.commit()
 
-        # Schedule runtime teardown and GCS cleanup to run after the response
-        # is sent.  The durable task queue guarantees eventual cleanup even if
-        # the background task fails or the process restarts before it runs.
+        # Schedule an immediate post-response drain of the durable cleanup task
+        # queue. Assistant GCS deletion now lives inside that retryable path.
         session_factory = request.app.state.db_session_factory
         background_tasks.add_task(
             _cleanup_after_assistant_delete,
             session_factory,
             cleanup_task_ids,
-            assistant.profile_photo,
-            assistant.profile_video,
             assistant_id,
-            settings.is_staging,
         )
 
         response_msg = "Assistant deleted successfully"

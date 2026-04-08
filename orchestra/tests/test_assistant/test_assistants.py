@@ -1700,7 +1700,7 @@ async def test_update_assistant_with_invalid_voice_config(
 
 @pytest.mark.anyio
 async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
-    """Deleting an assistant should delete its call recordings from GCS."""
+    """Deleting an assistant should hand GCS cleanup to the durable task path."""
     payload = {
         "first_name": "Recorded",
         "surname": "Assistant",
@@ -1711,8 +1711,18 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
     assistant_id = create_resp.json()["info"]["agent_id"]
 
     with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_process_cleanup, patch(
         "orchestra.web.api.assistant.views.BucketService",
     ) as MockBucketServiceClass:
+        mock_process_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         mock_instance = MockBucketServiceClass.return_value
         mock_instance.delete_assistant_file.return_value = True
         mock_instance.delete_all_assistant_data.return_value = {
@@ -1727,10 +1737,8 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
         )
         assert del_resp.status_code == 200
 
-        mock_instance.delete_all_assistant_data.assert_called_once_with(
-            int(assistant_id),
-            is_staging=False,
-        )
+        mock_process_cleanup.assert_awaited_once()
+        mock_instance.delete_all_assistant_data.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -1777,6 +1785,7 @@ async def test_delete_assistant_processes_cleanup_tasks(
     assert del_resp.status_code == 200
     mock_process_cleanup.assert_awaited_once()
     assert mock_process_cleanup.await_args.kwargs["task_ids"]
+    mock_instance.delete_all_assistant_data.assert_not_called()
     cleanup_task = dbsession.query(AssistantCleanupTask).one()
     assert cleanup_task.assistant_id == assistant_id
     assert cleanup_task.status == "pending"
@@ -1786,9 +1795,7 @@ async def test_delete_assistant_processes_cleanup_tasks(
 async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     client: AsyncClient,
 ):
-    """GCS cleanup failures must not prevent assistant deletion or surface in the
-    user-facing response.  Cleanup runs in a background task after the response
-    is sent, so errors are logged but not returned to the caller."""
+    """Durable cleanup retries must not prevent assistant deletion responses."""
     payload = {
         "first_name": "Resilient",
         "surname": "Assistant",
@@ -1799,8 +1806,18 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     assistant_id = create_resp.json()["info"]["agent_id"]
 
     with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_process_cleanup, patch(
         "orchestra.web.api.assistant.views.BucketService",
     ) as MockBucketServiceClass:
+        mock_process_cleanup.return_value = {
+            "processed": 1,
+            "completed": 0,
+            "retried": 1,
+            "failed": 0,
+            "errors": ["assistant GCS cleanup still retrying"],
+        }
         mock_instance = MockBucketServiceClass.return_value
         mock_instance.delete_assistant_file.return_value = True
         mock_instance.delete_all_assistant_data.side_effect = Exception(
@@ -1812,5 +1829,6 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
             headers=HEADERS,
         )
         assert del_resp.status_code == 200
-        # GCS errors happen in the background and must not appear in the response.
+        mock_process_cleanup.assert_awaited_once()
+        mock_instance.delete_all_assistant_data.assert_not_called()
         assert del_resp.json()["info"] == "Assistant deleted successfully"
