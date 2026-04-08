@@ -613,7 +613,12 @@ def delete_user(
     if not result.success:
         raise HTTPException(status_code=400, detail=result.message)
 
-    return AccountDeletionResponse(success=True, message=result.message)
+    return AccountDeletionResponse(
+        success=True,
+        message=result.message,
+        runtime_cleanup_complete=result.runtime_cleanup_complete,
+        runtime_cleanup_summary=result.runtime_cleanup_summary,
+    )
 
 
 ### Not related to next-auth
@@ -1693,7 +1698,12 @@ def delete_own_account(
     if not result.success:
         raise HTTPException(status_code=400, detail=result.message)
 
-    return AccountDeletionResponse(success=True, message=result.message)
+    return AccountDeletionResponse(
+        success=True,
+        message=result.message,
+        runtime_cleanup_complete=result.runtime_cleanup_complete,
+        runtime_cleanup_summary=result.runtime_cleanup_summary,
+    )
 
 
 # ============================================================================

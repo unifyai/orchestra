@@ -9,7 +9,7 @@ These tests verify:
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -572,8 +572,18 @@ class TestUserDeletionAttachmentCleanup:
         mock_session = self._make_mock_session(assistant_ids=[10, 20])
 
         with patch(
+            "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup, patch(
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
+            mock_process_cleanup.return_value = {
+                "processed": 2,
+                "completed": 2,
+                "retried": 0,
+                "failed": 0,
+                "errors": [],
+            }
             mock_bucket_service = MagicMock()
             mock_bucket_service.delete_all_assistant_data.return_value = {
                 "media": 1,
@@ -602,8 +612,22 @@ class TestUserDeletionAttachmentCleanup:
         with patch(
             "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
         ) as mock_enqueue_cleanup, patch(
+            "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup, patch(
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
+            mock_enqueue_cleanup.return_value = [
+                MagicMock(id=101),
+                MagicMock(id=102),
+            ]
+            mock_process_cleanup.return_value = {
+                "processed": 2,
+                "completed": 2,
+                "retried": 0,
+                "failed": 0,
+                "errors": [],
+            }
             mock_bucket_service = MagicMock()
             mock_bucket_service.delete_all_assistant_data.return_value = {
                 "media": 0,
@@ -623,6 +647,8 @@ class TestUserDeletionAttachmentCleanup:
                 mock_enqueue_cleanup.call_args.kwargs["source_flow"]
                 == CleanupSource.USER_DELETE
             )
+            mock_process_cleanup.assert_awaited_once()
+            assert mock_process_cleanup.call_args.kwargs == {"task_ids": [101, 102]}
 
     def test_user_deletion_falls_back_to_legacy_cleanup_when_no_assistants(self):
         """When no assistants found, fall back to legacy user-prefix cleanup."""
@@ -633,8 +659,18 @@ class TestUserDeletionAttachmentCleanup:
         mock_session = self._make_mock_session(assistant_ids=[])
 
         with patch(
+            "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup, patch(
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
+            mock_process_cleanup.return_value = {
+                "processed": 0,
+                "completed": 0,
+                "retried": 0,
+                "failed": 0,
+                "errors": [],
+            }
             mock_bucket_service = MagicMock()
             mock_bucket_service.delete_message_attachments_for_user.return_value = 3
             mock_bucket_cls.return_value = mock_bucket_service
@@ -647,6 +683,7 @@ class TestUserDeletionAttachmentCleanup:
                 "user-123",
             )
             mock_bucket_service.delete_all_assistant_data.assert_not_called()
+            mock_process_cleanup.assert_not_awaited()
 
     def test_user_deletion_continues_if_gcs_cleanup_fails(self):
         """User deletion should succeed even if GCS cleanup raises."""
@@ -657,8 +694,18 @@ class TestUserDeletionAttachmentCleanup:
         mock_session = self._make_mock_session(assistant_ids=[10])
 
         with patch(
+            "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup, patch(
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
+            mock_process_cleanup.return_value = {
+                "processed": 1,
+                "completed": 1,
+                "retried": 0,
+                "failed": 0,
+                "errors": [],
+            }
             mock_bucket_cls.side_effect = Exception("GCS error")
 
             service = UserAccountCleanupService(mock_session)
@@ -675,8 +722,18 @@ class TestUserDeletionAttachmentCleanup:
         mock_session = self._make_mock_session(assistant_ids=[10, 20, 30])
 
         with patch(
+            "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup, patch(
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
+            mock_process_cleanup.return_value = {
+                "processed": 3,
+                "completed": 3,
+                "retried": 0,
+                "failed": 0,
+                "errors": [],
+            }
             mock_bucket_service = MagicMock()
 
             def side_effect(aid, **kwargs):
