@@ -91,6 +91,13 @@ def seed_contact_type_costs(dbsession: Session):
                 monthly_cost=Decimal("5.00"),
                 one_time_cost=Decimal("5.00"),
             ),
+            AssistantContactCost(
+                contact_type="discord",
+                provider="discord",
+                country_code=None,
+                monthly_cost=Decimal("0"),
+                one_time_cost=Decimal("0"),
+            ),
         ]
         dbsession.add_all(rows)
         dbsession.flush()
@@ -166,6 +173,8 @@ def _ensure_user_has_contacts(dbsession: Session) -> None:
                 user.phone_number = "+15550001111"
             if not user.whatsapp_number:
                 user.whatsapp_number = "+15550002222"
+            if not user.discord_id:
+                user.discord_id = "100000000000000001"
             dbsession.commit()
 
 
@@ -445,6 +454,7 @@ class TestAssistantContactModel:
             ("phone", "+15551000012"),
             ("email", "multi@unify.ai"),
             ("whatsapp", "+15552000012"),
+            ("discord", "110000000000012012"),
         ]:
             dbsession.add(
                 AssistantContact(
@@ -459,9 +469,9 @@ class TestAssistantContactModel:
         contacts = AssistantContactDAO(dbsession).get_active_contacts_for_assistant(
             asst.agent_id,
         )
-        assert len(contacts) == 3
+        assert len(contacts) == 4
         types = {c.contact_type for c in contacts}
-        assert types == {"phone", "email", "whatsapp"}
+        assert types == {"phone", "email", "whatsapp", "discord"}
 
 
 # ============================================================================
@@ -963,6 +973,9 @@ def mock_all_infra(dbsession):
 
     wa_pool_mock = AsyncMock(return_value={"pool_number": "+15559876543"})
     wa_register_mock = AsyncMock(return_value={"success": True})
+    dc_pool_mock = AsyncMock(return_value={"pool_number": "123456789012345678"})
+    dc_register_mock = AsyncMock(return_value={"success": True})
+    dc_delete_routes_mock = AsyncMock(return_value=0)
 
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
         with patch(
@@ -971,9 +984,21 @@ def mock_all_infra(dbsession):
         ), patch(
             "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
             wa_register_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.assign_discord_pool_bot",
+            dc_pool_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.register_discord_bot",
+            dc_register_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.delete_discord_routes",
+            dc_delete_routes_mock,
         ):
             patches["assign_whatsapp_pool_number"] = wa_pool_mock
             patches["register_whatsapp_sender"] = wa_register_mock
+            patches["assign_discord_pool_bot"] = dc_pool_mock
+            patches["register_discord_bot"] = dc_register_mock
+            patches["delete_discord_routes"] = dc_delete_routes_mock
             with patch(
                 "orchestra.web.api.assistant.views.settings",
             ) as mock_settings:
@@ -1644,6 +1669,80 @@ class TestCreateContactEndpoint:
         assert contact is not None
         assert contact.contact_value == "+15559876543"
         assert contact.provider == "twilio"
+
+    @pytest.mark.anyio
+    async def test_create_discord_contact(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Creating a Discord contact assigns a pool bot and writes to DB."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={
+                "first_name": "CCE",
+                "surname": "Discord",
+                "create_infra": False,
+            },
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "discord"},
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "discord",
+        )
+        assert contact is not None
+        assert contact.contact_value == "123456789012345678"
+        assert contact.provider == "discord"
+
+    @pytest.mark.anyio
+    async def test_create_discord_contact_requires_discord_id(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Creating a Discord contact without discord_id on profile → 422."""
+        import os
+
+        api_key = os.getenv("AUTH_ACCOUNT_API_KEY", "")
+        row = dbsession.query(ApiKeyModel).filter(ApiKeyModel.key == api_key).first()
+        user = dbsession.query(User).filter(User.id == row.user_id).first()
+        original_discord_id = user.discord_id
+        user.discord_id = None
+        dbsession.commit()
+
+        try:
+            create_resp = await client.post(
+                "/v0/assistant",
+                json={
+                    "first_name": "CCE",
+                    "surname": "NoDiscord",
+                    "create_infra": False,
+                },
+                headers=HEADERS,
+            )
+            agent_id = int(create_resp.json()["info"]["agent_id"])
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/contact",
+                json={"contact_type": "discord"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+            assert "Discord" in resp.json()["detail"]
+        finally:
+            user.discord_id = original_discord_id
+            dbsession.commit()
 
     @pytest.mark.anyio
     async def test_duplicate_contact_type_returns_409(

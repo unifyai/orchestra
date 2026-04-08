@@ -19,6 +19,9 @@ O. 24h window tracking (DAO + endpoint level)
 P. Admin endpoint flows (assign → resolve, route → resolve, delete)
 Q. General success paths (happy-path flows without conflicts)
 R. Call permission (DAO + endpoints)
+S. Discord: DAO (Tier 1, pool assignment, conflicts, identity claim)
+T. Discord: Admin endpoints (pool CRUD, resolve, route, assign)
+U. User.discord_id (model + API)
 """
 
 from __future__ import annotations
@@ -88,6 +91,7 @@ def _make_user(
     dbsession: Session,
     email: str,
     whatsapp_number: str | None = None,
+    discord_id: str | None = None,
     name: str = "Test",
 ) -> User:
     ba = BillingAccount(credits=100)
@@ -98,6 +102,7 @@ def _make_user(
         email=email,
         name=name,
         whatsapp_number=whatsapp_number,
+        discord_id=discord_id,
         billing_account_id=ba.id,
     )
     dbsession.add(user)
@@ -130,6 +135,22 @@ def _enable_whatsapp(
         assistant_id=assistant.agent_id,
         contact_type="whatsapp",
         contact_value=pool_number.number,
+        status="active",
+    )
+    dbsession.add(contact)
+    dbsession.flush()
+    return contact
+
+
+def _enable_discord(
+    dbsession: Session,
+    assistant: Assistant,
+    pool_bot: SharedPoolNumber,
+) -> AssistantContact:
+    contact = AssistantContact(
+        assistant_id=assistant.agent_id,
+        contact_type="discord",
+        contact_value=pool_bot.number,
         status="active",
     )
     dbsession.add(contact)
@@ -1262,6 +1283,52 @@ class TestPlatformAgnostic:
         # Instagram pool still available
         eligible_ig = ig_dao.find_eligible_pool_numbers(a3.agent_id, [u.id])
         assert len(eligible_ig) == 1
+
+    def test_whatsapp_and_discord_pools_independent(
+        self,
+        dbsession: Session,
+        pool_numbers,
+    ):
+        """WhatsApp and Discord pools are fully isolated."""
+        dbsession.add(
+            SharedPoolNumber(number="111222333444555666", platform="discord"),
+        )
+        dbsession.flush()
+
+        wa_dao = SharedPoolDAO(dbsession, platform="whatsapp")
+        dc_dao = SharedPoolDAO(dbsession, platform="discord")
+
+        wa_pool = wa_dao.list_pool_numbers()
+        dc_pool = dc_dao.list_pool_numbers()
+
+        assert len(wa_pool) == 2
+        assert len(dc_pool) == 1
+        assert all(p.platform == "whatsapp" for p in wa_pool)
+        assert all(p.platform == "discord" for p in dc_pool)
+
+    def test_discord_pool_exhaustion_independent(
+        self,
+        dbsession: Session,
+        pool_numbers,
+    ):
+        """Exhausting Discord pool doesn't affect WhatsApp pool."""
+        dc_bot = SharedPoolNumber(number="999888777666555444", platform="discord")
+        dbsession.add(dc_bot)
+        dbsession.flush()
+
+        u = _make_user(dbsession, "cross_dc@test.com", "+15550800099")
+        a1 = _make_assistant(dbsession, u, "DCBot1")
+        a2 = _make_assistant(dbsession, u, "DCBot2")
+        _enable_discord(dbsession, a1, dc_bot)
+
+        dc_dao = SharedPoolDAO(dbsession, platform="discord")
+        wa_dao = SharedPoolDAO(dbsession, platform="whatsapp")
+
+        eligible_dc = dc_dao.find_eligible_pool_numbers(a2.agent_id, [u.id])
+        assert len(eligible_dc) == 0
+
+        eligible_wa = wa_dao.find_eligible_pool_numbers(a2.agent_id, [u.id])
+        assert len(eligible_wa) == 2
 
 
 # ============================================================================
@@ -3096,3 +3163,728 @@ class TestCallPermissionEndpoints:
         )
         assert resp.status_code == status.HTTP_200_OK
         assert resp.json()["permitted"] is False
+
+
+# ============================================================================
+# S. Discord DAO Tests
+# ============================================================================
+
+DISCORD_BOT_1 = "110000000000000001"
+DISCORD_BOT_2 = "110000000000000002"
+DISCORD_BOT_3 = "110000000000000003"
+DISCORD_USER_A = "220000000000000001"
+DISCORD_USER_B = "220000000000000002"
+DISCORD_USER_C = "220000000000000003"
+
+
+@pytest.fixture
+def discord_pool(dbsession: Session) -> list[SharedPoolNumber]:
+    bots = [
+        SharedPoolNumber(number=DISCORD_BOT_1, platform="discord"),
+        SharedPoolNumber(number=DISCORD_BOT_2, platform="discord"),
+    ]
+    dbsession.add_all(bots)
+    dbsession.flush()
+    return bots
+
+
+@pytest.fixture
+def discord_dao(dbsession: Session) -> SharedPoolDAO:
+    return SharedPoolDAO(dbsession, "discord")
+
+
+class TestDiscordTier1Routing:
+    def test_tier1_discord_user_match(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """User with discord_id resolves as owner via Tier 1."""
+        owner = _make_user(
+            dbsession,
+            "dc_owner@test.com",
+            discord_id=DISCORD_USER_A,
+        )
+        assistant = _make_assistant(dbsession, owner, "DCBot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+
+        result = discord_dao.resolve_inbound(discord_pool[0].number, DISCORD_USER_A)
+        assert result is not None
+        assert result["assistant_id"] == assistant.agent_id
+        assert result["role"] == "owner"
+
+    def test_tier2_discord_route_match(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """External Discord user resolves via Tier 2 route."""
+        owner = _make_user(
+            dbsession,
+            "dc_t2owner@test.com",
+            discord_id=DISCORD_USER_A,
+        )
+        assistant = _make_assistant(dbsession, owner, "DCT2Bot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+        discord_dao.get_or_create_route(assistant.agent_id, DISCORD_USER_B)
+        dbsession.flush()
+
+        result = discord_dao.resolve_inbound(discord_pool[0].number, DISCORD_USER_B)
+        assert result is not None
+        assert result["assistant_id"] == assistant.agent_id
+        assert result["role"] == "contact"
+
+    def test_no_match_returns_none_for_dedicated_discord(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Dedicated Discord bot, unknown sender → None."""
+        owner = _make_user(dbsession, "dc_ded@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, owner, "DCDed")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+
+        result = discord_dao.resolve_inbound(
+            discord_pool[0].number,
+            "999999999999999999",
+        )
+        assert result is None
+
+    def test_tier1_takes_priority_over_tier2_discord(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Owner's discord_id match wins over conflicting Tier 2 route."""
+        owner = _make_user(
+            dbsession,
+            "dc_prio@test.com",
+            discord_id=DISCORD_USER_A,
+        )
+        other_user = _make_user(dbsession, "dc_other@test.com")
+        a1 = _make_assistant(dbsession, owner, "PrioBot")
+        a2 = _make_assistant(dbsession, other_user, "OtherBot")
+        _enable_discord(dbsession, a1, discord_pool[0])
+        _enable_discord(dbsession, a2, discord_pool[0])
+
+        dbsession.add(
+            SharedPlatformRoute(
+                pool_number_id=discord_pool[0].id,
+                contact_number=DISCORD_USER_A,
+                assistant_id=a2.agent_id,
+            ),
+        )
+        dbsession.flush()
+
+        result = discord_dao.resolve_inbound(discord_pool[0].number, DISCORD_USER_A)
+        assert result["role"] == "owner"
+        assert result["assistant_id"] == a1.agent_id
+
+    def test_discord_id_does_not_match_whatsapp_tier1(
+        self,
+        dbsession: Session,
+        discord_pool,
+        pool_numbers,
+    ):
+        """Discord identity doesn't leak into WhatsApp routing."""
+        user = _make_user(
+            dbsession,
+            "dc_cross@test.com",
+            whatsapp_number="+15551112222",
+            discord_id=DISCORD_USER_A,
+        )
+        assistant = _make_assistant(dbsession, user, "CrossBot")
+        _enable_whatsapp(dbsession, assistant, pool_numbers[0])
+
+        wa_dao = SharedPoolDAO(dbsession, platform="whatsapp")
+        dc_dao = SharedPoolDAO(dbsession, platform="discord")
+
+        wa_result = wa_dao.resolve_inbound(pool_numbers[0].number, DISCORD_USER_A)
+        assert wa_result is None
+
+        dc_result = dc_dao.resolve_inbound(
+            pool_numbers[0].number,
+            "+15551112222",
+        )
+        assert dc_result is None
+
+
+class TestDiscordPoolAssignment:
+    def test_assign_discord_pool_bot(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """assign_pool_number picks from the discord pool."""
+        user = _make_user(dbsession, "dc_assign@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, user, "AssignBot")
+        pool = discord_dao.assign_pool_number(assistant.agent_id, [user.id])
+        assert pool.platform == "discord"
+        assert pool.number in (DISCORD_BOT_1, DISCORD_BOT_2)
+
+    def test_conflict_avoidance_same_user_discord(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Second assistant of same user avoids first bot."""
+        user = _make_user(dbsession, "dc_avoid@test.com", discord_id=DISCORD_USER_A)
+        a1 = _make_assistant(dbsession, user, "AvBot1")
+        a2 = _make_assistant(dbsession, user, "AvBot2")
+        pool1 = discord_dao.assign_pool_number(a1.agent_id, [user.id])
+        _enable_discord(dbsession, a1, pool1)
+        pool2 = discord_dao.assign_pool_number(a2.agent_id, [user.id])
+        assert pool1.number != pool2.number
+
+    def test_get_or_create_discord_route_idempotent(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Same assistant + discord user → same route."""
+        user = _make_user(dbsession, "dc_idem@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, user, "IdemBot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+
+        route1, res1 = discord_dao.get_or_create_route(
+            assistant.agent_id,
+            DISCORD_USER_B,
+        )
+        route2, res2 = discord_dao.get_or_create_route(
+            assistant.agent_id,
+            DISCORD_USER_B,
+        )
+        assert route1.id == route2.id
+        assert res1 is None
+        assert res2 is None
+
+    def test_delete_discord_routes_for_assistant(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Deletes all discord routes for an assistant."""
+        user = _make_user(dbsession, "dc_delr@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, user, "DelRBot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+
+        discord_dao.get_or_create_route(assistant.agent_id, DISCORD_USER_B)
+        discord_dao.get_or_create_route(assistant.agent_id, DISCORD_USER_C)
+        dbsession.flush()
+        assert len(discord_dao.get_routes_for_assistant(assistant.agent_id)) == 2
+
+        deleted = discord_dao.delete_routes_for_assistant(assistant.agent_id)
+        assert deleted == 2
+        assert len(discord_dao.get_routes_for_assistant(assistant.agent_id)) == 0
+
+
+class TestDiscordConflicts:
+    def test_contact_overlap_conflict_resolved_discord(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Two assistants on same bot, same external user → conflict resolved."""
+        u1 = _make_user(dbsession, "dc_co1@test.com", discord_id=DISCORD_USER_A)
+        u2 = _make_user(dbsession, "dc_co2@test.com", discord_id=DISCORD_USER_B)
+        a1 = _make_assistant(dbsession, u1, "CO1")
+        a2 = _make_assistant(dbsession, u2, "CO2")
+        _enable_discord(dbsession, a1, discord_pool[0])
+        _enable_discord(dbsession, a2, discord_pool[0])
+
+        discord_dao.get_or_create_route(a1.agent_id, DISCORD_USER_C)
+        dbsession.flush()
+
+        route, resolution = discord_dao.get_or_create_route(
+            a2.agent_id,
+            DISCORD_USER_C,
+        )
+        dbsession.flush()
+
+        assert resolution is not None
+        assert resolution.conflict_type == "contact_overlap"
+        assert route.pool_number.number == discord_pool[1].number
+
+    def test_user_to_user_conflict_discord(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Target is a platform user on same bot → user_to_user conflict."""
+        pool3 = SharedPoolNumber(number=DISCORD_BOT_3, platform="discord")
+        dbsession.add(pool3)
+        dbsession.flush()
+
+        u1 = _make_user(dbsession, "dc_u2u1@test.com", discord_id=DISCORD_USER_A)
+        u2 = _make_user(dbsession, "dc_u2u2@test.com", discord_id=DISCORD_USER_B)
+        a1 = _make_assistant(dbsession, u1, "U2U1")
+        a2 = _make_assistant(dbsession, u2, "U2U2")
+        _enable_discord(dbsession, a1, discord_pool[0])
+        _enable_discord(dbsession, a2, discord_pool[0])
+
+        dbsession.add(
+            SharedPlatformRoute(
+                pool_number_id=discord_pool[0].id,
+                contact_number=DISCORD_USER_B,
+                assistant_id=a2.agent_id,
+            ),
+        )
+        dbsession.flush()
+
+        route, resolution = discord_dao.get_or_create_route(
+            a1.agent_id,
+            DISCORD_USER_B,
+        )
+        dbsession.flush()
+
+        assert resolution is not None
+        assert resolution.conflict_type == "user_to_user"
+        assert set(resolution.affected_assistant_ids) == {a1.agent_id, a2.agent_id}
+        assert resolution.new_pool_assignments[a1.agent_id] != discord_pool[0].number
+        assert resolution.new_pool_assignments[a2.agent_id] != discord_pool[0].number
+
+    def test_decommissioned_discord_route_auto_reply(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Decommissioned Discord route → auto_reply."""
+        user = _make_user(dbsession, "dc_decomm@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, user, "DecommBot")
+
+        dbsession.add(
+            DecommissionedRoute(
+                platform="discord",
+                pool_number_id=discord_pool[0].id,
+                contact_identifier=DISCORD_USER_C,
+                old_assistant_id=assistant.agent_id,
+            ),
+        )
+        dbsession.flush()
+
+        result = discord_dao.resolve_inbound(discord_pool[0].number, DISCORD_USER_C)
+        assert result is not None
+        assert result["action"] == "auto_reply"
+
+    def test_unknown_sender_shared_discord_pool_reject_cold(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        """Unknown sender on shared Discord bot → reject_cold."""
+        u1 = _make_user(dbsession, "dc_cold1@test.com", discord_id=DISCORD_USER_A)
+        u2 = _make_user(dbsession, "dc_cold2@test.com", discord_id=DISCORD_USER_B)
+        a1 = _make_assistant(dbsession, u1, "Cold1")
+        a2 = _make_assistant(dbsession, u2, "Cold2")
+        _enable_discord(dbsession, a1, discord_pool[0])
+        _enable_discord(dbsession, a2, discord_pool[0])
+
+        result = discord_dao.resolve_inbound(
+            discord_pool[0].number,
+            "999999999999999999",
+        )
+        assert result is not None
+        assert result["action"] == "reject_cold"
+
+
+# ============================================================================
+# T. Discord Admin Endpoints
+# ============================================================================
+
+
+class TestDiscordAdminEndpoints:
+    async def test_discord_pool_list(self, client: AsyncClient, discord_pool):
+        resp = await client.get(
+            "/v0/admin/discord/pool",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        bot_ids = {p["bot_id"] for p in data}
+        assert DISCORD_BOT_1 in bot_ids
+        assert DISCORD_BOT_2 in bot_ids
+        assert all(p["platform"] == "discord" for p in data)
+
+    async def test_discord_pool_add(self, client: AsyncClient):
+        resp = await client.post(
+            "/v0/admin/discord/pool",
+            json={"bot_id": "330000000000000001"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["bot_id"] == "330000000000000001"
+        assert data["status"] == "active"
+        assert data["platform"] == "discord"
+
+    async def test_discord_pool_add_duplicate(
+        self,
+        client: AsyncClient,
+        discord_pool,
+    ):
+        resp = await client.post(
+            "/v0/admin/discord/pool",
+            json={"bot_id": DISCORD_BOT_1},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_409_CONFLICT
+
+    async def test_discord_pool_update_status(
+        self,
+        client: AsyncClient,
+        discord_pool,
+    ):
+        pool_id = discord_pool[0].id
+        resp = await client.patch(
+            f"/v0/admin/discord/pool/{pool_id}",
+            json={"status": "inactive"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["status"] == "inactive"
+
+    async def test_discord_pool_delete_unused(self, client: AsyncClient):
+        add_resp = await client.post(
+            "/v0/admin/discord/pool",
+            json={"bot_id": "330000000000000099"},
+            headers=ADMIN_HEADERS,
+        )
+        pool_id = add_resp.json()["id"]
+        del_resp = await client.delete(
+            f"/v0/admin/discord/pool/{pool_id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert del_resp.status_code == status.HTTP_200_OK
+        assert del_resp.json()["deleted_routes"] == 0
+
+    async def test_discord_pool_delete_in_use(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        discord_pool,
+    ):
+        user = _make_user(dbsession, "dc_inuse@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, user, "InUseBot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+        dbsession.commit()
+
+        resp = await client.delete(
+            f"/v0/admin/discord/pool/{discord_pool[0].id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert "active assistant" in resp.json()["detail"]
+
+    async def test_discord_assign(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        discord_pool,
+    ):
+        user = _make_user(dbsession, "dc_asgn_api@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, user, "AsgnBot")
+        dbsession.commit()
+
+        resp = await client.post(
+            "/v0/admin/discord/assign",
+            json={"assistant_id": assistant.agent_id},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["pool_bot_id"] in (DISCORD_BOT_1, DISCORD_BOT_2)
+        assert data["assistant_id"] == assistant.agent_id
+
+    async def test_discord_route_and_resolve(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        discord_pool,
+    ):
+        user = _make_user(
+            dbsession,
+            "dc_rt_api@test.com",
+            discord_id=DISCORD_USER_A,
+        )
+        assistant = _make_assistant(dbsession, user, "RtBot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+        dbsession.commit()
+
+        route_resp = await client.post(
+            "/v0/admin/discord/route",
+            json={
+                "assistant_id": assistant.agent_id,
+                "contact_number": DISCORD_USER_B,
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert route_resp.status_code == status.HTTP_200_OK
+        assert route_resp.json()["pool_bot_id"] == DISCORD_BOT_1
+
+        resolve_resp = await client.get(
+            "/v0/admin/discord/resolve",
+            params={"bot_id": DISCORD_BOT_1, "sender": DISCORD_USER_B},
+            headers=ADMIN_HEADERS,
+        )
+        assert resolve_resp.status_code == status.HTTP_200_OK
+        assert resolve_resp.json()["assistant_id"] == assistant.agent_id
+
+    async def test_discord_delete_routes(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        discord_pool,
+    ):
+        user = _make_user(
+            dbsession,
+            "dc_delrt_api@test.com",
+            discord_id=DISCORD_USER_A,
+        )
+        assistant = _make_assistant(dbsession, user, "DelRtBot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+        dbsession.commit()
+
+        await client.post(
+            "/v0/admin/discord/route",
+            json={
+                "assistant_id": assistant.agent_id,
+                "contact_number": DISCORD_USER_B,
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+        del_resp = await client.delete(
+            f"/v0/admin/discord/routes?assistant_id={assistant.agent_id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert del_resp.status_code == status.HTTP_200_OK
+        assert del_resp.json()["deleted"] >= 1
+
+        resolve_resp = await client.get(
+            "/v0/admin/discord/resolve",
+            params={"bot_id": DISCORD_BOT_1, "sender": DISCORD_USER_B},
+            headers=ADMIN_HEADERS,
+        )
+        assert resolve_resp.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_discord_resolve_unknown_404(
+        self,
+        client: AsyncClient,
+        discord_pool,
+    ):
+        resp = await client.get(
+            "/v0/admin/discord/resolve",
+            params={"bot_id": DISCORD_BOT_1, "sender": "999999999999999999"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_discord_conflict_events(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        discord_pool,
+    ):
+        dbsession.add(
+            ConflictEvent(
+                platform="discord",
+                conflict_type="contact_overlap",
+                trigger_assistant_id=None,
+                affected_assistant_ids=[1, 2],
+                old_pool_assignments={"1": DISCORD_BOT_1},
+                new_pool_assignments={"1": DISCORD_BOT_2},
+                status="resolved",
+            ),
+        )
+        dbsession.commit()
+
+        resp = await client.get(
+            "/v0/admin/discord/conflicts",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert len(data) >= 1
+        assert all(e["platform"] == "discord" for e in data)
+
+
+# ============================================================================
+# U. User.discord_id Tests
+# ============================================================================
+
+
+class TestUserDiscordId:
+    def test_unique_partial_index_discord(self, dbsession: Session):
+        """Two users can't have the same non-null discord_id."""
+        _make_user(dbsession, "dcdup1@test.com", discord_id="440000000000000001")
+
+        ba2 = BillingAccount(credits=0)
+        dbsession.add(ba2)
+        dbsession.flush()
+        u2 = User(
+            id=str(uuid.uuid4()),
+            email="dcdup2@test.com",
+            discord_id="440000000000000001",
+            billing_account_id=ba2.id,
+        )
+        dbsession.add(u2)
+        with pytest.raises(IntegrityError):
+            dbsession.flush()
+        dbsession.rollback()
+
+    def test_null_discord_id_allowed(self, dbsession: Session):
+        """Multiple users can have NULL discord_id."""
+        u1 = _make_user(dbsession, "dcnull1@test.com")
+        u2 = _make_user(dbsession, "dcnull2@test.com")
+        assert u1.discord_id is None
+        assert u2.discord_id is None
+
+
+class TestUserDiscordAPI:
+    async def test_create_user_with_discord_id(self, client: AsyncClient):
+        resp = await client.post(
+            "/v0/admin/user",
+            json={
+                "email": "dc_create_api@test.com",
+                "name": "DiscordUser",
+                "discord_id": "550000000000000001",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        assert resp.json()["discord_id"] == "550000000000000001"
+
+    async def test_update_user_discord_id(self, client: AsyncClient):
+        user = await create_test_user(client, "dc_update_api@test.com")
+        resp = await client.put(
+            "/v0/admin/user",
+            json={
+                "user_id": user["id"],
+                "discord_id": "550000000000000002",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+        info_resp = await client.get(
+            "/v0/user/basic-info",
+            headers=user["headers"],
+        )
+        assert info_resp.status_code == status.HTTP_200_OK
+        assert info_resp.json()["discord_id"] == "550000000000000002"
+
+    async def test_discord_id_in_user_lookup(self, client: AsyncClient):
+        resp = await client.post(
+            "/v0/admin/user",
+            json={
+                "email": "dc_lookup_api@test.com",
+                "name": "Lookup",
+                "discord_id": "550000000000000003",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        user_id = resp.json()["id"]
+
+        detail_resp = await client.get(
+            f"/v0/admin/user/by-user-id?user_id={user_id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert detail_resp.status_code == status.HTTP_200_OK
+        assert detail_resp.json()["discord_id"] == "550000000000000003"
+
+
+class TestDiscordRouteCleanupOnIdentityClaim:
+    """When a Discord user ID is claimed as a platform identity, stale
+    Tier 2 routes for that ID must be removed."""
+
+    def test_create_user_cleans_discord_routes(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        owner = _make_user(dbsession, "dcic_own@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, owner, "ICDCBot")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+
+        external_dc = "660000000000000001"
+        discord_dao.get_or_create_route(assistant.agent_id, external_dc)
+        dbsession.flush()
+        assert len(discord_dao.get_routes_for_assistant(assistant.agent_id)) == 1
+
+        from orchestra.db.dao.user_dao import UserDAO
+
+        user_dao = UserDAO(dbsession)
+        user_dao.create(email="dcnewcomer@test.com", discord_id=external_dc)
+        dbsession.flush()
+
+        assert len(discord_dao.get_routes_for_assistant(assistant.agent_id)) == 0
+
+    def test_update_user_cleans_discord_routes(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        owner = _make_user(dbsession, "dcic_own2@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, owner, "ICDCBot2")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+
+        external_dc = "660000000000000002"
+        discord_dao.get_or_create_route(assistant.agent_id, external_dc)
+        dbsession.flush()
+
+        bystander = _make_user(dbsession, "dcbystander@test.com")
+
+        from orchestra.db.dao.user_dao import UserDAO
+
+        user_dao = UserDAO(dbsession)
+        user_dao.update(bystander.id, discord_id=external_dc)
+
+        assert len(discord_dao.get_routes_for_assistant(assistant.agent_id)) == 0
+
+    def test_resolve_inbound_after_discord_identity_claim(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+    ):
+        owner = _make_user(dbsession, "dcic_res@test.com", discord_id=DISCORD_USER_A)
+        assistant = _make_assistant(dbsession, owner, "ICResDC")
+        _enable_discord(dbsession, assistant, discord_pool[0])
+
+        external_dc = "660000000000000003"
+        discord_dao.get_or_create_route(assistant.agent_id, external_dc)
+        dbsession.flush()
+
+        result_before = discord_dao.resolve_inbound(
+            discord_pool[0].number,
+            external_dc,
+        )
+        assert result_before is not None
+        assert result_before["assistant_id"] == assistant.agent_id
+
+        from orchestra.db.dao.user_dao import UserDAO
+
+        user_dao = UserDAO(dbsession)
+        user_dao.create(email="dcclaimed@test.com", discord_id=external_dc)
+        dbsession.flush()
+
+        result_after = discord_dao.resolve_inbound(
+            discord_pool[0].number,
+            external_dc,
+        )
+        assert result_after is None
