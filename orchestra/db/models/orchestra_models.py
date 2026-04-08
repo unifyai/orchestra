@@ -2744,11 +2744,12 @@ class CreditTransaction(Base):
 
 
 class AssistantCleanupTask(Base):
-    """Retryable cleanup work item for assistant runtime/contact deletion.
+    """Retryable cleanup work item for assistant teardown after owner deletion.
 
     A task is created before an owner row is irreversibly deleted. The payload
-    stores the minimum retry state needed to finish runtime teardown and contact
-    deprovisioning outside the original request lifecycle.
+    stores the minimum retry state needed to finish runtime teardown, contact
+    deprovisioning, and assistant-scoped GCS cleanup outside the original
+    request lifecycle.
     """
 
     __tablename__ = "assistant_cleanup_tasks"

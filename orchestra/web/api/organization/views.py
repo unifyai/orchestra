@@ -586,7 +586,6 @@ async def delete_organization(
         .filter(Assistant.organization_id == organization_id)
         .all()
     )
-    org_assistant_ids = [int(assistant.agent_id) for assistant in org_assistants]
     org_cleanup_specs = build_cleanup_specs_for_assistants(session, org_assistants)
     cleanup_task_ids: list[int] = []
 
@@ -632,7 +631,8 @@ async def delete_organization(
             detail="Failed to delete organization",
         )
 
-    # Post-commit: tear down runtime state and then clean up GCS data.
+    # Post-commit: drive runtime cleanup once immediately. Assistant-scoped GCS
+    # deletion now lives inside the durable cleanup task path.
     try:
         if cleanup_task_ids:
             cleanup_summary = await process_assistant_cleanup_tasks(
@@ -647,20 +647,6 @@ async def delete_organization(
                 )
 
         bucket_service = BucketService()
-
-        if org_assistant_ids:
-            for aid in org_assistant_ids:
-                try:
-                    bucket_service.delete_all_assistant_data(aid)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to clean up GCS data for assistant {aid} "
-                        f"(org {organization_id}): {e}",
-                    )
-            logger.info(
-                f"Cleaned up GCS data for {len(org_assistant_ids)} assistant(s) "
-                f"in deleted org {organization_id}",
-            )
 
         # Clean up org account photos from the dedicated account photo bucket
         try:
@@ -916,7 +902,6 @@ async def remove_organization_member(
         )
 
     cleanup_task_ids: list[int] = []
-    deleted_assistant_ids: list[int] = []
 
     # Remove member and clean up all associated data
     try:
@@ -934,9 +919,6 @@ async def remove_organization_member(
             organization_id,
         )
         deleted_assistants = list(unshared_resources["assistants"])
-        deleted_assistant_ids = [
-            int(assistant.agent_id) for assistant in deleted_assistants
-        ]
         deleted_cleanup_specs = build_cleanup_specs_for_assistants(
             session,
             deleted_assistants,
@@ -1021,28 +1003,6 @@ async def remove_organization_member(
                 user_id,
                 organization_id,
                 cleanup_summary["errors"],
-            )
-
-    if deleted_assistant_ids:
-        try:
-            bucket_service = BucketService()
-            for aid in deleted_assistant_ids:
-                try:
-                    bucket_service.delete_all_assistant_data(aid)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to clean up GCS data for assistant {aid} "
-                        f"(member removal, org {organization_id}): {e}",
-                    )
-            logger.info(
-                f"Cleaned up GCS data for {len(deleted_assistant_ids)} "
-                f"assistant(s) after removing member {user_id} from "
-                f"org {organization_id}",
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to initialize BucketService for member removal "
-                f"GCS cleanup (user {user_id}, org {organization_id}): {e}",
             )
 
     return None

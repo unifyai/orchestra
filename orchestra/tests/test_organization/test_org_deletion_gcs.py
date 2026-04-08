@@ -1,10 +1,7 @@
-"""Tests for GCS cleanup during organization deletion.
+"""Tests for GCS cleanup behavior during organization deletion.
 
-When an organization is deleted:
-- All GCS data for its assistants is cleaned up via
-  BucketService.delete_all_assistant_data().
-- The organization's account photos are cleaned up via
-  BucketService.delete_org_account_photos().
+Assistant-scoped GCS cleanup is owned by the durable cleanup task path, while
+organization account photos are still cleaned up directly in the request flow.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -82,8 +79,9 @@ async def test_org_deletion_cleans_gcs_for_all_assistants(
     dbsession,
     mock_infra_and_bucket,
 ):
-    """Deleting an org triggers delete_all_assistant_data for every assistant in the org."""
+    """Deleting an org leaves assistant GCS cleanup to the durable task path."""
     mock_bucket = mock_infra_and_bucket["bucket_instance"]
+    mock_runtime_cleanup = mock_infra_and_bucket["runtime_teardown"]
 
     owner = await create_test_user(client, "org_del_gcs_owner@test.com")
 
@@ -97,7 +95,6 @@ async def test_org_deletion_cleans_gcs_for_all_assistants(
 
     # Create several assistants in this org
     assistant_dao = AssistantDAO(dbsession)
-    agent_ids = []
     for i in range(3):
         assistant = assistant_dao.create_assistant(
             user_id=owner["id"],
@@ -111,7 +108,6 @@ async def test_org_deletion_cleans_gcs_for_all_assistants(
             organization_id=org_id,
         )
         dbsession.flush()
-        agent_ids.append(assistant.agent_id)
     dbsession.commit()
 
     # Delete the organization
@@ -121,12 +117,8 @@ async def test_org_deletion_cleans_gcs_for_all_assistants(
     )
     assert del_resp.status_code == status.HTTP_204_NO_CONTENT
 
-    # Verify delete_all_assistant_data was called for each assistant
-    assert mock_bucket.delete_all_assistant_data.call_count == 3
-    called_ids = sorted(
-        call.args[0] for call in mock_bucket.delete_all_assistant_data.call_args_list
-    )
-    assert called_ids == sorted(agent_ids)
+    mock_runtime_cleanup.assert_awaited_once()
+    mock_bucket.delete_all_assistant_data.assert_not_called()
 
     # Verify account photos were also cleaned up
     mock_bucket.delete_org_account_photos.assert_called_once_with(org_id)
@@ -255,9 +247,9 @@ async def test_org_deletion_gcs_failure_does_not_block(
     dbsession,
     mock_infra_and_bucket,
 ):
-    """GCS cleanup failure does not prevent org deletion from succeeding."""
+    """Org account photo cleanup failure does not prevent org deletion."""
     mock_bucket = mock_infra_and_bucket["bucket_instance"]
-    mock_bucket.delete_all_assistant_data.side_effect = Exception("GCS unreachable")
+    mock_bucket.delete_org_account_photos.side_effect = Exception("GCS unreachable")
 
     owner = await create_test_user(client, "org_del_fail_owner@test.com")
 
@@ -283,7 +275,7 @@ async def test_org_deletion_gcs_failure_does_not_block(
     )
     dbsession.commit()
 
-    # Delete org - should succeed even though GCS cleanup fails
+    # Delete org - should succeed even though account photo cleanup fails
     del_resp = await client.delete(
         f"/v0/organizations/{org_id}",
         headers=owner["headers"],
