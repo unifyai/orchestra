@@ -2786,3 +2786,44 @@ class AssistantCleanupTask(Base):
         Index("ix_assistant_cleanup_tasks_status", "status", "next_retry_at"),
         Index("ix_assistant_cleanup_tasks_assistant", "assistant_id"),
     )
+
+
+class DashboardToken(Base):
+    """Token-to-context mapping for dashboard tiles and layouts.
+
+    Content lives in Unify contexts (Dashboards/Tiles, Dashboards/Layouts);
+    this table provides the routing information the console needs to resolve
+    a token-based URL to the correct Unify context path and creator identity.
+    """
+
+    __tablename__ = "dashboard_token"
+
+    token = Column(String(12), primary_key=True)
+    entity_type = Column(String(20), nullable=False)
+    context_name = Column(String(500), nullable=False)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    project = relationship(
+        "Project",
+        backref=backref("dashboard_tokens", passive_deletes=True),
+    )
+
+    __table_args__ = (
+        Index("idx_dashboard_token_project_id", "project_id"),
+        Index("idx_dashboard_token_user_id", "user_id"),
+    )
