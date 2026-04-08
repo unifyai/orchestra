@@ -63,6 +63,9 @@ def mock_all_infra(dbsession):
     release_pool_vm_mock = AsyncMock(return_value={"success": True})
     wa_pool_mock = AsyncMock(return_value={"pool_number": "+15559876543"})
     wa_register_mock = AsyncMock(return_value={"success": True})
+    dc_pool_mock = AsyncMock(return_value={"pool_number": "123456789012345678"})
+    dc_register_mock = AsyncMock(return_value={"success": True})
+    dc_delete_routes_mock = AsyncMock(return_value=0)
 
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
         with patch(
@@ -74,6 +77,15 @@ def mock_all_infra(dbsession):
         ), patch(
             "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
             wa_register_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.assign_discord_pool_bot",
+            dc_pool_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.register_discord_bot",
+            dc_register_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.delete_discord_routes",
+            dc_delete_routes_mock,
         ):
             with patch(
                 "orchestra.web.api.assistant.views.settings",
@@ -90,6 +102,9 @@ def mock_all_infra(dbsession):
                         patches["release_pool_vm"] = release_pool_vm_mock
                         patches["assign_whatsapp_pool_number"] = wa_pool_mock
                         patches["register_whatsapp_sender"] = wa_register_mock
+                        patches["assign_discord_pool_bot"] = dc_pool_mock
+                        patches["register_discord_bot"] = dc_register_mock
+                        patches["delete_discord_routes"] = dc_delete_routes_mock
                         yield patches
 
 
