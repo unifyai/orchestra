@@ -1112,6 +1112,7 @@ async def test_list_members_by_api_key_with_org_key(client: AsyncClient):
         assert "timezone" in m
         assert "phone_number" in m
         assert "whatsapp_number" in m
+        assert "discord_id" in m
 
 
 @pytest.mark.anyio

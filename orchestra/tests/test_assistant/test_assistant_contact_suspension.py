@@ -106,6 +106,13 @@ def seed_contact_type_costs(dbsession: Session):
                 monthly_cost=Decimal("5.00"),
                 one_time_cost=Decimal("5.00"),
             ),
+            AssistantContactCost(
+                contact_type="discord",
+                provider="discord",
+                country_code=None,
+                monthly_cost=Decimal("0"),
+                one_time_cost=Decimal("0"),
+            ),
         ]
         dbsession.add_all(rows)
         dbsession.flush()
