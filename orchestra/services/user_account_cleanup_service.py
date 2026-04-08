@@ -5,10 +5,11 @@ Uses raw SQL for maximum performance - no ORM entity loading overhead.
 All deletions happen in a single transaction for data integrity.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     ContactCleanupSpec,
     enqueue_cleanup_tasks,
+    process_assistant_cleanup_tasks,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,8 @@ class DeletionResult:
     success: bool
     message: str
     blockers: Optional[list[DeletionBlocker]] = None
+    runtime_cleanup_complete: bool = True
+    runtime_cleanup_summary: Optional[dict[str, Any]] = None
 
 
 class UserAccountCleanupService:
@@ -219,12 +223,16 @@ class UserAccountCleanupService:
 
         assistant_cleanup_specs = self._get_user_assistant_cleanup_specs(user_id)
         assistant_ids = [int(spec.assistant_id) for spec in assistant_cleanup_specs]
+        cleanup_task_ids: list[int] = []
         if assistant_cleanup_specs:
-            enqueue_cleanup_tasks(
-                self.session,
-                assistant_cleanup_specs,
-                source_flow=CleanupSource.USER_DELETE,
-            )
+            cleanup_task_ids = [
+                task.id
+                for task in enqueue_cleanup_tasks(
+                    self.session,
+                    assistant_cleanup_specs,
+                    source_flow=CleanupSource.USER_DELETE,
+                )
+            ]
 
         self._delete_user_table_dependencies(user_id, billing_account_id)
 
@@ -246,10 +254,60 @@ class UserAccountCleanupService:
         if stripe_customer_id:
             self._archive_stripe_customer(stripe_customer_id)
 
+        runtime_cleanup_summary: dict[str, Any] | None = None
+        runtime_cleanup_complete = True
+        if cleanup_task_ids:
+            try:
+                runtime_cleanup_summary = asyncio.run(
+                    process_assistant_cleanup_tasks(
+                        self.session,
+                        task_ids=cleanup_task_ids,
+                    ),
+                )
+                runtime_cleanup_complete = (
+                    runtime_cleanup_summary["completed"] == len(cleanup_task_ids)
+                    and runtime_cleanup_summary["processed"] == len(cleanup_task_ids)
+                    and runtime_cleanup_summary["errors"] == []
+                    and runtime_cleanup_summary["failed"] == 0
+                    and runtime_cleanup_summary["retried"] == 0
+                )
+                if runtime_cleanup_summary["errors"]:
+                    logger.error(
+                        "Runtime cleanup task issues for deleted user %s: %s",
+                        user_id,
+                        runtime_cleanup_summary["errors"],
+                    )
+            except Exception as exc:
+                runtime_cleanup_complete = False
+                runtime_cleanup_summary = {
+                    "processed": 0,
+                    "completed": 0,
+                    "retried": 0,
+                    "failed": 0,
+                    "errors": [str(exc)],
+                }
+                logger.error(
+                    "Failed to process runtime cleanup tasks for deleted user %s: %s",
+                    user_id,
+                    exc,
+                    exc_info=True,
+                )
+
         self._cleanup_user_data(user_id, assistant_ids)
 
         logger.info(f"Successfully deleted user account: {user_id}")
-        return DeletionResult(success=True, message="Account deleted successfully")
+        message = "Account deleted successfully"
+        if not runtime_cleanup_complete:
+            message = (
+                "Account deleted successfully. Assistant runtime cleanup is still "
+                "in progress."
+            )
+        return DeletionResult(
+            success=True,
+            message=message,
+            runtime_cleanup_complete=runtime_cleanup_complete,
+            runtime_cleanup_summary=runtime_cleanup_summary,
+        )
 
     def _delete_user_table_dependencies(
         self,
