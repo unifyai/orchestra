@@ -118,6 +118,7 @@ class OrganizationMemberResponse(BaseModel):
     timezone: Optional[str] = None
     phone_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
+    discord_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

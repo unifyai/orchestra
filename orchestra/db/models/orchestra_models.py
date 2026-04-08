@@ -232,6 +232,7 @@ class User(Base):
     timezone = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
     whatsapp_number = Column(String, nullable=True)
+    discord_id = Column(String, nullable=True)
 
     # === BILLING (via BillingAccount) ===
     billing_account_id = Column(
@@ -277,6 +278,12 @@ class User(Base):
             "whatsapp_number",
             unique=True,
             postgresql_where=text("whatsapp_number IS NOT NULL"),
+        ),
+        Index(
+            "uq_user_discord_id",
+            "discord_id",
+            unique=True,
+            postgresql_where=text("discord_id IS NOT NULL"),
         ),
     )
 
@@ -1480,10 +1487,12 @@ class AssistantContact(Base):
             "uq_active_contact_value",
             "contact_value",
             unique=True,
-            postgresql_where=text("status != 'deleted' AND contact_type != 'whatsapp'"),
+            postgresql_where=text(
+                "status != 'deleted' AND contact_type NOT IN ('whatsapp', 'discord')",
+            ),
         ),
         sa.CheckConstraint(
-            "contact_type IN ('phone', 'email', 'whatsapp')",
+            "contact_type IN ('phone', 'email', 'whatsapp', 'discord')",
             name="ck_assistant_contact_type",
         ),
         sa.CheckConstraint(
@@ -1538,7 +1547,7 @@ class AssistantContactCost(Base):
             name="uq_contact_cost",
         ),
         sa.CheckConstraint(
-            "contact_type IN ('phone', 'email', 'whatsapp')",
+            "contact_type IN ('phone', 'email', 'whatsapp', 'discord')",
             name="ck_contact_type_cost_type",
         ),
     )

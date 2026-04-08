@@ -94,6 +94,7 @@ def create_user(
         timezone=user.timezone,
         phone_number=user.phone_number,
         whatsapp_number=user.whatsapp_number,
+        discord_id=user.discord_id,
     )
     user_row = user_dao.filter(email=user.email)
     new_user = user_row[0][0]
@@ -120,6 +121,7 @@ def create_user(
         "timezone": new_user.timezone,
         "phone_number": new_user.phone_number,
         "whatsapp_number": new_user.whatsapp_number,
+        "discord_id": new_user.discord_id,
     }
 
 
@@ -188,6 +190,7 @@ def get_user(
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
         "whatsapp_number": user_instance.whatsapp_number,
+        "discord_id": user_instance.discord_id,
     }
 
 
@@ -257,6 +260,7 @@ def get_user_by_email(
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
         "whatsapp_number": user_instance.whatsapp_number,
+        "discord_id": user_instance.discord_id,
     }
 
 
@@ -333,6 +337,7 @@ def get_user_by_account(
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
         "whatsapp_number": user_instance.whatsapp_number,
+        "discord_id": user_instance.discord_id,
     }
 
 
@@ -388,6 +393,8 @@ def update_user(
         update_kwargs["whatsapp_number"] = _normalize_phone(
             updated_user.whatsapp_number,
         )
+    if "discord_id" in provided:
+        update_kwargs["discord_id"] = updated_user.discord_id
 
     user_dao.update(**update_kwargs)
 
@@ -1144,6 +1151,7 @@ def get_user_basic_info(
         "timezone": user.timezone,
         "phone_number": user.phone_number,
         "whatsapp_number": user.whatsapp_number,
+        "discord_id": user.discord_id,
     }
 
 

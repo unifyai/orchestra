@@ -64,6 +64,7 @@ class UserDAO:
         timezone: Optional[str] = None,
         phone_number: Optional[str] = None,
         whatsapp_number: Optional[str] = None,
+        discord_id: Optional[str] = None,
         credits: Optional[float] = 0,
     ) -> User:
         """
@@ -124,6 +125,7 @@ class UserDAO:
             timezone=timezone,
             phone_number=phone_number,
             whatsapp_number=whatsapp_number,
+            discord_id=discord_id,
             billing_account_id=billing_account.id,
             store_prompts=True,
         )
@@ -135,6 +137,13 @@ class UserDAO:
 
             SharedPoolDAO(self.session).cleanup_routes_for_contact_number(
                 whatsapp_number,
+            )
+
+        if discord_id is not None:
+            from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+            SharedPoolDAO(self.session, "discord").cleanup_routes_for_contact_number(
+                discord_id,
             )
 
         if credits > 0:
@@ -251,6 +260,7 @@ class UserDAO:
         timezone: Optional[str] = ...,
         phone_number: Optional[str] = ...,
         whatsapp_number: Optional[str] = ...,
+        discord_id: Optional[str] = ...,
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
         monthly_spending_cap: Optional[float] = ...,
@@ -322,6 +332,16 @@ class UserDAO:
                     SharedPoolDAO(self.session).cleanup_routes_for_contact_number(
                         whatsapp_number,
                     )
+            if discord_id is not ...:
+                old_discord = entry.discord_id
+                setattr(entry, "discord_id", discord_id)
+                if discord_id is not None and discord_id != old_discord:
+                    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+                    SharedPoolDAO(
+                        self.session,
+                        "discord",
+                    ).cleanup_routes_for_contact_number(discord_id)
             if queries_enabled is not ...:
                 setattr(entry, "queries_enabled", queries_enabled)
             if evaluations_enabled is not ...:

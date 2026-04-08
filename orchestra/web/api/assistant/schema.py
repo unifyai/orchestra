@@ -301,6 +301,14 @@ class AssistantRead(AssistantCreate):
         description="WhatsApp number of the assistant",
         example="+15551234567",
     )
+    user_discord_id: Optional[str] = Field(
+        None,
+        description="User's linked Discord user ID",
+    )
+    assistant_discord_bot_id: Optional[str] = Field(
+        None,
+        description="Discord bot ID assigned to the assistant",
+    )
     api_key: Optional[str] = Field(
         None,
         description="API key associated with this assistant (personal or org key)",
@@ -1209,7 +1217,7 @@ class AssistantContactRemoval(BaseModel):
     Schema for removing a contact method from an assistant.
     """
 
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact information to remove.",
         example="email",
@@ -1224,7 +1232,7 @@ class AssistantContactCreate(BaseModel):
     email, WhatsApp sender) and creates the corresponding AssistantContact row.
     """
 
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact detail to create.",
         example="phone",
@@ -1271,7 +1279,7 @@ class AssistantContactRead(BaseModel):
         ...,
         description="ID of the assistant this contact belongs to.",
     )
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact detail.",
     )
@@ -1323,7 +1331,7 @@ class AssistantContactUpdate(BaseModel):
     actual provisioned resource requires delete + create.
     """
 
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact to update.",
         example="phone",
