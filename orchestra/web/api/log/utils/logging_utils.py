@@ -3613,8 +3613,11 @@ def _join_query_internal(
       optional filtering, sorting and pagination.
     """
     from orchestra.web.api.log.utils.metric_utils import (
+        REDUCTION_METHODS,
+        SHARED_VALUE_SAFE_METRICS,
         _postprocess_aggregator_value,
         _reduce_shared_value,
+        build_grouped_result,
     )
 
     try:
@@ -3908,24 +3911,12 @@ def _join_query_internal(
 
             keys = [key] if isinstance(key, str) else list(key)
 
-            reduction_methods = {
-                "count": func.count,
-                "sum": func.sum,
-                "mean": func.avg,
-                "var": func.var_pop,
-                "std": func.stddev_pop,
-                "min": func.min,
-                "max": func.max,
-                "median": func.percentile_cont(0.5).within_group,
-                "mode": func.mode().within_group,
-            }
-
             results = {}
             for agg_key in keys:
                 text_val = _get_text(agg_key)
                 jsonb_val = _get_jsonb(agg_key)
 
-                agg_fn = reduction_methods[metric]
+                agg_fn = REDUCTION_METHODS[metric]
 
                 if metric == "count":
                     agg_expr = agg_fn(text_val).label("agg_value")
@@ -3956,57 +3947,11 @@ def _join_query_internal(
                         .group_by(*group_exprs)
                     )
                     rows = session.execute(q).fetchall()
-
-                    def _norm(val) -> str:
-                        if val is None:
-                            return "None"
-                        if isinstance(val, (int, float)) and not isinstance(val, bool):
-                            return str(float(val))
-                        if isinstance(val, bool):
-                            return str(val)
-                        return str(val)
-
-                    key_result = {}
-                    if len(gb_fields) == 1:
-                        for row in rows:
-                            gk = _norm(row[0])
-                            agg_v = row[-2]
-                            raw_v = row[-1]
-                            shared = _reduce_shared_value(raw_v)
-                            entry = {"shared_value": None, metric: None}
-                            if shared is not None:
-                                entry["shared_value"] = shared
-                            else:
-                                entry[metric] = _postprocess_aggregator_value(
-                                    agg_v,
-                                    metric,
-                                    None,
-                                )
-                            key_result[gk] = entry
-                    else:
-                        for row in rows:
-                            cur = key_result
-                            for i in range(len(gb_fields) - 1):
-                                gk = _norm(row[i])
-                                if gk not in cur:
-                                    cur[gk] = {}
-                                cur = cur[gk]
-                            last_gk = _norm(row[len(gb_fields) - 1])
-                            agg_v = row[-2]
-                            raw_v = row[-1]
-                            shared = _reduce_shared_value(raw_v)
-                            entry = {"shared_value": None, metric: None}
-                            if shared is not None:
-                                entry["shared_value"] = shared
-                            else:
-                                entry[metric] = _postprocess_aggregator_value(
-                                    agg_v,
-                                    metric,
-                                    None,
-                                )
-                            cur[last_gk] = entry
-
-                    results[agg_key] = key_result
+                    results[agg_key] = build_grouped_result(
+                        rows,
+                        gb_fields,
+                        metric,
+                    )
                 else:
                     q = (
                         select(
@@ -4025,7 +3970,7 @@ def _join_query_internal(
                         )
                     else:
                         shared = _reduce_shared_value(row[-1])
-                        if shared is not None:
+                        if shared is not None and metric in SHARED_VALUE_SAFE_METRICS:
                             results[agg_key] = shared
                         else:
                             results[agg_key] = _postprocess_aggregator_value(
