@@ -240,6 +240,8 @@ class SharedPoolDAO:
             return (
                 self.session.query(User).filter(User.whatsapp_number == sender).first()
             )
+        elif self.platform == "discord":
+            return self.session.query(User).filter(User.discord_id == sender).first()
         return None
 
     def _touch_inbound(
@@ -348,8 +350,8 @@ class SharedPoolDAO:
         )
         if not eligible:
             raise ValueError(
-                "All WhatsApp lines are currently assigned. "
-                "More numbers coming soon.",
+                f"All {self.platform} pool entries are currently assigned. "
+                "More coming soon.",
             )
         return eligible[0]
 
@@ -382,7 +384,7 @@ class SharedPoolDAO:
             .first()
         )
         if not contact:
-            raise ValueError("Assistant does not have WhatsApp enabled.")
+            raise ValueError(f"Assistant does not have {self.platform} enabled.")
 
         pool = self.get_pool_number_by_value(contact.contact_value)
         if not pool:
@@ -895,6 +897,8 @@ class SharedPoolDAO:
     def _get_user_platform_identity(self, user: User) -> str | None:
         if self.platform == "whatsapp":
             return user.whatsapp_number
+        elif self.platform == "discord":
+            return user.discord_id
         return None
 
     def _gather_notification_recipients(

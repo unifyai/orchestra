@@ -284,6 +284,75 @@ async def notify_pool_reassignment(
     return response.json()
 
 
+async def assign_discord_pool_bot(
+    assistant_id: int,
+    session,
+) -> dict:
+    """Assign a Discord pool bot to an assistant via the local DAO.
+
+    Returns a dict with ``pool_number`` (bot ID) and ``assistant_id``.
+    """
+    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+    from orchestra.db.models.orchestra_models import Assistant, OrganizationMember
+
+    assistant = (
+        session.query(Assistant).filter(Assistant.agent_id == assistant_id).first()
+    )
+    if not assistant:
+        raise ValueError(f"Assistant {assistant_id} not found.")
+
+    user_ids = [assistant.user_id]
+    if assistant.organization_id is not None:
+        members = (
+            session.query(OrganizationMember.user_id)
+            .filter(
+                OrganizationMember.organization_id == assistant.organization_id,
+            )
+            .all()
+        )
+        for (uid,) in members:
+            if uid not in user_ids:
+                user_ids.append(uid)
+
+    dao = SharedPoolDAO(session, "discord")
+    pool = dao.assign_pool_number(assistant_id, user_ids)
+    return {"pool_number": pool.number, "assistant_id": assistant_id}
+
+
+async def register_discord_bot(
+    bot_id: str,
+    assistant_id: int,
+    deploy_env: str | None = None,
+) -> dict:
+    """Register a Discord bot-to-assistant mapping with the Communication service."""
+    comms_url = _comms_url_for(deploy_env)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{comms_url}/discord/create",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "bot_id": bot_id,
+                "assistant_id": assistant_id,
+            },
+            timeout=20,
+        )
+        return response.json()
+
+
+async def delete_discord_routes(
+    assistant_id: int,
+    session,
+) -> int:
+    """Delete all Discord routes for an assistant.
+
+    Returns the number of routes deleted.
+    """
+    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+    dao = SharedPoolDAO(session, "discord")
+    return dao.delete_routes_for_assistant(assistant_id)
+
+
 async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
     """
     Delete a phone number by making a DELETE request to the comms endpoint.

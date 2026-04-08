@@ -232,12 +232,14 @@ def _build_assistant_read(
     phone_contact = contact_map.get("phone")
     email_contact = contact_map.get("email")
     whatsapp_contact = contact_map.get("whatsapp")
+    discord_contact = contact_map.get("discord")
 
     # User-side contact info comes from the User profile
     user_obj = session.get(User, a.user_id)
     user_phone_number = user_obj.phone_number if user_obj else None
     if user_whatsapp_number is None:
         user_whatsapp_number = user_obj.whatsapp_number if user_obj else None
+    user_discord_id = user_obj.discord_id if user_obj else None
 
     return AssistantRead(
         agent_id=str(a.agent_id),
@@ -267,6 +269,10 @@ def _build_assistant_read(
         user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=(
             whatsapp_contact.contact_value if whatsapp_contact else None
+        ),
+        user_discord_id=user_discord_id,
+        assistant_discord_bot_id=(
+            discord_contact.contact_value if discord_contact else None
         ),
         voice_id=a.voice_id,
         voice_provider=a.voice_provider,
@@ -1045,6 +1051,13 @@ async def delete_assistant_contact(
 
                 await delete_whatsapp_routes(assistant_id, session)
 
+            elif contact_type == "discord":
+                from orchestra.web.api.utils.assistant_infra import (
+                    delete_discord_routes,
+                )
+
+                await delete_discord_routes(assistant_id, session)
+
             # Soft-delete the AssistantContact row
             contact_dao.soft_delete_assistant_contact(
                 assistant_id=assistant_id,
@@ -1160,8 +1173,8 @@ async def create_assistant_contact(
 
     contact_type = contact_request.contact_type
 
-    # 2. Require verified profile number for phone/whatsapp contacts
-    if contact_type in ("phone", "whatsapp"):
+    # 2. Require verified profile identity for phone/whatsapp/discord contacts
+    if contact_type in ("phone", "whatsapp", "discord"):
         user_dao = UserDAO(session)
         user_rows = user_dao.filter(id=user_id)
         if not user_rows:
@@ -1186,6 +1199,14 @@ async def create_assistant_contact(
                     "before creating a WhatsApp contact for an assistant."
                 ),
             )
+        if contact_type == "discord" and not user.discord_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "A linked Discord account is required on your profile "
+                    "before creating a Discord contact for an assistant."
+                ),
+            )
 
     contact_dao = AssistantContactDAO(session)
 
@@ -1207,6 +1228,8 @@ async def create_assistant_contact(
         provider = "google_workspace"
     elif contact_type == "whatsapp":
         provider = "twilio"
+    elif contact_type == "discord":
+        provider = "discord"
 
     monthly_cost = contact_dao.get_contact_monthly_cost(
         contact_type,
@@ -1300,6 +1323,24 @@ async def create_assistant_contact(
                 deploy_env=assistant.deploy_env,
             )
 
+        elif contact_type == "discord":
+            from orchestra.web.api.utils.assistant_infra import (
+                assign_discord_pool_bot,
+                register_discord_bot,
+            )
+
+            pool_result = await assign_discord_pool_bot(
+                assistant_id,
+                session,
+            )
+            created_value = pool_result["pool_number"]
+
+            await register_discord_bot(
+                created_value,
+                assistant_id,
+                deploy_env=assistant.deploy_env,
+            )
+
         if not created_value:
             raise Exception(f"Failed to provision {contact_type}: no value returned.")
 
@@ -1383,7 +1424,7 @@ async def create_assistant_contact(
                     created_value,
                     deploy_env=assistant.deploy_env,
                 )
-            # WhatsApp: no explicit deprovisioning needed
+            # WhatsApp/Discord: no explicit deprovisioning needed (pool stays)
         except Exception as rollback_error:
             logging.error(
                 f"RESOURCE LEAK: Failed to rollback {contact_type} "
