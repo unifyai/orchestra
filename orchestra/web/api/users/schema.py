@@ -200,7 +200,7 @@ class CanDeleteAccountResponse(BaseModel):
 
 
 class RuntimeCleanupSummaryResponse(BaseModel):
-    """Result of the immediate post-delete assistant cleanup pass."""
+    """Result of a post-delete assistant cleanup pass when available."""
 
     processed: int
     completed: int

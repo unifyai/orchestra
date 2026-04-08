@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     HTTPException,
@@ -30,7 +31,10 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
-from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
+from orchestra.services.user_account_cleanup_service import (
+    UserAccountCleanupService,
+    run_user_runtime_cleanup_tasks,
+)
 from orchestra.web.api.assistant.schema import (
     SpendingLimitReachedRequest,
     SpendingLimitReachedResponse,
@@ -542,6 +546,7 @@ def confirm_phone_verification(
 def delete_user(
     user_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     force: bool = Query(
         False,
         description="Skip organization ownership check (use with caution)",
@@ -612,6 +617,14 @@ def delete_user(
 
     if not result.success:
         raise HTTPException(status_code=400, detail=result.message)
+
+    if result.cleanup_task_ids:
+        background_tasks.add_task(
+            run_user_runtime_cleanup_tasks,
+            request.app.state.db_session_factory,
+            cleanup_task_ids=result.cleanup_task_ids,
+            user_id=user_id,
+        )
 
     return AccountDeletionResponse(
         success=True,
@@ -1664,6 +1677,7 @@ def can_delete_account(
 def delete_own_account(
     request: Request,
     body: AccountDeletionConfirmation,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -1697,6 +1711,14 @@ def delete_own_account(
 
     if not result.success:
         raise HTTPException(status_code=400, detail=result.message)
+
+    if result.cleanup_task_ids:
+        background_tasks.add_task(
+            run_user_runtime_cleanup_tasks,
+            request.app.state.db_session_factory,
+            cleanup_task_ids=result.cleanup_task_ids,
+            user_id=request.state.user_id,
+        )
 
     return AccountDeletionResponse(
         success=True,
