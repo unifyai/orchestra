@@ -343,6 +343,11 @@ def admin_reduce_bridge(
 
     context_name = body.context or ""
     context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
+    if not context_obj and context_name:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context_name}' not found",
+        )
     context_id = context_obj[0][0].id if context_obj else None
     field_types = field_type_dao.get_field_types(project_obj.id, context_id=context_id)
 
