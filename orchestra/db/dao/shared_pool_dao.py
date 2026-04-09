@@ -79,6 +79,7 @@ class SharedPoolDAO:
         self,
         number: str,
         twilio_sender_sid: str | None = None,
+        auth_token: str | None = None,
     ) -> SharedPoolNumber:
         if self.get_pool_number_by_value(number):
             raise ValueError(f"Pool number {number} already exists.")
@@ -86,6 +87,7 @@ class SharedPoolDAO:
             platform=self.platform,
             number=number,
             twilio_sender_sid=twilio_sender_sid,
+            auth_token=auth_token,
         )
         self.session.add(pool)
         self.session.flush()
@@ -96,6 +98,7 @@ class SharedPoolDAO:
         pool_id: int,
         status: str | None = None,
         twilio_sender_sid: str | None = ...,
+        auth_token: str | None = ...,
     ) -> SharedPoolNumber:
         pool = (
             self.session.query(SharedPoolNumber)
@@ -108,6 +111,8 @@ class SharedPoolDAO:
             pool.status = status
         if twilio_sender_sid is not ...:
             pool.twilio_sender_sid = twilio_sender_sid
+        if auth_token is not ...:
+            pool.auth_token = auth_token
         self.session.flush()
         return pool
 
