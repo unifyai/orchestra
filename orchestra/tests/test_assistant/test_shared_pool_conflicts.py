@@ -3180,8 +3180,16 @@ DISCORD_USER_C = "220000000000000003"
 @pytest.fixture
 def discord_pool(dbsession: Session) -> list[SharedPoolNumber]:
     bots = [
-        SharedPoolNumber(number=DISCORD_BOT_1, platform="discord"),
-        SharedPoolNumber(number=DISCORD_BOT_2, platform="discord"),
+        SharedPoolNumber(
+            number=DISCORD_BOT_1,
+            platform="discord",
+            auth_token="tok-bot1",
+        ),
+        SharedPoolNumber(
+            number=DISCORD_BOT_2,
+            platform="discord",
+            auth_token="tok-bot2",
+        ),
     ]
     dbsession.add_all(bots)
     dbsession.flush()
@@ -3421,7 +3429,11 @@ class TestDiscordConflicts:
         discord_pool,
     ):
         """Target is a platform user on same bot → user_to_user conflict."""
-        pool3 = SharedPoolNumber(number=DISCORD_BOT_3, platform="discord")
+        pool3 = SharedPoolNumber(
+            number=DISCORD_BOT_3,
+            platform="discord",
+            auth_token="tok-bot3",
+        )
         dbsession.add(pool3)
         dbsession.flush()
 
@@ -3516,11 +3528,12 @@ class TestDiscordAdminEndpoints:
         assert DISCORD_BOT_1 in bot_ids
         assert DISCORD_BOT_2 in bot_ids
         assert all(p["platform"] == "discord" for p in data)
+        assert all(p["auth_token"] is None for p in data)
 
     async def test_discord_pool_add(self, client: AsyncClient):
         resp = await client.post(
             "/v0/admin/discord/pool",
-            json={"bot_id": "330000000000000001"},
+            json={"bot_id": "330000000000000001", "bot_token": "tok-add-test"},
             headers=ADMIN_HEADERS,
         )
         assert resp.status_code == status.HTTP_200_OK
@@ -3528,6 +3541,7 @@ class TestDiscordAdminEndpoints:
         assert data["bot_id"] == "330000000000000001"
         assert data["status"] == "active"
         assert data["platform"] == "discord"
+        assert data.get("auth_token") is None
 
     async def test_discord_pool_add_duplicate(
         self,
@@ -3536,10 +3550,26 @@ class TestDiscordAdminEndpoints:
     ):
         resp = await client.post(
             "/v0/admin/discord/pool",
-            json={"bot_id": DISCORD_BOT_1},
+            json={"bot_id": DISCORD_BOT_1, "bot_token": "tok-dup"},
             headers=ADMIN_HEADERS,
         )
         assert resp.status_code == status.HTTP_409_CONFLICT
+
+    async def test_discord_pool_list_include_auth(
+        self,
+        client: AsyncClient,
+        discord_pool,
+    ):
+        """GET /discord/pool?include_auth=true returns auth_token values."""
+        resp = await client.get(
+            "/v0/admin/discord/pool",
+            params={"include_auth": True},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        for bot in data:
+            assert "auth_token" in bot
 
     async def test_discord_pool_update_status(
         self,
@@ -3555,10 +3585,32 @@ class TestDiscordAdminEndpoints:
         assert resp.status_code == status.HTTP_200_OK
         assert resp.json()["status"] == "inactive"
 
+    async def test_discord_pool_update_token(
+        self,
+        client: AsyncClient,
+        discord_pool,
+    ):
+        """PATCH with bot_token rotates the stored auth_token."""
+        pool_id = discord_pool[0].id
+        resp = await client.patch(
+            f"/v0/admin/discord/pool/{pool_id}",
+            json={"bot_token": "tok-rotated-999"},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        list_resp = await client.get(
+            "/v0/admin/discord/pool",
+            params={"include_auth": True},
+            headers=ADMIN_HEADERS,
+        )
+        rotated = next(b for b in list_resp.json() if b["id"] == pool_id)
+        assert rotated["auth_token"] == "tok-rotated-999"
+
     async def test_discord_pool_delete_unused(self, client: AsyncClient):
         add_resp = await client.post(
             "/v0/admin/discord/pool",
-            json={"bot_id": "330000000000000099"},
+            json={"bot_id": "330000000000000099", "bot_token": "tok-del"},
             headers=ADMIN_HEADERS,
         )
         pool_id = add_resp.json()["id"]

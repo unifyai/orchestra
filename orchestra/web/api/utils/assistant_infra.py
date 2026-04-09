@@ -316,24 +316,32 @@ async def assign_discord_pool_bot(
 
     dao = SharedPoolDAO(session, "discord")
     pool = dao.assign_pool_number(assistant_id, user_ids)
-    return {"pool_number": pool.number, "assistant_id": assistant_id}
+    return {
+        "pool_number": pool.number,
+        "assistant_id": assistant_id,
+        "auth_token": pool.auth_token,
+    }
 
 
 async def register_discord_bot(
     bot_id: str,
     assistant_id: int,
     deploy_env: str | None = None,
+    bot_token: str | None = None,
 ) -> dict:
     """Register a Discord bot-to-assistant mapping with the Communication service."""
     comms_url = _comms_url_for(deploy_env)
+    payload: dict = {
+        "bot_id": bot_id,
+        "assistant_id": assistant_id,
+    }
+    if bot_token is not None:
+        payload["bot_token"] = bot_token
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{comms_url}/discord/create",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            json={
-                "bot_id": bot_id,
-                "assistant_id": assistant_id,
-            },
+            json=payload,
             timeout=20,
         )
         return response.json()

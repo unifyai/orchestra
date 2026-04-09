@@ -973,7 +973,12 @@ def mock_all_infra(dbsession):
 
     wa_pool_mock = AsyncMock(return_value={"pool_number": "+15559876543"})
     wa_register_mock = AsyncMock(return_value={"success": True})
-    dc_pool_mock = AsyncMock(return_value={"pool_number": "123456789012345678"})
+    dc_pool_mock = AsyncMock(
+        return_value={
+            "pool_number": "123456789012345678",
+            "auth_token": "fake-discord-bot-token",
+        },
+    )
     dc_register_mock = AsyncMock(return_value={"success": True})
     dc_delete_routes_mock = AsyncMock(return_value=0)
 
