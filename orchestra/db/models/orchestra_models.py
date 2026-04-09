@@ -2544,6 +2544,7 @@ class SharedPoolNumber(Base):
     number = Column(String, nullable=False, unique=True)
     status = Column(String, nullable=False, default="active", server_default="active")
     twilio_sender_sid = Column(String, nullable=True)
+    auth_token = Column(String, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     __table_args__ = (

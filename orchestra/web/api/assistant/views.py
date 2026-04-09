@@ -1339,6 +1339,7 @@ async def create_assistant_contact(
                 created_value,
                 assistant_id,
                 deploy_env=assistant.deploy_env,
+                bot_token=pool_result.get("auth_token"),
             )
 
         if not created_value:

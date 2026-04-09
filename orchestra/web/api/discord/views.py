@@ -67,6 +67,10 @@ class PoolBotResponse(BaseModel):
     bot_id: str
     status: str
     platform: str = "discord"
+    auth_token: Optional[str] = Field(
+        None,
+        description="Bot auth token. Only populated when include_auth=true.",
+    )
 
 
 class PoolBotCreateRequest(BaseModel):
@@ -74,10 +78,18 @@ class PoolBotCreateRequest(BaseModel):
         ...,
         description="Discord bot application ID to add to the pool.",
     )
+    bot_token: str = Field(
+        ...,
+        description="Discord bot authentication token.",
+    )
 
 
 class PoolBotUpdateRequest(BaseModel):
     status: Optional[str] = Field(None, description="'active' or 'inactive'.")
+    bot_token: Optional[str] = Field(
+        None,
+        description="New bot token (for rotation).",
+    )
 
 
 class NotificationStatusRequest(BaseModel):
@@ -226,6 +238,10 @@ def delete_routes(
 
 @admin_router.get("/discord/pool")
 def get_pool_status(
+    include_auth: bool = Query(
+        False,
+        description="Include bot auth tokens in response (admin only).",
+    ),
     session: Session = Depends(get_db_session),
 ) -> list[PoolBotResponse]:
     """Return the current state of the Discord bot pool."""
@@ -237,6 +253,7 @@ def get_pool_status(
             bot_id=b.number,
             status=b.status,
             platform=b.platform,
+            auth_token=b.auth_token if include_auth else None,
         )
         for b in bots
     ]
@@ -250,7 +267,7 @@ def add_pool_bot(
     """Add a new Discord bot to the pool."""
     dao = _dao(session)
     try:
-        pool = dao.add_pool_number(body.bot_id)
+        pool = dao.add_pool_number(body.bot_id, auth_token=body.bot_token)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     session.commit()
@@ -268,11 +285,13 @@ def update_pool_bot(
     body: PoolBotUpdateRequest,
     session: Session = Depends(get_db_session),
 ) -> PoolBotResponse:
-    """Update a pool bot's status."""
+    """Update status or token of a pool bot."""
     dao = _dao(session)
     kwargs: dict = {}
     if body.status is not None:
         kwargs["status"] = body.status
+    if body.bot_token is not None:
+        kwargs["auth_token"] = body.bot_token
     try:
         pool = dao.update_pool_number(pool_id, **kwargs)
     except ValueError as e:
