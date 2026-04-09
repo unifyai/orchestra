@@ -209,6 +209,7 @@ def admin_resolve_token(
         user_id=entry.user_id,
         organization_id=entry.organization_id,
         project_id=entry.project_id,
+        project_name=entry.project.name,
     )
 
 

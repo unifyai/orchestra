@@ -30,6 +30,7 @@ class TokenResolutionResponse(BaseModel):
     user_id: str
     organization_id: Optional[int] = None
     project_id: int
+    project_name: str
 
 
 class FilterBridgeRequest(BaseModel):
