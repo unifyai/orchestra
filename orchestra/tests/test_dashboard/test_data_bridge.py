@@ -691,3 +691,153 @@ async def test_reduce_bridge_uses_creator_identity(
 
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json()["result"] == 3
+
+
+# ===========================================================================
+# Regression: context_name prefix != project name
+#
+# The bridge endpoints must resolve the project via the FK relationship
+# (entry.project), NOT by splitting context_name on "/".  These tests
+# register tokens whose context_name first segment differs from the
+# project name.  They would fail (500 / lookup miss) if the code reverted
+# to ``entry.context_name.split("/")[0]``.
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_filter_bridge_context_name_independent_of_project(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Filter bridge works when context_name doesn't start with the project name."""
+    user = await create_test_user(client, "flt_ctx_ind@test.com")
+    await _seed_project_with_logs(client, user, "flt-ctx-ind-proj")
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "flt_ctx_i01",
+            "tile",
+            "Dashboards/Tiles/MyTile",
+            "flt-ctx-ind-proj",
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/flt_ctx_i01/filter",
+        json={"context": ""},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["total_count"] == 3
+
+
+@pytest.mark.anyio
+async def test_reduce_bridge_context_name_independent_of_project(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Reduce bridge works when context_name doesn't start with the project name."""
+    user = await create_test_user(client, "red_ctx_ind@test.com")
+    await _seed_project_with_logs(client, user, "red-ctx-ind-proj")
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "red_ctx_i01",
+            "tile",
+            "Dashboards/Tiles/MyTile",
+            "red-ctx-ind-proj",
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/red_ctx_i01/reduce",
+        json={"context": "", "metric": "count", "columns": "model"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["result"] == 3
+
+
+@pytest.mark.anyio
+async def test_join_bridge_context_name_independent_of_project(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Join bridge works when context_name doesn't start with the project name."""
+    user = await create_test_user(client, "jn_ctx_ind@test.com")
+    await _seed_two_contexts(client, user, "jn-ctx-ind-proj")
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "jn_ctx_i_01",
+            "tile",
+            "Dashboards/Tiles/MyTile",
+            "jn-ctx-ind-proj",
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/jn_ctx_i_01/join",
+        json={
+            "tables": ["orders", "users"],
+            "join_expr": "A.user_id == B.user_id",
+            "select": {
+                "A.user_id": "user_id",
+                "A.amount": "amount",
+                "B.city": "city",
+            },
+            "mode": "inner",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["total_count"] == 3
+
+
+@pytest.mark.anyio
+async def test_join_reduce_bridge_context_name_independent_of_project(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Join-reduce bridge works when context_name doesn't start with the project name."""
+    user = await create_test_user(client, "jr_ctx_ind@test.com")
+    await _seed_two_contexts(client, user, "jr-ctx-ind-proj")
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "jr_ctx_i_01",
+            "tile",
+            "Dashboards/Tiles/MyTile",
+            "jr-ctx-ind-proj",
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/jr_ctx_i_01/join-reduce",
+        json={
+            "tables": ["orders", "users"],
+            "join_expr": "A.user_id == B.user_id",
+            "select": {
+                "A.user_id": "user_id",
+                "A.amount": "amount",
+                "B.city": "city",
+            },
+            "metric": "sum",
+            "columns": "amount",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json() is not None

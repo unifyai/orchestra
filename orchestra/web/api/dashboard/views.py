@@ -245,7 +245,7 @@ def admin_filter_bridge(
         ),
     )
 
-    project_name = entry.context_name.split("/")[0]
+    project_name = entry.project.name
 
     rows, total_count = _get_logs_query(
         request_fastapi=fake_request,
@@ -339,12 +339,7 @@ def admin_reduce_bridge(
     entry = _resolve_tile_token(session, token)
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
 
-    project_name = entry.context_name.split("/")[0]
-    project_obj = project_dao.get_by_user_and_name(
-        name=project_name,
-        user_id=entry.user_id,
-        organization_id=entry.organization_id,
-    )
+    project_obj = entry.project
 
     context_name = body.context or ""
     context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
@@ -424,12 +419,7 @@ def admin_join_bridge(
         ),
     )
 
-    project_name = entry.context_name.split("/")[0]
-    project_obj = project_dao.get_by_user_and_name(
-        name=project_name,
-        user_id=entry.user_id,
-        organization_id=entry.organization_id,
-    )
+    project_obj = entry.project
 
     pair_of_args = [
         {"context": body.tables[0], "filter_expr": body.left_where},
@@ -439,7 +429,7 @@ def admin_join_bridge(
     try:
         result = _join_query_internal(
             project_id=project_obj.id,
-            project_name=project_name,
+            project_name=project_obj.name,
             pair_of_args=pair_of_args,
             join_expr=body.join_expr,
             mode=body.mode,
@@ -503,12 +493,7 @@ def admin_join_reduce_bridge(
         ),
     )
 
-    project_name = entry.context_name.split("/")[0]
-    project_obj = project_dao.get_by_user_and_name(
-        name=project_name,
-        user_id=entry.user_id,
-        organization_id=entry.organization_id,
-    )
+    project_obj = entry.project
 
     pair_of_args = [
         {"context": body.tables[0], "filter_expr": body.left_where},
@@ -518,7 +503,7 @@ def admin_join_reduce_bridge(
     try:
         result = _join_query_internal(
             project_id=project_obj.id,
-            project_name=project_name,
+            project_name=project_obj.name,
             pair_of_args=pair_of_args,
             join_expr=body.join_expr,
             mode=body.mode,
