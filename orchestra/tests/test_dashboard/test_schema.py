@@ -165,6 +165,7 @@ class TestTokenResolutionResponse:
             context_name="proj/Dashboards/Tiles",
             user_id="uid_123",
             project_id=42,
+            project_name="proj",
         )
         assert resp.organization_id is None
 
@@ -175,6 +176,7 @@ class TestTokenResolutionResponse:
             user_id="uid_456",
             organization_id=7,
             project_id=99,
+            project_name="proj",
         )
         assert resp.organization_id == 7
 
