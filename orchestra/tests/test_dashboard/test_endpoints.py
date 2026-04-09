@@ -3,7 +3,7 @@
 - POST   /v0/dashboards/tokens              (register)
 - DELETE  /v0/dashboards/tokens/{token}      (delete)
 - GET     /v0/admin/dashboards/tokens/{token} (admin resolve)
-- POST    /v0/admin/dashboards/tiles/{token}/data (data bridge error cases)
+- POST    /v0/admin/dashboards/tiles/{token}/filter (filter bridge error cases)
 """
 
 import pytest
@@ -433,15 +433,15 @@ async def test_admin_resolve_non_admin_key_rejected(
 
 
 # ===========================================================================
-# POST /admin/dashboards/tiles/{token}/data – Data Bridge (error cases)
+# POST /admin/dashboards/tiles/{token}/filter – Filter Bridge (error cases)
 # ===========================================================================
 
 
 @pytest.mark.anyio
-async def test_data_bridge_token_not_found(client: AsyncClient, dbsession: Session):
-    """Data bridge returns 404 for unknown token."""
+async def test_filter_bridge_token_not_found(client: AsyncClient, dbsession: Session):
+    """Filter bridge returns 404 for unknown token."""
     resp = await client.post(
-        "/v0/admin/dashboards/tiles/nonexistent1/data",
+        "/v0/admin/dashboards/tiles/nonexistent1/filter",
         json={"context": "some/ctx"},
         headers=ADMIN_HEADERS,
     )
@@ -449,11 +449,11 @@ async def test_data_bridge_token_not_found(client: AsyncClient, dbsession: Sessi
 
 
 @pytest.mark.anyio
-async def test_data_bridge_rejects_dashboard_token(
+async def test_filter_bridge_rejects_dashboard_token(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Data bridge only works for tiles, not dashboards."""
+    """Filter bridge only works for tiles, not dashboards."""
     user = await create_test_user(client, "bridge_dash@test.com")
 
     await client.post(
@@ -474,7 +474,7 @@ async def test_data_bridge_rejects_dashboard_token(
     )
 
     resp = await client.post(
-        "/v0/admin/dashboards/tiles/bridge_d_001/data",
+        "/v0/admin/dashboards/tiles/bridge_d_001/filter",
         json={"context": "bridge-dash-proj/Logs"},
         headers=ADMIN_HEADERS,
     )
@@ -484,16 +484,256 @@ async def test_data_bridge_rejects_dashboard_token(
 
 
 @pytest.mark.anyio
-async def test_data_bridge_non_admin_key_rejected(
+async def test_filter_bridge_non_admin_key_rejected(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """A regular API key cannot hit the data bridge endpoint."""
+    """A regular API key cannot hit the filter bridge endpoint."""
     user = await create_test_user(client, "bridge_no_adm@test.com")
 
     resp = await client.post(
-        "/v0/admin/dashboards/tiles/any_token/data",
+        "/v0/admin/dashboards/tiles/any_token/filter",
         json={"context": "some/ctx"},
+        headers=user["headers"],
+    )
+
+    assert resp.status_code in (
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+    )
+
+
+# ===========================================================================
+# POST /admin/dashboards/tiles/{token}/reduce – Reduce Bridge (error cases)
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_reduce_bridge_token_not_found(client: AsyncClient, dbsession: Session):
+    """Reduce bridge returns 404 for unknown token."""
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/nonexistent1/reduce",
+        json={"context": "", "metric": "count", "columns": "score"},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_reduce_bridge_rejects_dashboard_token(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Reduce bridge only works for tiles, not dashboards."""
+    user = await create_test_user(client, "red_brg_dash@test.com")
+
+    await client.post(
+        "/v0/project",
+        json={"name": "red-brg-dash-proj"},
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "red_brg_d01",
+            "dashboard",
+            "red-brg-dash-proj/Dashboards/Layouts",
+            "red-brg-dash-proj",
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/red_brg_d01/reduce",
+        json={"context": "", "metric": "count", "columns": "score"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert "tile" in resp.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_reduce_bridge_non_admin_key_rejected(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """A regular API key cannot hit the reduce bridge endpoint."""
+    user = await create_test_user(client, "red_brg_noadm@test.com")
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/any_token/reduce",
+        json={"context": "", "metric": "count", "columns": "score"},
+        headers=user["headers"],
+    )
+
+    assert resp.status_code in (
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+    )
+
+
+# ===========================================================================
+# POST /admin/dashboards/tiles/{token}/join – Join Bridge (error cases)
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_join_bridge_token_not_found(client: AsyncClient, dbsession: Session):
+    """Join bridge returns 404 for unknown token."""
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/nonexistent1/join",
+        json={
+            "tables": ["proj/ctx_a", "proj/ctx_b"],
+            "join_expr": "A.id == B.id",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_join_bridge_rejects_dashboard_token(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Join bridge only works for tiles, not dashboards."""
+    user = await create_test_user(client, "jn_brg_dash@test.com")
+
+    await client.post(
+        "/v0/project",
+        json={"name": "jn-brg-dash-proj"},
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "jn_brg_d_01",
+            "dashboard",
+            "jn-brg-dash-proj/Dashboards/Layouts",
+            "jn-brg-dash-proj",
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/jn_brg_d_01/join",
+        json={
+            "tables": ["proj/ctx_a", "proj/ctx_b"],
+            "join_expr": "A.id == B.id",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert "tile" in resp.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_join_bridge_non_admin_key_rejected(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """A regular API key cannot hit the join bridge endpoint."""
+    user = await create_test_user(client, "jn_brg_noadm@test.com")
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/any_token/join",
+        json={
+            "tables": ["proj/ctx_a", "proj/ctx_b"],
+            "join_expr": "A.id == B.id",
+        },
+        headers=user["headers"],
+    )
+
+    assert resp.status_code in (
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+    )
+
+
+# ===========================================================================
+# POST /admin/dashboards/tiles/{token}/join-reduce – Join-Reduce Bridge (error cases)
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_join_reduce_bridge_token_not_found(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Join-reduce bridge returns 404 for unknown token."""
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/nonexistent1/join-reduce",
+        json={
+            "tables": ["proj/ctx_a", "proj/ctx_b"],
+            "join_expr": "A.id == B.id",
+            "metric": "count",
+            "columns": "amount",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_join_reduce_bridge_rejects_dashboard_token(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Join-reduce bridge only works for tiles, not dashboards."""
+    user = await create_test_user(client, "jr_brg_dash@test.com")
+
+    await client.post(
+        "/v0/project",
+        json={"name": "jr-brg-dash-proj"},
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "jr_brg_d_01",
+            "dashboard",
+            "jr-brg-dash-proj/Dashboards/Layouts",
+            "jr-brg-dash-proj",
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/jr_brg_d_01/join-reduce",
+        json={
+            "tables": ["proj/ctx_a", "proj/ctx_b"],
+            "join_expr": "A.id == B.id",
+            "metric": "count",
+            "columns": "amount",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert "tile" in resp.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_join_reduce_bridge_non_admin_key_rejected(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """A regular API key cannot hit the join-reduce bridge endpoint."""
+    user = await create_test_user(client, "jr_brg_noadm@test.com")
+
+    resp = await client.post(
+        "/v0/admin/dashboards/tiles/any_token/join-reduce",
+        json={
+            "tables": ["proj/ctx_a", "proj/ctx_b"],
+            "join_expr": "A.id == B.id",
+            "metric": "count",
+            "columns": "amount",
+        },
         headers=user["headers"],
     )
 
