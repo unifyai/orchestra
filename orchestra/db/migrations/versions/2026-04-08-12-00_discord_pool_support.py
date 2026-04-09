@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "discord_pool_support"
-down_revision = "backfill_credit_ledger"
+down_revision = "add_dashboard_token"
 branch_labels = None
 depends_on = None
 
