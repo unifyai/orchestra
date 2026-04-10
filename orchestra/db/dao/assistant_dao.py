@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, exists, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, AssistantContact
+from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
 
 
 @dataclass
@@ -28,6 +28,11 @@ class AssistantDAO:
 
     Supports both personal assistants (organization_id is NULL) and
     organizational assistants (organization_id is set).
+
+    Organizational assistants use a creator-owned lifecycle model:
+    ``user_id`` remains the creating user for lineage, cleanup, and
+    creator-scoped listings, while ``organization_id`` defines the
+    collaborative org scope and RBAC context.
     """
 
     def __init__(self, session: Session):
@@ -48,11 +53,6 @@ class AssistantDAO:
         desktop_mode: Optional[str] = None,
         user_desktop_id: Optional[int] = None,
         user_desktop_filesys_sync: bool = False,
-        phone: Optional[str] = None,
-        phone_country: Optional[str] = None,
-        user_phone: Optional[str] = None,
-        email: Optional[str] = None,
-        user_whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
         voice_provider: Optional[str] = None,
         timezone: Optional[str] = None,
@@ -66,8 +66,10 @@ class AssistantDAO:
         If organization_id is provided, creates an organizational assistant.
         If organization_id is None, creates a personal assistant.
 
-        :param user_id: The user ID (creator for org assistants, owner for personal).
-        :param organization_id: Optional organization ID for org assistants.
+        :param user_id: Personal assistants: owner. Org assistants:
+            creator/lifecycle owner retained on the row.
+        :param organization_id: Optional organization scope for org assistants.
+            None means a personal assistant.
         :return: The created Assistant.
         """
 
@@ -89,13 +91,8 @@ class AssistantDAO:
             about=about,
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
-            phone=phone,
-            user_phone=user_phone,
-            email=email,
-            user_whatsapp_number=user_whatsapp_number,
             voice_id=voice_id,
             voice_provider=voice_provider,
-            phone_country=phone_country,
             timezone=timezone,
             is_local=is_local,
             deploy_env=deploy_env,
@@ -118,7 +115,9 @@ class AssistantDAO:
 
         For org assistants (organization_id is set):
             Returns assistant if organization_id matches.
-            The user_id check is skipped since org members may access org assistants.
+            The user_id check is skipped because ``user_id`` remains creator
+            metadata for org assistants, while access is governed by org scope
+            and permission checks.
 
         :param user_id: User ID (used for personal assistant lookup).
         :param agent_id: Assistant agent ID.
@@ -176,7 +175,7 @@ class AssistantDAO:
 
         For org API key (organization_id is set):
             Returns only assistants in that org where user_id matches
-            (assistants created by this user in the org).
+            (creator-owned listing semantics for org assistants).
 
         :param user_id: User ID.
         :param organization_id: Organization ID from API key context (None = personal).
@@ -218,10 +217,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "phone",
-                        AssistantContact.user_value == user_phone,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.phone_number == user_phone,
                     ),
                 ),
             )
@@ -240,10 +237,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "whatsapp",
-                        AssistantContact.user_value == user_whatsapp_number,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.whatsapp_number == user_whatsapp_number,
                     ),
                 ),
             )
@@ -308,10 +303,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "phone",
-                        AssistantContact.user_value == user_phone,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.phone_number == user_phone,
                     ),
                 ),
             )
@@ -330,10 +323,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "whatsapp",
-                        AssistantContact.user_value == user_whatsapp_number,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.whatsapp_number == user_whatsapp_number,
                     ),
                 ),
             )
@@ -572,10 +563,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "phone",
-                        AssistantContact.user_value == user_phone,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.phone_number == user_phone,
                     ),
                 ),
             )
@@ -583,10 +572,8 @@ class AssistantDAO:
             stmt = stmt.where(
                 exists().where(
                     and_(
-                        AssistantContact.assistant_id == Assistant.agent_id,
-                        AssistantContact.contact_type == "whatsapp",
-                        AssistantContact.user_value == user_whatsapp_number,
-                        AssistantContact.status != "deleted",
+                        User.id == Assistant.user_id,
+                        User.whatsapp_number == user_whatsapp_number,
                     ),
                 ),
             )
@@ -755,60 +742,46 @@ class AssistantDAO:
         """
         Get assistant's cumulative spend for a given month.
 
-        Queries the Assistants project logs for spending data.
+        Queries the credit_transaction ledger for debits attributed to this
+        assistant within the calendar month.
 
         :param agent_id: Assistant agent ID.
         :param month: Month in YYYY-MM format.
         :return: Cumulative spend for the month (0.0 if no spend data).
         """
-        from sqlalchemy import cast, func
-        from sqlalchemy.types import Float
+        from datetime import datetime
 
-        from orchestra.db.models.orchestra_models import (
-            Context,
-            LogEvent,
-            LogEventContext,
-            Project,
-        )
+        from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+        from orchestra.db.models.orchestra_models import Organization, User
 
         assistant = self.get_assistant_by_agent_id(agent_id)
         if not assistant:
             return 0.0
 
-        # Build query based on whether assistant is personal or organizational
-        query = (
-            self.session.query(
-                func.coalesce(
-                    cast(LogEvent.data.op("->>")("cumulative_spend"), Float),
-                    0.0,
-                ).label("spend"),
-            )
-            .select_from(LogEvent)
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .join(Context, LogEventContext.context_id == Context.id)
-            .join(Project, Context.project_id == Project.id)
-            .filter(
-                Project.name == "Assistants",
-                Context.name == "All/Spending/Monthly",
-                LogEvent.data.op("->>")("_assistant_id") == str(agent_id),
-                LogEvent.data.op("->>")("month") == month,
-            )
-        )
-
-        # Add project ownership filter based on whether assistant is personal or org
+        # Resolve billing account
         if assistant.organization_id:
-            query = query.filter(Project.organization_id == assistant.organization_id)
-        else:
-            query = query.filter(
-                Project.organization_id.is_(None),
-                Project.user_id == assistant.user_id,
+            org = (
+                self.session.query(Organization)
+                .filter(Organization.id == assistant.organization_id)
+                .first()
             )
+            ba_id = org.billing_account_id if org else None
+        else:
+            user = self.session.query(User).filter(User.id == assistant.user_id).first()
+            ba_id = user.billing_account_id if user else None
 
-        result = query.first()
+        if ba_id is None:
+            return 0.0
 
-        if result and result.spend:
-            return float(result.spend)
-        return 0.0
+        year, mon = map(int, month.split("-"))
+        month_start = datetime(year, mon, 1)
+        if mon == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, mon + 1, 1)
+
+        dao = CreditTransactionDAO(self.session)
+        return dao.get_total_spend(ba_id, month_start, month_end, assistant_id=agent_id)
 
     def generate_unique_email_local(
         self,

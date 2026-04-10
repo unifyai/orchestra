@@ -20,12 +20,18 @@ from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    AssistantCleanupTask,
     BillingAccount,
     Organization,
     Recharge,
     RechargeStatus,
     RechargeType,
     User,
+)
+from orchestra.services.assistant_cleanup_service import (
+    DEFAULT_CLEANUP_TASK_BATCH_SIZE,
+    MAX_CLEANUP_TASK_BATCH_SIZE,
+    process_assistant_cleanup_tasks,
 )
 from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
@@ -300,6 +306,19 @@ def create_recharge_model(
             detail="Transaction id must be specified when adding a payment.",
         )
 
+    MAX_PROMO_AMOUNT = settings.max_promo_amount
+    if (
+        new_recharge_object.type == "promo"
+        and new_recharge_object.quantity > MAX_PROMO_AMOUNT
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Promo recharges are capped at ${MAX_PROMO_AMOUNT}. "
+                f"Requested: ${new_recharge_object.quantity:.2f}"
+            ),
+        )
+
     # Resolve billing account from user_id or organization_id
     ba = _resolve_billing_account(
         session,
@@ -311,7 +330,19 @@ def create_recharge_model(
 
     # Credit the billing account
     ba_dao = BillingAccountDAO(session)
-    ba_dao.add_credits(ba.id, float(new_recharge_object.quantity))
+    ba_dao.add_credits(
+        ba.id,
+        float(new_recharge_object.quantity),
+        category="recharge" if new_recharge_object.type != "promo" else "promo",
+        user_id=new_recharge_object.user_id,
+        organization_id=(
+            new_recharge_object.organization_id
+            if hasattr(new_recharge_object, "organization_id")
+            else None
+        ),
+        description=f"Admin recharge ({new_recharge_object.type})",
+        detail={"event": "admin_recharge", "type": new_recharge_object.type},
+    )
 
     # Calculate amount_usd and invoice_group
     amount_usd = new_recharge_object.quantity
@@ -1509,6 +1540,73 @@ def admin_cleanup_expired_invites(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to cleanup expired invites: {str(e)}",
+        )
+
+
+@router.get(
+    "/cleanup/assistant-runtime",
+    summary="Admin: Inspect durable assistant cleanup tasks",
+    description="List queued assistant cleanup tasks, optionally filtered by assistant_id.",
+)
+def admin_list_assistant_cleanup_tasks(
+    assistant_id: int | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Return cleanup task rows for observability and integration testing."""
+    query = session.query(AssistantCleanupTask)
+    if assistant_id is not None:
+        query = query.filter(AssistantCleanupTask.assistant_id == assistant_id)
+    if status is not None:
+        query = query.filter(AssistantCleanupTask.status == status)
+    tasks = query.order_by(AssistantCleanupTask.created_at.desc()).limit(limit).all()
+    return {
+        "tasks": [
+            {
+                "id": t.id,
+                "assistant_id": t.assistant_id,
+                "status": t.status,
+                "source_flow": t.source_flow,
+                "attempt_count": t.attempt_count,
+                "last_error": t.last_error,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                "next_retry_at": (
+                    t.next_retry_at.isoformat() if t.next_retry_at else None
+                ),
+            }
+            for t in tasks
+        ],
+        "count": len(tasks),
+    }
+
+
+@router.post(
+    "/cleanup/assistant-runtime",
+    summary="Admin: Process durable assistant cleanup tasks",
+    description="Run the Orchestra-owned retry queue for assistant runtime cleanup.",
+)
+async def admin_process_assistant_cleanup_tasks(
+    limit: int = Query(
+        DEFAULT_CLEANUP_TASK_BATCH_SIZE,
+        ge=1,
+        le=MAX_CLEANUP_TASK_BATCH_SIZE,
+    ),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Drain the assistant cleanup retry queue for a bounded batch of tasks."""
+    try:
+        result = await process_assistant_cleanup_tasks(session, limit=limit)
+        return {
+            **result,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process assistant cleanup tasks: {str(e)}",
         )
 
 

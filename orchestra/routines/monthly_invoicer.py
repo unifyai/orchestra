@@ -61,10 +61,6 @@ def invoice_month(
     """
     Invoice the given period; defaults to the *previous* month if omitted.
     """
-    from orchestra.lib.billing import configure_stripe
-
-    configure_stripe()
-
     today = _dt.datetime.now(_dt.timezone.utc).date()
 
     if year is None or month is None:
@@ -112,6 +108,10 @@ def _invoice_month_with_session(
 
     if not rows:
         return result
+
+    from orchestra.lib.billing import configure_stripe
+
+    configure_stripe()
 
     buckets: Dict[int, List[Recharge]] = {}
     for r in rows:

@@ -1088,8 +1088,10 @@ async def test_get_logs_metric_shared_value_reduction(
         result["F"]["shared_value"] == expected_config
     ), "Group F should return the shared config object directly"
 
-    # Test 5: Verify shared value reduction works for all metrics on Group A's score
-    for metric in ["sum", "min", "max", "median"]:
+    # Test 5: Verify shared value reduction for idempotent metrics on Group A
+    # Group A has 3 logs with score=10 — shared_value is only valid for
+    # metrics where f([V,V,...,V]) == V (min, max, median).
+    for metric in ["min", "max", "median"]:
         response = await client.get(
             f"/v0/logs/metric/{metric}?project_name={project_name}",
             params={
@@ -1100,11 +1102,49 @@ async def test_get_logs_metric_shared_value_reduction(
         )
         assert response.status_code == 200
         result = response.json()
-
-        # For Group A, all scores are 10, so all metrics should return 10
         assert (
             result["A"]["shared_value"] == 10
         ), f"Group A should return the shared value 10 directly for metric {metric}"
+
+    # Test 5b: sum must use the SQL aggregate, not shared_value
+    # 3 identical scores of 10 → sum = 30
+    response = await client.get(
+        f"/v0/logs/metric/sum?project_name={project_name}",
+        params={"key": "score", "group_by": "entries/group"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["A"]["shared_value"] is None, "sum must not use shared_value"
+    assert result["A"]["sum"] == 30, "sum of 3 × 10 should be 30"
+
+    # Test 5c: count must use the SQL aggregate
+    # 3 logs in Group A → count = 3
+    response = await client.get(
+        f"/v0/logs/metric/count?project_name={project_name}",
+        params={"key": "score", "group_by": "entries/group"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["A"]["shared_value"] is None, "count must not use shared_value"
+    assert result["A"]["count"] == 3, "count of 3 identical values should be 3"
+
+    # Test 5d: var/std of identical values should be 0
+    for metric in ["var", "std"]:
+        response = await client.get(
+            f"/v0/logs/metric/{metric}?project_name={project_name}",
+            params={"key": "score", "group_by": "entries/group"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert (
+            result["A"]["shared_value"] is None
+        ), f"{metric} must not use shared_value"
+        assert float(result["A"][metric]) == pytest.approx(
+            0.0,
+        ), f"{metric} of identical values should be 0"
 
 
 @pytest.mark.anyio

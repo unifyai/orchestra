@@ -269,6 +269,9 @@ class Settings(BaseSettings):
         os.environ.get("STRIPE_MAX_CREDIT_QTY", "500"),
     )
 
+    # Promo credits
+    max_promo_amount: float = 100.0
+
     # Signup credit grant (free credits for new users)
     signup_credit_grant: float = float(
         os.environ.get("SIGNUP_CREDIT_GRANT", "50"),

@@ -17,24 +17,62 @@ class UserRequest(BaseModel):
     bio: Optional[str] = None
     timezone: Optional[str] = None
     phone_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    discord_id: Optional[str] = None
 
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
         """Ensure the timezone is a valid IANA timezone name."""
         if v is None:
-            # Allow timezone to be optional
             return v
         if v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
 
-    @field_validator("phone_number")
+    @field_validator("phone_number", "whatsapp_number")
     @classmethod
     def validate_phone_number(cls, v: Optional[str]) -> Optional[str]:
         """Validate phone number and normalize to E.164 format."""
         if v is None:
             return v
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+        result = validate_phone_number(v)
+        if not result["is_valid"]:
+            raise ValueError(f"Invalid phone number: {result['error']}")
+        return result["formatted_phone_number"]
+
+
+class PhoneVerificationRequest(BaseModel):
+    """Request to send a verification code to a phone number."""
+
+    user_id: str
+    phone_number: str
+    phone_type: Literal["phone", "whatsapp"] = "phone"
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+        result = validate_phone_number(v)
+        if not result["is_valid"]:
+            raise ValueError(f"Invalid phone number: {result['error']}")
+        return result["formatted_phone_number"]
+
+
+class PhoneVerificationConfirm(BaseModel):
+    """Request to confirm a verification code."""
+
+    user_id: str
+    phone_number: str
+    phone_type: Literal["phone", "whatsapp"] = "phone"
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
         from orchestra.web.api.utils.phone_number_validator import validate_phone_number
 
         result = validate_phone_number(v)
@@ -162,11 +200,23 @@ class CanDeleteAccountResponse(BaseModel):
     blockers: list[DeletionBlockerResponse]
 
 
+class RuntimeCleanupSummaryResponse(BaseModel):
+    """Result of a post-delete assistant cleanup pass when available."""
+
+    processed: int
+    completed: int
+    retried: int
+    failed: int
+    errors: list[str]
+
+
 class AccountDeletionResponse(BaseModel):
     """Response after account deletion attempt."""
 
     success: bool
     message: str
+    runtime_cleanup_complete: bool = True
+    runtime_cleanup_summary: Optional[RuntimeCleanupSummaryResponse] = None
 
 
 # ============================================================================

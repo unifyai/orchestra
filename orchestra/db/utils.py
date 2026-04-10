@@ -4,6 +4,7 @@ from typing import Any, List, Optional, Type
 
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.settings import settings
@@ -29,12 +30,19 @@ def create_database(worker_id=None) -> None:
     if database_exists:
         drop_database(worker_id)
 
-    with engine.connect() as conn:  # noqa: WPS440
-        conn.execute(
-            text(
-                f'CREATE DATABASE "{datname}" ENCODING "utf8" TEMPLATE template1',  # noqa: E501
-            ),
-        )
+    for attempt in range(2):
+        try:
+            with engine.connect() as conn:  # noqa: WPS440
+                conn.execute(
+                    text(
+                        f'CREATE DATABASE "{datname}" ENCODING "utf8" TEMPLATE template1',  # noqa: E501
+                    ),
+                )
+            return
+        except IntegrityError:
+            if attempt == 1:
+                raise
+            drop_database(worker_id)
 
 
 def drop_database(worker_id=None) -> None:
@@ -57,7 +65,7 @@ def drop_database(worker_id=None) -> None:
             ),
             {"name": datname},
         )
-        conn.execute(text(f'DROP DATABASE "{datname}"'))
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{datname}"'))
 
 
 def get_next_order_value(

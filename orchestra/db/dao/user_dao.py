@@ -10,7 +10,15 @@ from zoneinfo import available_timezones
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, BillingAccount, User
+from orchestra.db.models.orchestra_models import (
+    RECHARGE_TYPE_PROMO,
+    Assistant,
+    BillingAccount,
+    PhoneVerification,
+    Recharge,
+    RechargeStatus,
+    User,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 if TYPE_CHECKING:
@@ -55,6 +63,8 @@ class UserDAO:
         image: Optional[str] = None,
         timezone: Optional[str] = None,
         phone_number: Optional[str] = None,
+        whatsapp_number: Optional[str] = None,
+        discord_id: Optional[str] = None,
         credits: Optional[float] = 0,
     ) -> User:
         """
@@ -74,22 +84,29 @@ class UserDAO:
         :param image: Profile image URL.
         :param timezone: IANA timezone string.
         :param phone_number: Phone number (will be validated and formatted).
-        :param credits: Initial credit balance (default 0).
+        :param credits: Initial credit balance. Defaults to settings.signup_credit_grant.
         :return: The created User instance.
         """
+        if credits is None:
+            from orchestra.settings import settings
+
+            credits = settings.signup_credit_grant
         if timezone is not None and timezone not in VALID_TIMEZONES:
             raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
 
-        # Validate and format phone_number if provided
-        if phone_number is not None:
-            from orchestra.web.api.utils.phone_number_validator import (
-                validate_phone_number,
-            )
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
 
+        if phone_number is not None:
             result = validate_phone_number(phone_number)
             if not result["is_valid"]:
                 raise ValueError(f"Invalid phone number: {result['error']}")
             phone_number = result["formatted_phone_number"]
+
+        if whatsapp_number is not None:
+            result = validate_phone_number(whatsapp_number)
+            if not result["is_valid"]:
+                raise ValueError(f"Invalid WhatsApp number: {result['error']}")
+            whatsapp_number = result["formatted_phone_number"]
 
         # Create a BillingAccount for this user
         billing_account = BillingAccount(
@@ -107,10 +124,37 @@ class UserDAO:
             image=image,
             timezone=timezone,
             phone_number=phone_number,
+            whatsapp_number=whatsapp_number,
+            discord_id=discord_id,
             billing_account_id=billing_account.id,
             store_prompts=True,
         )
         self.session.add(user)
+        self.session.flush()
+
+        if whatsapp_number is not None:
+            from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+            SharedPoolDAO(self.session).cleanup_routes_for_contact_number(
+                whatsapp_number,
+            )
+
+        if discord_id is not None:
+            from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+            SharedPoolDAO(self.session, "discord").cleanup_routes_for_contact_number(
+                discord_id,
+            )
+
+        if credits > 0:
+            recharge = Recharge(
+                billing_account_id=billing_account.id,
+                type=RECHARGE_TYPE_PROMO,
+                quantity=Decimal(str(credits)),
+                amount_usd=Decimal("0"),
+                status=RechargeStatus.PAID,
+            )
+            self.session.add(recharge)
 
         return user
 
@@ -168,6 +212,19 @@ class UserDAO:
             raise not_found("User ID")
         return result
 
+    def get_by_whatsapp_number(self, whatsapp_number: str) -> Optional[User]:
+        """
+        Get a user by their WhatsApp number.
+
+        :param whatsapp_number: E.164-formatted WhatsApp number.
+        :return: User instance or None.
+        """
+        return (
+            self.session.query(User)
+            .filter(User.whatsapp_number == whatsapp_number)
+            .first()
+        )
+
     def get_all_users(self) -> List[User]:
         """
         Get all users.
@@ -202,6 +259,8 @@ class UserDAO:
         image: Optional[str] = ...,
         timezone: Optional[str] = ...,
         phone_number: Optional[str] = ...,
+        whatsapp_number: Optional[str] = ...,
+        discord_id: Optional[str] = ...,
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
         monthly_spending_cap: Optional[float] = ...,
@@ -253,6 +312,36 @@ class UserDAO:
                         raise ValueError(f"Invalid phone number: {result['error']}")
                     phone_number = result["formatted_phone_number"]
                 setattr(entry, "phone_number", phone_number)
+            if whatsapp_number is not ...:
+                if whatsapp_number is not None:
+                    from orchestra.web.api.utils.phone_number_validator import (
+                        validate_phone_number,
+                    )
+
+                    result = validate_phone_number(whatsapp_number)
+                    if not result["is_valid"]:
+                        raise ValueError(
+                            f"Invalid WhatsApp number: {result['error']}",
+                        )
+                    whatsapp_number = result["formatted_phone_number"]
+                old_wa = entry.whatsapp_number
+                setattr(entry, "whatsapp_number", whatsapp_number)
+                if whatsapp_number is not None and whatsapp_number != old_wa:
+                    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+                    SharedPoolDAO(self.session).cleanup_routes_for_contact_number(
+                        whatsapp_number,
+                    )
+            if discord_id is not ...:
+                old_discord = entry.discord_id
+                setattr(entry, "discord_id", discord_id)
+                if discord_id is not None and discord_id != old_discord:
+                    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+                    SharedPoolDAO(
+                        self.session,
+                        "discord",
+                    ).cleanup_routes_for_contact_number(discord_id)
             if queries_enabled is not ...:
                 setattr(entry, "queries_enabled", queries_enabled)
             if evaluations_enabled is not ...:
@@ -282,6 +371,189 @@ class UserDAO:
                         new_bio=entry.bio,
                     )
                 self.session.commit()
+
+    def check_verification_cooldown(
+        self,
+        user_id: str,
+        phone_number: str,
+        phone_type: str,
+        cooldown_seconds: int,
+    ) -> bool:
+        """Return True if a verification was sent recently (within cooldown)."""
+        import datetime
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cutoff = now - datetime.timedelta(seconds=cooldown_seconds)
+        recent = self.session.execute(
+            select(PhoneVerification)
+            .where(
+                PhoneVerification.user_id == user_id,
+                PhoneVerification.phone_number == phone_number,
+                PhoneVerification.phone_type == phone_type,
+                PhoneVerification.created_at >= cutoff,
+            )
+            .order_by(PhoneVerification.created_at.desc())
+            .limit(1),
+        ).scalar_one_or_none()
+        return recent is not None
+
+    def create_phone_verification(
+        self,
+        user_id: str,
+        phone_number: str,
+        phone_type: str,
+        code_hash: str,
+        expiry_minutes: int,
+    ) -> None:
+        """
+        Invalidate pending verifications for the same user/number/type,
+        then create a new verification record.
+        """
+        import datetime
+
+        from sqlalchemy import delete as sa_delete
+
+        self.session.execute(
+            sa_delete(PhoneVerification).where(
+                PhoneVerification.user_id == user_id,
+                PhoneVerification.phone_number == phone_number,
+                PhoneVerification.phone_type == phone_type,
+                PhoneVerification.verified_at.is_(None),
+            ),
+        )
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.session.add(
+            PhoneVerification(
+                user_id=user_id,
+                phone_number=phone_number,
+                phone_type=phone_type,
+                code_hash=code_hash,
+                expires_at=now + datetime.timedelta(minutes=expiry_minutes),
+            ),
+        )
+        self.session.commit()
+
+    def confirm_phone_verification(
+        self,
+        user_id: str,
+        phone_number: str,
+        phone_type: str,
+        code: str,
+        max_attempts: int,
+    ) -> tuple[bool, str]:
+        """
+        Check a verification code.
+
+        Returns ``(True, message)`` on success or ``(False, error)`` on
+        failure (wrong code, expired, too many attempts, not found).
+        """
+        import datetime
+        import hashlib
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        verification = self.session.execute(
+            select(PhoneVerification)
+            .where(
+                PhoneVerification.user_id == user_id,
+                PhoneVerification.phone_number == phone_number,
+                PhoneVerification.phone_type == phone_type,
+                PhoneVerification.expires_at > now,
+                PhoneVerification.verified_at.is_(None),
+            )
+            .order_by(PhoneVerification.created_at.desc())
+            .limit(1),
+        ).scalar_one_or_none()
+
+        if not verification:
+            return False, "No pending verification found. Please request a new code."
+
+        if verification.attempts >= max_attempts:
+            return False, "Too many attempts. Please request a new code."
+
+        verification.attempts += 1
+
+        submitted_hash = hashlib.sha256(code.encode()).hexdigest()
+        if submitted_hash != verification.code_hash:
+            self.session.commit()
+            remaining = max_attempts - verification.attempts
+            return (
+                False,
+                f"Incorrect verification code. {remaining} attempts remaining.",
+            )
+
+        verification.verified_at = now
+        self.session.commit()
+        return True, "Phone number verified successfully."
+
+    def require_verified_phone(
+        self,
+        user: User,
+        new_value: Optional[str],
+        phone_type: str,
+    ) -> None:
+        """
+        Raise ``ValueError`` if ``new_value`` is a *changed* phone/whatsapp
+        number that has not been verified via ``confirm-verification``.
+
+        Clearing a number (None / empty) or keeping the same value is allowed
+        without verification.
+        """
+        import datetime
+
+        if new_value is None:
+            return
+
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+        result = validate_phone_number(new_value)
+        if result["is_valid"]:
+            new_value = result["formatted_phone_number"]
+
+        def _normalize(val: Optional[str]) -> Optional[str]:
+            if not val:
+                return val
+            r = validate_phone_number(val)
+            return r["formatted_phone_number"] if r["is_valid"] else val
+
+        current = _normalize(
+            user.phone_number if phone_type == "phone" else user.whatsapp_number,
+        )
+        if new_value == current or not new_value:
+            return
+
+        other = _normalize(
+            user.whatsapp_number if phone_type == "phone" else user.phone_number,
+        )
+        if new_value == other:
+            return
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        verified = self.session.execute(
+            select(PhoneVerification)
+            .where(
+                PhoneVerification.user_id == user.id,
+                PhoneVerification.phone_number == new_value,
+                PhoneVerification.verified_at.isnot(None),
+                PhoneVerification.expires_at > now,
+            )
+            .limit(1),
+        ).scalar_one_or_none()
+
+        if not verified:
+            label = "phone number" if phone_type == "phone" else "WhatsApp number"
+            raise ValueError(
+                f"The new {label} must be verified before it can be saved.",
+            )
+
+    def cleanup_phone_verifications(self, user_id: str) -> None:
+        """Remove all verification records for a user after a successful update."""
+        from sqlalchemy import delete as sa_delete
+
+        self.session.execute(
+            sa_delete(PhoneVerification).where(PhoneVerification.user_id == user_id),
+        )
+        self.session.commit()
 
     def delete(self, id: str) -> None:
         """Delete a user by ID."""
@@ -376,47 +648,38 @@ class UserDAO:
 
     def get_cumulative_spend(self, user_id: str, month: str) -> float:
         """
-        Get user's cumulative spend for a given month.
+        Get user's cumulative spend for a given month (personal workspace).
+
+        Queries the credit_transaction ledger for debits attributed to this
+        user on their personal billing account.
 
         :param user_id: User ID.
         :param month: Month in YYYY-MM format.
         :return: Cumulative spend for the month.
         """
-        from sqlalchemy import cast, func
-        from sqlalchemy.types import Float
+        from datetime import datetime
 
-        from orchestra.db.models.orchestra_models import (
-            Context,
-            LogEvent,
-            LogEventContext,
-            Project,
+        from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+        from orchestra.db.models.orchestra_models import User
+
+        user = self.session.query(User).filter(User.id == user_id).first()
+        if not user or not user.billing_account_id:
+            return 0.0
+
+        year, mon = map(int, month.split("-"))
+        month_start = datetime(year, mon, 1)
+        if mon == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, mon + 1, 1)
+
+        dao = CreditTransactionDAO(self.session)
+        return dao.get_total_spend(
+            user.billing_account_id,
+            month_start,
+            month_end,
+            user_id=user_id,
         )
-
-        result = (
-            self.session.query(
-                func.coalesce(
-                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
-                    0.0,
-                ).label("spend"),
-            )
-            .select_from(LogEvent)
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .join(Context, LogEventContext.context_id == Context.id)
-            .join(Project, Context.project_id == Project.id)
-            .filter(
-                Project.name == "Assistants",
-                Project.user_id == user_id,
-                Project.organization_id.is_(None),
-                Context.name == "All/Spending/Monthly",
-                LogEvent.data.op("->>")("_user_id") == user_id,
-                LogEvent.data.op("->>")("month") == month,
-            )
-            .first()
-        )
-
-        if result and result.spend:
-            return float(result.spend)
-        return 0.0
 
     # =========================================================================
     # ORGANIZATION MEMBERSHIP HELPERS

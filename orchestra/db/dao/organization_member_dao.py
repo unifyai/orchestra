@@ -168,6 +168,7 @@ class OrganizationMemberDAO:
                 User.bio.label("user_bio"),
                 User.timezone.label("user_timezone"),
                 User.phone_number.label("user_phone_number"),
+                User.whatsapp_number.label("user_whatsapp_number"),
             )
             .join(User, OrganizationMember.user_id == User.id)
             .join(Role, OrganizationMember.role_id == Role.id)
@@ -200,6 +201,7 @@ class OrganizationMemberDAO:
                     "bio": row.user_bio,
                     "timezone": row.user_timezone,
                     "phone_number": row.user_phone_number,
+                    "whatsapp_number": row.user_whatsapp_number,
                 },
             )
 
@@ -231,6 +233,7 @@ class OrganizationMemberDAO:
                 User.bio.label("user_bio"),
                 User.timezone.label("user_timezone"),
                 User.phone_number.label("user_phone_number"),
+                User.whatsapp_number.label("user_whatsapp_number"),
             )
             .join(User, OrganizationMember.user_id == User.id)
             .join(Role, OrganizationMember.role_id == Role.id)
@@ -263,6 +266,7 @@ class OrganizationMemberDAO:
             "bio": row.user_bio,
             "timezone": row.user_timezone,
             "phone_number": row.user_phone_number,
+            "whatsapp_number": row.user_whatsapp_number,
         }
 
     def update_member_role(
@@ -283,14 +287,12 @@ class OrganizationMemberDAO:
             member.role_id = role_id
             self.session.flush()
 
-    def delete(self, id: int):
-        try:
-            org_member = self.session.query(OrganizationMember).filter_by(id=id).one()
-            self.session.delete(org_member)
-            self.session.commit()
-        except:
-            self.session.rollback()
-            raise ValueError
+    def delete(self, id: int) -> None:
+        """Stage deletion of an organization member on the caller's transaction."""
+
+        org_member = self.session.query(OrganizationMember).filter_by(id=id).one()
+        self.session.delete(org_member)
+        self.session.flush()
 
     def count_members(self, organization_id: int) -> int:
         """
@@ -400,44 +402,39 @@ class OrganizationMemberDAO:
         """
         Get a member's cumulative spend for a given month within an organization.
 
-        Sums all assistant spending logs for this user in the organization.
+        Queries the credit_transaction ledger for debits attributed to this
+        user on the organization's billing account.
 
         :param user_id: User ID.
         :param organization_id: Organization ID.
         :param month: Month in YYYY-MM format.
         :return: Cumulative spend for the month (0.0 if no spend data).
         """
-        from sqlalchemy import cast, func
-        from sqlalchemy.types import Float
+        from datetime import datetime
 
-        from orchestra.db.models.orchestra_models import (
-            Context,
-            LogEvent,
-            LogEventContext,
-            Project,
-        )
+        from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+        from orchestra.db.models.orchestra_models import Organization
 
-        result = (
-            self.session.query(
-                func.coalesce(
-                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
-                    0.0,
-                ).label("total_spend"),
-            )
-            .select_from(LogEvent)
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .join(Context, LogEventContext.context_id == Context.id)
-            .join(Project, Context.project_id == Project.id)
-            .filter(
-                Project.name == "Assistants",
-                Project.organization_id == organization_id,
-                Context.name == "All/Spending/Monthly",
-                LogEvent.data.op("->>")("_user_id") == user_id,
-                LogEvent.data.op("->>")("month") == month,
-            )
+        org = (
+            self.session.query(Organization)
+            .filter(Organization.id == organization_id)
             .first()
         )
+        if not org or not org.billing_account_id:
+            return 0.0
 
-        if result and result.total_spend:
-            return float(result.total_spend)
-        return 0.0
+        year, mon = map(int, month.split("-"))
+        month_start = datetime(year, mon, 1)
+        if mon == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, mon + 1, 1)
+
+        dao = CreditTransactionDAO(self.session)
+        return dao.get_total_spend(
+            org.billing_account_id,
+            month_start,
+            month_end,
+            user_id=user_id,
+            organization_id=organization_id,
+        )

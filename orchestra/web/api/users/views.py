@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     HTTPException,
@@ -30,7 +31,10 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
-from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
+from orchestra.services.user_account_cleanup_service import (
+    UserAccountCleanupService,
+    run_user_runtime_cleanup_tasks,
+)
 from orchestra.web.api.assistant.schema import (
     SpendingLimitReachedRequest,
     SpendingLimitReachedResponse,
@@ -49,6 +53,8 @@ from orchestra.web.api.users.schema import (
     OnboardingStatusResponse,
     OnboardingStatusUpdateRequest,
     OnboardingStepDataResponse,
+    PhoneVerificationConfirm,
+    PhoneVerificationRequest,
     QueryLoggingStatus,
     UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
@@ -87,6 +93,8 @@ def create_user(
         image=user.image,
         timezone=user.timezone,
         phone_number=user.phone_number,
+        whatsapp_number=user.whatsapp_number,
+        discord_id=user.discord_id,
     )
     user_row = user_dao.filter(email=user.email)
     new_user = user_row[0][0]
@@ -112,6 +120,8 @@ def create_user(
         "email": new_user.email,
         "timezone": new_user.timezone,
         "phone_number": new_user.phone_number,
+        "whatsapp_number": new_user.whatsapp_number,
+        "discord_id": new_user.discord_id,
     }
 
 
@@ -131,13 +141,12 @@ def get_user(
         raise not_found("User ID")
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user_instance.id)
-    if api_key:
-        api_key_value = api_key[0][0].key
+    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
+    if personal_keys:
+        api_key_value = personal_keys[0][0].key
     else:
-        # User exists but has no API key — create one to self-heal
         logger.warning(
-            "User %s has no API key; generating one.",
+            "User %s has no personal API key; generating one.",
             user_instance.id,
         )
         new_key = generate_key()
@@ -180,6 +189,8 @@ def get_user(
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
+        "whatsapp_number": user_instance.whatsapp_number,
+        "discord_id": user_instance.discord_id,
     }
 
 
@@ -199,13 +210,12 @@ def get_user_by_email(
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user_instance.id)
-    if api_key:
-        api_key_value = api_key[0][0].key
+    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
+    if personal_keys:
+        api_key_value = personal_keys[0][0].key
     else:
-        # User exists but has no API key — create one to self-heal
         logger.warning(
-            "User %s (%s) has no API key; generating one.",
+            "User %s (%s) has no personal API key; generating one.",
             user_instance.id,
             email,
         )
@@ -249,6 +259,8 @@ def get_user_by_email(
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
+        "whatsapp_number": user_instance.whatsapp_number,
+        "discord_id": user_instance.discord_id,
     }
 
 
@@ -276,13 +288,12 @@ def get_user_by_account(
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user_instance.id)
-    if api_key:
-        api_key_value = api_key[0][0].key
+    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
+    if personal_keys:
+        api_key_value = personal_keys[0][0].key
     else:
-        # User exists but has no API key — create one to self-heal
         logger.warning(
-            "User %s has no API key; generating one.",
+            "User %s has no personal API key; generating one.",
             user_instance.id,
         )
         new_key = generate_key()
@@ -325,6 +336,8 @@ def get_user_by_account(
         "onboarding_step": onboarding_step,
         "timezone": user_instance.timezone,
         "phone_number": user_instance.phone_number,
+        "whatsapp_number": user_instance.whatsapp_number,
+        "discord_id": user_instance.discord_id,
     }
 
 
@@ -334,25 +347,213 @@ def update_user(
     session: Session = Depends(get_db_session),
 ):
     user_dao = UserDAO(session)
-    user = user_dao.filter(id=updated_user.user_id)
-    if not user:
+    user_rows = user_dao.filter(id=updated_user.user_id)
+    if not user_rows:
         raise not_found("User")
-    user_dao.update(
-        id=updated_user.user_id,
-        name=updated_user.name,
-        last_name=updated_user.last_name,
-        job_title=updated_user.job_title,
-        bio=updated_user.bio,
-        timezone=updated_user.timezone,
-        phone_number=updated_user.phone_number,
-    )
+    user = user_rows[0][0]
+
+    # Require server-side verification when phone or whatsapp changes
+    try:
+        user_dao.require_verified_phone(user, updated_user.phone_number, "phone")
+        user_dao.require_verified_phone(user, updated_user.whatsapp_number, "whatsapp")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+    def _normalize_phone(val: str | None) -> str | None:
+        if not val:
+            return val
+        r = validate_phone_number(val)
+        return r["formatted_phone_number"] if r["is_valid"] else val
+
+    # Only pass fields that were explicitly provided in the request body.
+    # Fields not sent by the client default to None in the Pydantic model,
+    # but user_dao.update() uses ... (Ellipsis) as a sentinel for "not
+    # provided". Passing None for unset fields would overwrite existing
+    # values with NULL.
+    provided = updated_user.model_fields_set
+    update_kwargs: dict = {"id": updated_user.user_id}
+    if "name" in provided:
+        update_kwargs["name"] = updated_user.name
+    if "last_name" in provided:
+        update_kwargs["last_name"] = updated_user.last_name
+    if "job_title" in provided:
+        update_kwargs["job_title"] = updated_user.job_title
+    if "bio" in provided:
+        update_kwargs["bio"] = updated_user.bio
+    if "timezone" in provided:
+        update_kwargs["timezone"] = updated_user.timezone
+    if "phone_number" in provided:
+        update_kwargs["phone_number"] = _normalize_phone(updated_user.phone_number)
+    if "whatsapp_number" in provided:
+        update_kwargs["whatsapp_number"] = _normalize_phone(
+            updated_user.whatsapp_number,
+        )
+    if "discord_id" in provided:
+        update_kwargs["discord_id"] = updated_user.discord_id
+
+    user_dao.update(**update_kwargs)
+
+    user_dao.cleanup_phone_verifications(updated_user.user_id)
+
     return "User information updated successfully!"
+
+
+# ---------------------------------------------------------------------------
+# Phone / WhatsApp number verification
+# ---------------------------------------------------------------------------
+
+VERIFICATION_EXPIRY_MINUTES = 10
+VERIFICATION_MAX_ATTEMPTS = 5
+VERIFICATION_COOLDOWN_SECONDS = 60
+
+
+@admin_router.post("/user/phone/send-verification")
+async def send_phone_verification(
+    body: PhoneVerificationRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Send a verification SMS to a phone number.
+
+    Delegates to the communication service for SMS delivery and to
+    ``UserDAO`` for cooldown checks and record persistence.
+    """
+    import hashlib
+    import os
+
+    import httpx
+
+    from orchestra.web.api.utils.http_client import get_async_client
+
+    user_dao = UserDAO(session)
+    user_rows = user_dao.filter(id=body.user_id)
+    if not user_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    if user_dao.check_verification_cooldown(
+        body.user_id,
+        body.phone_number,
+        body.phone_type,
+        VERIFICATION_COOLDOWN_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Please wait before requesting another verification code.",
+        )
+
+    # Call communication service — it generates the code, sends SMS,
+    # and returns the code so we can hash and store it server-side.
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+
+    if not comms_url or not admin_key:
+        logger.error("UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Verification service is not configured.",
+        )
+
+    try:
+        client = get_async_client()
+        response = await client.post(
+            f"{comms_url}/social/verify",
+            headers={
+                "Authorization": f"Bearer {admin_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "platform": "phone",
+                "account_identifier": body.phone_number,
+            },
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            logger.error(
+                "Communication service returned %s: %s",
+                response.status_code,
+                response.text,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to send verification SMS.",
+            )
+        comms_data = response.json()
+        code = comms_data.get("verification_code") or comms_data.get(
+            "verificationCode",
+        )
+        if not code:
+            logger.error("Communication service did not return a verification code")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to send verification SMS.",
+            )
+    except httpx.HTTPError as exc:
+        logger.error("Failed to reach communication service: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send verification SMS.",
+        )
+
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    user_dao.create_phone_verification(
+        body.user_id,
+        body.phone_number,
+        body.phone_type,
+        code_hash,
+        VERIFICATION_EXPIRY_MINUTES,
+    )
+
+    return {
+        "detail": "Verification code sent.",
+        "expires_in_seconds": VERIFICATION_EXPIRY_MINUTES * 60,
+    }
+
+
+@admin_router.post("/user/phone/confirm-verification")
+def confirm_phone_verification(
+    body: PhoneVerificationConfirm,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Confirm a phone verification code.
+
+    On success, marks the verification record as verified so that a
+    subsequent ``PUT /user`` can accept the new phone number.
+    """
+    user_dao = UserDAO(session)
+    success, message = user_dao.confirm_phone_verification(
+        body.user_id,
+        body.phone_number,
+        body.phone_type,
+        body.code,
+        VERIFICATION_MAX_ATTEMPTS,
+    )
+
+    if not success:
+        if "No pending" in message:
+            code = status.HTTP_404_NOT_FOUND
+        elif "Too many" in message:
+            code = status.HTTP_429_TOO_MANY_REQUESTS
+        else:
+            code = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=message)
+
+    return {"detail": message}
 
 
 @admin_router.delete("/user", response_model=AccountDeletionResponse)
 def delete_user(
     user_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     force: bool = Query(
         False,
         description="Skip organization ownership check (use with caution)",
@@ -424,7 +625,20 @@ def delete_user(
     if not result.success:
         raise HTTPException(status_code=400, detail=result.message)
 
-    return AccountDeletionResponse(success=True, message=result.message)
+    if result.cleanup_task_ids:
+        background_tasks.add_task(
+            run_user_runtime_cleanup_tasks,
+            request.app.state.db_session_factory,
+            cleanup_task_ids=result.cleanup_task_ids,
+            user_id=user_id,
+        )
+
+    return AccountDeletionResponse(
+        success=True,
+        message=result.message,
+        runtime_cleanup_complete=result.runtime_cleanup_complete,
+        runtime_cleanup_summary=result.runtime_cleanup_summary,
+    )
 
 
 ### Not related to next-auth
@@ -936,6 +1150,8 @@ def get_user_basic_info(
         "bio": user.bio,
         "timezone": user.timezone,
         "phone_number": user.phone_number,
+        "whatsapp_number": user.whatsapp_number,
+        "discord_id": user.discord_id,
     }
 
 
@@ -962,6 +1178,7 @@ def update_query_logging_status(
     "/user/claim-credit-grant-link",
     response_model=CreditGrantClaimResponse,
     status_code=200,
+    include_in_schema=False,
 )
 def claim_credit_grant_link(
     request: Request,
@@ -983,6 +1200,9 @@ def claim_credit_grant_link(
     """
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
     from orchestra.db.dao.organization_dao import OrganizationDAO
+    from orchestra.db.models.orchestra_models import OneTimeCreditGrantLink
+    from orchestra.db.models.orchestra_models import Organization as OrganizationModel
+    from orchestra.db.models.orchestra_models import User as UserModel
 
     user_dao = UserDAO(session)
     user_id = request.state.user_id
@@ -999,6 +1219,22 @@ def claim_credit_grant_link(
     if not link:
         raise not_found("Credit grant link token")
 
+    # Acquire row locks to serialize concurrent claims and prevent
+    # TOCTOU races on the per-user lifetime, per-org lifetime, and
+    # per-link max_claims guards.
+    session.query(UserModel).filter(
+        UserModel.id == user_id,
+    ).with_for_update().first()
+    session.query(OneTimeCreditGrantLink).filter(
+        OneTimeCreditGrantLink.id == link.id,
+    ).with_for_update().first()
+
+    org_instance = None
+    if organization_id:
+        session.query(OrganizationModel).filter(
+            OrganizationModel.id == organization_id,
+        ).with_for_update().first()
+
     # --- Per-user lifetime guard ---
     if token_dao.has_user_claimed_any_link(user_id):
         return CreditGrantClaimResponse(
@@ -1008,7 +1244,6 @@ def claim_credit_grant_link(
         )
 
     # --- Per-org lifetime guard ---
-    org_instance = None
     if organization_id:
         org_dao = OrganizationDAO(session)
         org_instance = org_dao.get(organization_id)
@@ -1234,7 +1469,11 @@ def delete_credit_grant_link(
     return None
 
 
-@router.get("/user/onboarding-status", response_model=OnboardingStatusResponse)
+@router.get(
+    "/user/onboarding-status",
+    response_model=OnboardingStatusResponse,
+    include_in_schema=False,
+)
 def get_onboarding_status(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1252,7 +1491,7 @@ def get_onboarding_status(
     return OnboardingStatusResponse(onboarded=onboarded)
 
 
-@router.put("/user/onboarding-status")
+@router.put("/user/onboarding-status", include_in_schema=False)
 def update_onboarding_status(
     request: Request,
     body: UpdateOnboardingStatusRequest,
@@ -1278,7 +1517,11 @@ def update_onboarding_status(
 # -- Detailed Onboarding Progress (Step-by-Step) --
 
 
-@router.get("/user/onboarding", response_model=OnboardingStatusDetailedResponse)
+@router.get(
+    "/user/onboarding",
+    response_model=OnboardingStatusDetailedResponse,
+    include_in_schema=False,
+)
 def get_onboarding_progress(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1309,7 +1552,11 @@ def get_onboarding_progress(
     )
 
 
-@router.put("/user/onboarding", response_model=OnboardingStatusDetailedResponse)
+@router.put(
+    "/user/onboarding",
+    response_model=OnboardingStatusDetailedResponse,
+    include_in_schema=False,
+)
 def update_onboarding_progress(
     request: Request,
     body: OnboardingStatusUpdateRequest,
@@ -1372,7 +1619,7 @@ def update_onboarding_progress(
     )
 
 
-@router.delete("/user/onboarding")
+@router.delete("/user/onboarding", include_in_schema=False)
 def reset_onboarding_progress(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1402,7 +1649,11 @@ def reset_onboarding_progress(
 # -- Account Deletion (Self-Service) --
 
 
-@router.get("/user/can-delete-account", response_model=CanDeleteAccountResponse)
+@router.get(
+    "/user/can-delete-account",
+    response_model=CanDeleteAccountResponse,
+    include_in_schema=False,
+)
 def can_delete_account(
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1426,10 +1677,15 @@ def can_delete_account(
     )
 
 
-@router.delete("/user/delete-account", response_model=AccountDeletionResponse)
+@router.delete(
+    "/user/delete-account",
+    response_model=AccountDeletionResponse,
+    include_in_schema=False,
+)
 def delete_own_account(
     request: Request,
     body: AccountDeletionConfirmation,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -1437,6 +1693,10 @@ def delete_own_account(
 
     Requires email confirmation to prevent accidental deletion.
     Permanently removes all user data - this action cannot be undone.
+
+    Assistant deletion follows creator-owned lifecycle semantics. If this user
+    created org-scoped assistants, those assistant rows cascade with the user
+    row and are cleaned up by the same account-deletion flow.
 
     Blocked if:
     - User has pending bills
@@ -1460,7 +1720,20 @@ def delete_own_account(
     if not result.success:
         raise HTTPException(status_code=400, detail=result.message)
 
-    return AccountDeletionResponse(success=True, message=result.message)
+    if result.cleanup_task_ids:
+        background_tasks.add_task(
+            run_user_runtime_cleanup_tasks,
+            request.app.state.db_session_factory,
+            cleanup_task_ids=result.cleanup_task_ids,
+            user_id=request.state.user_id,
+        )
+
+    return AccountDeletionResponse(
+        success=True,
+        message=result.message,
+        runtime_cleanup_complete=result.runtime_cleanup_complete,
+        runtime_cleanup_summary=result.runtime_cleanup_summary,
+    )
 
 
 # ============================================================================
@@ -1681,7 +1954,7 @@ def _compat_list_business_accounts(
     return []
 
 
-@router.post("/user/create-with-business-info")
+@router.post("/user/create-with-business-info", include_in_schema=False)
 def _compat_create_user_with_business_info(
     session: Session = Depends(get_db_session),
 ):

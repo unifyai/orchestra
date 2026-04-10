@@ -30,6 +30,10 @@ __all__ = [
     "_postprocess_aggregator_value",
     "_reduce_shared_value",
     "AggregationMetric",
+    "SHARED_VALUE_SAFE_METRICS",
+    "REDUCTION_METHODS",
+    "normalize_group_key",
+    "build_grouped_result",
     "_get_reduction_expr",
     "_build_cast_expr",
     "compute_metric_for_key",
@@ -267,6 +271,103 @@ def _reduce_shared_value(values: List[Any]) -> Optional[Any]:
         return first_value
 
     return None
+
+
+SHARED_VALUE_SAFE_METRICS = frozenset({"mean", "min", "max", "median", "mode"})
+"""Metrics where f([V,V,...,V]) == V, so the shared_value shortcut is valid."""
+
+
+REDUCTION_METHODS = {
+    "count": func.count,
+    "sum": func.sum,
+    "mean": func.avg,
+    "var": func.var_pop,
+    "std": func.stddev_pop,
+    "min": func.min,
+    "max": func.max,
+    "median": func.percentile_cont(0.5).within_group,
+    "mode": func.mode().within_group,
+}
+
+
+def normalize_group_key(val) -> str:
+    """Normalize group key values for consistent formatting.
+
+    Numeric values are converted via float first (e.g. 11 -> "11.0") so
+    that integer and float representations are stable.  Booleans are
+    capitalised to match Python's ``str(True)`` -> ``"True"``.
+    """
+    if val is None:
+        return "None"
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return str(float(val))
+    if isinstance(val, bool):
+        return str(val)
+    return str(val)
+
+
+def build_grouped_result(
+    rows,
+    gb_fields: list,
+    metric: str,
+    field_type=None,
+) -> dict:
+    """Build the grouped result dict from SQL rows.
+
+    Each row has: [*group_values, agg_value, raw_values_array].
+    Uses the shared_value shortcut only for metrics where identical
+    inputs produce that same value as output (mean, min, max, median, mode).
+    """
+    use_shared = metric in SHARED_VALUE_SAFE_METRICS
+    result: dict = {}
+
+    # Single-level grouping: flat dict keyed by normalised group value
+    if len(gb_fields) == 1:
+        for row in rows:
+            gk = normalize_group_key(row[0])  # group value
+            agg_v = row[-2]  # SQL aggregate result
+            raw_v = row[-1]  # array_agg of raw JSONB values
+
+            # If all raw values in the group are identical and the metric
+            # is idempotent (f([V,V,...,V]) == V), return the raw value
+            # directly as shared_value.  Otherwise fall back to the SQL
+            # aggregate and post-process it.
+            shared = _reduce_shared_value(raw_v)
+            entry: dict = {"shared_value": None, metric: None}
+            if shared is not None and use_shared:
+                entry["shared_value"] = shared
+            else:
+                entry[metric] = _postprocess_aggregator_value(
+                    agg_v,
+                    metric,
+                    field_type,
+                )
+            result[gk] = entry
+    else:
+        # Multi-level grouping: nested dicts
+        for row in rows:
+            cur = result
+            for i in range(len(gb_fields) - 1):
+                gk = normalize_group_key(row[i])
+                if gk not in cur:
+                    cur[gk] = {}
+                cur = cur[gk]
+            last_gk = normalize_group_key(row[len(gb_fields) - 1])
+            agg_v = row[-2]  # SQL aggregate result
+            raw_v = row[-1]  # array_agg of raw JSONB values
+            shared = _reduce_shared_value(raw_v)
+            entry = {"shared_value": None, metric: None}
+            if shared is not None and use_shared:
+                entry["shared_value"] = shared
+            else:
+                entry[metric] = _postprocess_aggregator_value(
+                    agg_v,
+                    metric,
+                    field_type,
+                )
+            cur[last_gk] = entry
+
+    return result
 
 
 def _get_reduction_expr(metric, inferred_type, aggCol, label):
@@ -825,132 +926,34 @@ def _compute_metric_for_key_grouped(
     # Subquery of filtered LogEvents
     filtered_events_subq = query.subquery()
 
-    # 2) Build reduction methods dictionary
-    reduction_methods = {
-        "count": func.count,
-        "sum": func.sum,
-        "mean": func.avg,
-        "var": func.var_pop,
-        "std": func.stddev_pop,
-        "min": func.min,
-        "max": func.max,
-        "median": func.percentile_cont(0.5).within_group,
-        "mode": func.mode().within_group,
-    }
-
-    # 3) Build the aggregation cast expression for the key
     agg_cast_expr = _build_cast_expr(key, field_types.get(key), LogEvent)
 
-    # 4) Build group-by expressions (extract values from JSONB)
-    # Use -> operator to get JSONB values (not text) so Python converts them properly
-    # This ensures consistent string formatting (e.g., "True" not "true", "11.0" not "11")
+    # Use -> (not ->>) to get JSONB values so Python converts them with
+    # correct types (e.g. "True" not "true", "11.0" not "11").
     group_exprs = [
         LogEvent.data.op("->")(field).label(f"group_{i}_val")
         for i, field in enumerate(group_by_fields)
     ]
 
-    # 5) Build the raw value expression for shared value reduction
     raw_value_expr = LogEvent.data.op("->")(key).label("raw_value")
 
-    # 6) Build the query with grouping
     query = (
         session.query(
             *group_exprs,
-            reduction_methods[metric](agg_cast_expr).label("agg_value"),
+            REDUCTION_METHODS[metric](agg_cast_expr).label("agg_value"),
             func.array_agg(raw_value_expr).label("raw_values"),
         )
         .select_from(LogEvent)
         .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
-        # Filter to only rows where the aggregation key exists
+        # Only include rows where the aggregation key exists in JSONB
         .filter(LogEvent.data.op("?")(literal(key)))
         .group_by(*group_exprs)
     )
 
-    # 7) Execute the query and build the result dictionary
     rows = query.all()
-
-    # Get the field type for post-processing
     field_type = field_types.get(key)
 
-    def _normalize_group_key(val) -> str:
-        """
-        Normalize group key values for consistent formatting across numeric and string types.
-        """
-        if val is None:
-            return "None"
-        # For numeric values, convert to float first for consistent formatting
-        if isinstance(val, (int, float)) and not isinstance(val, bool):
-            return str(float(val))
-        # For booleans, capitalize to match Python's str(True) -> "True"
-        if isinstance(val, bool):
-            return str(val)
-        return str(val)
-
-    # Build the result dictionary
-    result = {}
-
-    # For single-level grouping
-    if len(group_by_fields) == 1:
-        for row in rows:
-            group_val = row[0]  # First column is the group value
-            agg_value = row[-2]  # Second-to-last column is the aggregated value
-            raw_values = row[-1]  # Last column is the array of raw values
-
-            # Normalize the group key for consistent behavior
-            group_key = _normalize_group_key(group_val)
-
-            # First check if all values are identical (shared value reduction)
-            shared_value = _reduce_shared_value(raw_values)
-            result[group_key] = {"shared_value": None, metric: None}
-            if shared_value is not None:
-                # If we have a shared value, use it directly
-                result[group_key]["shared_value"] = shared_value
-            else:
-                # Otherwise, use the aggregated value
-                # Post-process the aggregated value
-                processed_value = _postprocess_aggregator_value(
-                    agg_value,
-                    metric,
-                    field_type,
-                )
-                # Add to result
-                result[group_key][metric] = processed_value
-    else:
-        # For multi-level grouping, build a nested dictionary
-        for row in rows:
-            # Get all group values except the last one
-            current_dict = result
-            for i in range(len(group_by_fields) - 1):
-                group_val = row[i]
-                group_key = _normalize_group_key(group_val)
-                if group_key not in current_dict:
-                    current_dict[group_key] = {}
-                current_dict = current_dict[group_key]
-
-            # Add the leaf value with the last group
-            last_group_val = row[len(group_by_fields) - 1]
-            last_group_key = _normalize_group_key(last_group_val)
-            agg_value = row[-2]  # Second-to-last column is the aggregated value
-            raw_values = row[-1]  # Last column is the array of raw values
-
-            # First check if all values are identical (shared value reduction)
-            shared_value = _reduce_shared_value(raw_values)
-            current_dict[last_group_key] = {"shared_value": None, metric: None}
-            if shared_value is not None:
-                # If we have a shared value, use it directly
-                current_dict[last_group_key]["shared_value"] = shared_value
-            else:
-                # Otherwise, use the aggregated value
-                # Post-process the aggregated value
-                processed_value = _postprocess_aggregator_value(
-                    agg_value,
-                    metric,
-                    field_type,
-                )
-                # Add to the nested dictionary
-                current_dict[last_group_key][metric] = processed_value
-
-    return result
+    return build_grouped_result(rows, group_by_fields, metric, field_type)
 
 
 def compute_metric_for_key(

@@ -120,21 +120,56 @@ async def test_create_user_with_invalid_phone_number(
 
 
 @pytest.mark.anyio
-async def test_update_user_phone_number(client: AsyncClient):
-    """Test updating user phone number with normalization."""
-    # Create user
+async def test_update_user_phone_number_requires_verification(client: AsyncClient):
+    """Test that updating phone number without verification is rejected."""
     url = "/v0/admin/user"
     params = {"email": "profile_phone_update@example.com"}
     response = await client.post(url, json=params, headers=HEADERS)
     user_id = response.json()["id"]
 
-    # Update with international format
+    url = "/v0/admin/user"
+    params = {"user_id": user_id, "phone_number": "+44 20 7946 0958"}
+    response = await client.put(url, json=params, headers=HEADERS)
+    assert response.status_code == 422
+    assert "verified" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_update_user_phone_number_with_verification(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that a verified phone number can be saved and is normalized."""
+    from orchestra.db.models.orchestra_models import PhoneVerification
+
+    url = "/v0/admin/user"
+    params = {"email": "profile_phone_update_v@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    # Simulate a completed verification by inserting a verified record
+    import datetime
+    import hashlib
+
+    phone = "+442079460958"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=phone,
+            phone_type="phone",
+            code_hash=hashlib.sha256(b"123456").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
     url = "/v0/admin/user"
     params = {"user_id": user_id, "phone_number": "+44 20 7946 0958"}
     response = await client.put(url, json=params, headers=HEADERS)
     assert response.status_code == 200
 
-    # Verify normalized
     url = f"/v0/admin/user/by-user-id?user_id={user_id}"
     response = await client.get(url, headers=HEADERS)
     assert response.json()["phone_number"] == "+442079460958"
@@ -196,3 +231,485 @@ async def test_phone_number_in_get_endpoints(client: AsyncClient):
     )
     assert response.status_code == 200
     assert "phone_number" in response.json()
+
+
+# ============================================================================
+# WhatsApp / Phone Cross-Verification Tests
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_whatsapp_skips_verification_when_same_as_phone(
+    client: AsyncClient,
+    dbsession,
+):
+    """Saving a WhatsApp number that matches the user's existing phone should
+    succeed without separate verification."""
+    import datetime
+    import hashlib
+
+    from orchestra.db.models.orchestra_models import PhoneVerification
+
+    url = "/v0/admin/user"
+    params = {"email": "profile_wa_cross@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    phone = "+442079460958"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Verify and save phone number first
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=phone,
+            phone_type="phone",
+            code_hash=hashlib.sha256(b"123456").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "phone_number": phone},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Now set WhatsApp to the same number — should NOT require verification
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "whatsapp_number": phone},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify both are stored
+    response = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    data = response.json()
+    assert data["phone_number"] == phone
+    assert data["whatsapp_number"] == phone
+
+
+@pytest.mark.anyio
+async def test_phone_skips_verification_when_same_as_whatsapp(
+    client: AsyncClient,
+    dbsession,
+):
+    """Saving a phone number that matches the user's existing WhatsApp should
+    succeed without separate verification."""
+    import datetime
+    import hashlib
+
+    from orchestra.db.models.orchestra_models import PhoneVerification
+
+    url = "/v0/admin/user"
+    params = {"email": "profile_ph_cross@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    phone = "+33612345678"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Verify and save WhatsApp first
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=phone,
+            phone_type="whatsapp",
+            code_hash=hashlib.sha256(b"654321").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "whatsapp_number": phone},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Now set phone to the same number — should NOT require verification
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "phone_number": phone},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_different_number_still_requires_verification(
+    client: AsyncClient,
+    dbsession,
+):
+    """A genuinely different number must still be verified."""
+    import datetime
+    import hashlib
+
+    from orchestra.db.models.orchestra_models import PhoneVerification
+
+    url = "/v0/admin/user"
+    params = {"email": "profile_diff_num@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    phone_a = "+442079460958"
+    phone_b = "+33612345678"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Verify and save phone A
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=phone_a,
+            phone_type="phone",
+            code_hash=hashlib.sha256(b"111111").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "phone_number": phone_a},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Try to set WhatsApp to a DIFFERENT number without verification
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "whatsapp_number": phone_b},
+        headers=HEADERS,
+    )
+    assert response.status_code == 422
+    assert "verified" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_cross_type_verification_record_accepted(
+    client: AsyncClient,
+    dbsession,
+):
+    """A verification record created for 'phone' should also be accepted
+    when saving the same number as 'whatsapp' (and vice versa)."""
+    import datetime
+    import hashlib
+
+    from orchestra.db.models.orchestra_models import PhoneVerification
+
+    url = "/v0/admin/user"
+    params = {"email": "profile_cross_type@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    phone = "+14155551234"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Verify as "phone" type
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=phone,
+            phone_type="phone",
+            code_hash=hashlib.sha256(b"999999").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
+    # Save as WhatsApp (using a phone-type verification record) — should succeed
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "whatsapp_number": phone},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+# ============================================================================
+# Phone Number Normalization on Save
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_phone_number_normalized_on_save(
+    client: AsyncClient,
+    dbsession,
+):
+    """Phone numbers should be stored in E.164 format regardless of input."""
+    import datetime
+    import hashlib
+
+    from orchestra.db.models.orchestra_models import PhoneVerification
+
+    url = "/v0/admin/user"
+    params = {"email": "profile_phone_norm@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    raw_input = "+44 20 7946 0958"
+    normalized = "+442079460958"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=normalized,
+            phone_type="phone",
+            code_hash=hashlib.sha256(b"123456").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "phone_number": raw_input},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    response = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    assert response.json()["phone_number"] == normalized
+
+
+# ============================================================================
+# Timezone Edge Cases
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_update_user_with_null_timezone_succeeds(client: AsyncClient):
+    """Setting timezone to null should be accepted (clears it)."""
+    url = "/v0/admin/user"
+    params = {"email": "profile_tz_null@example.com", "timezone": "UTC"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "timezone": None},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    response = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    assert response.json()["timezone"] is None
+
+
+@pytest.mark.anyio
+async def test_keeping_same_phone_does_not_require_verification(
+    client: AsyncClient,
+    dbsession,
+):
+    """Updating a profile without changing the phone number should not require
+    re-verification."""
+    import datetime
+    import hashlib
+
+    from orchestra.db.models.orchestra_models import PhoneVerification
+
+    url = "/v0/admin/user"
+    params = {"email": "profile_keep_same@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    phone = "+16502530000"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Verify and save initially
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=phone,
+            phone_type="phone",
+            code_hash=hashlib.sha256(b"000000").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "phone_number": phone},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Now update bio without changing phone — should succeed without verification
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "phone_number": phone, "bio": "Updated bio"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+# ============================================================================
+# Partial Update Tests — omitted fields must not be overwritten
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_partial_update_timezone_preserves_name(client: AsyncClient):
+    """Updating only timezone must not overwrite name or last_name."""
+    url = "/v0/admin/user"
+    response = await client.post(
+        url,
+        json={
+            "email": "partial_tz_name@example.com",
+            "name": "Alice",
+            "last_name": "Smith",
+            "bio": "Engineer",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    user_id = response.json()["id"]
+
+    # Update ONLY timezone
+    response = await client.put(
+        url,
+        json={"user_id": user_id, "timezone": "Asia/Tokyo"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify all original fields are preserved
+    response = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    data = response.json()
+    assert data["timezone"] == "Asia/Tokyo"
+    assert data["name"] == "Alice"
+    assert data["last_name"] == "Smith"
+    assert data["bio"] == "Engineer"
+
+
+@pytest.mark.anyio
+async def test_partial_update_bio_preserves_other_fields(client: AsyncClient):
+    """Updating only bio must not overwrite name, last_name, or timezone."""
+    url = "/v0/admin/user"
+    response = await client.post(
+        url,
+        json={
+            "email": "partial_bio@example.com",
+            "name": "Bob",
+            "last_name": "Jones",
+            "timezone": "Europe/London",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    user_id = response.json()["id"]
+
+    # Update ONLY bio
+    response = await client.put(
+        url,
+        json={"user_id": user_id, "bio": "New bio"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    response = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    data = response.json()
+    assert data["bio"] == "New bio"
+    assert data["name"] == "Bob"
+    assert data["last_name"] == "Jones"
+    assert data["timezone"] == "Europe/London"
+
+
+@pytest.mark.anyio
+async def test_partial_update_name_preserves_last_name(client: AsyncClient):
+    """Updating only name must not overwrite last_name."""
+    url = "/v0/admin/user"
+    response = await client.post(
+        url,
+        json={
+            "email": "partial_name@example.com",
+            "name": "Charlie",
+            "last_name": "Brown",
+            "bio": "Pilot",
+            "job_title": "Captain",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    user_id = response.json()["id"]
+
+    # Update ONLY name
+    response = await client.put(
+        url,
+        json={"user_id": user_id, "name": "Charles"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    response = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    data = response.json()
+    assert data["name"] == "Charles"
+    assert data["last_name"] == "Brown"
+    assert data["bio"] == "Pilot"
+    assert data["job_title"] == "Captain"
+
+
+@pytest.mark.anyio
+async def test_explicit_null_does_clear_field(client: AsyncClient):
+    """Explicitly sending null for a field should clear it (not the same as
+    omitting the field)."""
+    url = "/v0/admin/user"
+    response = await client.post(
+        url,
+        json={
+            "email": "partial_null@example.com",
+            "name": "Diana",
+            "last_name": "Prince",
+            "bio": "Hero",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    user_id = response.json()["id"]
+
+    # Explicitly set bio to null while omitting name / last_name
+    response = await client.put(
+        url,
+        json={"user_id": user_id, "bio": None},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    response = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    data = response.json()
+    assert data["bio"] is None  # explicitly cleared
+    assert data["name"] == "Diana"  # preserved
+    assert data["last_name"] == "Prince"  # preserved

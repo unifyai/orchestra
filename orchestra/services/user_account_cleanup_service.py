@@ -5,13 +5,22 @@ Uses raw SQL for maximum performance - no ORM entity loading overhead.
 All deletions happen in a single transaction for data integrity.
 """
 
+import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+from orchestra.services.assistant_cleanup_service import (
+    AssistantCleanupSpec,
+    CleanupSource,
+    ContactCleanupSpec,
+    enqueue_cleanup_tasks,
+    process_assistant_cleanup_tasks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +40,50 @@ class DeletionResult:
     success: bool
     message: str
     blockers: Optional[list[DeletionBlocker]] = None
+    runtime_cleanup_complete: bool = True
+    runtime_cleanup_summary: Optional[dict[str, Any]] = None
+    cleanup_task_ids: list[int] = field(default_factory=list)
+
+
+def run_user_runtime_cleanup_tasks(
+    session_factory,
+    *,
+    cleanup_task_ids: list[int],
+    user_id: str,
+) -> None:
+    """Run one immediate post-delete cleanup pass in the background.
+
+    Account deletion should return promptly once the DB transaction commits, so
+    this helper performs a single best-effort drain of the durable cleanup queue
+    after the response is sent. Any unfinished work remains in the queue for the
+    scheduled cleanup worker to retry.
+    """
+    if not cleanup_task_ids:
+        return
+
+    session = session_factory()
+    try:
+        runtime_cleanup_summary = asyncio.run(
+            process_assistant_cleanup_tasks(
+                session,
+                task_ids=cleanup_task_ids,
+            ),
+        )
+        if runtime_cleanup_summary["errors"]:
+            logger.error(
+                "Runtime cleanup task issues for deleted user %s: %s",
+                user_id,
+                runtime_cleanup_summary["errors"],
+            )
+    except Exception as exc:
+        logger.error(
+            "Failed to process runtime cleanup tasks for deleted user %s: %s",
+            user_id,
+            exc,
+            exc_info=True,
+        )
+    finally:
+        session.close()
 
 
 class UserAccountCleanupService:
@@ -173,6 +226,10 @@ class UserAccountCleanupService:
         3. Delete from user table (cascades all user.id FKs)
         4. Archive Stripe customer (post-commit, best-effort)
 
+        Assistant cleanup follows the creator-owned lifecycle model. Any org-
+        scoped assistants whose ``user_id`` points at this user cascade with the
+        user row and must be included in the same runtime/contact/GCS cleanup.
+
         :param user_id: The user's ID
         :param force_org_check: If True, skip organization ownership check
         :return: DeletionResult with success status and message
@@ -206,13 +263,18 @@ class UserAccountCleanupService:
         stripe_customer_id = ba_info.stripe_customer_id if ba_info else None
         billing_account_id = ba_info.ba_id if ba_info else None
 
-        # Collect assistant IDs *before* deleting the user row (CASCADE will
-        # remove the assistants rows).  This list is used for GCS cleanup.
-        assistant_ids = self._get_user_assistant_ids(user_id)
-
-        # Soft-delete and deprovision all contacts for this user's personal
-        # assistants *before* the CASCADE deletes the rows.
-        self._deprovision_user_contacts(user_id)
+        assistant_cleanup_specs = self._get_user_assistant_cleanup_specs(user_id)
+        assistant_ids = [int(spec.assistant_id) for spec in assistant_cleanup_specs]
+        cleanup_task_ids: list[int] = []
+        if assistant_cleanup_specs:
+            cleanup_task_ids = [
+                task.id
+                for task in enqueue_cleanup_tasks(
+                    self.session,
+                    assistant_cleanup_specs,
+                    source_flow=CleanupSource.USER_DELETE,
+                )
+            ]
 
         self._delete_user_table_dependencies(user_id, billing_account_id)
 
@@ -237,7 +299,13 @@ class UserAccountCleanupService:
         self._cleanup_user_data(user_id, assistant_ids)
 
         logger.info(f"Successfully deleted user account: {user_id}")
-        return DeletionResult(success=True, message="Account deleted successfully")
+        return DeletionResult(
+            success=True,
+            message="Account deleted successfully",
+            runtime_cleanup_complete=not cleanup_task_ids,
+            runtime_cleanup_summary=None,
+            cleanup_task_ids=cleanup_task_ids,
+        )
 
     def _delete_user_table_dependencies(
         self,
@@ -254,68 +322,6 @@ class UserAccountCleanupService:
         cascade-deleted when the billing_account row is removed.
         """
         # Currently no non-cascading tables reference user.id directly.
-
-    def _deprovision_user_contacts(self, user_id: str) -> None:
-        """Soft-delete and deprovision all contacts for the user's personal assistants.
-
-        Must be called *before* the user row is deleted (CASCADE would
-        hard-delete the contact rows otherwise).
-
-        Deprovisioning (Twilio / Google Workspace API calls) is best-effort
-        – failures are logged but do not block user deletion.
-        """
-        try:
-            from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
-
-            contact_dao = AssistantContactDAO(self.session)
-
-            # Collect personal assistant IDs
-            assistant_ids = [
-                row[0]
-                for row in self.session.execute(
-                    text(
-                        "SELECT agent_id FROM assistants "
-                        "WHERE user_id = :uid AND organization_id IS NULL",
-                    ),
-                    {"uid": user_id},
-                ).fetchall()
-            ]
-            if not assistant_ids:
-                return
-
-            # Fetch active contacts before soft-deleting
-            active_contacts = contact_dao.get_active_contacts_for_assistants(
-                assistant_ids,
-            )
-
-            # Deprovision external resources (best-effort)
-            import asyncio
-
-            from orchestra.routines.assistant_contact_suspension import (
-                _deprovision_contact,
-            )
-
-            for contact in active_contacts:
-                try:
-                    asyncio.get_event_loop().run_until_complete(
-                        _deprovision_contact(contact),
-                    )
-                except RuntimeError:
-                    # No event loop – create one
-                    asyncio.run(_deprovision_contact(contact))
-                except Exception as e:
-                    logger.error(
-                        f"Failed to deprovision {contact.contact_type} "
-                        f"({contact.contact_value}) for user {user_id}: {e}",
-                    )
-
-            # Soft-delete all contact rows
-            contact_dao.soft_delete_contacts_for_user(user_id)
-
-        except Exception as e:
-            logger.error(
-                f"Failed to deprovision contacts for user {user_id}: {e}",
-            )
 
     def _archive_stripe_customer(self, stripe_customer_id: str) -> None:
         """
@@ -351,18 +357,75 @@ class UserAccountCleanupService:
         ).fetchall()
         return [row[0] for row in rows] if rows else []
 
+    def _get_user_assistant_cleanup_specs(
+        self,
+        user_id: str,
+    ) -> list[AssistantCleanupSpec]:
+        """Return cleanup specs for every assistant row that will cascade.
+
+        Org assistants remain creator-owned for lifecycle cleanup even though
+        they live inside an organization scope, so the deletion flow must
+        enqueue teardown for both personal and org assistants here.
+        """
+        assistant_rows = self.session.execute(
+            text(
+                """
+                SELECT agent_id, deploy_env, desktop_mode, profile_photo, profile_video
+                FROM assistants
+                WHERE user_id = :uid
+                """,
+            ),
+            {"uid": user_id},
+        ).fetchall()
+        if not assistant_rows:
+            return []
+
+        assistant_ids = [int(row[0]) for row in assistant_rows]
+        contact_rows = self.session.execute(
+            text(
+                """
+                SELECT assistant_id, id, contact_type, contact_value
+                FROM assistant_contacts
+                WHERE assistant_id = ANY(:assistant_ids) AND status != 'deleted'
+                """,
+            ),
+            {"assistant_ids": assistant_ids},
+        ).fetchall()
+        contacts_by_assistant_id: dict[int, list[ContactCleanupSpec]] = {}
+        for row in contact_rows:
+            contacts_by_assistant_id.setdefault(int(row[0]), []).append(
+                ContactCleanupSpec(
+                    contact_type=row[2],
+                    contact_value=row[3],
+                    contact_id=row[1],
+                ),
+            )
+
+        return [
+            AssistantCleanupSpec(
+                assistant_id=int(row[0]),
+                deploy_env=row[1],
+                desktop_mode=row[2],
+                profile_photo=row[3],
+                profile_video=row[4],
+                contacts=contacts_by_assistant_id.get(int(row[0]), []),
+            )
+            for row in assistant_rows
+        ]
+
     def _cleanup_user_data(
         self,
         user_id: str,
         assistant_ids: list[int],
     ) -> None:
         """
-        Delete all GCS data for every assistant owned by a user, plus the
-        user's account photos.
+        Delete non-assistant GCS data for a user after account deletion.
 
-        *assistant_ids* is pre-fetched before the DB commit (since CASCADE
-        deletes the rows).  If the list is empty we fall back to the legacy
-        user-prefix cleanup.
+        Assistant-scoped media, recordings, and attachments are owned by the
+        durable ``AssistantCleanupTask`` queue so they are only deleted after
+        runtime teardown succeeds. This helper only handles account photos and,
+        when no assistants were queued, the legacy user-prefix attachment
+        cleanup.
 
         Best-effort operation – logs errors but never fails the deletion.
         """
@@ -371,27 +434,10 @@ class UserAccountCleanupService:
 
             bucket_service = BucketService()
 
-            if assistant_ids:
-                total = {"media": 0, "recordings": 0, "attachments": 0}
-                for aid in assistant_ids:
-                    try:
-                        counts = bucket_service.delete_all_assistant_data(aid)
-                        for key in total:
-                            total[key] += counts.get(key, 0)
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to cleanup GCS data for assistant {aid} "
-                            f"(user {user_id}): {e}",
-                        )
-                grand_total = sum(total.values())
-                if grand_total > 0:
-                    logger.info(
-                        f"Cleaned up {grand_total} GCS file(s) across "
-                        f"{len(assistant_ids)} assistant(s) for user {user_id}: {total}",
-                    )
-            else:
+            if not assistant_ids:
                 # Fallback: no assistants found (user had none, or they were
-                # already cleaned up).  Try the legacy user-prefix cleanup.
+                # already cleaned up through the durable queue). Try the legacy
+                # user-prefix cleanup.
                 deleted_count = bucket_service.delete_message_attachments_for_user(
                     user_id,
                 )
