@@ -6,8 +6,10 @@ and by Orchestra's own assistant-contact provisioning flow.
 """
 
 import logging
+import os
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -124,6 +126,23 @@ PLATFORM = "discord"
 
 def _dao(session: Session) -> SharedPoolDAO:
     return SharedPoolDAO(session, PLATFORM)
+
+
+async def _notify_comms_sync() -> None:
+    """Best-effort: tell Communication to re-sync its bot pool from Orchestra."""
+    comms_url = os.environ.get("UNITY_COMMS_URL")
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+    if not comms_url or not admin_key:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{comms_url}/discord/sync",
+                headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=10,
+            )
+    except Exception:
+        logger.warning("Failed to notify Communication of Discord pool sync")
 
 
 @admin_router.get("/discord/resolve")
@@ -260,7 +279,7 @@ def get_pool_status(
 
 
 @admin_router.post("/discord/pool")
-def add_pool_bot(
+async def add_pool_bot(
     body: PoolBotCreateRequest,
     session: Session = Depends(get_db_session),
 ) -> PoolBotResponse:
@@ -271,6 +290,7 @@ def add_pool_bot(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     session.commit()
+    await _notify_comms_sync()
     return PoolBotResponse(
         id=pool.id,
         bot_id=pool.number,
@@ -280,7 +300,7 @@ def add_pool_bot(
 
 
 @admin_router.patch("/discord/pool/{pool_id}")
-def update_pool_bot(
+async def update_pool_bot(
     pool_id: int,
     body: PoolBotUpdateRequest,
     session: Session = Depends(get_db_session),
@@ -297,6 +317,7 @@ def update_pool_bot(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     session.commit()
+    await _notify_comms_sync()
     return PoolBotResponse(
         id=pool.id,
         bot_id=pool.number,
@@ -306,7 +327,7 @@ def update_pool_bot(
 
 
 @admin_router.delete("/discord/pool/{pool_id}")
-def delete_pool_bot(
+async def delete_pool_bot(
     pool_id: int,
     session: Session = Depends(get_db_session),
 ):
@@ -320,6 +341,7 @@ def delete_pool_bot(
             detail=str(e),
         )
     session.commit()
+    await _notify_comms_sync()
     return {"deleted_routes": route_count}
 
 
