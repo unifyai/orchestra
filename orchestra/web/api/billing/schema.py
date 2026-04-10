@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Checkout / Portal / Status (original billing schemas)
@@ -118,6 +118,19 @@ class BillingProfileResponse(BaseModel):
     is_business: bool = False
 
 
+class BillingAddress(BaseModel):
+    """Structured billing address — only known fields are accepted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    line1: Optional[str] = None
+    line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+
+
 class BillingProfileUpdate(BaseModel):
     """
     Unified billing profile update for both personal and org contexts.
@@ -129,7 +142,7 @@ class BillingProfileUpdate(BaseModel):
     name: Optional[str] = None
     tax_id: Optional[str] = None
     tax_id_type: Optional[str] = None
-    billing_address: Optional[Dict[str, Any]] = None
+    billing_address: Optional[BillingAddress] = None
 
 
 # ---------------------------------------------------------------------------

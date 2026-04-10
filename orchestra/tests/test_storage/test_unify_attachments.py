@@ -9,7 +9,7 @@ These tests verify:
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -544,22 +544,27 @@ class TestUserDeletionAttachmentCleanup:
         mock_ba_info.ba_id = None
         mock_ba_info.stripe_customer_id = None
 
-        mock_session.execute.return_value.fetchone.side_effect = [
+        mock_execute_result = MagicMock()
+        mock_execute_result.fetchone.side_effect = [
             mock_result,  # check_deletion_blockers
             mock_ba_info,  # billing account lookup
         ]
+        mock_session.execute.return_value = mock_execute_result
 
         # -- _get_user_assistant_ids result (fetchall) --
         if assistant_ids is not None:
-            rows = [(aid,) for aid in assistant_ids]
+            assistant_rows = [(aid, None, None, None, None) for aid in assistant_ids]
         else:
-            rows = []
-        mock_session.execute.return_value.fetchall.return_value = rows
+            assistant_rows = []
+        mock_execute_result.fetchall.side_effect = [
+            assistant_rows,
+            [],
+        ]
 
         return mock_session
 
-    def test_user_deletion_cleans_up_all_assistant_data(self):
-        """delete_user_account should call delete_all_assistant_data for each assistant."""
+    def test_user_deletion_leaves_assistant_gcs_to_durable_cleanup_tasks(self):
+        """delete_user_account should not delete assistant GCS inline."""
         from orchestra.services.user_account_cleanup_service import (
             UserAccountCleanupService,
         )
@@ -570,20 +575,53 @@ class TestUserDeletionAttachmentCleanup:
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
             mock_bucket_service = MagicMock()
-            mock_bucket_service.delete_all_assistant_data.return_value = {
-                "media": 1,
-                "recordings": 0,
-                "attachments": 2,
-            }
             mock_bucket_cls.return_value = mock_bucket_service
 
             service = UserAccountCleanupService(mock_session)
             result = service.delete_user_account("user-123")
 
             assert result.success is True
-            assert mock_bucket_service.delete_all_assistant_data.call_count == 2
-            mock_bucket_service.delete_all_assistant_data.assert_any_call(10)
-            mock_bucket_service.delete_all_assistant_data.assert_any_call(20)
+            mock_bucket_service.delete_all_assistant_data.assert_not_called()
+            mock_bucket_service.delete_user_account_photos.assert_called_once_with(
+                "user-123",
+            )
+
+    def test_user_deletion_enqueues_runtime_cleanup_tasks(self):
+        """delete_user_account should enqueue durable cleanup for each assistant."""
+        from orchestra.services.assistant_cleanup_service import CleanupSource
+        from orchestra.services.user_account_cleanup_service import (
+            UserAccountCleanupService,
+        )
+
+        mock_session = self._make_mock_session(assistant_ids=[10, 20])
+
+        with patch(
+            "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
+        ) as mock_enqueue_cleanup, patch(
+            "orchestra.services.bucket_service.BucketService",
+        ) as mock_bucket_cls:
+            mock_enqueue_cleanup.return_value = [
+                MagicMock(id=101),
+                MagicMock(id=102),
+            ]
+            mock_bucket_service = MagicMock()
+            mock_bucket_cls.return_value = mock_bucket_service
+
+            service = UserAccountCleanupService(mock_session)
+            result = service.delete_user_account("user-123")
+
+            assert result.success is True
+            mock_enqueue_cleanup.assert_called_once()
+            cleanup_specs = mock_enqueue_cleanup.call_args.args[1]
+            assert sorted(spec.assistant_id for spec in cleanup_specs) == [10, 20]
+            assert (
+                mock_enqueue_cleanup.call_args.kwargs["source_flow"]
+                == CleanupSource.USER_DELETE
+            )
+            assert result.runtime_cleanup_complete is False
+            assert result.runtime_cleanup_summary is None
+            assert result.cleanup_task_ids == [101, 102]
+            mock_bucket_service.delete_all_assistant_data.assert_not_called()
 
     def test_user_deletion_falls_back_to_legacy_cleanup_when_no_assistants(self):
         """When no assistants found, fall back to legacy user-prefix cleanup."""
@@ -608,6 +646,8 @@ class TestUserDeletionAttachmentCleanup:
                 "user-123",
             )
             mock_bucket_service.delete_all_assistant_data.assert_not_called()
+            assert result.runtime_cleanup_complete is True
+            assert result.cleanup_task_ids == []
 
     def test_user_deletion_continues_if_gcs_cleanup_fails(self):
         """User deletion should succeed even if GCS cleanup raises."""
@@ -627,8 +667,8 @@ class TestUserDeletionAttachmentCleanup:
 
             assert result.success is True
 
-    def test_user_deletion_continues_if_single_assistant_cleanup_fails(self):
-        """If one assistant's GCS cleanup fails, the others still proceed."""
+    def test_user_deletion_does_not_touch_assistant_gcs_inline(self):
+        """Assistant-scoped GCS deletion is delegated to the durable queue."""
         from orchestra.services.user_account_cleanup_service import (
             UserAccountCleanupService,
         )
@@ -639,21 +679,47 @@ class TestUserDeletionAttachmentCleanup:
             "orchestra.services.bucket_service.BucketService",
         ) as mock_bucket_cls:
             mock_bucket_service = MagicMock()
-
-            def side_effect(aid, **kwargs):
-                if aid == 20:
-                    raise Exception("Bucket unavailable")
-                return {"media": 1, "recordings": 0, "attachments": 0}
-
-            mock_bucket_service.delete_all_assistant_data.side_effect = side_effect
             mock_bucket_cls.return_value = mock_bucket_service
 
             service = UserAccountCleanupService(mock_session)
             result = service.delete_user_account("user-123")
 
             assert result.success is True
-            # All three should have been attempted
-            assert mock_bucket_service.delete_all_assistant_data.call_count == 3
+            mock_bucket_service.delete_all_assistant_data.assert_not_called()
+
+    def test_user_runtime_cleanup_tasks_processes_enqueued_tasks(self):
+        """Background user cleanup should immediately drain the durable task queue once."""
+        from orchestra.services.user_account_cleanup_service import (
+            run_user_runtime_cleanup_tasks,
+        )
+
+        mock_session = MagicMock()
+        mock_session_factory = MagicMock(return_value=mock_session)
+
+        with patch(
+            "orchestra.services.user_account_cleanup_service.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup:
+            mock_process_cleanup.return_value = {
+                "processed": 2,
+                "completed": 1,
+                "retried": 1,
+                "failed": 0,
+                "errors": ["runtime cleanup still retrying"],
+            }
+
+            run_user_runtime_cleanup_tasks(
+                mock_session_factory,
+                cleanup_task_ids=[101, 102],
+                user_id="user-123",
+            )
+
+        mock_session_factory.assert_called_once_with()
+        mock_process_cleanup.assert_awaited_once_with(
+            mock_session,
+            task_ids=[101, 102],
+        )
+        mock_session.close.assert_called_once_with()
 
 
 # =============================================================================

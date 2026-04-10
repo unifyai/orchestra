@@ -25,18 +25,20 @@ def update_mint(pages, groupings):
 
     non_api_nav = [g for g in mint["navigation"] if not _references_api(g)]
 
-    mint["navigation"] = non_api_nav + [{"group": "", "pages": api_nav}]
+    if api_nav:
+        mint["navigation"] = non_api_nav + [{"group": "", "pages": api_nav}]
+        mint["api"] = {
+            "baseUrl": "https://api.unify.ai",
+            "playground": {"mode": "simple"},
+        }
+        tabs = mint.get("tabs", [])
+        if not any(t.get("url") == "api-reference" for t in tabs):
+            tabs.append({"name": "REST API", "url": "api-reference"})
+        mint["tabs"] = tabs
+    else:
+        mint["navigation"] = non_api_nav
 
-    mint["api"] = {
-        "baseUrl": "https://api.unify.ai",
-        "playground": {"mode": "simple"},
-    }
     mint["primaryTab"] = {"name": "Welcome"}
-
-    tabs = mint.get("tabs", [])
-    if not any(t.get("url") == "api-reference" for t in tabs):
-        tabs.append({"name": "REST API", "url": "api-reference"})
-    mint["tabs"] = tabs
 
     with open("mint.json", "w") as f:
         json.dump(mint, f, indent=4)

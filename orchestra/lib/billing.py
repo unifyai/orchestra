@@ -158,6 +158,13 @@ def deduct_credits(
     session: Session,
     billing_entity: BillingEntity,
     amount: Decimal,
+    *,
+    category: str = "other",
+    assistant_id: Optional[int] = None,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    description: Optional[str] = None,
+    detail: Optional[dict] = None,
 ) -> Decimal:
     """
     Deduct credits from a billing entity (via BillingAccount).
@@ -166,6 +173,12 @@ def deduct_credits(
         session: Database session.
         billing_entity: The entity to deduct from.
         amount: Amount of credits to deduct.
+        category: Ledger category (``'llm'``, ``'hire'``, ``'media'``, etc.).
+        assistant_id: Optional assistant context.
+        user_id: Optional acting user.
+        organization_id: Optional organization context.
+        description: Human-readable description.
+        detail: Category-specific JSONB metadata.
 
     Returns:
         The new credit balance after deduction.
@@ -177,6 +190,12 @@ def deduct_credits(
     new_balance = ba_dao.deduct_credits(
         billing_entity.billing_account_id,
         float(amount),
+        category=category,
+        assistant_id=assistant_id,
+        user_id=user_id,
+        organization_id=organization_id,
+        description=description,
+        detail=detail,
     )
     if new_balance is None:
         raise ValueError(
@@ -353,7 +372,13 @@ def queue_auto_recharge(
         )
         session.add(recharge)
         ba_dao = BillingAccountDAO(session)
-        new_balance = ba_dao.add_credits(billing_account.id, float(credits))
+        new_balance = ba_dao.add_credits(
+            billing_account.id,
+            float(credits),
+            category="recharge",
+            description=f"Auto-recharge ({credits} credits)",
+            detail={"event": "auto_recharge", "invoice_group": str(invoice_group)},
+        )
 
         logger.info(
             "Auto-recharge recorded for billing_account %s: "

@@ -11,6 +11,7 @@ from typing import List, Optional
 import mutagen
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -42,6 +43,7 @@ from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    AssistantCleanupTask,
     Context,
     DemoAssistantMeta,
     LogEvent,
@@ -49,8 +51,16 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
+    User,
 )
 from orchestra.lib.billing import get_billing_entity
+from orchestra.services.assistant_cleanup_service import (
+    CleanupSource,
+    build_cleanup_spec_from_assistant,
+    deprovision_assistant_contacts,
+    enqueue_cleanup_tasks,
+    process_assistant_cleanup_tasks,
+)
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
@@ -93,21 +103,21 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
-    assign_whatsapp_sender,
     create_email,
     create_phone_number,
     create_pubsub_topic,
-    delete_assistant_disk,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    get_running_jobs,
+    get_runtime_status,
     log_pre_hire_chat,
     reawaken_assistant,
-    stop_jobs,
     wake_up_assistant,
     watch_email,
 )
+
+ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
+ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
 
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
@@ -120,11 +130,47 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     return raw_phone
 
 
+def _open_request_session(request: Request) -> Session:
+    """Open a standalone session bound to the app's current engine."""
+
+    session_factory = request.app.state.db_session_factory
+    fresh_session: Session = session_factory()
+    fresh_session.info["request_state"] = request.state
+    return fresh_session
+
+
 router = APIRouter()
 admin_router = APIRouter()
 demo_router = APIRouter()
 
 _prediction_owners: dict[str, str] = {}
+
+RUNTIME_FACING_ASSISTANT_UPDATE_FIELDS = frozenset(
+    {
+        "first_name",
+        "surname",
+        "age",
+        "nationality",
+        "about",
+        "timezone",
+        "desktop_mode",
+        "user_desktop_id",
+        "user_desktop_filesys_sync",
+        "voice_id",
+        "voice_provider",
+    },
+)
+
+
+def _runtime_update_requires_reawaken(
+    existing_assistant: Assistant,
+    update_data: dict,
+) -> bool:
+    """Return True when a PATCH changes fields consumed by runtime startup/update."""
+    for field_name in RUNTIME_FACING_ASSISTANT_UPDATE_FIELDS.intersection(update_data):
+        if getattr(existing_assistant, field_name, None) != update_data[field_name]:
+            return True
+    return False
 
 
 def _build_assistant_read(
@@ -136,6 +182,7 @@ def _build_assistant_read(
     user_last_name: Optional[str] = None,
     user_email: Optional[str] = None,
     user_image: Optional[str] = None,
+    user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
     contacts: Optional[list] = None,
     include_internal: bool = False,
@@ -143,10 +190,12 @@ def _build_assistant_read(
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
 
     Contact fields (phone, email, whatsapp, etc.) are populated from the
-    ``AssistantContact`` table rather than the legacy columns on the
-    ``Assistant`` model.
+    ``AssistantContact`` table.  User-side contact info (``user_phone``,
+    ``user_whatsapp_number``) is sourced from the ``User`` profile.
 
     Args:
+        user_whatsapp_number: When provided, used directly.  When ``None``
+            the value is fetched from ``User.whatsapp_number``.
         contacts: Pre-fetched list of active ``AssistantContact`` rows for
             this assistant.  When ``None`` the contacts are fetched from
             the database.  Callers that build many ``AssistantRead``
@@ -183,6 +232,14 @@ def _build_assistant_read(
     phone_contact = contact_map.get("phone")
     email_contact = contact_map.get("email")
     whatsapp_contact = contact_map.get("whatsapp")
+    discord_contact = contact_map.get("discord")
+
+    # User-side contact info comes from the User profile
+    user_obj = session.get(User, a.user_id)
+    user_phone_number = user_obj.phone_number if user_obj else None
+    if user_whatsapp_number is None:
+        user_whatsapp_number = user_obj.whatsapp_number if user_obj else None
+    user_discord_id = user_obj.discord_id if user_obj else None
 
     return AssistantRead(
         agent_id=str(a.agent_id),
@@ -208,12 +265,14 @@ def _build_assistant_read(
         updated_at=a.updated_at,
         phone=(phone_contact.contact_value if phone_contact else None),
         email=(email_contact.contact_value if email_contact else None),
-        user_phone=(phone_contact.user_value if phone_contact else None),
-        user_whatsapp_number=(
-            whatsapp_contact.user_value if whatsapp_contact else None
-        ),
+        user_phone=user_phone_number,
+        user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=(
             whatsapp_contact.contact_value if whatsapp_contact else None
+        ),
+        user_discord_id=user_discord_id,
+        assistant_discord_bot_id=(
+            discord_contact.contact_value if discord_contact else None
         ),
         voice_id=a.voice_id,
         voice_provider=a.voice_provider,
@@ -306,7 +365,10 @@ async def create_assistant(
 
     This endpoint allows users to create a personalized assistant with specific
     attributes like name, age, and operational limits. Each assistant is tied
-    to the authenticated user's account. Creating an assistant incurs a credit cost.
+    to the authenticated user's account. When called with an organization API
+    key, the assistant lives inside that organization but still records the
+    caller as its creator/lifecycle owner. Creating an assistant incurs a
+    credit cost.
     """
     user_id = request.state.user_id
     user_dao = UserDAO(session)
@@ -390,7 +452,8 @@ async def create_assistant(
             deploy_env=assistant_in.deploy_env,
         )
 
-        # For org assistants, grant Owner role to creator
+        # Org assistants retain the creator in `user_id`; org access is granted
+        # separately through resource access so other members can collaborate.
         if organization_id is not None:
             owner_role = role_dao.get_by_name("Owner", organization_id=None)
             if owner_role:
@@ -568,14 +631,14 @@ async def create_assistant(
                 rollback_errors = []
 
                 if created_pubsub:
-                    try:
-                        await delete_pubsub_topic(
-                            str(assistant_id),
-                            deploy_env=assistant.deploy_env,
-                        )
-                    except Exception as e:
+                    result = await delete_pubsub_topic(
+                        str(assistant_id),
+                        deploy_env=assistant.deploy_env,
+                    )
+                    if not result.get("success"):
                         rollback_errors.append(
-                            f"Failed to delete pubsub topic: {str(e)}",
+                            "Failed to delete pubsub topic: "
+                            f"{result.get('error') or result.get('reason') or 'cleanup incomplete'}",
                         )
                 print(f"PUBSUB DELETED: {assistant_id}")
 
@@ -645,7 +708,20 @@ async def create_assistant(
             from orchestra.lib.billing import deduct_credits
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(session, billing_entity, Decimal(str(total_creation_cost)))
+            deduct_credits(
+                session,
+                billing_entity,
+                Decimal(str(total_creation_cost)),
+                category="hire",
+                assistant_id=assistant.agent_id if assistant else None,
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Assistant creation",
+                detail={
+                    "event": "assistant_creation",
+                    "assistant_id": assistant.agent_id if assistant else None,
+                },
+            )
             session.commit()
         except Exception as e_commit:
             logging.error(
@@ -864,6 +940,11 @@ def list_assistants(
                     ),
                     user_email=users[a.user_id].email if users.get(a.user_id) else None,
                     user_image=users[a.user_id].image if users.get(a.user_id) else None,
+                    user_whatsapp_number=(
+                        users[a.user_id].whatsapp_number
+                        if users.get(a.user_id)
+                        else None
+                    ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
                 )
                 for a in assistants
@@ -953,7 +1034,6 @@ async def delete_assistant_contact(
         )
 
         if contact:
-            # Deprovision external resource based on AssistantContact data
             if contact_type == "phone" and contact.contact_value:
                 await delete_phone_number(
                     contact.contact_value,
@@ -964,7 +1044,19 @@ async def delete_assistant_contact(
                     contact.contact_value,
                     deploy_env=assistant.deploy_env,
                 )
-            # WhatsApp: no external infra deletion needed
+            elif contact_type == "whatsapp":
+                from orchestra.web.api.utils.assistant_infra import (
+                    delete_whatsapp_routes,
+                )
+
+                await delete_whatsapp_routes(assistant_id, session)
+
+            elif contact_type == "discord":
+                from orchestra.web.api.utils.assistant_infra import (
+                    delete_discord_routes,
+                )
+
+                await delete_discord_routes(assistant_id, session)
 
             # Soft-delete the AssistantContact row
             contact_dao.soft_delete_assistant_contact(
@@ -1080,9 +1172,45 @@ async def create_assistant_contact(
             )
 
     contact_type = contact_request.contact_type
+
+    # 2. Require verified profile identity for phone/whatsapp/discord contacts
+    if contact_type in ("phone", "whatsapp", "discord"):
+        user_dao = UserDAO(session)
+        user_rows = user_dao.filter(id=user_id)
+        if not user_rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found.",
+            )
+        user = user_rows[0][0]
+        if contact_type == "phone" and not user.phone_number:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "A verified phone number is required on your profile "
+                    "before creating a phone contact for an assistant."
+                ),
+            )
+        if contact_type == "whatsapp" and not user.whatsapp_number:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "A verified WhatsApp number is required on your profile "
+                    "before creating a WhatsApp contact for an assistant."
+                ),
+            )
+        if contact_type == "discord" and not user.discord_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "A linked Discord account is required on your profile "
+                    "before creating a Discord contact for an assistant."
+                ),
+            )
+
     contact_dao = AssistantContactDAO(session)
 
-    # 2. Check for duplicate active contact
+    # 3. Check for duplicate active contact
     existing = contact_dao.get_contact_by_assistant_and_type(assistant_id, contact_type)
     if existing:
         raise HTTPException(
@@ -1100,6 +1228,8 @@ async def create_assistant_contact(
         provider = "google_workspace"
     elif contact_type == "whatsapp":
         provider = "twilio"
+    elif contact_type == "discord":
+        provider = "discord"
 
     monthly_cost = contact_dao.get_contact_monthly_cost(
         contact_type,
@@ -1132,7 +1262,6 @@ async def create_assistant_contact(
 
     # 5. Provision external resource
     created_value = None
-    user_value = None
 
     try:
         if contact_type == "phone":
@@ -1146,7 +1275,6 @@ async def create_assistant_contact(
                     f"Phone number creation failed: {phone_response['detail']}",
                 )
             created_value = phone_response.get("phoneNumber")
-            user_value = contact_request.user_phone
 
         elif contact_type == "email":
             if not contact_request.email_local:
@@ -1178,17 +1306,41 @@ async def create_assistant_contact(
                 )
 
         elif contact_type == "whatsapp":
-            if not contact_request.user_whatsapp_number:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="user_whatsapp_number is required for WhatsApp contacts.",
-                )
-            whatsapp_response = await assign_whatsapp_sender(
-                contact_request.user_whatsapp_number,
+            from orchestra.web.api.utils.assistant_infra import (
+                assign_whatsapp_pool_number,
+                register_whatsapp_sender,
+            )
+
+            pool_result = await assign_whatsapp_pool_number(
+                assistant_id,
+                session,
+            )
+            created_value = pool_result["pool_number"]
+
+            # Register the Twilio sender (idempotent if already registered)
+            await register_whatsapp_sender(
+                created_value,
                 deploy_env=assistant.deploy_env,
             )
-            created_value = whatsapp_response.get("whatsapp_number")
-            user_value = contact_request.user_whatsapp_number
+
+        elif contact_type == "discord":
+            from orchestra.web.api.utils.assistant_infra import (
+                assign_discord_pool_bot,
+                register_discord_bot,
+            )
+
+            pool_result = await assign_discord_pool_bot(
+                assistant_id,
+                session,
+            )
+            created_value = pool_result["pool_number"]
+
+            await register_discord_bot(
+                created_value,
+                assistant_id,
+                deploy_env=assistant.deploy_env,
+                bot_token=pool_result.get("auth_token"),
+            )
 
         if not created_value:
             raise Exception(f"Failed to provision {contact_type}: no value returned.")
@@ -1207,11 +1359,10 @@ async def create_assistant_contact(
 
     # 6. Create AssistantContact row + update Assistant columns + deduct cost
     #    Wrap in try/except to rollback the external provisioning if DB fails.
+    refreshed_session = _open_request_session(request)
     try:
-        # Refresh session after potentially long infra operations
-        session.close()
-        session = next(get_db_session(request))
-        assistant_dao = AssistantDAO(session)
+        assistant_dao = AssistantDAO(refreshed_session)
+        contact_dao = AssistantContactDAO(refreshed_session)
 
         # Re-fetch assistant with fresh session
         assistant = assistant_dao.get_assistant_by_id(
@@ -1229,7 +1380,6 @@ async def create_assistant_contact(
             contact_value=created_value,
             provider=provider,
             country_code=country_code,
-            user_value=user_value,
         )
         contact.monthly_cost = monthly_cost
 
@@ -1238,12 +1388,27 @@ async def create_assistant_contact(
             from orchestra.lib.billing import deduct_credits
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(session, billing_entity, one_time_cost)
+            deduct_credits(
+                session,
+                billing_entity,
+                one_time_cost,
+                category="resources",
+                assistant_id=assistant_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                description=f"Contact setup ({contact_type})",
+                detail={
+                    "event": "contact_setup",
+                    "contact_id": contact.id if contact else None,
+                    "contact_type": contact_type,
+                    "provider": provider,
+                },
+            )
 
-        session.commit()
+        refreshed_session.commit()
 
     except Exception as db_error:
-        session.rollback()
+        refreshed_session.rollback()
         logging.error(
             f"DB commit failed after provisioning {contact_type} for assistant "
             f"{assistant_id}: {db_error}. Rolling back external resource.",
@@ -1260,7 +1425,7 @@ async def create_assistant_contact(
                     created_value,
                     deploy_env=assistant.deploy_env,
                 )
-            # WhatsApp: no explicit deprovisioning needed
+            # WhatsApp/Discord: no explicit deprovisioning needed (pool stays)
         except Exception as rollback_error:
             logging.error(
                 f"RESOURCE LEAK: Failed to rollback {contact_type} "
@@ -1270,7 +1435,6 @@ async def create_assistant_contact(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save {contact_type} contact: {str(db_error)}",
         )
-
     # 8. Trigger reawaken so Unity picks up the new contact
     try:
         await reawaken_assistant(
@@ -1288,9 +1452,12 @@ async def create_assistant_contact(
         agent_id=assistant_id,
         organization_id=organization_id,
     )
-    return InfoResponse(
-        info=_build_assistant_read(assistant, session),
-    )
+    try:
+        return InfoResponse(
+            info=_build_assistant_read(assistant, refreshed_session),
+        )
+    finally:
+        refreshed_session.close()
 
 
 @router.get(
@@ -1355,7 +1522,6 @@ async def list_assistant_contacts(
             provider=c.provider,
             provisioned_by=c.provisioned_by,
             country_code=c.country_code,
-            user_value=c.user_value,
             status=c.status,
             monthly_cost=float(c.monthly_cost) if c.monthly_cost is not None else None,
             created_at=c.created_at,
@@ -1373,7 +1539,7 @@ async def list_assistant_contacts(
     status_code=status.HTTP_200_OK,
     summary="Update contact metadata",
     description=(
-        "Updates non-provisioned fields (user_value, metadata) on an existing contact. "
+        "Updates metadata on an existing contact. "
         "Changing the actual provisioned resource requires delete + create."
     ),
     tags=["Assistant Management"],
@@ -1389,11 +1555,11 @@ async def update_assistant_contact(
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
-    Update non-provisioned fields on an existing contact.
+    Update metadata on an existing contact.
 
-    Only ``user_value`` and ``metadata`` can be changed via this endpoint.
-    Changing the actual provisioned resource (phone number, email address, etc.)
-    requires a delete + create flow.
+    Only ``metadata`` can be changed via this endpoint. User-side contact
+    info is managed on the user profile. Changing the actual provisioned
+    resource (phone number, email address, etc.) requires delete + create.
     """
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -1434,10 +1600,6 @@ async def update_assistant_contact(
             detail=f"No active {contact_type} contact found for this assistant.",
         )
 
-    # Update user_value
-    if contact_update.user_value is not None:
-        contact.user_value = contact_update.user_value
-
     # Update metadata (merge with existing)
     if contact_update.metadata is not None:
         existing_meta = contact.metadata_ or {}
@@ -1446,7 +1608,7 @@ async def update_assistant_contact(
     session.commit()
     session.refresh(assistant)
 
-    # Trigger reawaken so Unity picks up the user_value change
+    # Trigger reawaken so Unity picks up the metadata change
     try:
         await reawaken_assistant(
             str(assistant_id),
@@ -1460,6 +1622,75 @@ async def update_assistant_contact(
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
     )
+
+
+async def _cleanup_after_assistant_delete(
+    session_factory,
+    cleanup_task_ids: list[int],
+    assistant_id: int,
+) -> None:
+    """Re-drive durable cleanup tasks after the delete response is sent.
+
+    Runs as a FastAPI BackgroundTask so the user gets an immediate response.
+    Assistant-scoped GCS cleanup now happens inside ``process_assistant_cleanup_tasks``
+    once runtime teardown is complete, so this background task only re-drives
+    the durable queue toward completion.
+    """
+    if cleanup_task_ids:
+        deadline = time.monotonic() + ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS
+        while True:
+            bg_session = session_factory()
+            try:
+                result = await process_assistant_cleanup_tasks(
+                    bg_session,
+                    task_ids=cleanup_task_ids,
+                )
+                tasks = (
+                    bg_session.query(AssistantCleanupTask)
+                    .filter(AssistantCleanupTask.id.in_(cleanup_task_ids))
+                    .all()
+                )
+                task_states = [
+                    {
+                        "id": task.id,
+                        "status": task.status,
+                        "attempt_count": task.attempt_count,
+                        "last_error": task.last_error,
+                        "next_retry_at": (
+                            task.next_retry_at.isoformat()
+                            if task.next_retry_at is not None
+                            else None
+                        ),
+                    }
+                    for task in tasks
+                ]
+                logging.info(
+                    "Assistant %s cleanup loop result=%s task_states=%s",
+                    assistant_id,
+                    result,
+                    task_states,
+                )
+                if tasks and all(
+                    task.status in {"completed", "failed"} for task in tasks
+                ):
+                    break
+                if time.monotonic() >= deadline:
+                    logging.warning(
+                        "Assistant %s cleanup loop timed out after %.0fs",
+                        assistant_id,
+                        ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS,
+                    )
+                    break
+            except Exception as exc:
+                logging.error(
+                    "Background runtime cleanup failed for assistant %s: %s",
+                    assistant_id,
+                    exc,
+                )
+                break
+            finally:
+                bg_session.close()
+            await asyncio.sleep(ASSISTANT_DELETE_CLEANUP_POLL_SECONDS)
 
 
 @router.delete(
@@ -1488,23 +1719,31 @@ async def update_assistant_contact(
 async def delete_assistant(
     assistant_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
-    Delete an assistant by ID for the authenticated user.
+    Delete an assistant and queue durable cleanup for external runtime resources.
 
-    Permanently removes the specified assistant from the user's account or organization.
-    This action cannot be undone. Associated GCS profile photos will also be deleted.
+    Contacts are deprovisioned inline (before the DB delete) so the same
+    transaction can soft-mark successes. Runtime teardown and GCS cleanup run
+    after the response is returned so the user is not blocked waiting for them.
+    Any steps that fail are recorded in the durable AssistantCleanupTask queue
+    and retried by the cleanup cron job.
+
+    For Assistants project logs, deleting the creator-scoped context tree also
+    removes matching entries from user aggregate siblings (``*/All/*``) via
+    sibling cleanup. The topmost ``All/*`` contexts are intentionally preserved
+    as protected archives for billing and reporting.
     """
-    bucket_service = BucketService()
     dao = AssistantDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request.state, "organization_id", None)
-    cleanup_errors = []
+    cleanup_errors: list[str] = []
+
     try:
-        # First get the assistant to retrieve infrastructure details including GCS photo URL
         assistant = dao.get_assistant_by_id(
             user_id=request.state.user_id,
             agent_id=assistant_id,
@@ -1519,7 +1758,6 @@ async def delete_assistant(
                 detail="Assistant not found.",
             )
 
-        # For org assistants, check assistant:delete permission
         if organization_id is not None:
             resource_access_dao = ResourceAccessDAO(session)
             has_permission = resource_access_dao.check_user_permission(
@@ -1534,23 +1772,9 @@ async def delete_assistant(
                     detail="You do not have permission to delete this assistant.",
                 )
 
-        # Suspend any jobs that might be currently running with that assistant
-        try:
-            response = await stop_jobs(
-                assistant_id,
-                deploy_env=assistant.deploy_env,
-            )
-            print(f"JOB STOPPED: {response['job_names']}")
-        except Exception as e:
-            logging.error(f"Failed to stop job: {str(e)}")
-            cleanup_errors.append(f"Failed to stop job: {str(e)}")
-
-        # DB operations (fast, sequential, session-bound)
-        # Delete the associated chat transcript context from the "Assistants" project
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
             if organization_id is not None:
-                # Org context: lookup directly by org_id + name (no user access check needed)
                 assistants_project = (
                     session.query(Project)
                     .filter(
@@ -1560,7 +1784,6 @@ async def delete_assistant(
                     .first()
                 )
             else:
-                # Personal context: use user access check
                 assistants_project = project_dao.get_by_user_and_name(
                     user_id=request.state.user_id,
                     name=ASSISTANTS_PROJECT_NAME,
@@ -1568,7 +1791,7 @@ async def delete_assistant(
                 )
             if assistants_project:
                 assistant_context_id = str(assistant_id)
-                user_ctx = request.state.user_id
+                user_ctx = assistant.user_id
                 context_prefix = f"{user_ctx}/{assistant_context_id}"
                 contexts_to_delete = (
                     session.query(Context)
@@ -1581,10 +1804,12 @@ async def delete_assistant(
                     )
                     .all()
                 )
-                if contexts_to_delete:
-                    for context_to_del in contexts_to_delete:
-                        context_dao.delete(context_to_del.id)
-
+                # ContextDAO.delete() handles lower-tier sibling cleanup for
+                # Assistants contexts. It removes assistant-specific entries
+                # from user aggregates (*/All/*) but intentionally leaves the
+                # topmost All/* archive intact.
+                for context_to_del in contexts_to_delete:
+                    context_dao.delete(context_to_del.id)
         except Exception as e_ctx:
             logging.error(
                 f"Failed to stage context deletion for assistant {assistant_id}: {str(e_ctx)}",
@@ -1593,176 +1818,60 @@ async def delete_assistant(
                 f"Failed to delete assistant context(s): {str(e_ctx)}",
             )
 
-        # Fetch active contacts before parallel cleanup (DB read)
+        # Deprovision contacts inline so successes can be soft-deleted in the
+        # same transaction.  Failures are captured in cleanup_spec and persisted
+        # in the durable task queue below for background retry.
         contact_dao = AssistantContactDAO(session)
-        try:
-            active_contacts = contact_dao.get_active_contacts_for_assistant(
-                assistant_id,
-            )
-        except Exception as e:
-            active_contacts = []
-            cleanup_errors.append(f"Failed to fetch assistant contacts: {str(e)}")
+        active_contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+        cleanup_spec = build_cleanup_spec_from_assistant(assistant, active_contacts)
 
-        # Parallel infrastructure cleanup (all independent after stop_jobs)
-        async def _cleanup_disk():
-            # Delete persistent disk if assistant uses a pool VM
-            if assistant.desktop_mode in ("windows", "ubuntu"):
-                try:
-                    await delete_assistant_disk(
-                        str(assistant_id),
-                        deploy_env=assistant.deploy_env,
-                    )
-                except Exception as e:
-                    logging.error(f"Failed to delete assistant disk: {str(e)}")
-                    cleanup_errors.append(f"Failed to delete assistant disk: {str(e)}")
-
-        async def _cleanup_gcs():
-            # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
-            if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
-                try:
-                    deleted_from_gcs = await asyncio.to_thread(
-                        bucket_service.delete_assistant_file,
-                        assistant.profile_photo,
-                    )
-                    if not deleted_from_gcs:
-                        logging.error(
-                            f"Profile photo {assistant.profile_photo} for assistant {assistant_id} was not deleted from GCS.",
-                        )
-                        cleanup_errors.append(
-                            f"Failed to delete profile photo from GCS",
-                        )
-                except Exception as e_gcs:
-                    logging.error(
-                        f"Failed to delete profile photo {assistant.profile_photo} for assistant {assistant_id}: {str(e_gcs)}",
-                    )
-                    cleanup_errors.append(
-                        f"Failed to delete profile photo: {str(e_gcs)}",
-                    )
-
-            # Delete GCS profile video if it exists
-            if assistant.profile_video and assistant.profile_video.startswith("gs://"):
-                try:
-                    deleted_from_gcs = await asyncio.to_thread(
-                        bucket_service.delete_assistant_file,
-                        assistant.profile_video,
-                    )
-                    if not deleted_from_gcs:
-                        logging.error(
-                            f"Profile video {assistant.profile_video} for assistant {assistant_id} was not deleted from GCS.",
-                        )
-                        cleanup_errors.append(
-                            f"Failed to delete profile video from GCS",
-                        )
-                except Exception as e_gcs:
-                    logging.error(
-                        f"Failed to delete profile video {assistant.profile_video} for assistant {assistant_id}: {str(e_gcs)}",
-                    )
-                    cleanup_errors.append(
-                        f"Failed to delete profile video: {str(e_gcs)}",
-                    )
-
-            # Delete all assistant GCS data (recordings, media, attachments) under {assistant_id}/
-            try:
-                cleanup_counts = await asyncio.to_thread(
-                    bucket_service.delete_all_assistant_data,
-                    assistant_id,
-                    is_staging=settings.is_staging,
-                )
-                total = sum(cleanup_counts.values())
-                if total > 0:
-                    print(
-                        f"GCS CLEANUP: {total} file(s) deleted "
-                        f"(media={cleanup_counts['media']}, "
-                        f"recordings={cleanup_counts['recordings']}, "
-                        f"attachments={cleanup_counts['attachments']})",
-                    )
-            except Exception as e:
-                logging.error(
-                    f"Failed to clean up GCS data for assistant {assistant_id}: {str(e)}",
-                )
-                cleanup_errors.append(f"Failed to clean up GCS data: {str(e)}")
-
-        async def _cleanup_pubsub():
-            # Delete pubsub topic
-            try:
-                await delete_pubsub_topic(
-                    str(assistant_id),
-                    deploy_env=assistant.deploy_env,
-                )
-            except Exception as e:
-                cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
-            print(f"PUBSUB DELETED: {assistant_id}")
-
-        async def _deprovision_contacts():
-            # Deprovision all contacts (phone numbers, emails)
-            async def _deprovision(ac):
-                try:
-                    if ac.contact_type == "phone" and ac.contact_value:
-                        await delete_phone_number(
-                            ac.contact_value,
-                            deploy_env=assistant.deploy_env,
-                        )
-                        print(f"PHONE DELETED: {ac.contact_value}")
-                    elif ac.contact_type == "email" and ac.contact_value:
-                        await delete_email(
-                            ac.contact_value,
-                            deploy_env=assistant.deploy_env,
-                        )
-                        print(f"EMAIL DELETED: {ac.contact_value}")
-                except Exception as e:
-                    cleanup_errors.append(
-                        f"Failed to deprovision {ac.contact_type} "
-                        f"({ac.contact_value}): {str(e)}",
-                    )
-
-            await asyncio.gather(*[_deprovision(ac) for ac in active_contacts])
-
-        await asyncio.gather(
-            _cleanup_disk(),
-            _cleanup_gcs(),
-            _cleanup_pubsub(),
-            _deprovision_contacts(),
+        contact_result = await deprovision_assistant_contacts(
+            session,
+            [cleanup_spec],
+            soft_delete_successes=True,
         )
+        cleanup_errors.extend(contact_result["errors"])
 
-        # DB finalization (fast, sequential, session-bound)
-        # Soft-delete all contacts from AssistantContact table
-        try:
-            contact_dao.soft_delete_all_contacts_for_assistant(assistant_id)
-        except Exception as e:
-            cleanup_errors.append(f"Failed to clean up assistant contacts: {str(e)}")
-
-        # Delete demo assistant metadata if this is a demo assistant
-        if assistant.demo_id:
-            try:
-                demo_meta = (
-                    session.query(DemoAssistantMeta)
-                    .filter(
-                        DemoAssistantMeta.id == assistant.demo_id,
-                    )
-                    .first()
-                )
-                if demo_meta:
-                    session.delete(demo_meta)
-            except Exception as e:
-                cleanup_errors.append(f"Failed to delete demo metadata: {str(e)}")
-
-        # Finally delete the assistant record
-        try:
-            dao.delete_assistant(
-                user_id=request.state.user_id,
-                agent_id=assistant_id,
-                organization_id=organization_id,
+        cleanup_task_ids = [
+            task.id
+            for task in enqueue_cleanup_tasks(
+                session,
+                [cleanup_spec],
+                source_flow=CleanupSource.ASSISTANT_DELETE,
             )
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
+        ]
 
-        # Commit the entire transaction
+        if assistant.demo_id:
+            demo_meta = (
+                session.query(DemoAssistantMeta)
+                .filter(
+                    DemoAssistantMeta.id == assistant.demo_id,
+                )
+                .first()
+            )
+            if demo_meta:
+                session.delete(demo_meta)
+
+        dao.delete_assistant(
+            user_id=request.state.user_id,
+            agent_id=assistant_id,
+            organization_id=organization_id,
+        )
         session.commit()
+
+        # Schedule an immediate post-response drain of the durable cleanup task
+        # queue. Assistant GCS deletion now lives inside that retryable path.
+        session_factory = request.app.state.db_session_factory
+        background_tasks.add_task(
+            _cleanup_after_assistant_delete,
+            session_factory,
+            cleanup_task_ids,
+            assistant_id,
+        )
 
         response_msg = "Assistant deleted successfully"
         if cleanup_errors:
             response_msg += f" (with some cleanup issues: {'; '.join(cleanup_errors)})"
-
         return InfoResponse(info=response_msg)
     except HTTPException:
         logging.warning(
@@ -1940,6 +2049,10 @@ async def update_assistant_config(
             update_data["monthly_spending_cap"] = Decimal(
                 str(update.monthly_spending_cap),
             )
+        runtime_update_requires_reawaken = _runtime_update_requires_reawaken(
+            existing_assistant,
+            update_data,
+        )
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
@@ -1978,6 +2091,20 @@ async def update_assistant_config(
                 )
 
         session.commit()
+        session.refresh(updated)
+
+        if runtime_update_requires_reawaken:
+            try:
+                await reawaken_assistant(
+                    str(assistant_id),
+                    deploy_env=updated.deploy_env,
+                )
+            except Exception as e:
+                logging.warning(
+                    "Failed to reawaken assistant %s after runtime config update: %s",
+                    assistant_id,
+                    e,
+                )
 
         return InfoResponse(
             info=_build_assistant_read(updated, session),
@@ -2604,6 +2731,7 @@ def register_voice(
     summary="Clone voice",
     description="Create a new assistant voice by cloning a voice from an audio file.",
     tags=["Voices"],
+    include_in_schema=False,
 )
 async def clone_voice(
     request: Request,
@@ -3043,6 +3171,7 @@ async def generate_speech(
     summary="Design Voice Previews",
     description="Generates voice design previews from a text description.",
     tags=["Voices", "TTS Design"],
+    include_in_schema=False,
 )
 async def design_voice_generate_previews_endpoint(
     request_data: VoiceDesignGeneratePreviewsRequest,
@@ -3127,6 +3256,7 @@ async def design_voice_generate_previews_endpoint(
     summary="Create Voice from Design Preview",
     description="Creates a full voice from a generated preview voice id.",
     tags=["Voices", "TTS Design"],
+    include_in_schema=False,
 )
 async def design_voice_create_from_preview_endpoint(
     request_data: VoiceDesignCreateFromPreviewRequest,
@@ -3533,6 +3663,11 @@ async def generate_assistant_photo(
                 session,
                 billing_entity,
                 Decimal(str(settings.photo_generation_cost)),
+                category="media",
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Photo generation",
+                detail={"event": "photo_generate"},
             )
             session.commit()
 
@@ -3694,6 +3829,11 @@ async def edit_assistant_photo(
                 session,
                 edit_entity,
                 Decimal(str(settings.photo_generation_cost)),
+                category="media",
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Photo edit",
+                detail={"event": "photo_edit"},
             )
             session.commit()
 
@@ -3945,6 +4085,14 @@ async def animate_video_endpoint(
                 session,
                 billing_entity,
                 Decimal(str(video_cost)),
+                category="media",
+                user_id=user_id,
+                organization_id=organization_id,
+                description="Video animation",
+                detail={
+                    "event": "video_animate",
+                    "duration_seconds": billable_duration,
+                },
             )
             session.commit()
 
@@ -4081,10 +4229,13 @@ async def admin_get_assistant_status(
     Get the live status of an assistant's dedicated service.
     """
     try:
-        job_names = await get_running_jobs(assistant_id)
-        if len(job_names) > 0:
+        runtime_status = await get_runtime_status(assistant_id)
+        active_job_names = []
+        if runtime_status is not None:
+            active_job_names = list(runtime_status.get("active_job_names") or [])
+        if active_job_names:
             return InfoResponse(
-                info=AssistantStatus(running=True, job_name=job_names[0]),
+                info=AssistantStatus(running=True, job_name=active_job_names[0]),
             )
         else:
             return InfoResponse(info=AssistantStatus(running=False, job_name=None))
@@ -4430,7 +4581,13 @@ def admin_list_all_assistants(
                 requested_fields is None
                 or bool(
                     requested_fields
-                    & {"user_email", "user_first_name", "user_last_name", "user_image"},
+                    & {
+                        "user_email",
+                        "user_first_name",
+                        "user_last_name",
+                        "user_image",
+                        "user_whatsapp_number",
+                    },
                 )
             )
             else None
@@ -4457,6 +4614,7 @@ def admin_list_all_assistants(
                 user_last_name=users[i].last_name if users else None,
                 user_email=users[i].email if users else None,
                 user_image=users[i].image if users else None,
+                user_whatsapp_number=(users[i].whatsapp_number if users else None),
                 team_ids=[] if skip_teams else None,
                 contacts=contacts_by_assistant.get(a.agent_id, []),
                 include_internal=True,
@@ -4551,27 +4709,25 @@ def admin_update_assistant_by_filter(
         )
     a = assistants[0]
 
-    # Update the whatsapp AssistantContact row (the canonical source of
-    # contact data) instead of the legacy columns on the Assistant model.
     contact_dao = AssistantContactDAO(session)
-    whatsapp_contact = contact_dao.get_contact_by_assistant_and_type(
-        a.agent_id,
-        "whatsapp",
-    )
-    if whatsapp_contact:
-        if new_assistant_whatsapp_number:
+    if new_assistant_whatsapp_number:
+        whatsapp_contact = contact_dao.get_contact_by_assistant_and_type(
+            a.agent_id,
+            "whatsapp",
+        )
+        if whatsapp_contact:
             whatsapp_contact.contact_value = new_assistant_whatsapp_number
-        if new_user_whatsapp_number:
-            whatsapp_contact.user_value = new_user_whatsapp_number
-    else:
-        # No existing whatsapp contact – create one if a new number was provided
-        if new_assistant_whatsapp_number:
+        else:
             contact_dao.upsert_assistant_contact(
                 assistant_id=a.agent_id,
                 contact_type="whatsapp",
                 contact_value=new_assistant_whatsapp_number,
-                user_value=new_user_whatsapp_number,
             )
+
+    if new_user_whatsapp_number:
+        user = session.get(User, a.user_id)
+        if user:
+            user.whatsapp_number = new_user_whatsapp_number
 
     session.commit()
 
@@ -4823,9 +4979,15 @@ async def get_assistant_spending_limit(
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
-    # Verify user owns the assistant
+    # Allow org members to view limits for any assistant in their org.
     if assistant.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Assistant not found.")
+        if assistant.organization_id is not None:
+            org_member_dao = OrganizationMemberDAO(session)
+            member = org_member_dao.get_member(user_id, assistant.organization_id)
+            if member is None:
+                raise HTTPException(status_code=404, detail="Assistant not found.")
+        else:
+            raise HTTPException(status_code=404, detail="Assistant not found.")
 
     # Get the limit
     monthly_cap = assistant_dao.get_spending_cap(agent_id)
@@ -4835,7 +4997,6 @@ async def get_assistant_spending_limit(
     if assistant.organization_id is not None:
         # Org assistant - check member and org limits
         from orchestra.db.dao.organization_dao import OrganizationDAO
-        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 
         org_dao = OrganizationDAO(session)
         org_member_dao = OrganizationMemberDAO(session)
@@ -4895,7 +5056,14 @@ async def get_assistant_spend(
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if assistant.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Assistant not found.")
+        # Allow org members to view spend for any assistant in their org.
+        if assistant.organization_id is not None:
+            org_member_dao = OrganizationMemberDAO(session)
+            member = org_member_dao.get_member(user_id, assistant.organization_id)
+            if member is None:
+                raise HTTPException(status_code=404, detail="Assistant not found.")
+        else:
+            raise HTTPException(status_code=404, detail="Assistant not found.")
 
     cumulative_spend = assistant_dao.get_cumulative_spend(agent_id, month)
     limit = assistant_dao.get_spending_cap(agent_id)
@@ -4914,8 +5082,6 @@ async def get_assistant_spend(
         if org and org.billing_account:
             credit_balance = float(org.billing_account.credits)
     else:
-        from orchestra.db.models.orchestra_models import User
-
         user = session.query(User).filter(User.id == assistant.user_id).first()
         if user and user.billing_account:
             credit_balance = float(user.billing_account.credits)
@@ -5194,8 +5360,12 @@ async def create_demo_assistant(
                 contact_value=demo_phone_number,
                 provider="twilio",
                 country_code=phone_country,
-                user_value=demo_create.demoer_phone,
             )
+            # Store demoer phone on user profile if not already set
+            if demo_create.demoer_phone:
+                demo_user = session.get(User, user_id)
+                if demo_user and not demo_user.phone_number:
+                    demo_user.phone_number = demo_create.demoer_phone
         if demo_email:
             contact_dao.upsert_assistant_contact(
                 assistant_id=demo_assistant.agent_id,

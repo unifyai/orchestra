@@ -29,18 +29,40 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.stop_jobs",
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
+    ) as mock_cleanup_tasks, patch(
         "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings:
+    ) as mock_settings, patch(
+        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
+        0.0,
+    ), patch(
+        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
+        0.0,
+    ), patch(
+        "orchestra.web.api.assistant.views.BucketService",
+    ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_stop_jobs.return_value = MagicMock(status_code=200)
+        mock_cleanup_tasks.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         # Patch is_staging to skip credit checks
         mock_settings.is_staging = True
+        mock_bucket = MagicMock()
+        mock_bucket.delete_assistant_file.return_value = None
+        mock_bucket.delete_all_assistant_data.return_value = {
+            "media": 0,
+            "recordings": 0,
+            "attachments": 0,
+        }
+        mock_bucket_cls.return_value = mock_bucket
 
-        yield mock_wake_up, mock_reawaken, mock_stop_jobs
+        yield mock_wake_up, mock_reawaken, mock_cleanup_tasks, mock_bucket_cls
 
 
 # =============================================================================
@@ -1425,11 +1447,11 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
 
 
 @pytest.mark.anyio
-async def test_delete_org_assistant_cleans_3tier_contexts(
+async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
     client: AsyncClient,
     dbsession,
 ):
-    """Test that deleting an org assistant cleans up 3-tier contexts including All/*."""
+    """Delete cleans creator scopes and user aggregates but preserves All/*."""
     user = await create_test_user(
         client,
         "org_3tier_cleanup@test.com",
@@ -1463,8 +1485,7 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
     agent_id = assistant_info["agent_id"]
     assistant_name = str(agent_id)
 
-    # Set up 3-tier context structure using the actual user_id
-    # The delete endpoint uses context_prefix = f"{request.state.user_id}/{assistant_id}"
+    # Creator-scoped delete roots use the assistant owner's user_id.
     tier3_context = f"{user['id']}/{assistant_name}/Transcripts"
     tier2_context = f"{user['id']}/All/Transcripts"
     tier1_context = "All/Transcripts"
@@ -1550,6 +1571,136 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
         assert (
             log_id in log_ids
         ), f"Log {log_id} should remain in archive context {tier1_context}"
+
+
+@pytest.mark.anyio
+async def test_delete_org_assistant_by_other_member_cleans_creator_scoped_logs(
+    client: AsyncClient,
+    dbsession,
+):
+    """Cross-member delete cleans creator scopes but preserves the All/* archive."""
+
+    owner = await create_test_user(
+        client,
+        "org_delete_owner@test.com",
+    )
+    member = await create_test_user(
+        client,
+        "org_delete_member@test.com",
+    )
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Cross User Delete Org"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
+    org_id = org_resp.json()["id"]
+
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_resp.status_code == status.HTTP_201_CREATED
+    member_org_headers = {
+        "Authorization": f"Bearer {add_member_resp.json()['api_key']}",
+    }
+
+    project_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+    assert project_resp.status_code == status.HTTP_200_OK
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Cross", "surname": "Delete", "create_infra": False},
+        headers=org_headers,
+    )
+    assert create_resp.status_code == status.HTTP_200_OK
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+    assistant_name = str(agent_id)
+
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    dbsession.commit()
+
+    tier3_context = f"{owner['id']}/{assistant_name}/Transcripts"
+    tier2_context = f"{owner['id']}/All/Transcripts"
+    tier1_context = "All/Transcripts"
+
+    log_resp = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Assistants",
+            "context": tier3_context,
+            "entries": [
+                {
+                    "message": "Cross-user delete log",
+                    "_user": owner["id"],
+                    "_assistant": assistant_name,
+                    "_assistant_id": agent_id,
+                },
+            ],
+        },
+        headers=org_headers,
+    )
+    assert log_resp.status_code == status.HTTP_200_OK
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    for ctx in [tier2_context, tier1_context]:
+        ctx_resp = await client.post(
+            "/v0/project/Assistants/contexts",
+            json={"name": ctx},
+            headers=org_headers,
+        )
+        assert ctx_resp.status_code == status.HTTP_200_OK, ctx_resp.json()
+
+        add_resp = await client.post(
+            "/v0/project/Assistants/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=org_headers,
+        )
+        assert add_resp.status_code == status.HTTP_200_OK, add_resp.json()
+
+    delete_resp = await client.delete(
+        f"/v0/assistant/{agent_id}",
+        headers=member_org_headers,
+    )
+    assert delete_resp.status_code == status.HTTP_200_OK
+
+    tier3_logs = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier3_context}",
+        headers=org_headers,
+    )
+    assert tier3_logs.status_code in [status.HTTP_200_OK, status.HTTP_404_NOT_FOUND]
+    if tier3_logs.status_code == status.HTTP_200_OK:
+        assert tier3_logs.json()["count"] == 0
+
+    tier2_logs = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier2_context}",
+        headers=org_headers,
+    )
+    if tier2_logs.status_code == status.HTTP_200_OK:
+        assert log_id not in [log["id"] for log in tier2_logs.json()["logs"]]
+
+    tier1_logs = await client.get(
+        f"/v0/logs?project_name=Assistants&context={tier1_context}",
+        headers=org_headers,
+    )
+    if tier1_logs.status_code == status.HTTP_200_OK:
+        assert log_id in [log["id"] for log in tier1_logs.json()["logs"]]
 
 
 # =============================================================================
@@ -2577,12 +2728,12 @@ async def test_transfer_shared_context_to_existing_org_context(
 
 
 @pytest.mark.anyio
-async def test_transfer_org_to_personal_deletes_shared_context_logs(
+async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive(
     client: AsyncClient,
     dbsession,
 ):
     """
-    Test that logs in 3-tier shared contexts are cleaned when transferring org->personal.
+    Transfer-to-personal removes lower tiers while keeping the topmost archive.
 
     Uses 3-tier context hierarchy:
     - Tier 1: All/Transcripts (global aggregate)
@@ -2591,7 +2742,8 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
 
     When transferring an assistant from org to personal with delete_logs=True:
     - Assistant-specific contexts (Tier 3) should be deleted
-    - Logs should be cleaned from sibling contexts (Tier 1 and Tier 2) via context_dao.delete()
+    - Tier 2 user aggregates should be cleaned via context_dao.delete()
+    - Tier 1 All/* should remain as the protected archive
     """
     user = await create_test_user(
         client,
@@ -2714,7 +2866,8 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     Test that logs from OTHER assistants in shared contexts are preserved during transfer.
 
     When transferring assistant A with delete_logs=True:
-    - Assistant A's logs should be deleted from all contexts
+    - Assistant A's logs should be removed from Tier 2 and Tier 3
+    - Assistant A's topmost All/* archive copy should remain
     - Assistant B's logs in shared All/* contexts should NOT be affected
     """
     user = await create_test_user(

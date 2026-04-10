@@ -6,6 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.models.orchestra_models import AssistantCleanupTask
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
@@ -15,7 +16,6 @@ def _insert_contact(
     contact_type: str,
     contact_value: str,
     *,
-    user_value: str | None = None,
     provider: str | None = None,
     country_code: str | None = None,
 ):
@@ -27,7 +27,6 @@ def _insert_contact(
         contact_value=contact_value,
         provider=provider,
         country_code=country_code,
-        user_value=user_value,
     )
     dbsession.flush()
 
@@ -48,7 +47,13 @@ def mock_assistant_infra_calls(request):
     ) as mock_wake_up, patch(
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
-    ) as mock_reawaken:
+    ) as mock_reawaken, patch(
+        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
+        0.0,
+    ), patch(
+        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
+        0.0,
+    ):
 
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
@@ -116,16 +121,20 @@ async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_
 
 @pytest.mark.anyio
 async def test_create_assistant_with_preview_deploy_env(client: AsyncClient):
-    payload = {
-        "first_name": "Preview",
-        "surname": "Assistant",
-        "deploy_env": "preview",
-        "create_infra": False,
-    }
-    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == 200
-    data = resp.json()["info"]
-    assert data["deploy_env"] == "preview"
+    with patch(
+        "orchestra.web.api.assistant.schema.settings",
+    ) as mock_settings:
+        mock_settings.is_staging = True
+        payload = {
+            "first_name": "Preview",
+            "surname": "Assistant",
+            "deploy_env": "preview",
+            "create_infra": False,
+        }
+        resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+        assert resp.status_code == 200
+        data = resp.json()["info"]
+        assert data["deploy_env"] == "preview"
 
 
 @pytest.mark.anyio
@@ -205,8 +214,12 @@ async def test_list_assistants_after_create(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_weekly_limit_only(client: AsyncClient):
+async def test_update_weekly_limit_only(
+    client: AsyncClient,
+    mock_assistant_infra_calls,
+):
     # Create assistant, then `PATCH /v0/assistant/{id}/config` weekly_limit only -> updated
+    _, mock_reawaken = mock_assistant_infra_calls
     payload = {
         "first_name": "Eve",
         "surname": "Adams",
@@ -239,6 +252,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
     assert updated["timezone"] == payload["timezone"]
     assert updated["phone"] is None
     assert updated["email"] is None
+    mock_reawaken.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -348,8 +362,9 @@ async def test_delete_assistant_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_about_only(client: AsyncClient):
+async def test_update_about_only(client: AsyncClient, mock_assistant_infra_calls):
     # Create assistant, then `PATCH /v0/assistant/{id}/config` about only -> updated
+    _, mock_reawaken = mock_assistant_infra_calls
     payload = {
         "first_name": "Hannah",
         "surname": "Kim",
@@ -377,6 +392,7 @@ async def test_update_about_only(client: AsyncClient):
     assert updated["nationality"] == payload["nationality"]
     assert updated["phone"] is None
     assert updated["email"] is None
+    mock_reawaken.assert_called_once_with(str(aid), deploy_env=None)
 
 
 @pytest.mark.anyio
@@ -1278,7 +1294,6 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
             "phone",
             "+15558675309",
             provider="twilio",
-            user_value="+15558675310",
         )
         _insert_contact(
             dbsession,
@@ -1286,7 +1301,6 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
             "whatsapp",
             "+15551112222",
             provider="twilio",
-            user_value="+15558675311",
         )
 
         assistant_whatsapp_number = "+15551112222"
@@ -1303,7 +1317,10 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         email_deleted_info = delete_email_resp.json()["info"]
         assert email_deleted_info["email"] is None
         assert email_deleted_info["phone"] == "+15558675309"  # Should be unchanged
-        mock_delete_email.assert_called_once_with("contact.remover@example.com")
+        mock_delete_email.assert_called_once_with(
+            "contact.remover@example.com",
+            deploy_env=None,
+        )
 
         # 5. Delete Phone contact
         delete_phone_payload = {"contact_type": "phone"}
@@ -1321,7 +1338,7 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         assert (
             phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
         )  # Unchanged
-        mock_delete_phone.assert_called_once_with("+15558675309")
+        mock_delete_phone.assert_called_once_with("+15558675309", deploy_env=None)
 
         # 6. Delete WhatsApp contact
         delete_whatsapp_payload = {"contact_type": "whatsapp"}
@@ -1386,8 +1403,11 @@ async def test_update_assistant_contact_info_reawakens(
     )
     mock_reawaken.reset_mock()
 
-    # Update the contact's user_value via PUT /assistant/{id}/contact and expect reawaken
-    update_contact_payload = {"contact_type": "phone", "user_value": "+15550009999"}
+    # Update the contact's metadata via PUT /assistant/{id}/contact and expect reawaken
+    update_contact_payload = {
+        "contact_type": "phone",
+        "metadata": {"test_key": "test_val"},
+    }
     put_resp = await client.put(
         f"/v0/assistant/{assistant_id}/contact",
         json=update_contact_payload,
@@ -1469,7 +1489,7 @@ async def test_delete_assistant_contact_reawakens(
     mock_reawaken.assert_called_once()
     assert mock_reawaken.call_args[0][0] == str(assistant_id)
     # Also assert the mock for deleting the phone number was called
-    mock_delete_phone.assert_called_once_with("+15552223333")
+    mock_delete_phone.assert_called_once_with("+15552223333", deploy_env=None)
 
 
 # ==== Voice Configuration Validation Tests ====
@@ -1686,7 +1706,7 @@ async def test_update_assistant_with_invalid_voice_config(
 
 @pytest.mark.anyio
 async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
-    """Deleting an assistant should delete its call recordings from GCS."""
+    """Deleting an assistant should hand GCS cleanup to the durable task path."""
     payload = {
         "first_name": "Recorded",
         "surname": "Assistant",
@@ -1697,8 +1717,18 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
     assistant_id = create_resp.json()["info"]["agent_id"]
 
     with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_process_cleanup, patch(
         "orchestra.web.api.assistant.views.BucketService",
     ) as MockBucketServiceClass:
+        mock_process_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         mock_instance = MockBucketServiceClass.return_value
         mock_instance.delete_assistant_file.return_value = True
         mock_instance.delete_all_assistant_data.return_value = {
@@ -1713,17 +1743,65 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
         )
         assert del_resp.status_code == 200
 
-        mock_instance.delete_all_assistant_data.assert_called_once_with(
-            int(assistant_id),
-            is_staging=False,
+        mock_process_cleanup.assert_awaited_once()
+        mock_instance.delete_all_assistant_data.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_processes_cleanup_tasks(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    payload = {
+        "first_name": "Runtime",
+        "surname": "Teardown",
+        "desktop_mode": "ubuntu",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = int(create_resp.json()["info"]["agent_id"])
+
+    with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_process_cleanup, patch(
+        "orchestra.web.api.assistant.views.BucketService",
+    ) as MockBucketServiceClass:
+        mock_process_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
+        mock_instance = MockBucketServiceClass.return_value
+        mock_instance.delete_assistant_file.return_value = True
+        mock_instance.delete_all_assistant_data.return_value = {
+            "media": 0,
+            "recordings": 0,
+            "attachments": 0,
+        }
+
+        del_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}",
+            headers=HEADERS,
         )
+
+    assert del_resp.status_code == 200
+    mock_process_cleanup.assert_awaited_once()
+    assert mock_process_cleanup.await_args.kwargs["task_ids"]
+    mock_instance.delete_all_assistant_data.assert_not_called()
+    cleanup_task = dbsession.query(AssistantCleanupTask).one()
+    assert cleanup_task.assistant_id == assistant_id
+    assert cleanup_task.status == "pending"
 
 
 @pytest.mark.anyio
 async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     client: AsyncClient,
 ):
-    """Recording cleanup failures should not prevent assistant deletion."""
+    """Durable cleanup retries must not prevent assistant deletion responses."""
     payload = {
         "first_name": "Resilient",
         "surname": "Assistant",
@@ -1734,8 +1812,18 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     assistant_id = create_resp.json()["info"]["agent_id"]
 
     with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_process_cleanup, patch(
         "orchestra.web.api.assistant.views.BucketService",
     ) as MockBucketServiceClass:
+        mock_process_cleanup.return_value = {
+            "processed": 1,
+            "completed": 0,
+            "retried": 1,
+            "failed": 0,
+            "errors": ["assistant GCS cleanup still retrying"],
+        }
         mock_instance = MockBucketServiceClass.return_value
         mock_instance.delete_assistant_file.return_value = True
         mock_instance.delete_all_assistant_data.side_effect = Exception(
@@ -1747,5 +1835,6 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
             headers=HEADERS,
         )
         assert del_resp.status_code == 200
-        assert "cleanup issues" in del_resp.json()["info"]
-        assert "GCS" in del_resp.json()["info"]
+        mock_process_cleanup.assert_awaited_once()
+        mock_instance.delete_all_assistant_data.assert_not_called()
+        assert del_resp.json()["info"] == "Assistant deleted successfully"

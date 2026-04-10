@@ -423,7 +423,22 @@ def _process_billing_account(
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     ba_dao = BillingAccountDAO(session)
-    new_balance = ba_dao.deduct_credits(ba.id, float(total_levy))
+    new_balance = ba_dao.deduct_credits(
+        ba.id,
+        float(total_levy),
+        category="resources",
+        description=f"Contact levy ({billing_month})",
+        detail={
+            "event": "contact_levy",
+            "billing_month": billing_month,
+            "phone_count": ar.phone_count,
+            "phone_cost": float(ar.phone_cost),
+            "email_count": ar.email_count,
+            "email_cost": float(ar.email_cost),
+            "whatsapp_count": ar.whatsapp_count,
+            "whatsapp_cost": float(ar.whatsapp_cost),
+        },
+    )
     if new_balance is not None:
         ar.credits_after = Decimal(str(new_balance))
     else:

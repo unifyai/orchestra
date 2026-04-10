@@ -439,21 +439,27 @@ def _check_stale_recharges(
                 )
                 if fix:
                     recharge.status = RechargeStatus.FAILED
-                    ba = (
-                        session.query(BillingAccount)
-                        .filter_by(id=recharge.billing_account_id)
-                        .with_for_update()
-                        .first()
+                    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+                    ba_dao = BillingAccountDAO(session)
+                    ba_dao.deduct_credits(
+                        recharge.billing_account_id,
+                        float(recharge.quantity),
+                        category="void",
+                        description="Reconciliation: INVOICE_CREATED → FAILED",
+                        detail={
+                            "event": "reconciliation_void",
+                            "recharge_id": recharge.id,
+                            "stripe_invoice_id": recharge.stripe_invoice_id,
+                        },
                     )
-                    if ba:
-                        ba.credits -= recharge.quantity
-                        logger.info(
-                            "Auto-fixed recharge %s: INVOICE_CREATED → FAILED, "
-                            "voided %s credits from BA %s",
-                            recharge.id,
-                            recharge.quantity,
-                            ba.id,
-                        )
+                    logger.info(
+                        "Auto-fixed recharge %s: INVOICE_CREATED → FAILED, "
+                        "voided %s credits from BA %s",
+                        recharge.id,
+                        recharge.quantity,
+                        recharge.billing_account_id,
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -1249,7 +1255,17 @@ def _check_failed_recharge_voids(
                 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
                 ba_dao = BillingAccountDAO(session)
-                ba_dao.deduct_credits(ba.id, float(recharge.quantity))
+                ba_dao.deduct_credits(
+                    ba.id,
+                    float(recharge.quantity),
+                    category="void",
+                    description="Reconciliation: voided unearned credits",
+                    detail={
+                        "event": "reconciliation_void",
+                        "recharge_id": recharge.id,
+                        "stripe_invoice_id": recharge.stripe_invoice_id,
+                    },
+                )
                 fixed = True
                 logger.info(
                     "Auto-fixed BA %s: voided %s unearned credits from "

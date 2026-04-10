@@ -729,13 +729,13 @@ class ResourceAccessDAO:
         self.clear_permission_cache()
         return deleted
 
-    def delete_unshared_resources_by_creator(
+    def get_unshared_resources_by_creator(
         self,
         user_id: str,
         organization_id: int,
-    ) -> dict:
+    ) -> dict[str, list[Project | Assistant]]:
         """
-        Delete resources created by a user that were never shared with others.
+        Discover resources created by a user that were never shared with others.
 
         A resource is considered "unshared" if:
         - It has explicit ResourceAccess entries (not relying on implicit org access)
@@ -746,10 +746,8 @@ class ResourceAccessDAO:
 
         :param user_id: User ID of the creator being removed.
         :param organization_id: Organization ID.
-        :returns: Dict with counts of deleted resources by type.
+        :returns: Dict with ``projects`` and ``assistants`` lists.
         """
-        deleted = {"projects": 0, "assistants": 0}
-
         # Get resources created by this user in this org
         user_projects = (
             self.session.query(Project)
@@ -769,27 +767,44 @@ class ResourceAccessDAO:
             .all()
         )
 
-        # Check each project
-        for project in user_projects:
-            if self._is_resource_unshared(
-                resource_type="project",
-                resource_id=project.id,
-                creator_id=user_id,
-            ):
-                self.session.delete(project)
-                deleted["projects"] += 1
+        return {
+            "projects": [
+                project
+                for project in user_projects
+                if self._is_resource_unshared(
+                    resource_type="project",
+                    resource_id=project.id,
+                    creator_id=user_id,
+                )
+            ],
+            "assistants": [
+                assistant
+                for assistant in user_assistants
+                if self._is_resource_unshared(
+                    resource_type="assistant",
+                    resource_id=assistant.agent_id,
+                    creator_id=user_id,
+                )
+            ],
+        }
 
-        # Check each assistant
-        for assistant in user_assistants:
-            if self._is_resource_unshared(
-                resource_type="assistant",
-                resource_id=assistant.agent_id,
-                creator_id=user_id,
-            ):
-                # Delete assistant logs before deleting assistant
-                self._delete_assistant_logs(assistant, organization_id)
-                self.session.delete(assistant)
-                deleted["assistants"] += 1
+    def delete_unshared_resources(
+        self,
+        resources: dict[str, list[Project | Assistant]],
+        *,
+        organization_id: int,
+    ) -> dict:
+        """Delete previously discovered unshared projects/assistants."""
+        deleted = {"projects": 0, "assistants": 0}
+
+        for project in resources.get("projects", []):
+            self.session.delete(project)
+            deleted["projects"] += 1
+
+        for assistant in resources.get("assistants", []):
+            self._delete_assistant_logs(assistant, organization_id)
+            self.session.delete(assistant)
+            deleted["assistants"] += 1
 
         self.session.flush()
         return deleted

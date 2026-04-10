@@ -15,6 +15,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
+from orchestra.db.models.orchestra_models import AssistantCleanupTask
 from orchestra.tests.utils import HEADERS
 
 
@@ -41,26 +42,55 @@ def mock_all_infra(dbsession):
         "create_phone_number": AsyncMock(
             return_value={"phoneNumber": "+15551234567"},
         ),
-        "assign_whatsapp_sender": AsyncMock(
-            return_value={"whatsapp_number": "+15559876543"},
-        ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
-        "delete_assistant_disk": AsyncMock(return_value={"success": True}),
         "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
+        "process_assistant_cleanup_tasks": AsyncMock(
+            return_value={
+                "processed": 1,
+                "completed": 1,
+                "retried": 0,
+                "failed": 0,
+                "errors": [],
+            },
+        ),
+        "_cleanup_after_assistant_delete": AsyncMock(return_value=None),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
         "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
     }
 
     release_pool_vm_mock = AsyncMock(return_value={"success": True})
+    wa_pool_mock = AsyncMock(return_value={"pool_number": "+15559876543"})
+    wa_register_mock = AsyncMock(return_value={"success": True})
+    dc_pool_mock = AsyncMock(
+        return_value={
+            "pool_number": "123456789012345678",
+            "auth_token": "fake-discord-bot-token",
+        },
+    )
+    dc_register_mock = AsyncMock(return_value={"success": True})
+    dc_delete_routes_mock = AsyncMock(return_value=0)
 
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
-        # Patch release_pool_vm at the infra module level so
-        # stop_jobs()'s internal call is intercepted.
         with patch(
             "orchestra.web.api.utils.assistant_infra.release_pool_vm",
             release_pool_vm_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.assign_whatsapp_pool_number",
+            wa_pool_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
+            wa_register_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.assign_discord_pool_bot",
+            dc_pool_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.register_discord_bot",
+            dc_register_mock,
+        ), patch(
+            "orchestra.web.api.utils.assistant_infra.delete_discord_routes",
+            dc_delete_routes_mock,
         ):
             with patch(
                 "orchestra.web.api.assistant.views.settings",
@@ -75,6 +105,11 @@ def mock_all_infra(dbsession):
                         new_callable=AsyncMock,
                     ), patch("orchestra.web.api.assistant.views.time.sleep"):
                         patches["release_pool_vm"] = release_pool_vm_mock
+                        patches["assign_whatsapp_pool_number"] = wa_pool_mock
+                        patches["register_whatsapp_sender"] = wa_register_mock
+                        patches["assign_discord_pool_bot"] = dc_pool_mock
+                        patches["register_discord_bot"] = dc_register_mock
+                        patches["delete_discord_routes"] = dc_delete_routes_mock
                         yield patches
 
 
@@ -115,7 +150,8 @@ async def test_create_assistant_with_infra_full(
     # Contact provisioning removed from create
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
     # Verify no rollback functions were called
     mock_all_infra["delete_email"].assert_not_called()
@@ -150,7 +186,8 @@ async def test_create_assistant_with_infra_email_only(
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["watch_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -313,7 +350,8 @@ async def test_create_infra_whatsapp_fails(
     # Create succeeds because contact provisioning is no longer part of create
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
@@ -341,7 +379,6 @@ async def test_create_infra_pubsub_fails(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
 
     # No contact infra to roll back (contact provisioning removed from create)
     mock_all_infra["delete_email"].assert_not_called()
@@ -383,7 +420,6 @@ async def test_create_infra_rollback_also_fails(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
 
 
 @pytest.mark.anyio
@@ -410,7 +446,6 @@ async def test_create_infra_multiple_rollback_failures(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "PubSub error" in error_detail
 
 
 # =============================================================================
@@ -591,7 +626,8 @@ async def test_org_assistant_with_infra_full(
     # Contact provisioning removed from create
     mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["assign_whatsapp_sender"].assert_not_called()
+    mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
+    mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
 
 @pytest.mark.anyio
@@ -655,7 +691,6 @@ async def test_org_assistant_infra_pubsub_fails_rollback(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "Pubsub topic creation failed" in error_detail
 
     # No contact infra to roll back (contact provisioning removed from create)
     mock_all_infra["delete_email"].assert_not_called()
@@ -753,7 +788,6 @@ async def test_org_assistant_infra_rollback_also_fails(
 
     error_detail = resp.json()["detail"]
     assert "Infrastructure setup failed" in error_detail
-    assert "PubSub org error" in error_detail
 
     # No contact infra to roll back
     mock_all_infra["delete_email"].assert_not_called()
@@ -891,8 +925,9 @@ async def test_create_assistant_with_ubuntu_desktop_mode(
 async def test_delete_assistant_with_windows_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
+    dbsession,
 ):
-    """Test deleting assistant with desktop_mode=windows calls release_pool_vm and delete_assistant_disk."""
+    """Test deleting assistant with desktop_mode=windows queues durable cleanup."""
     payload = {
         "first_name": "DeleteWindowsPool",
         "surname": "Test",
@@ -904,24 +939,28 @@ async def test_delete_assistant_with_windows_desktop_mode(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    mock_all_infra["release_pool_vm"].reset_mock()
-    mock_all_infra["delete_assistant_disk"].reset_mock()
-    mock_all_infra["delete_pubsub_topic"].reset_mock()
+    mock_all_infra["_cleanup_after_assistant_delete"].reset_mock()
 
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    mock_all_infra["release_pool_vm"].assert_called()
-    mock_all_infra["delete_assistant_disk"].assert_called_once_with(agent_id)
-    mock_all_infra["delete_pubsub_topic"].assert_called_once()
+    cleanup_tasks = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == int(agent_id))
+        .all()
+    )
+    assert cleanup_tasks
+    assert cleanup_tasks[-1].desktop_mode == "windows"
+    mock_all_infra["_cleanup_after_assistant_delete"].assert_awaited()
 
 
 @pytest.mark.anyio
 async def test_delete_assistant_with_ubuntu_desktop_mode(
     client: AsyncClient,
     mock_all_infra,
+    dbsession,
 ):
-    """Test deleting assistant with desktop_mode=ubuntu calls release_pool_vm and delete_assistant_disk."""
+    """Test deleting assistant with desktop_mode=ubuntu queues durable cleanup."""
     payload = {
         "first_name": "DeleteUbuntuPool",
         "surname": "Test",
@@ -933,13 +972,16 @@ async def test_delete_assistant_with_ubuntu_desktop_mode(
     assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    mock_all_infra["release_pool_vm"].reset_mock()
-    mock_all_infra["delete_assistant_disk"].reset_mock()
-    mock_all_infra["delete_pubsub_topic"].reset_mock()
+    mock_all_infra["_cleanup_after_assistant_delete"].reset_mock()
 
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
     assert delete_resp.status_code == status.HTTP_200_OK, delete_resp.json()
 
-    mock_all_infra["release_pool_vm"].assert_called()
-    mock_all_infra["delete_assistant_disk"].assert_called_once_with(agent_id)
-    mock_all_infra["delete_pubsub_topic"].assert_called_once()
+    cleanup_tasks = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == int(agent_id))
+        .all()
+    )
+    assert cleanup_tasks
+    assert cleanup_tasks[-1].desktop_mode == "ubuntu"
+    mock_all_infra["_cleanup_after_assistant_delete"].assert_awaited()

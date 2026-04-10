@@ -522,7 +522,10 @@ def register_shutdown_event(
     """
 
     @app.on_event("shutdown")
-    def _shutdown() -> None:  # noqa: WPS430
+    async def _shutdown() -> None:  # noqa: WPS430
+        from orchestra.web.api.utils.http_client import close_async_client
+
+        await close_async_client()
         stop_inactivity_monitor()
         app.state.db_engine.dispose()
         stop_opentelemetry(app)

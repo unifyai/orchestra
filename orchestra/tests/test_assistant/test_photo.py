@@ -5,9 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.services.bucket_service import BucketService as OriginalBucketService
-from orchestra.services.openai_service import (
-    ImageAnalysisResponse,
-)
+from orchestra.services.openai_service import ImageAnalysisResponse
 from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
 from orchestra.services.openai_service import (
     TextModerationResponse,

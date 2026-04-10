@@ -1,17 +1,25 @@
 import logging
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
+from fastapi.responses import JSONResponse
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BillingAccount
 from orchestra.lib.billing import get_billing_entity, queue_auto_recharge
 from orchestra.web.api.credits.schema import (
+    AggregatedTransactionHistoryResponse,
+    AggregatedTransactionItem,
     CreditsResponse,
     DeductCreditsRequest,
     DeductCreditsResponse,
+    SpendingBreakdownResponse,
+    TransactionHistoryResponse,
+    TransactionItem,
 )
 
 router = APIRouter()
@@ -136,6 +144,12 @@ def deduct_credits(
         session,
         billing_entity,
         Decimal(str(request.amount)),
+        category=request.category,
+        assistant_id=request.assistant_id,
+        user_id=request.user_id or user_id,
+        organization_id=organization_id,
+        description=request.description,
+        detail=request.detail,
     )
 
     # Trigger auto-recharge if credits fell below threshold
@@ -166,3 +180,237 @@ def deduct_credits(
         deducted=request.amount,
         current_credits=float(new_balance),
     )
+
+
+@router.get(
+    "/credits/transactions",
+)
+def get_transaction_history(
+    request_fastapi: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    category: Optional[str] = Query(None),
+    assistant_id: Optional[int] = Query(None),
+    filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    start_date: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}-\d{2}"),
+    group_by: Optional[str] = Query(None),
+    session=Depends(get_db_session),
+) -> TransactionHistoryResponse | AggregatedTransactionHistoryResponse:
+    """Paginated credit transaction history for the current billing account.
+
+    Filters are scoped to the billing account resolved from the API key.
+    Use ``user_id`` to see spending by a specific member in an org context.
+    Use ``start_date`` / ``end_date`` (ISO date strings) to restrict the
+    time window (inclusive start, exclusive end).
+
+    When ``group_by`` is provided (e.g. ``day``, ``month``), transactions
+    are aggregated by time bucket and category instead of returned
+    individually.
+    """
+    from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+    _VALID_INTERVALS = {"minute", "hour", "day", "month", "year"}
+    _SPENDING_CATEGORIES = ["llm", "hire", "resources", "media"]
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    since = None
+    until = None
+    if start_date:
+        since = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    if end_date:
+        until = datetime.strptime(end_date, "%Y-%m-%d").replace(
+            tzinfo=timezone.utc,
+        ) + timedelta(days=1)
+
+    txn_dao = CreditTransactionDAO(session)
+
+    if group_by:
+        if group_by not in _VALID_INTERVALS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid group_by value. Must be one of: {', '.join(sorted(_VALID_INTERVALS))}",
+            )
+        rows = txn_dao.get_aggregated_transactions(
+            billing_entity.billing_account_id,
+            group_by,
+            limit=limit,
+            offset=offset,
+            category=category,
+            categories=None if category else _SPENDING_CATEGORIES,
+            assistant_id=assistant_id,
+            user_id=filter_user_id,
+            since=since,
+            until=until,
+        )
+        return AggregatedTransactionHistoryResponse(
+            transactions=[
+                AggregatedTransactionItem(
+                    bucket=bucket,
+                    category=cat,
+                    total=total,
+                    count=count,
+                )
+                for bucket, cat, total, count in rows
+            ],
+        )
+
+    rows = txn_dao.get_transactions(
+        billing_entity.billing_account_id,
+        limit=limit,
+        offset=offset,
+        category=category,
+        assistant_id=assistant_id,
+        user_id=filter_user_id,
+        since=since,
+        until=until,
+    )
+
+    return TransactionHistoryResponse(
+        transactions=[
+            TransactionItem(
+                id=r.id,
+                at=r.at,
+                amount=float(r.amount),
+                balance_after=(
+                    float(r.balance_after) if r.balance_after is not None else None
+                ),
+                category=r.category,
+                assistant_id=r.assistant_id,
+                user_id=r.user_id,
+                organization_id=r.organization_id,
+                description=r.description,
+                detail=r.detail,
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.get(
+    "/credits/spending",
+    response_model=SpendingBreakdownResponse,
+)
+def get_spending_breakdown(
+    request_fastapi: Request,
+    month: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}$"),
+    assistant_id: Optional[int] = Query(None),
+    filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    session=Depends(get_db_session),
+) -> SpendingBreakdownResponse:
+    """Monthly spending breakdown by category, queried from the credit ledger.
+
+    Uses the composite index ``(billing_account_id, category, at)``
+    so aggregation only touches relevant rows.
+
+    Use ``user_id`` to see spending by a specific member in an org context.
+    """
+    from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    if month is None:
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    year, mon = map(int, month.split("-"))
+    month_start = datetime(year, mon, 1, tzinfo=timezone.utc)
+    if mon == 12:
+        month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        month_end = datetime(year, mon + 1, 1, tzinfo=timezone.utc)
+
+    txn_dao = CreditTransactionDAO(session)
+    breakdown = txn_dao.get_spending_by_category(
+        billing_entity.billing_account_id,
+        month_start,
+        month_end,
+        assistant_id=assistant_id,
+        user_id=filter_user_id,
+    )
+    total = sum(breakdown.values())
+
+    return SpendingBreakdownResponse(
+        month=month,
+        total=total,
+        by_category=breakdown,
+    )
+
+
+@router.get("/credits/spending/timeseries")
+def get_spending_timeseries(
+    request_fastapi: Request,
+    start_date: str = Query(..., regex=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: str = Query(..., regex=r"^\d{4}-\d{2}-\d{2}$"),
+    group_by: str = Query("day"),
+    category: Optional[str] = Query(None),
+    assistant_id: Optional[int] = Query(None),
+    filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    session=Depends(get_db_session),
+) -> JSONResponse:
+    """Time-bucketed spending from the credit ledger.
+
+    Returns ``{ "<timestamp>": { "sum": <float> }, ... }`` — the same
+    shape as ``/v0/logs/metric/sum`` so the console chart can consume it
+    without transformation changes.
+
+    ``group_by`` accepts the interval name directly (``day``, ``month``, …).
+    """
+    from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+
+    _VALID_INTERVALS = {"minute", "hour", "day", "month", "year"}
+
+    if group_by not in _VALID_INTERVALS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid group_by value. Must be one of: {', '.join(sorted(_VALID_INTERVALS))}",
+        )
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    # end_date is inclusive — advance to next day for exclusive upper bound
+    end = datetime.strptime(end_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc,
+    ) + timedelta(days=1)
+
+    _SPENDING_CATEGORIES = ["llm", "hire", "resources", "media"]
+
+    txn_dao = CreditTransactionDAO(session)
+    rows = txn_dao.get_spending_timeseries(
+        billing_entity.billing_account_id,
+        start,
+        end,
+        interval=group_by,
+        category=category,
+        categories=None if category else _SPENDING_CATEGORIES,
+        assistant_id=assistant_id,
+        user_id=filter_user_id,
+    )
+
+    result = {bucket.isoformat(): {"sum": total} for bucket, total in rows}
+    return JSONResponse(content=result)

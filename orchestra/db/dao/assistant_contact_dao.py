@@ -235,7 +235,6 @@ class AssistantContactDAO:
         contact_value: str,
         provider: str | None = None,
         country_code: str | None = None,
-        user_value: str | None = None,
         provisioned_by: str = "platform",
         metadata: dict | None = None,
     ) -> AssistantContact:
@@ -244,6 +243,10 @@ class AssistantContactDAO:
         If a *deleted* row for the same ``(assistant_id, contact_type)``
         already exists, it is recycled (un-deleted) to avoid
         partial-unique-index violations.  Otherwise a new row is created.
+
+        User-side contact info (phone, whatsapp) is stored on the ``User``
+        model rather than per-contact; see ``User.phone_number`` and
+        ``User.whatsapp_number``.
         """
         if provider is None:
             provider = self.infer_provider(contact_type)
@@ -259,11 +262,9 @@ class AssistantContactDAO:
             .first()
         )
         if existing_active:
-            # Update in place (idempotent re-write)
             existing_active.contact_value = contact_value
             existing_active.provider = provider
             existing_active.country_code = country_code
-            existing_active.user_value = user_value
             existing_active.provisioned_by = provisioned_by
             existing_active.metadata_ = metadata or {}
             existing_active.updated_at = datetime.utcnow()
@@ -283,7 +284,6 @@ class AssistantContactDAO:
             deleted_row.contact_value = contact_value
             deleted_row.provider = provider
             deleted_row.country_code = country_code
-            deleted_row.user_value = user_value
             deleted_row.provisioned_by = provisioned_by
             deleted_row.metadata_ = metadata or {}
             deleted_row.status = "active"
@@ -302,7 +302,6 @@ class AssistantContactDAO:
             provider=provider,
             provisioned_by=provisioned_by,
             country_code=country_code,
-            user_value=user_value,
             status="active",
             metadata_=metadata or {},
         )

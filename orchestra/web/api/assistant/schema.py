@@ -57,6 +57,11 @@ class UnifyMessage(BaseModel):
 class AssistantCreate(BaseModel):
     """
     Schema for creating a new assistant.
+
+    When this request is made with an organization API key, the assistant is
+    created inside that organization but still records the calling user as its
+    creator/lifecycle owner. Organization access is layered on through
+    ``organization_id`` and org RBAC, not by rewriting ``user_id``.
     """
 
     first_name: Optional[str] = Field(
@@ -215,6 +220,9 @@ class AssistantCreate(BaseModel):
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
+
+    For organization-scoped assistants, ``user_id`` is the creator/lifecycle
+    owner and ``organization_id`` is the org access scope.
     """
 
     user_desktop_url: Optional[str] = Field(
@@ -234,12 +242,19 @@ class AssistantRead(AssistantCreate):
     )
     user_id: str = Field(
         ...,
-        description="ID of the user who created/owns the assistant",
+        description=(
+            "ID of the creating user. For org assistants this remains the "
+            "creator/lifecycle owner, while org access is governed separately "
+            "by organization_id and RBAC."
+        ),
         example="123",
     )
     organization_id: Optional[int] = Field(
         None,
-        description="Organization ID if this is an organizational assistant, None for personal assistants",
+        description=(
+            "Organization access scope for org assistants. Null means the "
+            "assistant is personal rather than organization-scoped."
+        ),
         example=None,
     )
     created_at: datetime = Field(
@@ -273,18 +288,26 @@ class AssistantRead(AssistantCreate):
     )
     user_phone: Optional[str] = Field(
         None,
-        description="User's personal phone number (for call forwarding)",
+        description="User's personal phone number",
         example="+15559876543",
     )
     user_whatsapp_number: Optional[str] = Field(
         None,
-        description="User's WhatsApp number associated with the assistant",
+        description="User's WhatsApp number",
         example="+15559876543",
     )
     assistant_whatsapp_number: Optional[str] = Field(
         None,
         description="WhatsApp number of the assistant",
         example="+15551234567",
+    )
+    user_discord_id: Optional[str] = Field(
+        None,
+        description="User's linked Discord user ID",
+    )
+    assistant_discord_bot_id: Optional[str] = Field(
+        None,
+        description="Discord bot ID assigned to the assistant",
     )
     api_key: Optional[str] = Field(
         None,
@@ -1194,7 +1217,7 @@ class AssistantContactRemoval(BaseModel):
     Schema for removing a contact method from an assistant.
     """
 
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact information to remove.",
         example="email",
@@ -1209,7 +1232,7 @@ class AssistantContactCreate(BaseModel):
     email, WhatsApp sender) and creates the corresponding AssistantContact row.
     """
 
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact detail to create.",
         example="phone",
@@ -1219,11 +1242,6 @@ class AssistantContactCreate(BaseModel):
         "US",
         description="Country code for phone number provisioning (e.g., 'US', 'GB'). Only used for phone contacts.",
         example="US",
-    )
-    user_phone: Optional[str] = Field(
-        None,
-        description="User's personal phone number (for forwarding). Only used for phone contacts.",
-        example="+15551234567",
     )
     # Email-specific fields
     email_local: Optional[str] = Field(
@@ -1241,19 +1259,12 @@ class AssistantContactCreate(BaseModel):
         description="Last name for Google Workspace account. Only used for email contacts.",
         example="Lovelace",
     )
-    # WhatsApp-specific fields
-    user_whatsapp_number: Optional[str] = Field(
-        None,
-        description="User's WhatsApp number to associate with the sender. Only used for WhatsApp contacts.",
-        example="+15551234567",
-    )
 
     class Config:
         schema_extra = {
             "example": {
                 "contact_type": "phone",
                 "phone_country": "US",
-                "user_phone": "+15551234567",
             },
         }
 
@@ -1268,7 +1279,7 @@ class AssistantContactRead(BaseModel):
         ...,
         description="ID of the assistant this contact belongs to.",
     )
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact detail.",
     )
@@ -1287,10 +1298,6 @@ class AssistantContactRead(BaseModel):
     country_code: Optional[str] = Field(
         None,
         description="Country code for phone numbers.",
-    )
-    user_value: Optional[str] = Field(
-        None,
-        description="Linked user-side value (personal phone/WhatsApp for forwarding).",
     )
     status: str = Field(
         ...,
@@ -1317,21 +1324,17 @@ class AssistantContactRead(BaseModel):
 
 class AssistantContactUpdate(BaseModel):
     """
-    Schema for updating non-provisioned fields on an existing contact.
+    Schema for updating metadata on an existing contact.
 
-    Only ``user_value`` and ``metadata`` can be changed. Changing the actual
-    provisioned resource (phone number, email address) requires delete + create.
+    Only ``metadata`` can be changed via this endpoint. User-side contact
+    info (phone, whatsapp) is managed on the user profile. Changing the
+    actual provisioned resource requires delete + create.
     """
 
-    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+    contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact to update.",
         example="phone",
-    )
-    user_value: Optional[str] = Field(
-        None,
-        description="Updated user-side value (e.g., personal phone for forwarding).",
-        example="+15559876543",
     )
     metadata: Optional[Dict[str, Any]] = Field(
         None,
@@ -1342,7 +1345,7 @@ class AssistantContactUpdate(BaseModel):
         schema_extra = {
             "example": {
                 "contact_type": "phone",
-                "user_value": "+15559876543",
+                "metadata": {"custom_key": "value"},
             },
         }
 

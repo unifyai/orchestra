@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import Depends, HTTPException, Request
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Float,
     Integer,
     String,
     Text,
@@ -61,6 +62,7 @@ __all__ = [
     "is_image_field",
     "is_audio_field",
     "_join_logs",
+    "_join_query_internal",
     "extract_key_order",
     "reorder_nested_dict",
 ]
@@ -2674,7 +2676,13 @@ def _build_log_subquery(
     Build subquery selecting log_event_id and data column.
 
     Args:
-        args: Dictionary containing filtering criteria
+        args: Dictionary containing filtering criteria.  Recognised keys:
+            ``context``, ``filter_expr``, ``from_ids``, ``exclude_ids``,
+            and ``from_fields``.  When ``from_fields`` is provided (an
+            ``&``-separated string of field names) only those keys are
+            projected from the JSONB ``data`` column via
+            ``jsonb_build_object``, avoiding TOAST decompression of large
+            values (e.g. embedding arrays) during Nested Loop joins.
         project_name: Name of the project
         project_id: ID of the project
         request_fastapi: FastAPI request object
@@ -2695,6 +2703,7 @@ def _build_log_subquery(
     filter_expr = args.get("filter_expr")
     from_ids = args.get("from_ids")
     exclude_ids = args.get("exclude_ids")
+    from_fields = args.get("from_fields")
 
     # Get filtered log event IDs as a subquery
     event_ids_subq, _ = _get_all_filtered_log_event_ids(
@@ -2719,10 +2728,24 @@ def _build_log_subquery(
             name=context,
         )
 
-    # Build simple query selecting log_event_id and data column
+    # When from_fields is provided, project only those keys from JSONB to
+    # avoid decompressing TOAST pages for large values during joins.
+    if from_fields:
+        fields = (
+            from_fields.split("&")
+            if isinstance(from_fields, str)
+            else list(from_fields)
+        )
+        jsonb_args = []
+        for k in sorted(fields):
+            jsonb_args.extend([literal(k), LogEvent.data.op("->")(k)])
+        data_col = func.jsonb_build_object(*jsonb_args).label("data")
+    else:
+        data_col = LogEvent.data.label("data")
+
     base_query = session.query(
         LogEvent.id.label("log_event_id"),
-        LogEvent.data.label("data"),
+        data_col,
     )
 
     # Get field names from FieldTypeDAO for validation and column selection
@@ -2754,6 +2777,7 @@ def _construct_join_query(
     fields_b: Optional[Dict[str, Any]] = None,
     include_log_ids: bool = False,
     session=None,
+    skip_merge: bool = False,
 ):
     """
     JSONB version: Construct join using A.data || B.data merge.
@@ -2837,7 +2861,10 @@ def _construct_join_query(
         select_columns.append(subq_a.c.log_event_id.label("log_event_id_a"))
         select_columns.append(subq_b.c.log_event_id.label("log_event_id_b"))
 
-    if columns:
+    if skip_merge:
+        select_columns.append(subq_a.c.data.label("data_a"))
+        select_columns.append(subq_b.c.data.label("data_b"))
+    elif columns:
         # Column selection mode: extract specific keys from JSONB and build merged_data
         if isinstance(columns, dict):
             column_specs = list(columns.items())
@@ -3478,7 +3505,298 @@ def _join_logs_internal(
                     "or a list (for column selection)",
                 )
 
-        # Build JSONB subqueries for both contexts
+        # --- Phase 1: Build subqueries ---
+        subq_a, fields_a = _build_log_subquery(
+            args=pair_of_args[0],
+            project_name=project_name,
+            project_id=project_id,
+            request_fastapi=request_fastapi,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            alias="A",
+        )
+
+        subq_b, fields_b = _build_log_subquery(
+            args=pair_of_args[1],
+            project_name=project_name,
+            project_id=project_id,
+            request_fastapi=request_fastapi,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            alias="B",
+        )
+
+        # --- Phase 2: Construct join query ---
+        joined_query = _construct_join_query(
+            subq_a=subq_a,
+            subq_b=subq_b,
+            join_expr=join_expr,
+            mode=mode,
+            columns=columns,
+            fields_a=fields_a,
+            fields_b=fields_b,
+            include_log_ids=True,  # Always include log IDs for embedding lookups
+            session=session,
+        )
+
+        # --- Phase 3: Execute the join query ---
+        result_rows = session.execute(joined_query).fetchall()
+
+        if not result_rows:
+            return []
+
+        # Get source context IDs for field type lookups
+        source_contexts = {}
+        context_a_id = context_dao.get_or_create(project_id, name=context_a)
+        context_b_id = context_dao.get_or_create(project_id, name=context_b)
+        source_contexts["A"] = context_a_id
+        source_contexts["B"] = context_b_id
+
+        # --- Phase 4: Create new log entries from joined results ---
+        new_log_ids = _create_logs_from_joined_rows(
+            result_rows=result_rows,
+            project_id=project_id,
+            context_id=context_id,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            source_contexts=source_contexts,
+            columns=columns,
+        )
+
+        # --- Phase 5: Commit ---
+        session.commit()
+        return new_log_ids
+
+    except Exception as e:
+        raise ValueError(f"Failed to join logs (JSONB): {traceback.format_exc()}")
+
+
+# ---------------------------------------------------------------------------
+# Fused join + query/reduce (no materialization)
+# ---------------------------------------------------------------------------
+
+
+def _join_query_internal(
+    project_id: int,
+    project_name: str,
+    pair_of_args: List[Dict[str, Any]],
+    join_expr: str,
+    mode: str,
+    columns: Optional[Union[Dict[str, str], List[str]]] = None,
+    *,
+    filter_expr: Optional[str] = None,
+    sorting: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    group_by: Optional[Union[str, List[str]]] = None,
+    metric: Optional[str] = None,
+    key: Optional[Union[str, List[str]]] = None,
+    request_fastapi: Optional[Request] = None,
+    project_dao: ProjectDAO = None,
+    field_type_dao: FieldTypeDAO = None,
+    context_dao: ContextDAO = None,
+    session=None,
+):
+    """Execute a join and query or reduce the result without materialisation.
+
+    Reuses the subquery / join-construction phases of ``_join_logs_internal``
+    but never writes rows.  Two modes:
+
+    * **reduce** (``metric`` + ``key`` supplied): returns an aggregated dict
+      keyed by ``group_by`` values.
+    * **row** (no ``metric``): returns ``{"logs": [...], "count": N}`` with
+      optional filtering, sorting and pagination.
+    """
+    from orchestra.web.api.log.utils.metric_utils import (
+        REDUCTION_METHODS,
+        SHARED_VALUE_SAFE_METRICS,
+        _postprocess_aggregator_value,
+        _reduce_shared_value,
+        build_grouped_result,
+    )
+
+    try:
+        context_a = pair_of_args[0].get("context")
+        context_b = pair_of_args[1].get("context")
+        if not context_a or not context_b:
+            raise ValueError(
+                "Contexts for both queries must be provided in the pair of args. "
+                f"Got: {context_a} and {context_b}",
+            )
+
+        filter_expr_a = pair_of_args[0].get("filter_expr")
+        filter_expr_b = pair_of_args[1].get("filter_expr")
+        if filter_expr_a:
+            pair_of_args[0]["filter_expr"] = filter_expr_a.replace(
+                context_a + ".",
+                "",
+            )
+        if filter_expr_b:
+            pair_of_args[1]["filter_expr"] = filter_expr_b.replace(
+                context_b + ".",
+                "",
+            )
+
+        join_expr = join_expr.replace(context_a, "A").replace(context_b, "B")
+
+        if columns is not None:
+            if isinstance(columns, dict):
+                columns = {
+                    k.replace(context_a, "A").replace(context_b, "B"): v
+                    for k, v in columns.items()
+                }
+            elif isinstance(columns, list):
+                columns = [
+                    c.replace(context_a, "A").replace(context_b, "B") for c in columns
+                ]
+
+        # --- Inject from_fields for TOAST avoidance ---
+        # Determine whether this will be a direct-reduce query (skip_merge)
+        # so we can narrow the projection to only aggregation-needed fields.
+        import re as _re_proj
+
+        # Build the alias → (side, original_col) mapping from columns.
+        _alias_map: Dict[str, tuple] = {}
+        if columns is not None:
+            if isinstance(columns, dict):
+                for src, alias in columns.items():
+                    if "." in src:
+                        table, col = src.split(".", 1)
+                        _alias_map[alias] = (table.upper(), col)
+            elif isinstance(columns, list):
+                for src in columns:
+                    if "." in src:
+                        table, col = src.split(".", 1)
+                        _alias_map[col] = (table.upper(), col)
+
+        # Collect the aliases the aggregation will reference.
+        _agg_aliases: set = set()
+        if key is not None:
+            _agg_aliases.update(
+                [key] if isinstance(key, str) else list(key),
+            )
+        if group_by is not None:
+            _agg_aliases.update(
+                [group_by] if isinstance(group_by, str) else list(group_by),
+            )
+
+        # Direct reduce is only safe when every agg alias is resolvable.
+        _use_direct_reduce = (
+            metric is not None
+            and not filter_expr
+            and columns is not None
+            and all(a in _alias_map for a in _agg_aliases)
+        )
+
+        # Join-expression keys are always needed on both sides.
+        join_keys_a: set = set()
+        join_keys_b: set = set()
+        for m in _re_proj.finditer(r"\bA\.(\w+)", join_expr):
+            join_keys_a.add(m.group(1))
+        for m in _re_proj.finditer(r"\bB\.(\w+)", join_expr):
+            join_keys_b.add(m.group(1))
+
+        # Derive the minimal set of keys that the aggregation actually
+        # touches (join keys + metric key + group_by).  Used by both the
+        # direct-reduce projection AND the filtered-reduce projection.
+        _reduce_keys_a: set = set(join_keys_a)
+        _reduce_keys_b: set = set(join_keys_b)
+        if columns is not None:
+            col_specs = (
+                list(columns.items())
+                if isinstance(columns, dict)
+                else [(c, c.split(".", 1)[1]) for c in columns if "." in c]
+            )
+            for src, alias in col_specs:
+                if alias not in _agg_aliases or "." not in src:
+                    continue
+                tbl, col = src.split(".", 1)
+                if tbl.upper() == "A":
+                    _reduce_keys_a.add(col)
+                elif tbl.upper() == "B":
+                    _reduce_keys_b.add(col)
+
+        if columns is not None:
+            if _use_direct_reduce:
+                # Always project for direct reduce — the set is minimal.
+                for side_idx, rkeys in enumerate(
+                    [_reduce_keys_a, _reduce_keys_b],
+                ):
+                    if rkeys and "from_fields" not in pair_of_args[side_idx]:
+                        pair_of_args[side_idx]["from_fields"] = "&".join(
+                            sorted(rkeys),
+                        )
+            elif metric is not None and filter_expr:
+                # Filtered reduce: narrow to filter-referenced + agg fields
+                # so we don't drag embeddings through the merge needlessly.
+                _filter_refs: set = set()
+                for m in _re_proj.finditer(r"\b(\w+)\b", filter_expr):
+                    _filter_refs.add(m.group(1))
+
+                filt_keys_a: set = set(_reduce_keys_a)
+                filt_keys_b: set = set(_reduce_keys_b)
+                for src, alias in col_specs:
+                    if "." not in src:
+                        continue
+                    if alias not in _filter_refs:
+                        continue
+                    tbl, col = src.split(".", 1)
+                    if tbl.upper() == "A":
+                        filt_keys_a.add(col)
+                    elif tbl.upper() == "B":
+                        filt_keys_b.add(col)
+
+                for side_idx, fkeys in enumerate(
+                    [filt_keys_a, filt_keys_b],
+                ):
+                    if fkeys and "from_fields" not in pair_of_args[side_idx]:
+                        pair_of_args[side_idx]["from_fields"] = "&".join(
+                            sorted(fkeys),
+                        )
+            else:
+                # Row mode: project when selected columns are a small
+                # fraction of total fields (heuristic).
+                _PROJECTION_RATIO = 0.5
+                keys_a: set = set(join_keys_a)
+                keys_b: set = set(join_keys_b)
+                for src, _alias in col_specs:
+                    if "." in src:
+                        tbl, col = src.split(".", 1)
+                        if tbl.upper() == "A":
+                            keys_a.add(col)
+                        elif tbl.upper() == "B":
+                            keys_b.add(col)
+
+                for side_idx, keys_side in enumerate([keys_a, keys_b]):
+                    if not keys_side or "from_fields" in pair_of_args[side_idx]:
+                        continue
+                    ctx_name = pair_of_args[side_idx].get("context", "")
+                    ctx_objs = context_dao.filter(
+                        name=ctx_name,
+                        project_id=project_id,
+                    )
+                    ctx_id = ctx_objs[0][0].id if ctx_objs else None
+                    if ctx_id is None:
+                        continue
+                    total_fields = field_type_dao.get_field_types(
+                        project_id=project_id,
+                        context_id=ctx_id,
+                    )
+                    total_count = len(total_fields)
+                    if (
+                        total_count > 0
+                        and len(keys_side) / total_count < _PROJECTION_RATIO
+                    ):
+                        pair_of_args[side_idx]["from_fields"] = "&".join(
+                            sorted(keys_side),
+                        )
+
+        # --- Phase 1: Build subqueries ---
         subq_a, fields_a = _build_log_subquery(
             args=pair_of_args[0],
             project_name=project_name,
@@ -3502,7 +3820,7 @@ def _join_logs_internal(
             alias="B",
         )
 
-        # Construct the JSONB join query
+        # --- Phase 2: Construct join query ---
         joined_query = _construct_join_query(
             subq_a=subq_a,
             subq_b=subq_b,
@@ -3511,39 +3829,189 @@ def _join_logs_internal(
             columns=columns,
             fields_a=fields_a,
             fields_b=fields_b,
-            include_log_ids=True,  # Always include log IDs for embedding lookups
+            include_log_ids=False,
             session=session,
+            skip_merge=_use_direct_reduce,
         )
 
-        # Execute the join query
-        result_rows = session.execute(joined_query).fetchall()
+        if filter_expr:
+            pre_subq = joined_query.subquery("_pre_filter")
+            pre_merged = pre_subq.c.merged_data
 
-        # If no results, return empty list
-        if not result_rows:
-            return []
+            output_fields: Dict[str, Any] = {}
+            if columns:
+                if isinstance(columns, dict):
+                    for src, alias in columns.items():
+                        output_fields[alias] = "Any"
+                elif isinstance(columns, list):
+                    for src in columns:
+                        if "." in src:
+                            _, col = src.split(".", 1)
+                            output_fields[col] = "Any"
 
-        # Get source context IDs for field type lookups
-        source_contexts = {}
-        context_a_id = context_dao.get_or_create(project_id, name=context_a)
-        context_b_id = context_dao.get_or_create(project_id, name=context_b)
-        source_contexts["A"] = context_a_id
-        source_contexts["B"] = context_b_id
+            local_scope: Dict[str, Any] = {}
+            for fname in output_fields:
+                local_scope[fname] = (pre_merged.op("->")(fname), "Any")
 
-        # Create new log entries from the joined results using JSONB merge
-        new_log_ids = _create_logs_from_joined_rows(
-            result_rows=result_rows,
-            project_id=project_id,
-            context_id=context_id,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            source_contexts=source_contexts,
-            columns=columns,
+            from ..python2SQL.parsers import str_filter_exp_to_dict_using_ast
+
+            filter_dict = str_filter_exp_to_dict_using_ast(filter_expr)
+            filter_cond = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session=session,
+                log_event_ids=select(literal(1)).subquery("dummy_ids"),
+                is_derived=False,
+                local_scope=local_scope,
+            )
+            joined_query = (
+                select(pre_merged.label("merged_data"))
+                .select_from(pre_subq)
+                .where(filter_cond)
+            )
+
+        joined_subq = joined_query.subquery("joined")
+
+        # Column accessors — route through raw source cols or merged_data
+        if _use_direct_reduce:
+
+            def _get_text(alias: str):
+                side, col = _alias_map[alias]
+                d = joined_subq.c.data_a if side == "A" else joined_subq.c.data_b
+                return d.op("->>")(col)
+
+            def _get_jsonb(alias: str):
+                side, col = _alias_map[alias]
+                d = joined_subq.c.data_a if side == "A" else joined_subq.c.data_b
+                return d.op("->")(col)
+
+        else:
+            merged = joined_subq.c.merged_data
+
+            def _get_text(alias: str):
+                return merged.op("->>")(alias)
+
+            def _get_jsonb(alias: str):
+                return merged.op("->")(alias)
+
+        # -----------------------------------------------------------------
+        # Reduce mode
+        # -----------------------------------------------------------------
+        if metric is not None:
+            from orchestra.web.api.log.utils.metric_utils import AggregationMetric
+
+            valid_metrics = {m.value for m in AggregationMetric}
+            if metric not in valid_metrics:
+                raise ValueError(
+                    f"Unsupported metric {metric!r}. "
+                    f"Supported: {sorted(valid_metrics)}",
+                )
+            if key is None:
+                raise ValueError("`key` is required when `metric` is provided.")
+
+            keys = [key] if isinstance(key, str) else list(key)
+
+            results = {}
+            for agg_key in keys:
+                text_val = _get_text(agg_key)
+                jsonb_val = _get_jsonb(agg_key)
+
+                agg_fn = REDUCTION_METHODS[metric]
+
+                if metric == "count":
+                    agg_expr = agg_fn(text_val).label("agg_value")
+                elif metric in ("median", "mode"):
+                    agg_expr = agg_fn(cast(text_val, Float)).label("agg_value")
+                else:
+                    agg_expr = agg_fn(cast(text_val, Float)).label("agg_value")
+
+                raw_value_expr = jsonb_val.label("raw_value")
+
+                if group_by is not None:
+                    gb_fields = (
+                        [group_by] if isinstance(group_by, str) else list(group_by)
+                    )
+                    group_exprs = [
+                        _get_jsonb(f).label(f"group_{i}_val")
+                        for i, f in enumerate(gb_fields)
+                    ]
+
+                    q = (
+                        select(
+                            *group_exprs,
+                            agg_expr,
+                            func.array_agg(raw_value_expr).label("raw_values"),
+                        )
+                        .select_from(joined_subq)
+                        .where(text_val.isnot(None))
+                        .group_by(*group_exprs)
+                    )
+                    rows = session.execute(q).fetchall()
+                    results[agg_key] = build_grouped_result(
+                        rows,
+                        gb_fields,
+                        metric,
+                    )
+                else:
+                    q = (
+                        select(
+                            agg_expr,
+                            func.array_agg(raw_value_expr).label("raw_values"),
+                        )
+                        .select_from(joined_subq)
+                        .where(text_val.isnot(None))
+                    )
+                    row = session.execute(q).fetchone()
+                    if row is None:
+                        results[agg_key] = _postprocess_aggregator_value(
+                            None,
+                            metric,
+                            None,
+                        )
+                    else:
+                        shared = _reduce_shared_value(row[-1])
+                        if shared is not None and metric in SHARED_VALUE_SAFE_METRICS:
+                            results[agg_key] = shared
+                        else:
+                            results[agg_key] = _postprocess_aggregator_value(
+                                row[0],
+                                metric,
+                                None,
+                            )
+
+            if len(keys) == 1:
+                return results[keys[0]]
+            return results
+
+        # -----------------------------------------------------------------
+        # Row mode
+        # -----------------------------------------------------------------
+        base_q = select(merged).select_from(joined_subq)
+
+        count_q = select(func.count()).select_from(base_q.subquery("cnt"))
+        total_count = session.execute(count_q).scalar() or 0
+
+        if sorting:
+            sort_spec = json.loads(sorting) if isinstance(sorting, str) else sorting
+            for col_name, direction in sort_spec.items():
+                sort_expr = merged.op("->>")(col_name)
+                if direction == "descending":
+                    base_q = base_q.order_by(desc(sort_expr))
+                else:
+                    base_q = base_q.order_by(asc(sort_expr))
+
+        base_q = base_q.offset(offset)
+        if limit is not None:
+            base_q = base_q.limit(limit)
+
+        rows = session.execute(base_q).fetchall()
+        logs = [dict(row[0]) if row[0] else {} for row in rows]
+
+        return {"logs": logs, "count": total_count}
+
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError(
+            f"Failed to execute join query: {traceback.format_exc()}",
         )
-
-        # Commit the transaction
-        session.commit()
-        return new_log_ids
-
-    except Exception as e:
-        raise ValueError(f"Failed to join logs (JSONB): {traceback.format_exc()}")

@@ -103,8 +103,10 @@ def mock_assistant_infra_calls(request):
 
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        # Return a dict matching the actual create_phone_number response format
-        mock_create_phone.return_value = {"phoneNumber": "+14155551234"}
+        _phone_seq = iter(range(1, 10000))
+        mock_create_phone.side_effect = lambda **kw: {
+            "phoneNumber": f"+1415555{next(_phone_seq):04d}",
+        }
         mock_create_pubsub.return_value = None
 
         yield mock_wake_up, mock_reawaken

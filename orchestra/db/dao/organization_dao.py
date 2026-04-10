@@ -117,8 +117,8 @@ class OrganizationDAO:
         Also deletes the associated BillingAccount (which cascades to
         recharges, credit card fingerprints, etc.).
 
-        Note: Stripe customer archival is handled by the caller (view layer)
-        as a post-commit, best-effort operation.
+        Note: The caller owns the surrounding transaction and the post-commit
+        cleanup work (Stripe archival, durable runtime cleanup, etc.).
 
         :param id: Organization ID.
         :raises ValueError: If the organization doesn't exist or deletion fails.
@@ -133,9 +133,8 @@ class OrganizationDAO:
                     text("DELETE FROM billing_account WHERE id = :ba_id"),
                     {"ba_id": billing_account_id},
                 )
-            self.session.commit()
+            self.session.flush()
         except Exception:
-            self.session.rollback()
             raise ValueError
 
     def get(self, id: int) -> Optional[Organization]:
@@ -273,47 +272,36 @@ class OrganizationDAO:
         """
         Get organization's cumulative spend for a given month.
 
-        Queries the organization's Assistants project logs for spending data.
-        Aggregates cumulative_spend across all assistants in the organization.
+        Queries the credit_transaction ledger for all debits on the
+        organization's billing account within the calendar month.
 
         :param org_id: Organization ID.
         :param month: Month in YYYY-MM format.
         :return: Cumulative spend for the month (0.0 if no spend data).
         """
-        from sqlalchemy import cast, func
-        from sqlalchemy.types import Float
+        from datetime import datetime
 
-        from orchestra.db.models.orchestra_models import (
-            Context,
-            LogEvent,
-            LogEventContext,
-            Project,
+        from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
+        from orchestra.db.models.orchestra_models import Organization
+
+        org = self.session.query(Organization).filter(Organization.id == org_id).first()
+        if not org or not org.billing_account_id:
+            return 0.0
+
+        year, mon = map(int, month.split("-"))
+        month_start = datetime(year, mon, 1)
+        if mon == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, mon + 1, 1)
+
+        dao = CreditTransactionDAO(self.session)
+        return dao.get_total_spend(
+            org.billing_account_id,
+            month_start,
+            month_end,
+            organization_id=org_id,
         )
-
-        # Sum cumulative_spend across all assistants in this organization
-        result = (
-            self.session.query(
-                func.coalesce(
-                    func.sum(cast(LogEvent.data.op("->>")("cumulative_spend"), Float)),
-                    0.0,
-                ).label("spend"),
-            )
-            .select_from(LogEvent)
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .join(Context, LogEventContext.context_id == Context.id)
-            .join(Project, Context.project_id == Project.id)
-            .filter(
-                Project.name == "Assistants",
-                Project.organization_id == org_id,
-                Context.name == "All/Spending/Monthly",
-                LogEvent.data.op("->>")("month") == month,
-            )
-            .first()
-        )
-
-        if result and result.spend:
-            return float(result.spend)
-        return 0.0
 
     # =================================================================
     # MFA Enforcement
