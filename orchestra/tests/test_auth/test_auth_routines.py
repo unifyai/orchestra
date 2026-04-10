@@ -30,6 +30,7 @@ from orchestra.db.models.orchestra_models import MFACredential
 
 _MODULE_PATH = "orchestra.db.dao.auth_dao"
 _SETTINGS_PATH = f"{_MODULE_PATH}.settings"
+_HTTP_CLIENT_PATH = "orchestra.web.api.utils.http_client.get_async_client"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -130,13 +131,12 @@ class TestTurnstileVerification:
 
         with (
             patch(_SETTINGS_PATH) as ms,
-            patch(f"{_MODULE_PATH}.httpx.AsyncClient") as MockClient,
+            patch(_HTTP_CLIENT_PATH) as get_async_client,
         ):
             ms.turnstile_secret_key = "test-secret"
             mc = AsyncMock()
             mc.post.return_value = mock_response
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mc)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            get_async_client.return_value = mc
 
             assert await verify_turnstile_token("valid-token") is True
 
@@ -157,13 +157,12 @@ class TestTurnstileVerification:
 
         with (
             patch(_SETTINGS_PATH) as ms,
-            patch(f"{_MODULE_PATH}.httpx.AsyncClient") as MockClient,
+            patch(_HTTP_CLIENT_PATH) as get_async_client,
         ):
             ms.turnstile_secret_key = "test-secret"
             mc = AsyncMock()
             mc.post.return_value = mock_response
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mc)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            get_async_client.return_value = mc
 
             assert await verify_turnstile_token("bad-token") is False
 
@@ -173,13 +172,12 @@ class TestTurnstileVerification:
 
         with (
             patch(_SETTINGS_PATH) as ms,
-            patch(f"{_MODULE_PATH}.httpx.AsyncClient") as MockClient,
+            patch(_HTTP_CLIENT_PATH) as get_async_client,
         ):
             ms.turnstile_secret_key = "test-secret"
             mc = AsyncMock()
             mc.post.side_effect = httpx.ConnectError("Connection refused")
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mc)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            get_async_client.return_value = mc
 
             assert await verify_turnstile_token("valid-token") is False
 
@@ -193,13 +191,12 @@ class TestTurnstileVerification:
 
         with (
             patch(_SETTINGS_PATH) as ms,
-            patch(f"{_MODULE_PATH}.httpx.AsyncClient") as MockClient,
+            patch(_HTTP_CLIENT_PATH) as get_async_client,
         ):
             ms.turnstile_secret_key = "test-secret"
             mc = AsyncMock()
             mc.post.return_value = mock_response
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mc)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            get_async_client.return_value = mc
 
             assert (
                 await verify_turnstile_token("valid-token", remote_ip="1.2.3.4") is True
@@ -217,13 +214,12 @@ class TestTurnstileVerification:
 
         with (
             patch(_SETTINGS_PATH) as ms,
-            patch(f"{_MODULE_PATH}.httpx.AsyncClient") as MockClient,
+            patch(_HTTP_CLIENT_PATH) as get_async_client,
         ):
             ms.turnstile_secret_key = "test-secret"
             mc = AsyncMock()
             mc.post.return_value = mock_response
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mc)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            get_async_client.return_value = mc
 
             assert await verify_turnstile_token("valid-token", remote_ip=None) is True
 
