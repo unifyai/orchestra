@@ -35,18 +35,24 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.stop_jobs",
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
+    ) as mock_cleanup_tasks, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_stop_jobs.return_value = MagicMock(status_code=200)
+        mock_cleanup_tasks.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         # Patch is_staging to skip credit checks
         mock_settings.is_staging = True
 
-        yield mock_wake_up, mock_reawaken, mock_stop_jobs
+        yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
 
 
 @pytest.fixture

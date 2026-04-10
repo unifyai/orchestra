@@ -203,7 +203,17 @@ def process_checkout_session_event(
                         organization_id=organization_id,
                     )
 
-                ba_dao.add_credits(ba.id, credits)
+                ba_dao.add_credits(
+                    ba.id,
+                    credits,
+                    category="recharge",
+                    organization_id=organization_id,
+                    description="Stripe checkout (organization)",
+                    detail={
+                        "event": "checkout",
+                        "payment_intent_id": payment_intent_id,
+                    },
+                )
 
                 # Record a PAID Recharge so checkout purchases count
                 # toward the cumulative spending threshold for
@@ -275,7 +285,17 @@ def process_checkout_session_event(
                         user_id=user_id,
                     )
 
-                ba_dao.add_credits(ba.id, credits)
+                ba_dao.add_credits(
+                    ba.id,
+                    credits,
+                    category="recharge",
+                    user_id=user_id,
+                    description="Stripe checkout (personal)",
+                    detail={
+                        "event": "checkout",
+                        "payment_intent_id": payment_intent_id,
+                    },
+                )
 
                 # Record a PAID Recharge so checkout purchases count
                 # toward the cumulative spending threshold for
@@ -534,7 +554,16 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                     r.quantity for r in recharges if r.billing_account_id == ba_id
                 )
                 if unpaid:
-                    new_balance = ba_dao.deduct_credits(ba_id, float(unpaid))
+                    new_balance = ba_dao.deduct_credits(
+                        ba_id,
+                        float(unpaid),
+                        category="void",
+                        description="Voided unpaid auto-recharge credits",
+                        detail={
+                            "event": "invoice_failed_void",
+                            "invoice_id": invoice_id,
+                        },
+                    )
                     if new_balance is not None:
                         logger.info(
                             {
@@ -730,7 +759,17 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
             ba = _resolve_billing_account_from_metadata(session, pi_metadata)
             if ba:
-                billing_account_dao.deduct_credits(ba.id, credits_to_remove)
+                billing_account_dao.deduct_credits(
+                    ba.id,
+                    credits_to_remove,
+                    category="refund",
+                    description="Credits removed due to refund",
+                    detail={
+                        "event": "refund",
+                        "payment_intent_id": payment_intent_id,
+                        "refund_fraction": fraction,
+                    },
+                )
                 logger.info(
                     {
                         "message": "Billing account debited due to refund",
@@ -811,7 +850,16 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
             ba = _resolve_billing_account_from_metadata(session, pi_metadata)
             if ba:
-                billing_account_dao.deduct_credits(ba.id, credits_original)
+                billing_account_dao.deduct_credits(
+                    ba.id,
+                    credits_original,
+                    category="dispute",
+                    description="Credits removed due to dispute",
+                    detail={
+                        "event": "dispute",
+                        "payment_intent_id": payment_intent_id,
+                    },
+                )
                 _suspend_ba_for_dispute(ba)
 
                 logger.info(
@@ -846,7 +894,16 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     synchronize_session=False,
                 )
 
-                billing_account_dao.deduct_credits(ba_id, total_credits)
+                billing_account_dao.deduct_credits(
+                    ba_id,
+                    total_credits,
+                    category="dispute",
+                    description="Credits removed due to dispute (invoice)",
+                    detail={
+                        "event": "dispute",
+                        "invoice_id": invoice_id,
+                    },
+                )
 
                 ba = session.query(BillingAccount).filter_by(id=ba_id).first()
                 if ba:
@@ -923,7 +980,16 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
             if ba and credits_original > 0:
                 ba_dao = BillingAccountDAO(session)
-                ba_dao.add_credits(ba.id, credits_original)
+                ba_dao.add_credits(
+                    ba.id,
+                    credits_original,
+                    category="dispute",
+                    description="Credits restored — dispute won",
+                    detail={
+                        "event": "dispute_won",
+                        "payment_intent_id": payment_intent_id,
+                    },
+                )
 
                 if invoice_id:
                     session.query(Recharge).filter_by(
@@ -1352,7 +1418,7 @@ async def handle_stripe_webhook(
                 payload=payload,
                 sig_header=sig_header,
                 secret=settings.stripe_webhook_secret,
-                tolerance=600,
+                tolerance=300,
             )
         except ValueError as e:
             logger.error({"message": "Invalid payload", "error": str(e)})

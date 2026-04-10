@@ -20,7 +20,12 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
-from orchestra.db.models.orchestra_models import ResourceAccess, TeamMember
+from orchestra.db.models.orchestra_models import (
+    AssistantCleanupTask,
+    AssistantContact,
+    ResourceAccess,
+    TeamMember,
+)
 from orchestra.tests.utils import create_test_user
 
 
@@ -38,16 +43,32 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.stop_jobs",
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
+    ) as mock_assistant_cleanup, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings, patch(
+        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_org_cleanup, patch(
         "orchestra.web.api.organization.views.BucketService",
     ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
-        mock_stop_jobs.return_value = MagicMock(status_code=200)
+        mock_assistant_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
+        mock_org_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
         mock_settings.is_staging = True
 
         mock_bucket_instance = MagicMock()
@@ -58,7 +79,13 @@ def mock_assistant_infra_calls(request):
         }
         mock_bucket_cls.return_value = mock_bucket_instance
 
-        yield mock_wake_up, mock_reawaken, mock_stop_jobs, mock_bucket_cls
+        yield (
+            mock_wake_up,
+            mock_reawaken,
+            mock_assistant_cleanup,
+            mock_org_cleanup,
+            mock_bucket_cls,
+        )
 
 
 # =============================================================================
@@ -147,6 +174,50 @@ async def test_member_removal_revokes_resource_access(client: AsyncClient, dbses
         .first()
     )
     assert access_after is None, "ResourceAccess entry should be removed"
+
+
+@pytest.mark.anyio
+async def test_member_removal_rolls_back_if_pool_cleanup_fails(
+    client_concurrent: AsyncClient,
+):
+    """Member removal should stay atomic until shared-pool cleanup succeeds."""
+
+    owner = await create_test_user(client_concurrent, "rollback_owner@test.com")
+    member = await create_test_user(client_concurrent, "rollback_member@test.com")
+
+    org_resp = await client_concurrent.post(
+        "/v0/organizations",
+        json={"name": "Rollback Cleanup Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    add_member_resp = await client_concurrent.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_resp.status_code == status.HTTP_201_CREATED
+
+    with patch(
+        "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.cleanup_departed_member_routes",
+        side_effect=RuntimeError("simulated shared-pool cleanup failure"),
+    ):
+        remove_resp = await client_concurrent.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
+
+    assert remove_resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert remove_resp.json()["detail"] == "Failed to remove member"
+
+    members_resp = await client_concurrent.get(
+        f"/v0/organizations/{org_id}/members",
+        headers=owner["headers"],
+    )
+    assert members_resp.status_code == status.HTTP_200_OK
+    member_ids = {org_member["user_id"] for org_member in members_resp.json()}
+    assert member["id"] in member_ids
 
 
 # =============================================================================
@@ -345,16 +416,129 @@ async def test_member_removal_deletes_unshared_assistant(
     assert assistant_before is not None, "Assistant should exist"
 
     # Remove member
-    remove_resp = await client.delete(
-        f"/v0/organizations/{org_id}/members/{member['id']}",
-        headers=owner["headers"],
-    )
+    with patch(
+        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_cleanup:
+        mock_cleanup.return_value = {
+            "processed": 1,
+            "completed": 1,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
+        remove_resp = await client.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
     assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
 
     # Verify assistant is deleted
     dbsession.expire_all()
     assistant_after = assistant_dao.get_assistant_by_agent_id(agent_id)
     assert assistant_after is None, "Unshared assistant should be deleted"
+    mock_cleanup.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_member_removal_deprovisions_contacts_before_deleting_unshared_assistant(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "contact_cleanup_owner@test.com")
+    member = await create_test_user(client, "contact_cleanup_member@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Contact Cleanup Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    assistant_dao = AssistantDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="Cleanup",
+        surname="Target",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+
+    dbsession.add_all(
+        [
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="phone",
+                contact_value="+15551110000",
+            ),
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="email",
+                contact_value="cleanup-member@assistant.unify.ai",
+            ),
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="whatsapp",
+                contact_value="+15552220000",
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.delete_phone_number",
+        new_callable=AsyncMock,
+    ) as mock_delete_phone, patch(
+        "orchestra.services.assistant_cleanup_service.delete_email",
+        new_callable=AsyncMock,
+    ) as mock_delete_email, patch(
+        "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.delete_routes_for_assistant",
+        return_value=1,
+    ) as mock_delete_routes:
+        remove_resp = await client.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
+
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+    mock_delete_phone.assert_awaited_once_with("+15551110000", deploy_env=None)
+    mock_delete_email.assert_awaited_once_with(
+        "cleanup-member@assistant.unify.ai",
+        deploy_env=None,
+    )
+    mock_delete_routes.assert_called_once_with(agent_id)
+
+    dbsession.expire_all()
+    cleanup_task = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == agent_id)
+        .one()
+    )
+    assert cleanup_task.status == "pending"
 
 
 # =============================================================================
@@ -765,7 +949,8 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
 
     When member is removed and their unshared assistant is deleted:
     - Assistant-specific contexts (Tier 3) should be deleted
-    - Logs should be cleaned from sibling contexts (Tier 1 and Tier 2)
+    - Tier 2 user aggregates should be cleaned via sibling cleanup
+    - Tier 1 All/* should remain as the protected archive
     """
     owner = await create_test_user(
         client,
@@ -878,7 +1063,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
             log["id"] for log in logs_resp.json()["logs"]
         ], f"Log should exist in {ctx}"
 
-    # Remove member - should delete assistant AND its logs from all contexts
+    # Remove member - should delete the assistant and clear lower-tier copies.
     remove_resp = await client.delete(
         f"/v0/organizations/{org_id}/members/{member['id']}",
         headers=owner["headers"],
@@ -920,7 +1105,8 @@ async def test_member_removal_preserves_other_assistant_logs(
     Test that logs from OTHER assistants in shared contexts are preserved.
 
     When member A is removed and their assistant is deleted:
-    - Member A's assistant logs should be deleted from all contexts
+    - Member A's assistant logs should be removed from Tier 2 and Tier 3
+    - Member A's topmost All/* archive copy should remain
     - Member B's assistant logs in shared All/* contexts should NOT be affected
     """
     owner = await create_test_user(
@@ -1412,8 +1598,8 @@ async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
     dbsession,
     mock_assistant_infra_calls,
 ):
-    """Test that GCS data is cleaned up for assistants deleted during member removal."""
-    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    """Deleted assistants leave GCS cleanup to the durable cleanup task path."""
+    _, _, _, mock_org_cleanup, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
 
     owner = await create_test_user(client, "gcs_cleanup_owner@test.com")
@@ -1463,7 +1649,7 @@ async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
     )
     dbsession.commit()
 
-    # Remove member - triggers assistant deletion AND GCS cleanup
+    # Remove member - triggers assistant deletion and durable cleanup
     remove_resp = await client.delete(
         f"/v0/organizations/{org_id}/members/{member['id']}",
         headers=owner["headers"],
@@ -1474,8 +1660,8 @@ async def test_member_removal_cleans_up_gcs_for_deleted_assistants(
     dbsession.expire_all()
     assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
 
-    # Verify BucketService.delete_all_assistant_data was called for the deleted assistant
-    mock_bucket_instance.delete_all_assistant_data.assert_called_once_with(agent_id)
+    mock_org_cleanup.assert_awaited_once()
+    mock_bucket_instance.delete_all_assistant_data.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -1485,7 +1671,7 @@ async def test_member_removal_no_gcs_cleanup_for_shared_assistants(
     mock_assistant_infra_calls,
 ):
     """Test that GCS data is NOT cleaned up for assistants that survive member removal (shared)."""
-    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    _, _, _, _, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
 
     owner = await create_test_user(client, "gcs_shared_owner@test.com")
@@ -1570,12 +1756,9 @@ async def test_member_removal_gcs_failure_does_not_block(
     dbsession,
     mock_assistant_infra_calls,
 ):
-    """Test that GCS cleanup failure does not block member removal."""
-    _, _, _, mock_bucket_cls = mock_assistant_infra_calls
+    """Durable cleanup retries do not block member removal responses."""
+    _, _, _, mock_org_cleanup, mock_bucket_cls = mock_assistant_infra_calls
     mock_bucket_instance = mock_bucket_cls.return_value
-    mock_bucket_instance.delete_all_assistant_data.side_effect = Exception(
-        "GCS unreachable",
-    )
 
     owner = await create_test_user(client, "gcs_fail_owner@test.com")
     member = await create_test_user(client, "gcs_fail_member@test.com")
@@ -1624,12 +1807,14 @@ async def test_member_removal_gcs_failure_does_not_block(
     )
     dbsession.commit()
 
-    # Remove member - GCS cleanup fails but endpoint should still succeed
+    # Remove member - cleanup retries remain asynchronous and must not block.
     remove_resp = await client.delete(
         f"/v0/organizations/{org_id}/members/{member['id']}",
         headers=owner["headers"],
     )
     assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+    mock_org_cleanup.assert_awaited_once()
+    mock_bucket_instance.delete_all_assistant_data.assert_not_called()
 
     # DB deletion should still have occurred
     dbsession.expire_all()

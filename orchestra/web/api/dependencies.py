@@ -132,6 +132,14 @@ def auth_admin_key(
     raise admin_not_authorized
 
 
+_FREEZE_EXEMPT_PATHS = frozenset(
+    {
+        "/v0/billing/account-info",
+        "/v0/billing/portal-session",
+    },
+)
+
+
 def check_account_not_frozen(request: Request):
     """
     Check if the relevant billing account is frozen (dispute / fraud).
@@ -139,7 +147,17 @@ def check_account_not_frozen(request: Request):
     Only SUSPENDED and CLOSED accounts are hard-blocked.  Balance-based
     enforcement for billable actions is handled per-handler (credits
     checks) and by Unity's spending-limit hook — not here.
+
+    Read-only billing endpoints (account-info, portal-session) are
+    exempted so the frontend can display account-status banners and
+    allow users to manage their payment methods to resolve suspensions.
+
+    Fails closed: if the DB check itself errors, the request is blocked
+    to prevent suspended accounts from exploiting transient DB issues.
     """
+    if request.url.path in _FREEZE_EXEMPT_PATHS:
+        return
+
     user_id = getattr(request.state, "user_id", None)
     organization_id = getattr(request.state, "organization_id", None)
     if not user_id:
@@ -155,11 +173,15 @@ def check_account_not_frozen(request: Request):
             if ba.account_status in ("SUSPENDED", "CLOSED"):
                 raise account_frozen
 
-    except Exception as e:
-        if e is account_frozen:
-            raise
-        logger.error(f"Account freeze check failed: {e}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "Failed to check account frozen status for user %s — "
+            "blocking request (fail-closed)",
+            user_id,
+        )
         raise HTTPException(
             status_code=503,
-            detail="Unable to verify account status",
+            detail="Unable to verify account status. Please try again.",
         )

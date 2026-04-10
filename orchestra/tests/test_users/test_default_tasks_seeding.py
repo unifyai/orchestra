@@ -143,7 +143,7 @@ async def test_create_user_after_verification_seeds_default_tasks(
 
     # Step 2: Get the verification code from the DB and set a known code
     dao = AuthDAO(dbsession)
-    entry = dao.get_pending(email, "signup")
+    entry = dao.get_pending_verification(email, "signup")
     assert entry is not None, f"No pending signup verification for {email}"
     code = "123456"
     entry.code_hash = hash_code(code)

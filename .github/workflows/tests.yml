@@ -9,7 +9,7 @@ on:
     branches:
     - '**'
 
-  # Pull request events - tests only run if PR title contains [run-tests]
+  # Pull request events - run tests automatically for main/staging, or opt in with [run-tests]
   pull_request:
     branches:
     - '**'
@@ -27,6 +27,7 @@ jobs:
         EVENT_NAME: ${{ github.event_name }}
         COMMIT_MSG: ${{ github.event.head_commit.message }}
         PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
       run: |
         # workflow_dispatch always runs tests
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
@@ -47,14 +48,17 @@ jobs:
           exit 0
         fi
 
-        # For pull_request events, check PR title for [run-tests]
+        # Pull requests into main/staging always run; other PRs can opt in with [run-tests]
         if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          if [[ "$PR_TITLE" == *"[run-tests]"* ]]; then
+          if [[ "$PR_BASE_BRANCH" == "main" || "$PR_BASE_BRANCH" == "staging" ]]; then
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+            echo "Tests triggered by pull_request targeting $PR_BASE_BRANCH"
+          elif [[ "$PR_TITLE" == *"[run-tests]"* ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
             echo "Tests triggered by PR title containing [run-tests]"
           else
             echo "run_tests=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping tests - PR title does not contain [run-tests]"
+            echo "Skipping tests - PR does not target main/staging and title does not contain [run-tests]"
           fi
           exit 0
         fi

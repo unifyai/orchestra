@@ -50,12 +50,20 @@ def notify_reconciliation(
 ) -> bool:
     """Send a Discord message summarising a reconciliation run.
 
+    Only sends a notification when there are discrepancies or errors.
+    Clean runs are silently skipped to reduce noise.
+
     Returns ``True`` if the message was sent (or skipped because no
-    webhook is configured), ``False`` on delivery failure.
+    webhook is configured / nothing to report), ``False`` on delivery
+    failure.
     """
     webhook_url = os.environ.get(WEBHOOK_URL_ENV)
     if not webhook_url:
         logger.debug("No Discord webhook configured, skipping notification")
+        return True
+
+    if not result.discrepancies and not result.errors:
+        logger.info("Reconciliation clean — skipping Discord notification")
         return True
 
     env_tag = environment.upper() or _detect_environment()

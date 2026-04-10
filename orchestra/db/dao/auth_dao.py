@@ -32,7 +32,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-import httpx
 import jwt
 import pyotp
 from cryptography.fernet import Fernet
@@ -282,15 +281,21 @@ async def verify_turnstile_token(
         payload["remoteip"] = remote_ip
 
     try:
-        async with httpx.AsyncClient(timeout=TURNSTILE_TIMEOUT_SECONDS) as client:
-            resp = await client.post(TURNSTILE_SITEVERIFY_URL, data=payload)
-            resp.raise_for_status()
-            result = resp.json()
-            success = result.get("success", False)
-            if not success:
-                error_codes = result.get("error-codes", [])
-                logger.warning(f"Turnstile verification failed: {error_codes}")
-            return success
+        from orchestra.web.api.utils.http_client import get_async_client
+
+        client = get_async_client()
+        resp = await client.post(
+            TURNSTILE_SITEVERIFY_URL,
+            data=payload,
+            timeout=TURNSTILE_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        success = result.get("success", False)
+        if not success:
+            error_codes = result.get("error-codes", [])
+            logger.warning(f"Turnstile verification failed: {error_codes}")
+        return success
     except Exception:
         logger.exception("Turnstile siteverify request failed")
         return False

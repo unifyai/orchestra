@@ -231,6 +231,8 @@ class User(Base):
     image = Column(String)
     timezone = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
+    whatsapp_number = Column(String, nullable=True)
+    discord_id = Column(String, nullable=True)
 
     # === BILLING (via BillingAccount) ===
     billing_account_id = Column(
@@ -268,6 +270,21 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_user_whatsapp_number",
+            "whatsapp_number",
+            unique=True,
+            postgresql_where=text("whatsapp_number IS NOT NULL"),
+        ),
+        Index(
+            "uq_user_discord_id",
+            "discord_id",
+            unique=True,
+            postgresql_where=text("discord_id IS NOT NULL"),
+        ),
     )
 
 
@@ -360,6 +377,47 @@ class EmailVerification(Base):
     )  # Max 5 attempts before invalidation
     token_jti = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class PhoneVerification(Base):
+    """
+    Short-lived verification codes for phone / WhatsApp number ownership.
+
+    When a user wants to add or change their phone_number or whatsapp_number
+    on the User table, they must first verify ownership via SMS.  The flow:
+
+    1. ``POST /user/phone/send-verification`` creates a row with a hashed
+       6-digit code and sends the SMS via the communication service.
+    2. ``POST /user/phone/confirm-verification`` checks the code, and on
+       success sets ``verified_at``.
+    3. ``PUT /user`` (profile update) checks for a recent verified row
+       matching the new number before accepting the change.
+
+    Rows are deleted after successful profile update or by a periodic
+    cleanup job for expired entries.
+    """
+
+    __tablename__ = "phone_verifications"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    phone_number = Column(String, nullable=False)
+    phone_type = Column(String, nullable=False)  # "phone" | "whatsapp"
+    code_hash = Column(String, nullable=False)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    attempts = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    verified_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class MFACredential(Base):
@@ -1251,26 +1309,8 @@ class Assistant(Base):
     Assistants can be either personal (user_id set, organization_id NULL)
     or organizational (organization_id set, user_id is the creator).
 
-    Contact columns legacy note
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    The columns ``phone``, ``phone_country``, ``user_phone``, ``email``,
-    ``user_whatsapp_number``, and ``assistant_whatsapp_number`` are legacy
-    columns.  The single source of truth for contact details is now the
+    Contact details (phone, email, WhatsApp) are stored in the
     ``assistant_contacts`` table (see :class:`AssistantContact`).
-
-    These columns are **retained temporarily** for two reasons:
-
-    1. **Zero-downtime deployment** – during a rolling deploy, old application
-       instances still reference these columns.  Dropping them in the same
-       migration that adds ``assistant_contacts`` would cause column-not-found
-       errors on old instances that haven't been replaced yet.
-    2. **Rollback safety** – if the new code needs to be reverted, the old
-       columns still contain valid data and no reverse data migration is
-       required.
-
-    A follow-up migration should drop these columns once the new code has
-    been running stably in production and rollback to the previous version
-    is no longer a concern.
     """
 
     __tablename__ = "assistants"
@@ -1304,7 +1344,6 @@ class Assistant(Base):
     )
     user_desktop_filesys_sync = Column(Boolean, nullable=False, default=False)
     about = Column(String, nullable=True)
-    phone_country = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
     # Monthly spending limit for this assistant (NULL = no limit)
@@ -1313,11 +1352,6 @@ class Assistant(Base):
     # When the spending cap was last changed (for notification deduplication)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
     max_parallel = Column(Integer, nullable=True)
-    email = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
-    user_phone = Column(String, nullable=True)
-    user_whatsapp_number = Column(String, nullable=True)
-    assistant_whatsapp_number = Column(String, nullable=True)
     deploy_env = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
@@ -1401,9 +1435,6 @@ class AssistantContact(Base):
     # Country code for phone numbers (affects pricing lookups)
     country_code = Column(String, nullable=True)
 
-    # Linked user-side value (user's personal phone/whatsapp for forwarding)
-    user_value = Column(String, nullable=True)
-
     # Lifecycle status
     status = Column(
         String,
@@ -1451,14 +1482,17 @@ class AssistantContact(Base):
             postgresql_where=text("status != 'deleted'"),
         ),
         # Prevent duplicate active contact values across all assistants
+        # (excludes WhatsApp because pool numbers are shared)
         Index(
             "uq_active_contact_value",
             "contact_value",
             unique=True,
-            postgresql_where=text("status != 'deleted'"),
+            postgresql_where=text(
+                "status != 'deleted' AND contact_type NOT IN ('whatsapp', 'discord')",
+            ),
         ),
         sa.CheckConstraint(
-            "contact_type IN ('phone', 'email', 'whatsapp')",
+            "contact_type IN ('phone', 'email', 'whatsapp', 'discord')",
             name="ck_assistant_contact_type",
         ),
         sa.CheckConstraint(
@@ -1513,7 +1547,7 @@ class AssistantContactCost(Base):
             name="uq_contact_cost",
         ),
         sa.CheckConstraint(
-            "contact_type IN ('phone', 'email', 'whatsapp')",
+            "contact_type IN ('phone', 'email', 'whatsapp', 'discord')",
             name="ck_contact_type_cost_type",
         ),
     )
@@ -1558,8 +1592,6 @@ class OneTimeCreditGrantLink(Base):
     max_claims = Column(
         Integer,
         nullable=True,
-        default=1,
-        server_default=text("1"),
         comment="Maximum number of claims allowed (NULL = unlimited)",
     )
 
@@ -2490,3 +2522,318 @@ class ApiMessage(Base):
     response_attachments = Column(JSONB, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
     completed_at = Column(TIMESTAMP, nullable=True)
+
+
+class SharedPoolNumber(Base):
+    """Platform-owned contact identifiers shared across assistants.
+
+    Each row represents a registered sender (e.g. a Twilio WhatsApp number,
+    an Instagram bot account) that can be assigned to multiple assistants.
+    The pool is small and managed at the platform level.
+    """
+
+    __tablename__ = "shared_pool_numbers"
+
+    id = Column(Integer, primary_key=True)
+    platform = Column(
+        String,
+        nullable=False,
+        default="whatsapp",
+        server_default="whatsapp",
+    )
+    number = Column(String, nullable=False, unique=True)
+    status = Column(String, nullable=False, default="active", server_default="active")
+    twilio_sender_sid = Column(String, nullable=True)
+    auth_token = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('active', 'inactive')",
+            name="ck_shared_pool_number_status",
+        ),
+    )
+
+
+class SharedPlatformRoute(Base):
+    """Maps (pool_number, external_contact) → assistant for inbound routing.
+
+    Only used for external contacts (non-platform-users).  Platform users
+    are routed dynamically via user identity lookups (Tier 1).
+    Routes are created when an assistant sends an outbound message
+    to an external contact, establishing a permanent reply path.
+    """
+
+    __tablename__ = "shared_platform_routes"
+
+    id = Column(Integer, primary_key=True)
+    pool_number_id = Column(
+        Integer,
+        ForeignKey("shared_pool_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    contact_number = Column(String, nullable=False)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_inbound_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    call_permission_status = Column(String, nullable=True)
+    call_permission_granted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    call_permission_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    pool_number = relationship("SharedPoolNumber")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pool_number_id",
+            "contact_number",
+            name="uq_pool_contact",
+        ),
+        Index(
+            "ix_shared_routes_assistant",
+            "assistant_id",
+            "contact_number",
+        ),
+        Index(
+            "ix_shared_routes_contact",
+            "contact_number",
+        ),
+    )
+
+
+class DecommissionedRoute(Base):
+    """Tracks old (pool_number, contact) pairs after conflict reassignment.
+
+    When an assistant is reassigned to a new pool number, its old routes
+    are recorded here so that inbound messages to the old number can be
+    answered with an auto-reply instead of being silently dropped.
+    """
+
+    __tablename__ = "decommissioned_routes"
+
+    id = Column(Integer, primary_key=True)
+    platform = Column(String, nullable=False)
+    pool_number_id = Column(
+        Integer,
+        ForeignKey("shared_pool_numbers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    contact_identifier = Column(String, nullable=False)
+    old_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    new_pool_number_id = Column(
+        Integer,
+        ForeignKey("shared_pool_numbers.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    decommissioned_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    pool_number = relationship("SharedPoolNumber", foreign_keys=[pool_number_id])
+    new_pool_number = relationship(
+        "SharedPoolNumber",
+        foreign_keys=[new_pool_number_id],
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_decommissioned_routes_lookup",
+            "pool_number_id",
+            "contact_identifier",
+        ),
+    )
+
+
+class ConflictEvent(Base):
+    """Audit log for shared-pool conflict resolutions.
+
+    Records every conflict detection + resolution, including the pool
+    reassignments performed and the delivery status of WhatsApp
+    notifications sent to affected users.
+    """
+
+    __tablename__ = "conflict_events"
+
+    id = Column(Integer, primary_key=True)
+    platform = Column(String, nullable=False)
+    conflict_type = Column(String, nullable=False)
+    trigger_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    affected_assistant_ids = Column(JSONB, nullable=False)
+    old_pool_assignments = Column(JSONB, nullable=False)
+    new_pool_assignments = Column(JSONB, nullable=False)
+    notification_recipients = Column(JSONB, nullable=True)
+    notification_status = Column(JSONB, nullable=True)
+    status = Column(
+        String,
+        nullable=False,
+        default="notifying",
+        server_default="notifying",
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    resolved_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    trigger_assistant = relationship("Assistant")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "conflict_type IN ('contact_overlap', 'user_to_user', 'org_membership')",
+            name="ck_conflict_event_type",
+        ),
+        sa.CheckConstraint(
+            "status IN ('notifying', 'resolved', 'notification_failed', 'failed')",
+            name="ck_conflict_event_status",
+        ),
+        Index("ix_conflict_events_status", "status"),
+        Index("ix_conflict_events_trigger_assistant", "trigger_assistant_id"),
+    )
+
+
+class CreditTransaction(Base):
+    """Append-only ledger of every credit movement on a billing account.
+
+    Positive ``amount`` = credits added (recharge, promo, refund, dispute).
+    Negative ``amount`` = credits spent (llm, hire, resources, media).
+
+    The public API constrains ``category`` to the canonical spending set
+    (``llm | hire | resources | media``) for debits and
+    (``recharge | promo | refund | dispute``) for credits.
+    Internal reconciliation routines may use additional diagnostic
+    categories (e.g. ``void``, ``stale_pending_recharge``).
+
+    ``balance_after`` is a snapshot captured in the same DB transaction
+    as the balance update so it can be used for reconciliation:
+    the latest row's ``balance_after`` must always equal
+    ``billing_account.credits``.  NULL for historical backfills
+    where the running balance cannot be reliably reconstructed.
+    """
+
+    __tablename__ = "credit_transaction"
+
+    id = Column(BigInteger, primary_key=True)
+    billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    # Financial
+    amount = Column(Numeric, nullable=False)
+    balance_after = Column(Numeric, nullable=True)
+
+    # Dimensions (indexed for fast filtering)
+    category = Column(String, nullable=False)
+    assistant_id = Column(Integer, nullable=True)
+    user_id = Column(String, nullable=True)
+    organization_id = Column(Integer, nullable=True)
+
+    description = Column(String, nullable=True)
+    detail = Column(JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("ix_credit_txn_ba_at", "billing_account_id", "at"),
+        Index("ix_credit_txn_ba_category_at", "billing_account_id", "category", "at"),
+        Index("ix_credit_txn_assistant_category_at", "assistant_id", "category", "at"),
+        Index("ix_credit_txn_user_at", "user_id", "at"),
+    )
+
+
+class AssistantCleanupTask(Base):
+    """Retryable cleanup work item for assistant teardown after owner deletion.
+
+    A task is created before an owner row is irreversibly deleted. The payload
+    stores the minimum retry state needed to finish runtime teardown, contact
+    deprovisioning, and assistant-scoped GCS cleanup outside the original
+    request lifecycle.
+    """
+
+    __tablename__ = "assistant_cleanup_tasks"
+
+    id = Column(Integer, primary_key=True)
+    assistant_id = Column(Integer, nullable=False)
+    deploy_env = Column(String, nullable=True)
+    desktop_mode = Column(String, nullable=True)
+    source_flow = Column(String, nullable=False)
+    cleanup_payload = Column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'{}'::jsonb"),
+    )
+    status = Column(String, nullable=False, default="pending", server_default="pending")
+    attempt_count = Column(Integer, nullable=False, server_default=sa.text("0"))
+    last_error = Column(String, nullable=True)
+    last_result = Column(JSONB, nullable=True)
+    next_retry_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    processing_started_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    completed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="ck_assistant_cleanup_task_status",
+        ),
+        Index("ix_assistant_cleanup_tasks_status", "status", "next_retry_at"),
+        Index("ix_assistant_cleanup_tasks_assistant", "assistant_id"),
+    )
+
+
+class DashboardToken(Base):
+    """Token-to-context mapping for dashboard tiles and layouts.
+
+    Content lives in Unify contexts (Dashboards/Tiles, Dashboards/Layouts);
+    this table provides the routing information the console needs to resolve
+    a token-based URL to the correct Unify context path and creator identity.
+    """
+
+    __tablename__ = "dashboard_token"
+
+    token = Column(String(12), primary_key=True)
+    entity_type = Column(String(20), nullable=False)
+    context_name = Column(String(500), nullable=False)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    project = relationship(
+        "Project",
+        backref=backref("dashboard_tokens", passive_deletes=True),
+    )
+
+    __table_args__ = (
+        Index("idx_dashboard_token_project_id", "project_id"),
+        Index("idx_dashboard_token_user_id", "user_id"),
+    )

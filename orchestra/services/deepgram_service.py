@@ -26,6 +26,8 @@ class DeepgramService:
             "Authorization": f"Token {settings.deepgram_api_key}",
             "Content-Type": "application/json",
         }
+        transport = httpx.HTTPTransport(retries=3)
+        self._client = httpx.Client(transport=transport, timeout=httpx.Timeout(60.0))
 
     def _handle_response(self, response: httpx.Response) -> Dict[str, Any]:
         if not (200 <= response.status_code < 300):
@@ -117,9 +119,7 @@ class DeepgramService:
             url = f"{self.base_url}/listen?detect_language=true"
             payload = {"url": signed_url}
 
-            # Increased timeout for remote file processing
-            with httpx.Client(timeout=60.0) as client:
-                response = client.post(url, json=payload, headers=self.headers)
+            response = self._client.post(url, json=payload, headers=self.headers)
 
             response_data = self._handle_response(response)
 
