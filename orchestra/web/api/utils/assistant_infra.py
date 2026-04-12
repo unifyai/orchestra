@@ -92,6 +92,12 @@ def _stop_requires_sessionless_fallback(step: dict[str, Any]) -> bool:
     return _stop_step_reason(step) == "not_found"
 
 
+def _is_missing_comms_config_step(step: dict[str, Any]) -> bool:
+    """Return whether a cleanup step was skipped because comms is unavailable."""
+
+    return bool(step.get("skipped")) and step.get("reason") == "missing_comms_config"
+
+
 def _runtime_vm_refs(runtime_status: dict[str, Any]) -> list[dict[str, str]]:
     """Return de-duplicated VM refs from a runtime status payload."""
 
@@ -1291,6 +1297,13 @@ async def wait_for_runtime_cleanup(
                 success=False,
                 error=status_step.get("error") or "runtime status request failed",
             )
+        if _is_missing_comms_config_step(status_step):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=True,
+                skipped=True,
+                reason="missing_comms_config",
+            )
 
         last_status = status_step.get("response", {})
         if last_status.get("runtime_cleanup_complete"):
@@ -1328,7 +1341,26 @@ async def teardown_assistant_runtime(
         skipped=True,
         reason="assistant_session_present",
     )
-    if not stop_session_step.get("success"):
+    if _is_missing_comms_config_step(stop_session_step):
+        fallback_step = _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        wait_step = _cleanup_step_result(
+            "wait_for_runtime_cleanup",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        session_step = _cleanup_step_result(
+            "delete_assistant_session",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+    elif not stop_session_step.get("success"):
         fallback_step = _cleanup_step_result(
             "sessionless_runtime_fallback",
             success=True,
@@ -1433,6 +1465,13 @@ def _wait_for_runtime_cleanup_sync(
                 "wait_for_runtime_cleanup",
                 success=False,
                 error=status_step.get("error") or "runtime status request failed",
+            )
+        if _is_missing_comms_config_step(status_step):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=True,
+                skipped=True,
+                reason="missing_comms_config",
             )
 
         last_status = status_step.get("response", {})

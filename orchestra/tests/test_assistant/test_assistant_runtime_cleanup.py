@@ -158,6 +158,105 @@ async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup(
 
 
 @pytest.mark.anyio
+async def test_wait_for_runtime_cleanup_skips_when_runtime_status_reports_missing_comms():
+    with patch(
+        "orchestra.web.api.utils.assistant_infra._request_cleanup_step",
+        new_callable=AsyncMock,
+    ) as mock_request_step:
+        mock_request_step.return_value = {
+            "name": "runtime_status",
+            "success": True,
+            "skipped": True,
+            "reason": "missing_comms_config",
+        }
+
+        result = await assistant_infra.wait_for_runtime_cleanup(
+            "42",
+            timeout=0,
+            poll_interval=0,
+        )
+
+    assert result == {
+        "name": "wait_for_runtime_cleanup",
+        "success": True,
+        "skipped": True,
+        "reason": "missing_comms_config",
+    }
+    mock_request_step.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comms():
+    with patch(
+        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
+        new_callable=AsyncMock,
+    ) as mock_stop_session, patch(
+        "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
+        new_callable=AsyncMock,
+    ) as mock_wait_for_runtime_cleanup, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
+        new_callable=AsyncMock,
+    ) as mock_delete_session, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_delete_topic, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
+        new_callable=AsyncMock,
+    ) as mock_delete_disk:
+        mock_stop_session.return_value = {
+            "name": "stop_assistant_session_runtime",
+            "success": True,
+            "skipped": True,
+            "reason": "missing_comms_config",
+        }
+        mock_wait_for_runtime_cleanup.return_value = {
+            "name": "wait_for_runtime_cleanup",
+            "success": False,
+            "reason": "should_not_be_called",
+        }
+        mock_delete_session.return_value = {
+            "name": "delete_assistant_session",
+            "success": False,
+            "reason": "should_not_be_called",
+        }
+        mock_delete_topic.return_value = {
+            "name": "delete_pubsub_topic",
+            "success": True,
+            "skipped": True,
+            "reason": "missing_comms_config",
+        }
+        mock_delete_disk.return_value = {
+            "name": "delete_assistant_disk",
+            "success": True,
+            "skipped": True,
+            "reason": "missing_comms_config",
+        }
+
+        result = await assistant_infra.teardown_assistant_runtime(
+            "42",
+            desktop_mode="ubuntu",
+        )
+
+    assert result["success"] is True
+    assert result["steps"]["wait_for_runtime_cleanup"] == {
+        "name": "wait_for_runtime_cleanup",
+        "success": True,
+        "skipped": True,
+        "reason": "missing_comms_config",
+    }
+    assert result["steps"]["delete_assistant_session"] == {
+        "name": "delete_assistant_session",
+        "success": True,
+        "skipped": True,
+        "reason": "missing_comms_config",
+    }
+    mock_wait_for_runtime_cleanup.assert_not_awaited()
+    mock_delete_session.assert_not_awaited()
+    mock_delete_topic.assert_awaited_once_with("42", deploy_env=None)
+    mock_delete_disk.assert_awaited_once_with("42", deploy_env=None)
+
+
+@pytest.mark.anyio
 async def test_process_assistant_cleanup_tasks_retries_incomplete_runtime(dbsession):
     task = AssistantCleanupTask(
         assistant_id=42,
