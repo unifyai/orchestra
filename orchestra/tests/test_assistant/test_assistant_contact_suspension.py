@@ -113,6 +113,13 @@ def seed_contact_type_costs(dbsession: Session):
                 monthly_cost=Decimal("1"),
                 one_time_cost=Decimal("1"),
             ),
+            AssistantContactCost(
+                contact_type="email",
+                provider="microsoft_365",
+                country_code=None,
+                monthly_cost=Decimal("12.50"),
+                one_time_cost=Decimal("5.00"),
+            ),
         ]
         dbsession.add_all(rows)
         dbsession.flush()

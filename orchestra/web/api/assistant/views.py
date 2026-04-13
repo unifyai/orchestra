@@ -104,9 +104,11 @@ from orchestra.web.api.assistant.schema import (
 )
 from orchestra.web.api.utils.assistant_infra import (
     create_email,
+    create_outlook_email,
     create_phone_number,
     create_pubsub_topic,
     delete_email,
+    delete_outlook_email,
     delete_phone_number,
     delete_pubsub_topic,
     get_runtime_status,
@@ -114,6 +116,7 @@ from orchestra.web.api.utils.assistant_infra import (
     reawaken_assistant,
     wake_up_assistant,
     watch_email,
+    watch_outlook_email,
 )
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
@@ -1040,10 +1043,16 @@ async def delete_assistant_contact(
                     deploy_env=assistant.deploy_env,
                 )
             elif contact_type == "email" and contact.contact_value:
-                await delete_email(
-                    contact.contact_value,
-                    deploy_env=assistant.deploy_env,
-                )
+                if contact.provider == "microsoft_365":
+                    await delete_outlook_email(
+                        contact.contact_value,
+                        deploy_env=assistant.deploy_env,
+                    )
+                else:
+                    await delete_email(
+                        contact.contact_value,
+                        deploy_env=assistant.deploy_env,
+                    )
             elif contact_type == "whatsapp":
                 from orchestra.web.api.utils.assistant_infra import (
                     delete_whatsapp_routes,
@@ -1225,7 +1234,7 @@ async def create_assistant_contact(
         provider = "twilio"
         country_code = contact_request.phone_country or "US"
     elif contact_type == "email":
-        provider = "google_workspace"
+        provider = contact_request.email_provider or "google_workspace"
     elif contact_type == "whatsapp":
         provider = "twilio"
     elif contact_type == "discord":
@@ -1282,24 +1291,41 @@ async def create_assistant_contact(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="email_local is required for email contacts.",
                 )
-            email_response = await create_email(
-                contact_request.email_local,
-                contact_request.first_name or "",
-                contact_request.last_name or "",
-                deploy_env=assistant.deploy_env,
-            )
+
+            if provider == "microsoft_365":
+                email_response = await create_outlook_email(
+                    contact_request.email_local,
+                    contact_request.first_name or "",
+                    contact_request.last_name or "",
+                    deploy_env=assistant.deploy_env,
+                )
+            else:
+                email_response = await create_email(
+                    contact_request.email_local,
+                    contact_request.first_name or "",
+                    contact_request.last_name or "",
+                    deploy_env=assistant.deploy_env,
+                )
+
             if "detail" in email_response:
                 raise Exception(
                     f"Email creation failed: {email_response['detail']}",
                 )
             created_value = email_response.get("user", {}).get("primaryEmail")
 
-            # Set up email watch
             await asyncio.sleep(10)
-            watch_response = await watch_email(
-                created_value,
-                deploy_env=assistant.deploy_env,
-            )
+
+            if provider == "microsoft_365":
+                watch_response = await watch_outlook_email(
+                    created_value,
+                    deploy_env=assistant.deploy_env,
+                )
+            else:
+                watch_response = await watch_email(
+                    created_value,
+                    deploy_env=assistant.deploy_env,
+                )
+
             if "detail" in watch_response:
                 raise Exception(
                     f"Email watch setup failed: {watch_response['detail']}",
@@ -1421,11 +1447,16 @@ async def create_assistant_contact(
                     deploy_env=assistant.deploy_env,
                 )
             elif contact_type == "email":
-                await delete_email(
-                    created_value,
-                    deploy_env=assistant.deploy_env,
-                )
-            # WhatsApp/Discord: no explicit deprovisioning needed (pool stays)
+                if provider == "microsoft_365":
+                    await delete_outlook_email(
+                        created_value,
+                        deploy_env=assistant.deploy_env,
+                    )
+                else:
+                    await delete_email(
+                        created_value,
+                        deploy_env=assistant.deploy_env,
+                    )
         except Exception as rollback_error:
             logging.error(
                 f"RESOURCE LEAK: Failed to rollback {contact_type} "
