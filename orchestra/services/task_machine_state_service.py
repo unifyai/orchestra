@@ -183,6 +183,16 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Source task status at the time this activation was projected.",
     },
+    "task_name": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Current task title mirrored from Unity/Tasks.",
+    },
+    "task_description": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Current task description mirrored from Unity/Tasks.",
+    },
     "next_due_at": {
         "field_type": "datetime",
         "mutable": True,
@@ -214,9 +224,9 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Whether the trigger re-arms after completion.",
     },
     "entrypoint": {
-        "field_type": "str",
+        "field_type": "int",
         "mutable": True,
-        "description": "Offline entrypoint name when execution_mode=offline.",
+        "description": "Offline function_id when execution_mode=offline.",
     },
     "repeat": {
         "field_type": "list",
@@ -665,6 +675,10 @@ def _project_activation_payload(
     trigger = (
         row.data.get("trigger") if isinstance(row.data.get("trigger"), dict) else {}
     )
+    execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
+    entrypoint = _coerce_int(row.data.get("entrypoint"))
+    if execution_mode == "offline" and entrypoint is None:
+        raise ValueError("Offline tasks require an integer entrypoint.")
     payload = {
         "assistant_id": assistant_id,
         "activation_key": _build_activation_key(
@@ -675,8 +689,10 @@ def _project_activation_payload(
         "source_task_log_id": row.log_event_id,
         "instance_id": _coerce_int(row.data.get("instance_id")),
         "activation_kind": activation_kind,
-        "execution_mode": "offline" if bool(row.data.get("offline")) else "live",
+        "execution_mode": execution_mode,
         "status": row.data.get("status"),
+        "task_name": _coerce_optional_str(row.data.get("name")),
+        "task_description": _coerce_optional_str(row.data.get("description")),
         "next_due_at": _coerce_datetime_string(schedule.get("start_at")),
         "trigger_medium": _coerce_optional_str(trigger.get("medium")),
         "trigger_from_contact_ids": _coerce_optional_list(
@@ -687,7 +703,7 @@ def _project_activation_payload(
         ),
         "interrupt": bool(trigger.get("interrupt", False)),
         "trigger_recurring": bool(trigger.get("recurring", False)),
-        "entrypoint": _coerce_optional_str(row.data.get("entrypoint")),
+        "entrypoint": entrypoint,
         "repeat": _coerce_optional_list(row.data.get("repeat")),
         "source_task_updated_at": _coerce_datetime_string(
             row.updated_at or row.created_at,
@@ -716,6 +732,9 @@ def _reconcile_scheduled_activation_materialization(
             ]
             current_upsert_body["previous_scheduled_for"] = previous_delete_body[
                 "scheduled_for"
+            ]
+            current_upsert_body["previous_execution_mode"] = previous_delete_body[
+                "execution_mode"
             ]
         _post_task_activation_request(
             path=_TASK_ACTIVATION_UPSERT_PATH,
@@ -780,6 +799,8 @@ def _scheduled_activation_delete_body(
         "task_id": task_id,
         "activation_revision": activation_revision,
         "scheduled_for": scheduled_for,
+        "execution_mode": _coerce_optional_str(activation.get("execution_mode"))
+        or "live",
     }
 
 
@@ -1187,6 +1208,20 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_bool(value: Any) -> bool:
+    """Best-effort boolean coercion for JSON-backed task rows."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return bool(value)
 
 
 def _coerce_optional_str(value: Any) -> str | None:

@@ -13,6 +13,7 @@ from orchestra.tests.test_log import (
     _delete_logs,
     _update_logs,
 )
+from orchestra.tests.utils import ADMIN_HEADERS
 
 TASKS_CONTEXT = "1/42/Tasks"
 
@@ -104,6 +105,20 @@ def _trigger_task_entries(
             "recurring": True,
         },
     }
+
+
+def _offline_task_entries(
+    *,
+    task_id: int,
+    entrypoint: int | None,
+) -> dict:
+    """Return a minimal offline scheduled task row."""
+
+    entries = _scheduled_task_entries(task_id=task_id)
+    entries["offline"] = True
+    if entrypoint is not None:
+        entries["entrypoint"] = entrypoint
+    return entries
 
 
 @pytest.mark.anyio
@@ -204,6 +219,23 @@ async def test_unity_task_update_clears_activation_when_row_stops_being_armed(
 
 
 @pytest.mark.anyio
+async def test_unity_task_create_rejects_offline_row_without_integer_entrypoint(
+    client: AsyncClient,
+):
+    """Offline task rows must supply an integer entrypoint before projection."""
+
+    await _ensure_unity_project(client)
+    response = await _create_log(
+        client,
+        "Unity",
+        context=TASKS_CONTEXT,
+        entries=_offline_task_entries(task_id=250, entrypoint=None),
+    )
+    assert response.status_code == 400
+    assert "Offline tasks require an integer entrypoint" in response.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_unity_task_delete_clears_activation(client: AsyncClient):
     """Deleting a task row should remove its activation row."""
 
@@ -291,3 +323,87 @@ async def test_delete_context_blocks_internal_task_machine_context(
     )
     assert response.status_code == 403
     assert "Cannot delete built-in Tasks context" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
+    """The internal run API should reuse the same row for duplicate run_keys."""
+
+    await _ensure_unity_project(client)
+    payload = {
+        "project_name": "Unity",
+        "run_key": "offline:42:101:rev-1",
+        "assistant_id": "42",
+        "task_id": 101,
+        "source_task_log_id": 555,
+        "source_type": "scheduled",
+        "execution_mode": "offline",
+        "activation_revision": "rev-1",
+        "scheduled_for": "2026-04-10T09:00:00+00:00",
+        "state": "pending",
+    }
+
+    first = await client.post(
+        "/v0/admin/task-run/create-or-adopt",
+        json=payload,
+        headers=ADMIN_HEADERS,
+    )
+    assert first.status_code == 200, first.json()
+    first_body = first.json()
+    assert first_body["created"] is True
+    first_run = first_body["run"]
+    assert first_run["run_key"] == payload["run_key"]
+    assert first_run["run_id"]
+    assert first_run["execution_mode"] == "offline"
+
+    second = await client.post(
+        "/v0/admin/task-run/create-or-adopt",
+        json=payload,
+        headers=ADMIN_HEADERS,
+    )
+    assert second.status_code == 200, second.json()
+    second_body = second.json()
+    assert second_body["created"] is False
+    assert second_body["run"]["run_id"] == first_run["run_id"]
+
+
+@pytest.mark.anyio
+async def test_task_run_update_mutates_existing_row(client: AsyncClient):
+    """The internal run API should merge partial updates into an existing row."""
+
+    await _ensure_unity_project(client)
+    run_key = "offline:42:202:rev-2"
+    create_response = await client.post(
+        "/v0/admin/task-run/create-or-adopt",
+        json={
+            "project_name": "Unity",
+            "run_key": run_key,
+            "assistant_id": "42",
+            "task_id": 202,
+            "source_type": "triggered",
+            "execution_mode": "offline",
+            "state": "running",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+
+    update_response = await client.post(
+        "/v0/admin/task-run/update",
+        json={
+            "project_name": "Unity",
+            "run_key": run_key,
+            "updates": {
+                "state": "completed",
+                "completed_at": "2026-04-10T09:05:00+00:00",
+                "result_summary": "ok",
+            },
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+    updated_run = update_response.json()["run"]
+    assert updated_run["run_key"] == run_key
+    assert updated_run["state"] == "completed"
+    assert updated_run["completed_at"] == "2026-04-10T09:05:00+00:00"
+    assert updated_run["result_summary"] == "ok"
