@@ -11,7 +11,7 @@ Online) alongside the existing Google Workspace row.
 from alembic import op
 
 revision = "ms365_email_provider"
-down_revision = "shared_pool_auth_token"
+down_revision = "discord_costs_to_one"
 branch_labels = None
 depends_on = None
 
