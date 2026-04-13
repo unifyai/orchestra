@@ -120,21 +120,15 @@ async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_
 
 
 @pytest.mark.anyio
-async def test_create_assistant_with_preview_deploy_env(client: AsyncClient):
-    with patch(
-        "orchestra.web.api.assistant.schema.settings",
-    ) as mock_settings:
-        mock_settings.is_staging = True
-        payload = {
-            "first_name": "Preview",
-            "surname": "Assistant",
-            "deploy_env": "preview",
-            "create_infra": False,
-        }
-        resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-        assert resp.status_code == 200
-        data = resp.json()["info"]
-        assert data["deploy_env"] == "preview"
+async def test_create_assistant_rejects_deploy_env(client: AsyncClient):
+    payload = {
+        "first_name": "Rejected",
+        "surname": "Assistant",
+        "deploy_env": "preview",
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 422
 
 
 @pytest.mark.anyio
