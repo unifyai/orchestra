@@ -277,6 +277,12 @@ class AssistantRead(AssistantCreate):
         description="Email address of the assistant",
         example="ada.lovelace@unify.ai",
     )
+    email_provider: Optional[Literal["google_workspace", "microsoft_365"]] = Field(
+        None,
+        description="Provider used for the provisioned email. "
+        "None when no email contact is provisioned.",
+        example="google_workspace",
+    )
     user_phone: Optional[str] = Field(
         None,
         description="User's personal phone number",

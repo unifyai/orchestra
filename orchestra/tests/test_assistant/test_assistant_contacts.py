@@ -2518,6 +2518,12 @@ class TestCreateMS365EmailContact:
         )
         assert contact.provider == "google_workspace"
 
+        get_resp = await client.get("/v0/assistant", headers=HEADERS)
+        assistant = [
+            a for a in get_resp.json()["info"] if int(a["agent_id"]) == agent_id
+        ][0]
+        assert assistant["email_provider"] == "google_workspace"
+
     @pytest.mark.anyio
     async def test_create_email_explicit_google_workspace(
         self,
@@ -2750,6 +2756,14 @@ class TestMS365EndToEndLifecycle:
         assert contacts[0]["provider"] == "microsoft_365"
         assert contacts[0]["contact_value"] == "testcontact@outlook.unify.ai"
 
+        # 2b. GET /assistant should surface email_provider
+        get_resp = await client.get("/v0/assistant", headers=HEADERS)
+        assistant = [
+            a for a in get_resp.json()["info"] if int(a["agent_id"]) == agent_id
+        ][0]
+        assert assistant["email_provider"] == "microsoft_365"
+        assert assistant["email"] == "testcontact@outlook.unify.ai"
+
         # 3. Update metadata
         update_resp = await client.put(
             f"/v0/assistant/{agent_id}/contact",
@@ -2784,6 +2798,14 @@ class TestMS365EndToEndLifecycle:
             headers=HEADERS,
         )
         assert len(list_resp2.json()["info"]) == 0
+
+        # 5b. email_provider should be None after deletion
+        get_resp2 = await client.get("/v0/assistant", headers=HEADERS)
+        assistant2 = [
+            a for a in get_resp2.json()["info"] if int(a["agent_id"]) == agent_id
+        ][0]
+        assert assistant2["email_provider"] is None
+        assert assistant2["email"] is None
 
     @pytest.mark.anyio
     async def test_ms365_duplicate_contact_rejected(
