@@ -5,21 +5,15 @@ from zoneinfo import available_timezones
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from pydantic.generics import GenericModel
 
-from orchestra.settings import settings
-
 T = TypeVar("T")
 
 VALID_TIMEZONES = available_timezones()
 
 
 def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
-    if v is None:
-        return None
-    if v != "preview":
-        raise ValueError("deploy_env must be 'preview' or null.")
-    if not settings.is_staging:
-        raise ValueError("deploy_env='preview' is only supported on staging.")
-    return v
+    if v is not None:
+        raise ValueError("deploy_env is no longer supported; must be null.")
+    return None
 
 
 class InfoResponse(GenericModel, Generic[T]):
@@ -149,12 +143,9 @@ class AssistantCreate(BaseModel):
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
     )
-    deploy_env: Optional[Literal["preview"]] = Field(
+    deploy_env: Optional[str] = Field(
         None,
-        description=(
-            "Set to 'preview' to route this assistant to the preview runtime stack. "
-            "Leave null for native assistants (routed to this Orchestra's own environment)."
-        ),
+        description="Deprecated. Must be null.",
         example=None,
     )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
@@ -689,13 +680,9 @@ class AssistantUpdate(BaseModel):
         description="Monthly spending limit in dollars. Set to null to remove the limit.",
         example=100.00,
     )
-    deploy_env: Optional[Literal["preview"]] = Field(
+    deploy_env: Optional[str] = Field(
         None,
-        description=(
-            "Set to 'preview' to route this assistant to the preview runtime stack. "
-            "Set to null to revert to native routing."
-        ),
-        example="preview",
+        description="Deprecated. Must be null.",
     )
 
     @field_validator("timezone")
@@ -1493,13 +1480,9 @@ class AdminUpdateAssistant(BaseModel):
         None,
         description="SSH private key for desktop filesystem sync.",
     )
-    deploy_env: Optional[Literal["preview"]] = Field(
+    deploy_env: Optional[str] = Field(
         None,
-        description=(
-            "Set to 'preview' to route this assistant to the preview runtime stack. "
-            "Set to null to revert to native routing."
-        ),
-        example="preview",
+        description="Deprecated. Must be null.",
     )
 
     @field_validator("timezone")

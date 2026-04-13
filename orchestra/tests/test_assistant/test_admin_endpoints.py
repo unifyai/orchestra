@@ -564,22 +564,12 @@ async def test_admin_update_assistant_deploy_env(client: AsyncClient, dbsession)
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
-    with patch(
-        "orchestra.web.api.assistant.schema.settings",
-    ) as mock_settings:
-        mock_settings.is_staging = True
-        update_resp = await client.patch(
-            f"/v0/admin/assistant/{agent_id}",
-            json={"deploy_env": "preview"},
-            headers=ADMIN_HEADERS,
-        )
-    assert update_resp.status_code == 200
-    data = update_resp.json()
-    assert data["updated_fields"] == ["deploy_env"]
-
-    assistant_dao = AssistantDAO(dbsession)
-    assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
-    assert assistant.deploy_env == "preview"
+    update_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"deploy_env": "preview"},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 422
 
 
 @pytest.mark.anyio
