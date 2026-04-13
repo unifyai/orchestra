@@ -1215,8 +1215,9 @@ class AssistantContactCreate(BaseModel):
     """
     Schema for creating a new contact detail for an assistant.
 
-    This provisions the external infrastructure (Twilio phone, Google Workspace
-    email, WhatsApp sender) and creates the corresponding AssistantContact row.
+    This provisions the external infrastructure (Twilio phone, Google Workspace /
+    MS365 email, WhatsApp sender) and creates the corresponding AssistantContact
+    row.
     """
 
     contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
@@ -1231,6 +1232,11 @@ class AssistantContactCreate(BaseModel):
         example="US",
     )
     # Email-specific fields
+    email_provider: Optional[Literal["google_workspace", "microsoft_365"]] = Field(
+        "google_workspace",
+        description="Email provider to use for provisioning. Only used for email contacts.",
+        example="google_workspace",
+    )
     email_local: Optional[str] = Field(
         None,
         description="Local part of the email address (before @). Only used for email contacts.",
@@ -1238,12 +1244,12 @@ class AssistantContactCreate(BaseModel):
     )
     first_name: Optional[str] = Field(
         None,
-        description="First name for Google Workspace account. Only used for email contacts.",
+        description="First name for the email account. Only used for email contacts.",
         example="Ada",
     )
     last_name: Optional[str] = Field(
         None,
-        description="Last name for Google Workspace account. Only used for email contacts.",
+        description="Last name for the email account. Only used for email contacts.",
         example="Lovelace",
     )
 
