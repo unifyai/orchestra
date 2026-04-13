@@ -9,9 +9,7 @@ import httpx
 from orchestra.web.api.utils.http_client import get_async_client
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
-COMMS_URL_PREVIEW = os.environ.get("UNITY_COMMS_URL_PREVIEW")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
-ADAPTERS_URL_PREVIEW = os.environ.get("UNITY_ADAPTERS_URL_PREVIEW")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
@@ -92,6 +90,12 @@ def _stop_requires_sessionless_fallback(step: dict[str, Any]) -> bool:
     return _stop_step_reason(step) == "not_found"
 
 
+def _is_missing_comms_config_step(step: dict[str, Any]) -> bool:
+    """Return whether a cleanup step was skipped because comms is unavailable."""
+
+    return bool(step.get("skipped")) and step.get("reason") == "missing_comms_config"
+
+
 def _runtime_vm_refs(runtime_status: dict[str, Any]) -> list[dict[str, str]]:
     """Return de-duplicated VM refs from a runtime status payload."""
 
@@ -122,21 +126,15 @@ def _runtime_has_live_resources(runtime_status: dict[str, Any]) -> bool:
     )
 
 
-def _comms_url_for(deploy_env: str | None) -> str:
-    if deploy_env == "preview":
-        return COMMS_URL_PREVIEW or ""
+def _comms_url_for(deploy_env: str | None = None) -> str:
     return COMMS_URL or ""
 
 
-def _adapters_url_for(deploy_env: str | None) -> str:
-    if deploy_env == "preview":
-        return ADAPTERS_URL_PREVIEW or ""
+def _adapters_url_for(deploy_env: str | None = None) -> str:
     return ADAPTERS_URL or ""
 
 
-def _env_suffix(deploy_env: str | None) -> str:
-    if deploy_env == "preview":
-        return "-preview"
+def _env_suffix(deploy_env: str | None = None) -> str:
     is_staging = os.environ.get("STAGING", "False") == "True"
     return "-staging" if is_staging else ""
 
@@ -150,7 +148,7 @@ async def create_phone_number(
 
     Args:
         phone_country (str): The country code for phone number provisioning (e.g., "US", "GB").
-        deploy_env: 'preview' for preview stack, None for native environment.
+        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         JSON response from the phone creation endpoint
@@ -445,7 +443,7 @@ async def watch_email(email: str, deploy_env: str | None = None):
 
     Args:
         email (str): The email to watch
-        deploy_env: 'preview' for preview stack, None for native environment.
+        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         JSON response from the email watch endpoint
@@ -470,7 +468,7 @@ async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
 
     Args:
         assistant_id (str): The ID of the assistant
-        deploy_env: 'preview' for preview stack, None for native environment.
+        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         JSON response from the pubsub topic creation endpoint
@@ -611,7 +609,7 @@ async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
 
     Args:
         assistant_id (str): The ID of the assistant
-        deploy_env: 'preview' for preview stack, None for native environment.
+        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         JSON response from the pubsub topic deletion endpoint
@@ -744,7 +742,7 @@ async def get_running_jobs(
 
     Args:
         assistant_id: The assistant ID to find running jobs for
-        deploy_env: 'preview' for preview stack, None for native environment.
+        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         List of job names that are currently running for this assistant
@@ -1291,6 +1289,13 @@ async def wait_for_runtime_cleanup(
                 success=False,
                 error=status_step.get("error") or "runtime status request failed",
             )
+        if _is_missing_comms_config_step(status_step):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=True,
+                skipped=True,
+                reason="missing_comms_config",
+            )
 
         last_status = status_step.get("response", {})
         if last_status.get("runtime_cleanup_complete"):
@@ -1328,7 +1333,26 @@ async def teardown_assistant_runtime(
         skipped=True,
         reason="assistant_session_present",
     )
-    if not stop_session_step.get("success"):
+    if _is_missing_comms_config_step(stop_session_step):
+        fallback_step = _cleanup_step_result(
+            "sessionless_runtime_fallback",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        wait_step = _cleanup_step_result(
+            "wait_for_runtime_cleanup",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+        session_step = _cleanup_step_result(
+            "delete_assistant_session",
+            success=True,
+            skipped=True,
+            reason="missing_comms_config",
+        )
+    elif not stop_session_step.get("success"):
         fallback_step = _cleanup_step_result(
             "sessionless_runtime_fallback",
             success=True,
@@ -1433,6 +1457,13 @@ def _wait_for_runtime_cleanup_sync(
                 "wait_for_runtime_cleanup",
                 success=False,
                 error=status_step.get("error") or "runtime status request failed",
+            )
+        if _is_missing_comms_config_step(status_step):
+            return _cleanup_step_result(
+                "wait_for_runtime_cleanup",
+                success=True,
+                skipped=True,
+                reason="missing_comms_config",
             )
 
         last_status = status_step.get("response", {})
@@ -1606,7 +1637,7 @@ async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
 
     Args:
         assistant_id (str): The ID of the assistant to reawaken.
-        deploy_env: 'preview' for preview stack, None for native environment.
+        deploy_env: Reserved for future use; currently ignored.
     Returns:
         The JSON response from the webhook.
     """
@@ -1632,7 +1663,7 @@ async def log_pre_hire_chat(
     Args:
         assistant_id (str): The ID of the assistant.
         messages (list): A list of chat message dictionaries.
-        deploy_env: 'preview' for preview stack, None for native environment.
+        deploy_env: Reserved for future use; currently ignored.
     Returns:
         The JSON response from the webhook.
     """
