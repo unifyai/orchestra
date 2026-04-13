@@ -292,7 +292,6 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
         weekly_limit=None,
         max_parallel=None,
         organization_id=org_id,
-        deploy_env="preview",
         desktop_mode="windows",
     )
     dbsession.flush()
@@ -354,7 +353,7 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
         mock_enqueue_cleanup.call_args.kwargs["source_flow"]
         == CleanupSource.USER_DELETE
     )
-    assert cleanup_specs[0].deploy_env == "preview"
+    assert cleanup_specs[0].deploy_env is None
     assert cleanup_specs[0].desktop_mode == "windows"
     assert [
         (contact.contact_type, contact.contact_value)
@@ -386,7 +385,7 @@ async def test_self_service_delete_schedules_background_runtime_cleanup(
 
     with patch(
         "orchestra.services.user_account_cleanup_service.UserAccountCleanupService._get_user_assistant_cleanup_specs",
-        return_value=[AssistantCleanupSpec(assistant_id=321, deploy_env="preview")],
+        return_value=[AssistantCleanupSpec(assistant_id=321)],
     ), patch(
         "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
         return_value=[SimpleNamespace(id=1234)],
