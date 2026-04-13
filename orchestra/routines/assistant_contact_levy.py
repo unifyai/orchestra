@@ -75,6 +75,8 @@ class LevyAccountResult:
     email_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     whatsapp_count: int = 0
     whatsapp_cost: Decimal = field(default_factory=lambda: Decimal("0"))
+    discord_count: int = 0
+    discord_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     credits_before: Decimal = field(default_factory=lambda: Decimal("0"))
     credits_after: Decimal = field(default_factory=lambda: Decimal("0"))
     auto_recharge_triggered: bool = False
@@ -411,6 +413,9 @@ def _process_billing_account(
         elif contact.contact_type == "whatsapp":
             ar.whatsapp_count += 1
             ar.whatsapp_cost += cost
+        elif contact.contact_type == "discord":
+            ar.discord_count += 1
+            ar.discord_cost += cost
 
     ar.contacts_billed = len(contacts)
     ar.total_amount = total_levy
@@ -437,6 +442,8 @@ def _process_billing_account(
             "email_cost": float(ar.email_cost),
             "whatsapp_count": ar.whatsapp_count,
             "whatsapp_cost": float(ar.whatsapp_cost),
+            "discord_count": ar.discord_count,
+            "discord_cost": float(ar.discord_cost),
         },
     )
     if new_balance is not None:

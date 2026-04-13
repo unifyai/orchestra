@@ -95,8 +95,8 @@ def seed_contact_type_costs(dbsession: Session):
                 contact_type="discord",
                 provider="discord",
                 country_code=None,
-                monthly_cost=Decimal("0"),
-                one_time_cost=Decimal("0"),
+                monthly_cost=Decimal("1"),
+                one_time_cost=Decimal("1"),
             ),
         ]
         dbsession.add_all(rows)
