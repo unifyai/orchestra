@@ -98,6 +98,13 @@ def seed_contact_type_costs(dbsession: Session):
                 monthly_cost=Decimal("1"),
                 one_time_cost=Decimal("1"),
             ),
+            AssistantContactCost(
+                contact_type="email",
+                provider="microsoft_365",
+                country_code=None,
+                monthly_cost=Decimal("12.50"),
+                one_time_cost=Decimal("5.00"),
+            ),
         ]
         dbsession.add_all(rows)
         dbsession.flush()
@@ -956,12 +963,19 @@ def mock_all_infra(dbsession):
                 "user": {"primaryEmail": "testcontact@assistant.unify.ai"},
             },
         ),
+        "create_outlook_email": AsyncMock(
+            return_value={
+                "user": {"primaryEmail": "testcontact@outlook.unify.ai"},
+            },
+        ),
         "watch_email": AsyncMock(return_value={"historyId": "123456"}),
+        "watch_outlook_email": AsyncMock(return_value={"subscriptionId": "abc-123"}),
         "create_phone_number": AsyncMock(
             return_value={"phoneNumber": "+15551234567"},
         ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
         "delete_email": AsyncMock(return_value={"success": True}),
+        "delete_outlook_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
@@ -2416,6 +2430,479 @@ class TestEndToEndContactLifecycle:
         )
         assert list_resp2.status_code == status.HTTP_200_OK
         assert len(list_resp2.json()["info"]) == 0
+
+
+# ============================================================================
+# 8b. MS365 Email Provider Tests
+# ============================================================================
+
+
+class TestCreateMS365EmailContact:
+    """Tests for creating email contacts with email_provider='microsoft_365'."""
+
+    @pytest.mark.anyio
+    async def test_create_ms365_email_contact(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """POST /contact with email_provider=microsoft_365 provisions via Outlook."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "MS365", "surname": "Email", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "microsoft_365",
+                "email_local": "ms365test",
+                "first_name": "MS365",
+                "last_name": "Email",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+        mock_all_infra["create_outlook_email"].assert_called_once()
+        mock_all_infra["watch_outlook_email"].assert_called_once()
+        mock_all_infra["create_email"].assert_not_called()
+        mock_all_infra["watch_email"].assert_not_called()
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact is not None
+        assert contact.contact_value == "testcontact@outlook.unify.ai"
+        assert contact.provider == "microsoft_365"
+        assert contact.status == "active"
+
+    @pytest.mark.anyio
+    async def test_create_email_default_provider_is_google(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """POST /contact without email_provider defaults to google_workspace."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "DefProv", "surname": "Email", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_local": "defprov",
+                "first_name": "DefProv",
+                "last_name": "Email",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        mock_all_infra["create_email"].assert_called_once()
+        mock_all_infra["create_outlook_email"].assert_not_called()
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact.provider == "google_workspace"
+
+    @pytest.mark.anyio
+    async def test_create_email_explicit_google_workspace(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """POST /contact with email_provider=google_workspace uses Gmail path."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "GW", "surname": "Email", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "google_workspace",
+                "email_local": "gwtest",
+                "first_name": "GW",
+                "last_name": "Email",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        mock_all_infra["create_email"].assert_called_once()
+        mock_all_infra["create_outlook_email"].assert_not_called()
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact.provider == "google_workspace"
+
+    @pytest.mark.anyio
+    async def test_ms365_monthly_cost_stored(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """MS365 email contact stores its own monthly cost (not Google's)."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "MS365MC", "surname": "Cost", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "microsoft_365",
+                "email_local": "ms365mc",
+                "first_name": "MS365MC",
+                "last_name": "Cost",
+            },
+            headers=HEADERS,
+        )
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact is not None
+        assert Decimal(str(contact.monthly_cost)) == Decimal("12.50")
+
+    @pytest.mark.anyio
+    async def test_ms365_email_requires_email_local(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """MS365 email contact requires email_local just like Google."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "MS365NL", "surname": "Err", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "microsoft_365",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert "email_local" in resp.json()["detail"]
+
+
+class TestDeleteMS365EmailContact:
+    """Tests for deleting email contacts provisioned via MS365."""
+
+    @pytest.mark.anyio
+    async def test_delete_ms365_email_calls_outlook_delete(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """DELETE email contact with provider=microsoft_365 calls delete_outlook_email."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "MS365Del", "surname": "Email", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "microsoft_365",
+                "email_local": "ms365del",
+                "first_name": "MS365Del",
+                "last_name": "Email",
+            },
+            headers=HEADERS,
+        )
+
+        mock_all_infra["delete_outlook_email"].reset_mock()
+        mock_all_infra["delete_email"].reset_mock()
+
+        del_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "email"},
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == status.HTTP_200_OK
+
+        mock_all_infra["delete_outlook_email"].assert_called_once()
+        mock_all_infra["delete_email"].assert_not_called()
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact is None
+
+    @pytest.mark.anyio
+    async def test_delete_google_email_calls_gmail_delete(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """DELETE email contact with provider=google_workspace calls delete_email."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "GWDel", "surname": "Email", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_local": "gwdel",
+                "first_name": "GWDel",
+                "last_name": "Email",
+            },
+            headers=HEADERS,
+        )
+
+        mock_all_infra["delete_outlook_email"].reset_mock()
+        mock_all_infra["delete_email"].reset_mock()
+
+        del_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "email"},
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == status.HTTP_200_OK
+
+        mock_all_infra["delete_email"].assert_called_once()
+        mock_all_infra["delete_outlook_email"].assert_not_called()
+
+
+class TestMS365EndToEndLifecycle:
+    """Full lifecycle test for MS365 email contacts."""
+
+    @pytest.mark.anyio
+    async def test_ms365_full_lifecycle(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Create → list → update → delete an MS365 email contact."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "MS365E2E", "surname": "Life", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        # 1. Create MS365 email contact
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "microsoft_365",
+                "email_local": "ms365e2e",
+                "first_name": "MS365E2E",
+                "last_name": "Life",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        # 2. List — should show provider=microsoft_365
+        list_resp = await client.get(
+            f"/v0/assistant/{agent_id}/contacts",
+            headers=HEADERS,
+        )
+        assert list_resp.status_code == status.HTTP_200_OK
+        contacts = list_resp.json()["info"]
+        assert len(contacts) == 1
+        assert contacts[0]["provider"] == "microsoft_365"
+        assert contacts[0]["contact_value"] == "testcontact@outlook.unify.ai"
+
+        # 3. Update metadata
+        update_resp = await client.put(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "metadata": {"alias": "primary"},
+            },
+            headers=HEADERS,
+        )
+        assert update_resp.status_code == status.HTTP_200_OK
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact.metadata_.get("alias") == "primary"
+
+        # 4. Delete — routes to Outlook deprovision
+        mock_all_infra["delete_outlook_email"].reset_mock()
+        del_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "email"},
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == status.HTTP_200_OK
+        mock_all_infra["delete_outlook_email"].assert_called_once()
+
+        # 5. Verify deleted
+        list_resp2 = await client.get(
+            f"/v0/assistant/{agent_id}/contacts",
+            headers=HEADERS,
+        )
+        assert len(list_resp2.json()["info"]) == 0
+
+    @pytest.mark.anyio
+    async def test_ms365_duplicate_contact_rejected(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Creating a second email contact (any provider) is rejected."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "MS365Dup", "surname": "Dup", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        # First: create MS365 email
+        resp1 = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "microsoft_365",
+                "email_local": "ms365dup",
+                "first_name": "MS365Dup",
+                "last_name": "Dup",
+            },
+            headers=HEADERS,
+        )
+        assert resp1.status_code == status.HTTP_200_OK
+
+        # Second: try Google email — 409
+        resp2 = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "google_workspace",
+                "email_local": "ms365dup2",
+                "first_name": "MS365Dup",
+                "last_name": "Dup2",
+            },
+            headers=HEADERS,
+        )
+        assert resp2.status_code == status.HTTP_409_CONFLICT
+
+    @pytest.mark.anyio
+    async def test_ms365_create_after_delete_recycles(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Deleting then re-creating with a different provider recycles the row."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "MS365Rec", "surname": "Cycle", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        # Create Google email
+        await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_local": "ms365rec",
+                "first_name": "MS365Rec",
+                "last_name": "Cycle",
+            },
+            headers=HEADERS,
+        )
+
+        # Delete it
+        await client.request(
+            "DELETE",
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "email"},
+            headers=HEADERS,
+        )
+
+        # Re-create as MS365
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "email_provider": "microsoft_365",
+                "email_local": "ms365rec2",
+                "first_name": "MS365Rec",
+                "last_name": "Cycle",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact.provider == "microsoft_365"
+        assert contact.contact_value == "testcontact@outlook.unify.ai"
+
+
+class TestMS365CostLookup:
+    """Verify cost lookup returns the correct provider-specific costs."""
+
+    def test_ms365_monthly_cost(self, dbsession: Session):
+        """MS365 email cost is distinct from Google Workspace cost."""
+        dao = AssistantContactDAO(dbsession)
+        ms365_cost = dao.get_contact_monthly_cost("email", provider="microsoft_365")
+        gw_cost = dao.get_contact_monthly_cost("email", provider="google_workspace")
+
+        assert ms365_cost == Decimal("12.50")
+        assert gw_cost == Decimal("14.00")
+        assert ms365_cost != gw_cost
+
+    def test_ms365_one_time_cost(self, dbsession: Session):
+        """MS365 email setup fee lookup works."""
+        dao = AssistantContactDAO(dbsession)
+        cost = dao.get_contact_one_time_cost("email", provider="microsoft_365")
+        assert cost == Decimal("5.00")
 
 
 # ============================================================================

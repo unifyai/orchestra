@@ -414,6 +414,33 @@ async def create_email(
     return response.json()
 
 
+async def create_outlook_email(
+    local: str,
+    first_name: str,
+    last_name: str,
+    deploy_env: str | None = None,
+):
+    """
+    Create an MS365 mailbox by calling the Communication service.
+
+    Mirrors `create_email` (Gmail) but hits the ``/outlook/create`` endpoint,
+    which creates the Azure AD user and assigns an Exchange Online license.
+    """
+    comms_url = _comms_url_for(deploy_env)
+    client = get_async_client()
+    response = await client.post(
+        f"{comms_url}/outlook/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={
+            "local": local,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
+        timeout=30,
+    )
+    return response.json()
+
+
 async def delete_email(email: str, deploy_env: str | None = None):
     """
     Delete an email by making a DELETE request to the comms endpoint.
@@ -429,6 +456,21 @@ async def delete_email(email: str, deploy_env: str | None = None):
     response = await client.request(
         "DELETE",
         f"{comms_url}/gmail/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={"primary_email": email},
+        timeout=20,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def delete_outlook_email(email: str, deploy_env: str | None = None):
+    """Delete an MS365 user/mailbox via the Communication service."""
+    comms_url = _comms_url_for(deploy_env)
+    client = get_async_client()
+    response = await client.request(
+        "DELETE",
+        f"{comms_url}/outlook/delete",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"primary_email": email},
         timeout=20,
@@ -456,6 +498,22 @@ async def watch_email(email: str, deploy_env: str | None = None):
         json={
             "primary_email": email,
             "topic": f"gmail-notifications{_env_suffix(deploy_env)}",
+        },
+        timeout=20,
+    )
+    return response.json()
+
+
+async def watch_outlook_email(email: str, deploy_env: str | None = None):
+    """Set up Outlook change-notification subscription via the Communication service."""
+    comms_url = _comms_url_for(deploy_env)
+    client = get_async_client()
+    response = await client.post(
+        f"{comms_url}/outlook/watch",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json={
+            "primary_email": email,
+            "topic": f"outlook-notifications{_env_suffix(deploy_env)}",
         },
         timeout=20,
     )
