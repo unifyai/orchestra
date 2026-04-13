@@ -136,17 +136,17 @@ async def test_add_member_with_admin_role(
 
 
 @pytest.mark.anyio
-async def test_add_member_propagates_preview_deploy_env_for_pool_conflicts(
+async def test_add_member_propagates_deploy_env_for_pool_conflicts(
     client: AsyncClient,
     dbsession,
 ):
-    """Preview personal assistants should notify/reawaken via the preview stack."""
-    owner = await create_test_user(client, "preview_conflict_owner@test.com")
-    joiner = await create_test_user(client, "preview_conflict_joiner@test.com")
+    """Personal assistants should notify/reawaken via the correct stack on pool conflicts."""
+    owner = await create_test_user(client, "pool_conflict_owner@test.com")
+    joiner = await create_test_user(client, "pool_conflict_joiner@test.com")
 
     org_response = await client.post(
         "/v0/organizations",
-        json={"name": "Preview Conflict Org"},
+        json={"name": "Pool Conflict Org"},
         headers=owner["headers"],
     )
     assert org_response.status_code == status.HTTP_201_CREATED
@@ -167,12 +167,11 @@ async def test_add_member_propagates_preview_deploy_env_for_pool_conflicts(
         first_name="OrgBot",
         organization_id=org_id,
     )
-    preview_personal_assistant = Assistant(
+    personal_assistant = Assistant(
         user_id=joiner["id"],
-        first_name="PreviewBot",
-        deploy_env="preview",
+        first_name="PersonalBot",
     )
-    dbsession.add_all([org_assistant, preview_personal_assistant])
+    dbsession.add_all([org_assistant, personal_assistant])
     dbsession.flush()
 
     dbsession.add_all(
@@ -184,7 +183,7 @@ async def test_add_member_propagates_preview_deploy_env_for_pool_conflicts(
                 status="active",
             ),
             AssistantContact(
-                assistant_id=preview_personal_assistant.agent_id,
+                assistant_id=personal_assistant.agent_id,
                 contact_type="whatsapp",
                 contact_value="+18507990111",
                 status="active",
@@ -211,7 +210,7 @@ async def test_add_member_propagates_preview_deploy_env_for_pool_conflicts(
     moved_contact = (
         dbsession.query(AssistantContact)
         .filter(
-            AssistantContact.assistant_id == preview_personal_assistant.agent_id,
+            AssistantContact.assistant_id == personal_assistant.agent_id,
             AssistantContact.contact_type == "whatsapp",
             AssistantContact.status == "active",
         )
@@ -221,10 +220,10 @@ async def test_add_member_propagates_preview_deploy_env_for_pool_conflicts(
     assert moved_contact.contact_value == "+18507990112"
 
     mock_notify.assert_awaited_once()
-    assert mock_notify.await_args.kwargs["deploy_env"] == "preview"
+    assert mock_notify.await_args.kwargs["deploy_env"] is None
     mock_reawaken.assert_awaited_once_with(
-        str(preview_personal_assistant.agent_id),
-        deploy_env="preview",
+        str(personal_assistant.agent_id),
+        deploy_env=None,
     )
 
 
