@@ -268,6 +268,7 @@ def _build_assistant_read(
         updated_at=a.updated_at,
         phone=(phone_contact.contact_value if phone_contact else None),
         email=(email_contact.contact_value if email_contact else None),
+        email_provider=(email_contact.provider if email_contact else None),
         user_phone=user_phone_number,
         user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=(
