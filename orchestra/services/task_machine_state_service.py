@@ -40,11 +40,12 @@ _TASK_RUN_UNIQUE_FIELD = "run_key"
 _TASK_ACTIVATION_UPSERT_PATH = "/infra/task-activation/upsert"
 _TASK_ACTIVATION_DELETE_PATH = "/infra/task-activation/delete"
 _TASK_ACTIVATION_SYNC_TIMEOUT_SECONDS = 15.0
-UNITY_TASK_CONTEXT_NAMES = {
-    UNITY_TASKS_CONTEXT_NAME,
-    TASK_ACTIVATIONS_CONTEXT_NAME,
-    TASK_RUNS_CONTEXT_NAME,
-}
+_INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
+    {
+        TASK_ACTIVATIONS_CONTEXT_NAME,
+        TASK_RUNS_CONTEXT_NAME,
+    },
+)
 
 _SCHEDULED_ACTIVATION_STATUSES = {"scheduled", "queued", "primed"}
 _TRIGGERABLE_STATUS = "triggerable"
@@ -128,17 +129,16 @@ def is_internal_task_machine_context_name(context_name: str | None) -> bool:
     """Return True when the name refers to an internal Unity task machine context."""
 
     normalized = (context_name or "").strip("/")
-    return normalized in {TASK_ACTIVATIONS_CONTEXT_NAME, TASK_RUNS_CONTEXT_NAME}
+    return normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES
 
 
 def is_protected_unity_task_context_name(context_name: str | None) -> bool:
     """Return True for built-in Unity task contexts that should not be removed."""
 
     normalized = (context_name or "").strip("/")
-    return is_unity_tasks_context_name(normalized) or normalized in {
-        TASK_ACTIVATIONS_CONTEXT_NAME,
-        TASK_RUNS_CONTEXT_NAME,
-    }
+    return is_unity_tasks_context_name(normalized) or (
+        normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES
+    )
 
 
 _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
@@ -748,38 +748,10 @@ def _reconcile_scheduled_activation_materialization(
         )
 
 
-def _scheduled_activation_upsert_body(
+def _scheduled_activation_snapshot(
     activation: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Build the Communication upsert payload for one scheduled activation."""
-
-    if not _is_scheduled_activation_payload(activation):
-        return None
-    assistant_id = _coerce_optional_str(activation.get("assistant_id"))
-    task_id = _coerce_int(activation.get("task_id"))
-    source_task_log_id = _coerce_int(activation.get("source_task_log_id"))
-    activation_revision = _coerce_optional_str(activation.get("activation_revision"))
-    scheduled_for = _coerce_datetime_string(activation.get("next_due_at"))
-    if not assistant_id or task_id is None or source_task_log_id is None:
-        return None
-    if not activation_revision or not scheduled_for:
-        return None
-    return {
-        "assistant_id": assistant_id,
-        "task_id": task_id,
-        "source_task_log_id": source_task_log_id,
-        "activation_revision": activation_revision,
-        "scheduled_for": scheduled_for,
-        "execution_mode": _coerce_optional_str(activation.get("execution_mode"))
-        or "live",
-        "source_type": "scheduled",
-    }
-
-
-def _scheduled_activation_delete_body(
-    activation: Mapping[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Build the Communication delete payload for one scheduled activation."""
+    """Return the shared scheduled-activation fields Communication expects."""
 
     if not _is_scheduled_activation_payload(activation):
         return None
@@ -802,6 +774,32 @@ def _scheduled_activation_delete_body(
         "execution_mode": _coerce_optional_str(activation.get("execution_mode"))
         or "live",
     }
+
+
+def _scheduled_activation_upsert_body(
+    activation: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Build the Communication upsert payload for one scheduled activation."""
+
+    snapshot = _scheduled_activation_snapshot(activation)
+    if snapshot is None:
+        return None
+    source_task_log_id = _coerce_int(activation.get("source_task_log_id"))
+    if source_task_log_id is None:
+        return None
+    return {
+        **snapshot,
+        "source_task_log_id": source_task_log_id,
+        "source_type": "scheduled",
+    }
+
+
+def _scheduled_activation_delete_body(
+    activation: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Build the Communication delete payload for one scheduled activation."""
+
+    return _scheduled_activation_snapshot(activation)
 
 
 def _is_scheduled_activation_payload(activation: Mapping[str, Any] | None) -> bool:
