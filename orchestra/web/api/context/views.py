@@ -17,6 +17,9 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Context
+from orchestra.services.task_machine_state_service import (
+    is_protected_unity_task_context_name,
+)
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCommit,
@@ -604,10 +607,12 @@ def delete_context(
 
         # Check for protected contexts
         for ctx in contexts_to_delete:
-            if project_name == "Unity" and ctx.name == "Tasks":
+            if project_name == "Unity" and is_protected_unity_task_context_name(
+                ctx.name,
+            ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Cannot delete built-in Tasks context.",
+                    detail="Cannot delete built-in Tasks context or internal task machine contexts.",
                 )
 
         deleted_names = []
