@@ -16,12 +16,14 @@ from orchestra.tests.test_log import (
 from orchestra.tests.utils import ADMIN_HEADERS
 
 TASKS_CONTEXT = "1/42/Tasks"
+UNITY_PROJECT_NAME = "Unity"
+TASK_ACTIVATIONS_CONTEXT = task_machine_state_service.TASK_ACTIVATIONS_CONTEXT_NAME
 
 
 async def _ensure_unity_project(client: AsyncClient) -> None:
     """Create the protected Unity project when it does not already exist."""
 
-    response = await _create_project(client, "Unity")
+    response = await _create_project(client, UNITY_PROJECT_NAME)
     assert response.status_code in (200, 400), response.json()
 
 
@@ -34,7 +36,7 @@ async def _get_context_logs(
 
     response = await client.get(
         "/v0/logs",
-        params={"project_name": "Unity", "context": context_name},
+        params={"project_name": UNITY_PROJECT_NAME, "context": context_name},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -138,7 +140,7 @@ async def test_unity_task_create_projects_scheduled_activation(
     assert response.status_code == 200, response.json()
     created_task_log_id = response.json()["log_event_ids"][0]
 
-    activations = await _get_context_logs(client, context_name="Tasks/Activations")
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
     assert len(activations) == 1
     activation = activations[0]["entries"]
     assert activation["assistant_id"] == "42"
@@ -214,7 +216,7 @@ async def test_unity_task_update_clears_activation_when_row_stops_being_armed(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name="Tasks/Activations")
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
     assert all(log["entries"]["task_id"] != 202 for log in activations)
 
 
@@ -257,7 +259,7 @@ async def test_unity_task_delete_clears_activation(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name="Tasks/Activations")
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
     assert all(log["entries"]["task_id"] != 303 for log in activations)
 
 
@@ -285,7 +287,7 @@ async def test_unity_task_projection_chooses_latest_armed_triggerable_instance(
     assert second.status_code == 200, second.json()
     second_log_id = second.json()["log_event_ids"][0]
 
-    activations = await _get_context_logs(client, context_name="Tasks/Activations")
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
     matching = [
         log["entries"] for log in activations if log["entries"]["task_id"] == 404
     ]
@@ -318,7 +320,7 @@ async def test_delete_context_blocks_internal_task_machine_context(
     assert response.status_code == 200, response.json()
 
     response = await client.delete(
-        "/v0/project/Unity/contexts/Tasks/Activations",
+        f"/v0/project/{UNITY_PROJECT_NAME}/contexts/{TASK_ACTIVATIONS_CONTEXT}",
         headers=HEADERS,
     )
     assert response.status_code == 403
@@ -331,7 +333,7 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
 
     await _ensure_unity_project(client)
     payload = {
-        "project_name": "Unity",
+        "project_name": UNITY_PROJECT_NAME,
         "run_key": "offline:42:101:rev-1",
         "assistant_id": "42",
         "task_id": 101,
@@ -376,7 +378,7 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     create_response = await client.post(
         "/v0/admin/task-run/create-or-adopt",
         json={
-            "project_name": "Unity",
+            "project_name": UNITY_PROJECT_NAME,
             "run_key": run_key,
             "assistant_id": "42",
             "task_id": 202,
@@ -391,7 +393,7 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     update_response = await client.post(
         "/v0/admin/task-run/update",
         json={
-            "project_name": "Unity",
+            "project_name": UNITY_PROJECT_NAME,
             "run_key": run_key,
             "updates": {
                 "state": "completed",
