@@ -79,8 +79,8 @@ async def _run_pool_resolution_followups(
 ) -> None:
     """Send notifications and runtime refreshes for assistants moved post-commit.
 
-    The follow-up calls must use the affected assistant's ``deploy_env`` so
-    preview-routed assistants talk to the preview comms/adapters stack.
+    The follow-up calls use the affected assistant's ``deploy_env`` for
+    environment-aware routing.
     """
     if not pool_resolutions:
         return
