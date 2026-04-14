@@ -66,45 +66,67 @@ class EmbeddingDAO:
 
         return result.rowcount
 
+    SOFT_DELETE_BATCH_SIZE = 5000
+
     def soft_delete(
         self,
         *,
         log_event_ids: Optional[List[int]] = None,
         project_id: Optional[int] = None,
+        batch_size: int = SOFT_DELETE_BATCH_SIZE,
     ) -> int:
         """Soft-delete embeddings (is_deleted=true) for the given scope.
 
         Marks embeddings as deleted so they are excluded from HNSW similarity
-        searches immediately, without expensive index surgery.
+        searches immediately. Processes in batches to limit HNSW index churn
+        per transaction — a single unbatched UPDATE on 100K+ rows causes
+        superlinear graph maintenance overhead.
+
+        Commits after each batch so WAL can flush and locks are released.
         """
         self._validate_scope(log_event_ids, project_id)
+        total = 0
 
         if log_event_ids is not None:
             if not log_event_ids:
                 return 0
-            result = self.session.execute(
-                text("""
-                    UPDATE embedding
-                    SET is_deleted = true
-                    WHERE ref_id = ANY(:ids)
-                      AND is_deleted = false
-                """),
-                {"ids": log_event_ids},
-            )
+            for i in range(0, len(log_event_ids), batch_size):
+                chunk = log_event_ids[i : i + batch_size]
+                result = self.session.execute(
+                    text("""
+                        UPDATE embedding
+                        SET is_deleted = true
+                        WHERE ref_id = ANY(:ids)
+                          AND is_deleted = false
+                    """),
+                    {"ids": chunk},
+                )
+                total += result.rowcount
+                self.session.commit()
         else:
-            result = self.session.execute(
-                text("""
-                    UPDATE embedding e
-                    SET is_deleted = true
-                    FROM log_event le
-                    WHERE e.ref_id = le.id
-                      AND le.project_id = :project_id
-                      AND e.is_deleted = false
-                """),
-                {"project_id": project_id},
-            )
+            while True:
+                result = self.session.execute(
+                    text("""
+                        WITH batch AS (
+                            SELECT e.ctid FROM embedding e
+                            JOIN log_event le ON e.ref_id = le.id
+                            WHERE le.project_id = :project_id
+                              AND e.is_deleted = false
+                            LIMIT :batch_size
+                        )
+                        UPDATE embedding
+                        SET is_deleted = true
+                        WHERE ctid IN (SELECT ctid FROM batch)
+                    """),
+                    {"project_id": project_id, "batch_size": batch_size},
+                )
+                updated = result.rowcount
+                total += updated
+                self.session.commit()
+                if updated < batch_size:
+                    break
 
-        return result.rowcount
+        return total
 
     def null_ref_ids(
         self,
