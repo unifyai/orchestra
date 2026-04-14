@@ -247,6 +247,18 @@ async def deprovision_assistant_contacts(
 
         spec.contacts = remaining_contacts
 
+    # Clean up any stored secrets for each assistant
+    from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+    secret_dao = AssistantSecretDAO(session)
+    for spec in cleanup_specs:
+        try:
+            secret_dao.delete_all(int(spec.assistant_id))
+        except Exception as exc:
+            errors.append(
+                f"Failed to delete secrets for assistant {spec.assistant_id}: {exc}",
+            )
+
     return {
         "success": not errors,
         "attempted": attempted,

@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -95,6 +96,8 @@ from orchestra.web.api.assistant.schema import (
     InfoResponse,
     PhotoGenerateRequest,
     ReplicatePredictionResponse,
+    SecretCreate,
+    SecretUpdate,
     SpendingLimitRequest,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
@@ -189,6 +192,7 @@ def _build_assistant_read(
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
     contacts: Optional[list] = None,
+    secrets: Optional[dict] = None,
     include_internal: bool = False,
 ) -> AssistantRead:
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
@@ -298,6 +302,7 @@ def _build_assistant_read(
         user_email=user_email,
         user_image=user_image,
         team_ids=team_ids,
+        secrets=secrets,
     )
 
 
@@ -1764,6 +1769,119 @@ async def get_email_connect_url(
         )
 
     return InfoResponse(info=EmailConnectResponse(oauth_url=oauth_url))
+
+
+# =========================================================================
+# Secret CRUD (used by Communication to persist OAuth tokens)
+# =========================================================================
+
+
+@router.post(
+    "/assistant/{assistant_id}/secret",
+    response_model=InfoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Create a secret for an assistant",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Secret created."},
+        404: {"description": "Assistant not found."},
+        409: {
+            "description": "Secret with that name already exists (use PUT to update).",
+        },
+    },
+)
+async def create_assistant_secret(
+    assistant_id: int,
+    body: SecretCreate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    secret_dao = AssistantSecretDAO(session)
+    existing = secret_dao.get(assistant_id, body.secret_name)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Secret '{body.secret_name}' already exists. Use PUT to update.",
+        )
+    secret_dao.upsert(user_id, assistant_id, body.secret_name, body.secret_value)
+    session.commit()
+    return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
+
+
+@router.put(
+    "/assistant/{assistant_id}/secret/{secret_name}",
+    response_model=InfoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update an existing secret",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Secret updated."},
+        404: {"description": "Assistant or secret not found."},
+    },
+)
+async def update_assistant_secret(
+    assistant_id: int,
+    secret_name: str,
+    body: SecretUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    secret_dao = AssistantSecretDAO(session)
+    existing = secret_dao.get(assistant_id, secret_name)
+    if existing is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Secret '{secret_name}' not found.",
+        )
+    secret_dao.upsert(user_id, assistant_id, secret_name, body.secret_value)
+    session.commit()
+    return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
+
+
+@router.delete(
+    "/assistant/{assistant_id}/secret/{secret_name}",
+    response_model=InfoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete a secret",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Secret deleted."},
+        404: {"description": "Assistant or secret not found."},
+    },
+)
+async def delete_assistant_secret(
+    assistant_id: int,
+    secret_name: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    secret_dao = AssistantSecretDAO(session)
+    removed = secret_dao.delete(assistant_id, secret_name)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Secret '{secret_name}' not found.",
+        )
+    session.commit()
+    return InfoResponse(info={"secret_name": secret_name, "status": "deleted"})
 
 
 @router.put(
@@ -4837,6 +4955,26 @@ def admin_list_all_assistants(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        # Batch-fetch secrets for all assistants
+        from orchestra.db.models.orchestra_models import AssistantSecret
+
+        skip_secrets = (
+            requested_fields is not None and "secrets" not in requested_fields
+        )
+        secrets_by_assistant: dict[int, dict[str, str]] = {}
+        if not skip_secrets:
+            agent_ids = [a.agent_id for a in assistants]
+            if agent_ids:
+                all_secret_rows = (
+                    session.query(AssistantSecret)
+                    .filter(AssistantSecret.agent_id.in_(agent_ids))
+                    .all()
+                )
+                for s in all_secret_rows:
+                    secrets_by_assistant.setdefault(s.agent_id, {})[
+                        s.secret_name
+                    ] = s.secret_value
+
         # Build AssistantRead objects
         assistant_reads = [
             _build_assistant_read(
@@ -4850,6 +4988,11 @@ def admin_list_all_assistants(
                 user_whatsapp_number=(users[i].whatsapp_number if users else None),
                 team_ids=[] if skip_teams else None,
                 contacts=contacts_by_assistant.get(a.agent_id, []),
+                secrets=(
+                    secrets_by_assistant.get(a.agent_id, {})
+                    if not skip_secrets
+                    else None
+                ),
                 include_internal=True,
             )
             for i, a in enumerate(assistants)

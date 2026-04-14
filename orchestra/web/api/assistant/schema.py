@@ -353,6 +353,11 @@ class AssistantRead(AssistantCreate):
         description="Team IDs the assistant's user belongs to within the assistant's organization. "
         "Empty for personal assistants or when the user has no team memberships.",
     )
+    secrets: Optional[Dict[str, str]] = Field(
+        None,
+        description="External service credentials (OAuth tokens, etc.). "
+        "Only populated in admin responses.",
+    )
 
     class Config:
         orm_mode = True
@@ -1389,6 +1394,19 @@ class EmailConnectResponse(BaseModel):
         ...,
         description="OAuth authorization URL the user should visit to grant email access.",
     )
+
+
+class SecretCreate(BaseModel):
+    """Request body for ``POST /assistant/{id}/secret``."""
+
+    secret_name: str = Field(..., description="Unique name for the secret.")
+    secret_value: str = Field(..., description="Secret payload (token, key, etc.).")
+
+
+class SecretUpdate(BaseModel):
+    """Request body for ``PUT /assistant/{id}/secret/{name}``."""
+
+    secret_value: str = Field(..., description="New value for the secret.")
 
 
 class AssistantTransferToOrgRequest(BaseModel):
