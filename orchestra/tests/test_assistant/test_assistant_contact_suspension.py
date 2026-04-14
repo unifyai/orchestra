@@ -903,6 +903,47 @@ class TestSuspensionEdgeCases:
         assert result.contacts_deleted == 0
         assert result.reminders_sent == 0
 
+    @pytest.mark.anyio
+    async def test_byod_contact_skips_deprovisioning(self, dbsession: Session):
+        """User-provisioned (BYOD) contacts are not externally deprovisioned."""
+        from orchestra.routines.assistant_contact_suspension import (
+            _deprovision_contact as real_deprovision,
+        )
+
+        ba = _make_ba(dbsession, credits=-10)
+        user = _make_user(dbsession, "susp_byod_u1", ba)
+        asst = _make_assistant(dbsession, user.id, first_name="BYODBot")
+        c = _make_grace_contact(
+            dbsession,
+            asst.agent_id,
+            contact_type="email",
+            contact_value="user@gmail.com",
+            provider="google_workspace",
+            provisioned_by="user",
+            grace_days_ago=15,
+        )
+        dbsession.flush()
+
+        with (
+            patch(
+                "orchestra.web.api.utils.assistant_infra.delete_email",
+                new_callable=AsyncMock,
+            ) as mock_del_email,
+            patch(
+                "orchestra.web.api.utils.assistant_infra.delete_outlook_email",
+                new_callable=AsyncMock,
+            ) as mock_del_outlook,
+            patch(
+                "orchestra.web.api.utils.assistant_infra.delete_phone_number",
+                new_callable=AsyncMock,
+            ) as mock_del_phone,
+        ):
+            await real_deprovision(c)
+
+            mock_del_email.assert_not_called()
+            mock_del_outlook.assert_not_called()
+            mock_del_phone.assert_not_called()
+
 
 # ============================================================================
 # 5. Grouping helper
