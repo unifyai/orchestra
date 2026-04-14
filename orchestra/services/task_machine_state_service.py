@@ -1,9 +1,10 @@
-"""Internal machine-state helpers for Unity task activations and runs.
+"""Internal machine-state helpers for assistant task activations and runs.
 
 This module keeps scheduled and triggerable task machine state inside the
-existing Orchestra log/context system. The public `Unity/Tasks` table remains
-the user-authored surface; `Tasks/Activations` and `Tasks/Runs` are internal
-contexts derived from or driven by that surface.
+existing Orchestra log/context system. The public assistant-scoped `.../Tasks`
+table in the `Assistants` project remains the user-authored surface;
+`Tasks/Activations` and `Tasks/Runs` are internal contexts derived from or
+driven by that surface.
 """
 
 from __future__ import annotations
@@ -31,7 +32,8 @@ from orchestra.db.models.orchestra_models import (
     LogUniqueConstraint,
 )
 
-UNITY_TASKS_CONTEXT_NAME = "Tasks"
+TASK_MACHINE_PROJECT_NAME = "Assistants"
+TASKS_CONTEXT_NAME = "Tasks"
 TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
 TASK_RUNS_CONTEXT_NAME = "Tasks/Runs"
 _ALL_CONTEXT_SEGMENT = "All"
@@ -59,7 +61,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class TaskMachineContextIds:
-    """Resolved context identifiers for Unity task machine state."""
+    """Resolved context identifiers for task machine state."""
 
     activations_context_id: int
     runs_context_id: int
@@ -84,10 +86,10 @@ def _split_context_name(context_name: str | None) -> list[str]:
 
 
 def _assistant_id_from_context_name(context_name: str | None) -> str | None:
-    """Extract the assistant id from an assistant-scoped Unity tasks context."""
+    """Extract the assistant id from an assistant-scoped tasks context."""
 
     segments = _split_context_name(context_name)
-    if len(segments) < 2 or segments[-1] != UNITY_TASKS_CONTEXT_NAME:
+    if len(segments) < 2 or segments[-1] != TASKS_CONTEXT_NAME:
         return None
     if segments[-2] == _ALL_CONTEXT_SEGMENT:
         return None
@@ -118,11 +120,11 @@ def _build_activation_key(*, assistant_id: str | None, task_id: int) -> str:
     return str(task_id)
 
 
-def is_unity_tasks_context_name(context_name: str | None) -> bool:
-    """Return True when the name refers to the user-authored Unity tasks table."""
+def is_task_surface_context_name(context_name: str | None) -> bool:
+    """Return True when the name refers to the user-authored tasks table."""
 
     segments = _split_context_name(context_name)
-    if not segments or segments[-1] != UNITY_TASKS_CONTEXT_NAME:
+    if not segments or segments[-1] != TASKS_CONTEXT_NAME:
         return False
     if len(segments) >= 2 and segments[-2] == _ALL_CONTEXT_SEGMENT:
         return False
@@ -130,17 +132,17 @@ def is_unity_tasks_context_name(context_name: str | None) -> bool:
 
 
 def is_internal_task_machine_context_name(context_name: str | None) -> bool:
-    """Return True when the name refers to an internal Unity task machine context."""
+    """Return True when the name refers to an internal task machine context."""
 
     normalized = (context_name or "").strip("/")
     return normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES
 
 
-def is_protected_unity_task_context_name(context_name: str | None) -> bool:
-    """Return True for built-in Unity task contexts that should not be removed."""
+def is_protected_task_surface_context_name(context_name: str | None) -> bool:
+    """Return True for built-in task contexts that should not be removed."""
 
     normalized = (context_name or "").strip("/")
-    return is_unity_tasks_context_name(normalized) or (
+    return is_task_surface_context_name(normalized) or (
         normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES
     )
 
@@ -149,7 +151,7 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "assistant_id": {
         "field_type": "str",
         "mutable": False,
-        "description": "Assistant identifier mirrored from the source Unity/Tasks row.",
+        "description": "Assistant identifier mirrored from the source task row.",
     },
     "activation_key": {
         "field_type": "str",
@@ -160,12 +162,12 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "task_id": {
         "field_type": "int",
         "mutable": False,
-        "description": "Logical task identifier mirrored from Unity/Tasks.",
+        "description": "Logical task identifier mirrored from the source task row.",
     },
     "source_task_log_id": {
         "field_type": "int",
         "mutable": True,
-        "description": "Current Unity/Tasks row that owns this activation.",
+        "description": "Current task row that owns this activation.",
     },
     "instance_id": {
         "field_type": "int",
@@ -190,12 +192,12 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "task_name": {
         "field_type": "str",
         "mutable": True,
-        "description": "Current task title mirrored from Unity/Tasks.",
+        "description": "Current task title mirrored from the source task row.",
     },
     "task_description": {
         "field_type": "str",
         "mutable": True,
-        "description": "Current task description mirrored from Unity/Tasks.",
+        "description": "Current task description mirrored from the source task row.",
     },
     "next_due_at": {
         "field_type": "datetime",
@@ -245,7 +247,7 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "source_task_updated_at": {
         "field_type": "datetime",
         "mutable": True,
-        "description": "Updated timestamp from the source Unity/Tasks row.",
+        "description": "Updated timestamp from the source task row.",
     },
     "last_materialized_at": {
         "field_type": "datetime",
@@ -279,7 +281,7 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "source_task_log_id": {
         "field_type": "int",
         "mutable": True,
-        "description": "Unity/Tasks row that originated this run.",
+        "description": "Task row that originated this run.",
     },
     "source_type": {
         "field_type": "str",
@@ -333,13 +335,13 @@ def ensure_task_machine_contexts(
     session: Session,
     project_id: int,
 ) -> TaskMachineContextIds:
-    """Ensure the Unity task machine contexts and field schemas exist."""
+    """Ensure the task machine contexts and field schemas exist."""
 
     activations_context_id = _upsert_context(
         session=session,
         project_id=project_id,
         name=TASK_ACTIVATIONS_CONTEXT_NAME,
-        description="Internal machine-facing activation state for Unity tasks.",
+        description="Internal machine-facing activation state for assistant tasks.",
         allow_duplicates=False,
         unique_keys={_TASK_ACTIVATION_UNIQUE_FIELD: "str"},
     )
@@ -347,7 +349,7 @@ def ensure_task_machine_contexts(
         session=session,
         project_id=project_id,
         name=TASK_RUNS_CONTEXT_NAME,
-        description="Internal idempotent execution history for Unity tasks.",
+        description="Internal idempotent execution history for assistant tasks.",
         allow_duplicates=False,
         unique_keys={_TASK_RUN_UNIQUE_FIELD: "str"},
     )
@@ -375,12 +377,12 @@ def sync_task_activations_for_task_ids(
     project_id: int,
     task_ids: Iterable[int],
     *,
-    tasks_context_name: str = UNITY_TASKS_CONTEXT_NAME,
+    tasks_context_name: str = TASKS_CONTEXT_NAME,
 ) -> dict[str, int]:
-    """Project one assistant-scoped Unity tasks table into `Tasks/Activations`."""
+    """Project one assistant-scoped tasks table into `Tasks/Activations`."""
 
     unique_task_ids = sorted({int(task_id) for task_id in task_ids})
-    if not unique_task_ids or not is_unity_tasks_context_name(tasks_context_name):
+    if not unique_task_ids or not is_task_surface_context_name(tasks_context_name):
         return {"upserted": 0, "deleted": 0}
 
     tasks_context_id = _get_context_id(
@@ -580,7 +582,7 @@ def get_task_ids_for_log_ids(
     context_name: str,
     log_event_ids: Iterable[int],
 ) -> set[int]:
-    """Return logical task ids for the specified Unity/Tasks log rows."""
+    """Return logical task ids for the specified task rows."""
 
     ids = [int(log_id) for log_id in set(log_event_ids)]
     if not ids:
@@ -906,7 +908,7 @@ def _load_task_rows(
     context_id: int,
     task_ids: Sequence[int],
 ) -> list[_TaskRow]:
-    """Load Unity/Tasks rows for the given logical task ids."""
+    """Load task rows for the given logical task ids."""
 
     task_id_strings = [str(task_id) for task_id in task_ids]
     rows = (
