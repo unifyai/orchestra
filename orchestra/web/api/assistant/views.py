@@ -6,7 +6,7 @@ import math
 import time
 import urllib.request
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import mutagen
 from fastapi import (
@@ -91,6 +91,7 @@ from orchestra.web.api.assistant.schema import (
     Contact,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
+    EmailConnectResponse,
     InfoResponse,
     PhotoGenerateRequest,
     ReplicatePredictionResponse,
@@ -1038,35 +1039,37 @@ async def delete_assistant_contact(
         )
 
         if contact:
-            if contact_type == "phone" and contact.contact_value:
-                await delete_phone_number(
-                    contact.contact_value,
-                    deploy_env=assistant.deploy_env,
-                )
-            elif contact_type == "email" and contact.contact_value:
-                if contact.provider == "microsoft_365":
-                    await delete_outlook_email(
+            # BYOD contacts: skip external deprovisioning (we don't own the resource)
+            if contact.provisioned_by != "user":
+                if contact_type == "phone" and contact.contact_value:
+                    await delete_phone_number(
                         contact.contact_value,
                         deploy_env=assistant.deploy_env,
                     )
-                else:
-                    await delete_email(
-                        contact.contact_value,
-                        deploy_env=assistant.deploy_env,
+                elif contact_type == "email" and contact.contact_value:
+                    if contact.provider == "microsoft_365":
+                        await delete_outlook_email(
+                            contact.contact_value,
+                            deploy_env=assistant.deploy_env,
+                        )
+                    else:
+                        await delete_email(
+                            contact.contact_value,
+                            deploy_env=assistant.deploy_env,
+                        )
+                elif contact_type == "whatsapp":
+                    from orchestra.web.api.utils.assistant_infra import (
+                        delete_whatsapp_routes,
                     )
-            elif contact_type == "whatsapp":
-                from orchestra.web.api.utils.assistant_infra import (
-                    delete_whatsapp_routes,
-                )
 
-                await delete_whatsapp_routes(assistant_id, session)
+                    await delete_whatsapp_routes(assistant_id, session)
 
-            elif contact_type == "discord":
-                from orchestra.web.api.utils.assistant_infra import (
-                    delete_discord_routes,
-                )
+                elif contact_type == "discord":
+                    from orchestra.web.api.utils.assistant_infra import (
+                        delete_discord_routes,
+                    )
 
-                await delete_discord_routes(assistant_id, session)
+                    await delete_discord_routes(assistant_id, session)
 
             # Soft-delete the AssistantContact row
             contact_dao.soft_delete_assistant_contact(
@@ -1182,6 +1185,7 @@ async def create_assistant_contact(
             )
 
     contact_type = contact_request.contact_type
+    is_byod = contact_request.provisioned_by == "user"
 
     # 2. Require verified profile identity for phone/whatsapp/discord contacts
     if contact_type in ("phone", "whatsapp", "discord"):
@@ -1228,7 +1232,7 @@ async def create_assistant_contact(
             detail=f"An active {contact_type} contact already exists for this assistant.",
         )
 
-    # 3. Look up costs
+    # Determine provider
     provider = None
     country_code = None
     if contact_type == "phone":
@@ -1240,6 +1244,73 @@ async def create_assistant_contact(
         provider = "twilio"
     elif contact_type == "discord":
         provider = "discord"
+
+    if is_byod:
+        # ── BYOD path: no external provisioning, no billing ──
+        created_value = contact_request.contact_value
+
+        refreshed_session = _open_request_session(request)
+        try:
+            assistant_dao = AssistantDAO(refreshed_session)
+            contact_dao = AssistantContactDAO(refreshed_session)
+
+            assistant = assistant_dao.get_assistant_by_id(
+                user_id=user_id,
+                agent_id=assistant_id,
+                organization_id=organization_id,
+            )
+            if not assistant:
+                raise Exception("Assistant not found.")
+
+            contact = contact_dao.upsert_assistant_contact(
+                assistant_id=assistant_id,
+                contact_type=contact_type,
+                contact_value=created_value,
+                provider=provider,
+                country_code=country_code,
+                provisioned_by="user",
+            )
+
+            refreshed_session.commit()
+        except Exception as db_error:
+            refreshed_session.rollback()
+            logging.error(
+                "Failed to save BYOD %s contact for assistant %s: %s",
+                contact_type,
+                assistant_id,
+                db_error,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save {contact_type} contact: {str(db_error)}",
+            )
+
+        try:
+            await reawaken_assistant(
+                str(assistant_id),
+                deploy_env=assistant.deploy_env,
+            )
+        except Exception as e:
+            logging.warning(
+                "Failed to reawaken assistant %s after BYOD contact creation: %s",
+                assistant_id,
+                e,
+            )
+
+        assistant = assistant_dao.get_assistant_by_id(
+            user_id=user_id,
+            agent_id=assistant_id,
+            organization_id=organization_id,
+        )
+        try:
+            return InfoResponse(
+                info=_build_assistant_read(assistant, refreshed_session),
+            )
+        finally:
+            refreshed_session.close()
+
+    # ── Platform-provisioned path (original) ──
 
     monthly_cost = contact_dao.get_contact_monthly_cost(
         contact_type,
@@ -1563,6 +1634,136 @@ async def list_assistant_contacts(
         for c in contacts
     ]
     return InfoResponse(info=contact_reads)
+
+
+@router.get(
+    "/assistant/{assistant_id}/email/connect",
+    response_model=InfoResponse[EmailConnectResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Get an OAuth URL to connect a user's own email",
+    description=(
+        "Returns an OAuth authorization URL that the user visits to grant "
+        "delegated email access (BYOD). Works for both Gmail and Microsoft "
+        "accounts (personal and enterprise)."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "OAuth URL generated successfully."},
+        404: {"description": "Assistant not found."},
+        422: {"description": "Missing OAuth configuration."},
+    },
+)
+async def get_email_connect_url(
+    assistant_id: int,
+    request: Request,
+    provider: Literal["gmail", "microsoft"] = Query(
+        ...,
+        description="Email provider to connect: 'gmail' or 'microsoft'.",
+    ),
+    redirect_after: Optional[str] = Query(
+        None,
+        description="URL to redirect the user to after OAuth completes.",
+    ),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[EmailConnectResponse]:
+    """Build an OAuth authorization URL for BYOD email access."""
+    import json
+    import os
+
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
+
+    adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
+
+    state_payload = json.dumps(
+        {
+            "assistant_id": assistant_id,
+            "provider": provider,
+            "redirect_after": redirect_after,
+            "byod": True,
+        },
+    )
+    encoded_state = base64.urlsafe_b64encode(state_payload.encode()).decode()
+
+    if provider == "gmail":
+        client_id = settings.google_oauth_client_id
+        if not client_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Google OAuth is not configured on this deployment.",
+            )
+        params = {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": f"{adapters_url}/google/auth/callback",
+            "scope": (
+                "https://www.googleapis.com/auth/gmail.send "
+                "https://www.googleapis.com/auth/gmail.readonly "
+                "https://www.googleapis.com/auth/gmail.modify "
+                "https://www.googleapis.com/auth/userinfo.email"
+            ),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": encoded_state,
+        }
+        from urllib.parse import urlencode
+
+        oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+
+    else:
+        client_id = settings.microsoft_byod_client_id
+        if not client_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Microsoft BYOD OAuth is not configured on this deployment.",
+            )
+        params = {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": f"{adapters_url}/microsoft/auth/callback",
+            "scope": (
+                "https://graph.microsoft.com/Mail.Send "
+                "https://graph.microsoft.com/Mail.Read "
+                "https://graph.microsoft.com/Mail.ReadWrite "
+                "https://graph.microsoft.com/User.Read "
+                "offline_access"
+            ),
+            "response_mode": "query",
+            "state": encoded_state,
+        }
+        from urllib.parse import urlencode
+
+        oauth_url = (
+            f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+            f"?{urlencode(params)}"
+        )
+
+    return InfoResponse(info=EmailConnectResponse(oauth_url=oauth_url))
 
 
 @router.put(
