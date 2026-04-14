@@ -1221,15 +1221,34 @@ class AssistantContactCreate(BaseModel):
     """
     Schema for creating a new contact detail for an assistant.
 
-    This provisions the external infrastructure (Twilio phone, Google Workspace /
-    MS365 email, WhatsApp sender) and creates the corresponding AssistantContact
-    row.
+    For ``provisioned_by="platform"`` (default) the endpoint provisions
+    external infrastructure (Twilio phone, Google Workspace / MS365 email,
+    WhatsApp sender) and creates the corresponding AssistantContact row.
+
+    For ``provisioned_by="user"`` (BYOD) the caller supplies the full
+    ``contact_value`` directly — no external provisioning or billing occurs.
     """
 
     contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
         ...,
         description="The type of contact detail to create.",
         example="phone",
+    )
+    provisioned_by: Literal["platform", "user"] = Field(
+        "platform",
+        description=(
+            "Who owns the resource. 'platform' = we provision and bill; "
+            "'user' = BYOD, the user connected their own account via OAuth."
+        ),
+    )
+    # BYOD field — the full contact value (email address, phone number, etc.)
+    # discovered from the OAuth provider after the user authenticates.
+    contact_value: Optional[str] = Field(
+        None,
+        description=(
+            "Full contact value for BYOD contacts (e.g. 'user@gmail.com'). "
+            "Required when provisioned_by='user', ignored otherwise."
+        ),
     )
     # Phone-specific fields
     phone_country: Optional[str] = Field(
@@ -1245,19 +1264,33 @@ class AssistantContactCreate(BaseModel):
     )
     email_local: Optional[str] = Field(
         None,
-        description="Local part of the email address (before @). Only used for email contacts.",
+        description="Local part of the email address (before @). Only used for platform-provisioned email contacts.",
         example="ada.lovelace",
     )
     first_name: Optional[str] = Field(
         None,
-        description="First name for the email account. Only used for email contacts.",
+        description="First name for the email account. Only used for platform-provisioned email contacts.",
         example="Ada",
     )
     last_name: Optional[str] = Field(
         None,
-        description="Last name for the email account. Only used for email contacts.",
+        description="Last name for the email account. Only used for platform-provisioned email contacts.",
         example="Lovelace",
     )
+
+    @model_validator(mode="after")
+    def _validate_byod_fields(self) -> "AssistantContactCreate":
+        if self.provisioned_by == "user":
+            if not self.contact_value:
+                raise ValueError(
+                    "contact_value is required when provisioned_by='user'.",
+                )
+            if self.contact_type == "email" and not self.email_provider:
+                raise ValueError(
+                    "email_provider is required when provisioned_by='user' "
+                    "and contact_type='email'.",
+                )
+        return self
 
     class Config:
         schema_extra = {
@@ -1347,6 +1380,15 @@ class AssistantContactUpdate(BaseModel):
                 "metadata": {"custom_key": "value"},
             },
         }
+
+
+class EmailConnectResponse(BaseModel):
+    """Response from the email-connect endpoint with the OAuth authorization URL."""
+
+    oauth_url: str = Field(
+        ...,
+        description="OAuth authorization URL the user should visit to grant email access.",
+    )
 
 
 class AssistantTransferToOrgRequest(BaseModel):

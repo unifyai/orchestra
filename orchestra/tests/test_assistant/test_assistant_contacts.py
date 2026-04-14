@@ -3911,3 +3911,333 @@ class TestPhase5EndToEnd:
         asst = dbsession.query(Assistant).filter_by(agent_id=agent_id).first()
         dbsession.refresh(asst)
         assert asst.about == "Updated P5 E2E description"
+
+
+# ============================================================================
+# 12. BYOD (user-provisioned) contacts
+# ============================================================================
+
+
+class TestBYODContactCreation:
+    """Tests for creating contacts with provisioned_by='user'."""
+
+    @pytest.mark.anyio
+    async def test_create_byod_email_contact(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """BYOD email contact is created without external provisioning."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "BYOD", "surname": "Email", "create_infra": False},
+            headers=HEADERS,
+        )
+        assert create_resp.status_code == status.HTTP_200_OK
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "contact_value": "myuser@gmail.com",
+                "email_provider": "google_workspace",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact is not None
+        assert contact.contact_value == "myuser@gmail.com"
+        assert contact.provider == "google_workspace"
+        assert contact.provisioned_by == "user"
+        assert contact.status == "active"
+
+        # No external email provisioning calls were made
+        mock_all_infra["create_email"].assert_not_called()
+        mock_all_infra["create_outlook_email"].assert_not_called()
+        mock_all_infra["watch_email"].assert_not_called()
+        mock_all_infra["watch_outlook_email"].assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_create_byod_ms365_contact(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """BYOD MS365 email contact is created without external provisioning."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "BYOD", "surname": "MS365", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "contact_value": "user@company.com",
+                "email_provider": "microsoft_365",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+        contact = AssistantContactDAO(dbsession).get_contact_by_assistant_and_type(
+            agent_id,
+            "email",
+        )
+        assert contact is not None
+        assert contact.contact_value == "user@company.com"
+        assert contact.provider == "microsoft_365"
+        assert contact.provisioned_by == "user"
+
+    @pytest.mark.anyio
+    async def test_byod_requires_contact_value(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """BYOD contact without contact_value is rejected by validation."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "BYOD", "surname": "NoVal", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "email_provider": "google_workspace",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    @pytest.mark.anyio
+    async def test_byod_duplicate_rejected(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Creating a second BYOD email contact for the same assistant is rejected."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "BYOD", "surname": "Dup", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp1 = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "contact_value": "user1@gmail.com",
+                "email_provider": "google_workspace",
+            },
+            headers=HEADERS,
+        )
+        assert resp1.status_code == status.HTTP_200_OK
+
+        resp2 = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "contact_value": "user2@gmail.com",
+                "email_provider": "google_workspace",
+            },
+            headers=HEADERS,
+        )
+        assert resp2.status_code == status.HTTP_409_CONFLICT
+
+
+class TestBYODContactDeletion:
+    """Tests for deleting BYOD contacts — no external deprovisioning."""
+
+    @pytest.mark.anyio
+    async def test_delete_byod_email_no_deprovisioning(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Deleting a BYOD email contact does not call external deletion."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "BYOD", "surname": "Del", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        # Create BYOD contact
+        await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "contact_value": "delbyo@gmail.com",
+                "email_provider": "google_workspace",
+            },
+            headers=HEADERS,
+        )
+
+        # Reset mock call counts after creation
+        mock_all_infra["delete_email"].reset_mock()
+        mock_all_infra["delete_outlook_email"].reset_mock()
+
+        # Delete the contact
+        del_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "email"},
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == status.HTTP_200_OK
+
+        # No external deprovisioning
+        mock_all_infra["delete_email"].assert_not_called()
+        mock_all_infra["delete_outlook_email"].assert_not_called()
+
+        # Row is soft-deleted
+        all_rows = (
+            dbsession.query(AssistantContact)
+            .filter(
+                AssistantContact.assistant_id == agent_id,
+                AssistantContact.contact_type == "email",
+            )
+            .all()
+        )
+        assert len(all_rows) == 1
+        assert all_rows[0].status == "deleted"
+
+
+class TestEmailConnectEndpoint:
+    """Tests for GET /assistant/{id}/email/connect."""
+
+    @pytest.mark.anyio
+    async def test_gmail_oauth_url(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Gmail OAuth URL is correctly generated."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "OAuth", "surname": "Gmail", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-client-id"
+            mock_settings.microsoft_byod_client_id = None
+            mock_settings.is_staging = True
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/email/connect",
+                params={"provider": "gmail", "redirect_after": "https://app.test/done"},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "accounts.google.com" in oauth_url
+        assert "test-google-client-id" in oauth_url
+        assert "gmail.send" in oauth_url
+        assert "gmail.readonly" in oauth_url
+
+        # Verify state contains assistant_id
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(oauth_url)
+        qs = parse_qs(parsed.query)
+        state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
+        assert state["assistant_id"] == agent_id
+        assert state["provider"] == "gmail"
+        assert state["redirect_after"] == "https://app.test/done"
+        assert state["byod"] is True
+
+    @pytest.mark.anyio
+    async def test_microsoft_oauth_url(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Microsoft OAuth URL is correctly generated."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "OAuth", "surname": "MS", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = None
+            mock_settings.microsoft_byod_client_id = "test-ms-client-id"
+            mock_settings.is_staging = True
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/email/connect",
+                params={"provider": "microsoft"},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "login.microsoftonline.com/common" in oauth_url
+        assert "test-ms-client-id" in oauth_url
+        assert "Mail.Send" in oauth_url
+
+    @pytest.mark.anyio
+    async def test_missing_google_config(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Returns 422 when Google OAuth is not configured."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "OAuth", "surname": "NoCfg", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = None
+            mock_settings.microsoft_byod_client_id = None
+            mock_settings.is_staging = True
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/email/connect",
+                params={"provider": "gmail"},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
