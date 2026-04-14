@@ -16,14 +16,14 @@ from orchestra.tests.test_log import (
 from orchestra.tests.utils import ADMIN_HEADERS
 
 TASKS_CONTEXT = "1/42/Tasks"
-UNITY_PROJECT_NAME = "Unity"
+TASK_MACHINE_PROJECT_NAME = task_machine_state_service.TASK_MACHINE_PROJECT_NAME
 TASK_ACTIVATIONS_CONTEXT = task_machine_state_service.TASK_ACTIVATIONS_CONTEXT_NAME
 
 
-async def _ensure_unity_project(client: AsyncClient) -> None:
-    """Create the protected Unity project when it does not already exist."""
+async def _ensure_task_machine_project(client: AsyncClient) -> None:
+    """Create the task machine project when it does not already exist."""
 
-    response = await _create_project(client, UNITY_PROJECT_NAME)
+    response = await _create_project(client, TASK_MACHINE_PROJECT_NAME)
     assert response.status_code in (200, 400), response.json()
 
 
@@ -32,11 +32,11 @@ async def _get_context_logs(
     *,
     context_name: str,
 ) -> list[dict]:
-    """Fetch logs from a Unity context and return the payload list."""
+    """Fetch logs from one task-machine context and return the payload list."""
 
     response = await client.get(
         "/v0/logs",
-        params={"project_name": UNITY_PROJECT_NAME, "context": context_name},
+        params={"project_name": TASK_MACHINE_PROJECT_NAME, "context": context_name},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -67,7 +67,7 @@ def _scheduled_task_entries(
     status: str = "scheduled",
     start_at: str = "2026-04-10T09:00:00+00:00",
 ) -> dict:
-    """Return a minimal scheduled Unity task row."""
+    """Return a minimal scheduled task row."""
 
     return {
         "task_id": task_id,
@@ -91,7 +91,7 @@ def _trigger_task_entries(
     status: str = "triggerable",
     medium: str = "email",
 ) -> dict:
-    """Return a minimal triggerable Unity task row."""
+    """Return a minimal triggerable task row."""
 
     return {
         "task_id": task_id,
@@ -153,16 +153,16 @@ def test_scheduled_activation_upsert_body_includes_wake_context():
 
 
 @pytest.mark.anyio
-async def test_unity_task_create_projects_scheduled_activation(
+async def test_task_create_projects_scheduled_activation(
     client: AsyncClient,
     materialization_calls,
 ):
     """Creating a scheduled task should materialize one activation row."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     response = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_scheduled_task_entries(task_id=101),
     )
@@ -185,16 +185,16 @@ async def test_unity_task_create_projects_scheduled_activation(
 
 
 @pytest.mark.anyio
-async def test_unity_task_update_reconciles_new_schedule_head(
+async def test_task_update_reconciles_new_schedule_head(
     client: AsyncClient,
     materialization_calls,
 ):
     """Schedule edits should carry both the old and new queue-head due times."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     response = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_scheduled_task_entries(task_id=151),
     )
@@ -221,15 +221,15 @@ async def test_unity_task_update_reconciles_new_schedule_head(
 
 
 @pytest.mark.anyio
-async def test_unity_task_update_clears_activation_when_row_stops_being_armed(
+async def test_task_update_clears_activation_when_row_stops_being_armed(
     client: AsyncClient,
 ):
     """Updating a task into a non-activatable status should clear the activation."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     response = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_scheduled_task_entries(task_id=202),
     )
@@ -250,15 +250,15 @@ async def test_unity_task_update_clears_activation_when_row_stops_being_armed(
 
 
 @pytest.mark.anyio
-async def test_unity_task_create_rejects_offline_row_without_integer_entrypoint(
+async def test_task_create_rejects_offline_row_without_integer_entrypoint(
     client: AsyncClient,
 ):
     """Offline task rows must supply an integer entrypoint before projection."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     response = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_offline_task_entries(task_id=250, entrypoint=None),
     )
@@ -267,13 +267,13 @@ async def test_unity_task_create_rejects_offline_row_without_integer_entrypoint(
 
 
 @pytest.mark.anyio
-async def test_unity_task_delete_clears_activation(client: AsyncClient):
+async def test_task_delete_clears_activation(client: AsyncClient):
     """Deleting a task row should remove its activation row."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     response = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_scheduled_task_entries(task_id=303),
     )
@@ -283,7 +283,7 @@ async def test_unity_task_delete_clears_activation(client: AsyncClient):
     response = await _delete_logs(
         client,
         [(log_id, None)],
-        project_name="Unity",
+        project_name=TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
     )
     assert response.status_code == 200, response.json()
@@ -293,15 +293,15 @@ async def test_unity_task_delete_clears_activation(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_unity_task_projection_chooses_latest_armed_triggerable_instance(
+async def test_task_projection_chooses_latest_armed_triggerable_instance(
     client: AsyncClient,
 ):
     """Projection should follow the current armed row for a shared logical task."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     first = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_trigger_task_entries(task_id=404, instance_id=0, status="active"),
     )
@@ -309,7 +309,7 @@ async def test_unity_task_projection_chooses_latest_armed_triggerable_instance(
 
     second = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_trigger_task_entries(task_id=404, instance_id=1, status="triggerable"),
     )
@@ -339,30 +339,30 @@ async def test_delete_context_blocks_internal_task_machine_context(
 ):
     """Internal task machine contexts should be protected from direct deletion."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     response = await _create_log(
         client,
-        "Unity",
+        TASK_MACHINE_PROJECT_NAME,
         context=TASKS_CONTEXT,
         entries=_scheduled_task_entries(task_id=505),
     )
     assert response.status_code == 200, response.json()
 
     response = await client.delete(
-        f"/v0/project/{UNITY_PROJECT_NAME}/contexts/{TASK_ACTIVATIONS_CONTEXT}",
+        f"/v0/project/{TASK_MACHINE_PROJECT_NAME}/contexts/{TASK_ACTIVATIONS_CONTEXT}",
         headers=HEADERS,
     )
     assert response.status_code == 403
-    assert "Cannot delete built-in Tasks context" in response.json()["detail"]
+    assert "Cannot delete protected task machine contexts." in response.json()["detail"]
 
 
 @pytest.mark.anyio
 async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     """The internal run API should reuse the same row for duplicate run_keys."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     payload = {
-        "project_name": UNITY_PROJECT_NAME,
+        "project_name": TASK_MACHINE_PROJECT_NAME,
         "run_key": "offline:42:101:rev-1",
         "assistant_id": "42",
         "task_id": 101,
@@ -402,12 +402,12 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
 async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     """The internal run API should merge partial updates into an existing row."""
 
-    await _ensure_unity_project(client)
+    await _ensure_task_machine_project(client)
     run_key = "offline:42:202:rev-2"
     create_response = await client.post(
         "/v0/admin/task-run/create-or-adopt",
         json={
-            "project_name": UNITY_PROJECT_NAME,
+            "project_name": TASK_MACHINE_PROJECT_NAME,
             "run_key": run_key,
             "assistant_id": "42",
             "task_id": 202,
@@ -422,7 +422,7 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     update_response = await client.post(
         "/v0/admin/task-run/update",
         json={
-            "project_name": UNITY_PROJECT_NAME,
+            "project_name": TASK_MACHINE_PROJECT_NAME,
             "run_key": run_key,
             "updates": {
                 "state": "completed",

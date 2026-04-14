@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 from orchestra.web.api.context.schema import ContextCreateRequest
 
 
@@ -938,7 +939,7 @@ class TaskActivationLookupRequest(BaseModel):
     """Lookup one projected task activation row by assistant/task id."""
 
     project_name: str = Field(
-        default="Unity",
+        default=TASK_MACHINE_PROJECT_NAME,
         description="Project that owns the internal task machine contexts.",
     )
     assistant_id: str = Field(description="Assistant identifier that owns the task.")
@@ -958,7 +959,7 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
     """Create a task run by run_key if absent, or adopt the existing row."""
 
     project_name: str = Field(
-        default="Unity",
+        default=TASK_MACHINE_PROJECT_NAME,
         description="Project that owns the internal task machine contexts.",
     )
     run_key: str = Field(description="Idempotency key for this execution attempt.")
@@ -1004,7 +1005,7 @@ class TaskRunUpdateRequest(BaseModel):
     """Apply a partial update to an existing task run row."""
 
     project_name: str = Field(
-        default="Unity",
+        default=TASK_MACHINE_PROJECT_NAME,
         description="Project that owns the internal task machine contexts.",
     )
     run_key: str = Field(description="Idempotency key for the run to update.")

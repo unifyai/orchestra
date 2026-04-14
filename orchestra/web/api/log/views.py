@@ -48,9 +48,11 @@ from orchestra.db.models.orchestra_models import (
     Project,
 )
 from orchestra.services.task_machine_state_service import (
+    TASK_MACHINE_PROJECT_NAME,
     get_task_ids_for_log_ids,
-    is_protected_unity_task_context_name,
-    is_unity_tasks_context_name,
+    is_internal_task_machine_context_name,
+    is_protected_task_surface_context_name,
+    is_task_surface_context_name,
     sync_task_activations_for_task_ids,
 )
 from orchestra.web.api.dependencies import auth_admin_key
@@ -109,17 +111,22 @@ admin_router = APIRouter()
 admin_router.include_router(task_machine_admin_router)
 
 
-def _require_mutable_unity_task_context(
+def _require_mutable_task_machine_context(
     *,
     project_name: str,
     context_name: str | None,
 ) -> None:
-    """Reject writes against Unity's system-managed task contexts."""
+    """Reject writes against system-managed task-machine contexts."""
 
-    if project_name == "Unity" and is_protected_unity_task_context_name(context_name):
+    if (
+        project_name == TASK_MACHINE_PROJECT_NAME
+        and is_internal_task_machine_context_name(context_name)
+    ) or (
+        project_name == "Unity" and is_protected_task_surface_context_name(context_name)
+    ):
         raise HTTPException(
             status_code=403,
-            detail="Cannot modify protected Unity task contexts - they are system-managed",
+            detail="Cannot modify protected task machine contexts - they are system-managed",
         )
 
 
@@ -246,7 +253,7 @@ def _recompute_derived_for_logs(
         )
 
 
-def _sync_unity_task_activations_if_needed(
+def _sync_task_activations_if_needed(
     *,
     session,
     project_name: str | None,
@@ -254,13 +261,13 @@ def _sync_unity_task_activations_if_needed(
     task_ids: Set[int],
     tasks_context_name: str | None,
 ) -> None:
-    """Project Unity task machine state when the user-authored Tasks table changed."""
+    """Project task machine state when the user-authored Tasks table changed."""
 
     if (
-        project_name != "Unity"
+        project_name != TASK_MACHINE_PROJECT_NAME
         or not task_ids
         or not tasks_context_name
-        or not is_unity_tasks_context_name(tasks_context_name)
+        or not is_task_surface_context_name(tasks_context_name)
     ):
         return
     sync_task_activations_for_task_ids(
@@ -441,9 +448,9 @@ def create_logs(
             )
 
         if (
-            project.name == "Unity"
+            project.name == TASK_MACHINE_PROJECT_NAME
             and context_obj
-            and is_unity_tasks_context_name(context_obj.name)
+            and is_task_surface_context_name(context_obj.name)
             and result.get("log_event_ids")
         ):
             task_ids = get_task_ids_for_log_ids(
@@ -452,7 +459,7 @@ def create_logs(
                 context_name=context_obj.name,
                 log_event_ids=result["log_event_ids"],
             )
-            _sync_unity_task_activations_if_needed(
+            _sync_task_activations_if_needed(
                 session=session,
                 project_name=project.name,
                 project_id=project_id,
@@ -2143,7 +2150,7 @@ def _update_logs(
     ctx_obj_cache = None
     if ctx_id is not None:
         ctx_obj_cache = context_dao.session.query(Context).filter_by(id=ctx_id).first()
-        if project_name == "Unity" and is_unity_tasks_context_name(
+        if project_name == TASK_MACHINE_PROJECT_NAME and is_task_surface_context_name(
             getattr(ctx_obj_cache, "name", None),
         ):
             pre_sync_task_ids = get_task_ids_for_log_ids(
@@ -2581,9 +2588,9 @@ def _update_logs(
         )
 
     if (
-        project_name == "Unity"
+        project_name == TASK_MACHINE_PROJECT_NAME
         and successful_update_ids
-        and is_unity_tasks_context_name(getattr(ctx_obj_cache, "name", None))
+        and is_task_surface_context_name(getattr(ctx_obj_cache, "name", None))
     ):
         post_sync_task_ids = get_task_ids_for_log_ids(
             session=session,
@@ -2591,7 +2598,7 @@ def _update_logs(
             context_name=ctx_obj_cache.name,
             log_event_ids=successful_update_ids,
         )
-        _sync_unity_task_activations_if_needed(
+        _sync_task_activations_if_needed(
             session=session,
             project_name=project_name,
             project_id=project_id,
@@ -2702,7 +2709,9 @@ def _delete_logs(
         .all()
     ]
     pre_sync_task_ids: Set[int] = set()
-    if body.project_name == "Unity" and is_unity_tasks_context_name(context_name):
+    if body.project_name == TASK_MACHINE_PROJECT_NAME and is_task_surface_context_name(
+        context_name,
+    ):
         candidate_task_log_ids: Set[int] = set()
         for log_id, fields in ids_and_fields.items():
             if log_id is None:
@@ -3203,13 +3212,13 @@ def _delete_logs(
                         detail=f"Error deleting field type {field}: {str(e)}",
                     )
 
-    _sync_unity_task_activations_if_needed(
-        session=session,
-        project_name=body.project_name,
-        project_id=project_id,
-        task_ids=pre_sync_task_ids,
-        tasks_context_name=context_name,
-    )
+        _sync_task_activations_if_needed(
+            session=session,
+            project_name=body.project_name,
+            project_id=project_id,
+            task_ids=pre_sync_task_ids,
+            tasks_context_name=context_name,
+        )
 
     return {"info": "Logs and fields deleted successfully!"}
 
@@ -4650,8 +4659,8 @@ def rename_field(
     log_dao = LogEventDAO(session, context_dao)
 
     try:
-        # Check if this is the protected Unity/Tasks context
-        _require_mutable_unity_task_context(
+        # Check if this is a protected task-machine context
+        _require_mutable_task_machine_context(
             project_name=request.project_name,
             context_name=request.context,
         )
@@ -5505,7 +5514,7 @@ def update_field(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
 
-    _require_mutable_unity_task_context(
+    _require_mutable_task_machine_context(
         project_name=request.project_name,
         context_name=request.context,
     )
@@ -5606,8 +5615,8 @@ def delete_fields(
     field_type_dao = FieldTypeDAO(session)
     log_dao = LogEventDAO(session, context_dao)
 
-    # Check if this is the protected Unity/Tasks context
-    _require_mutable_unity_task_context(
+    # Check if this is a protected task-machine context
+    _require_mutable_task_machine_context(
         project_name=request.project_name,
         context_name=request.context,
     )

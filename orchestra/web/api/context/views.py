@@ -18,7 +18,10 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Context
 from orchestra.services.task_machine_state_service import (
-    is_protected_unity_task_context_name,
+    TASK_MACHINE_PROJECT_NAME,
+    is_internal_task_machine_context_name,
+    is_protected_task_surface_context_name,
+    is_task_surface_context_name,
 )
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
@@ -607,12 +610,16 @@ def delete_context(
 
         # Check for protected contexts
         for ctx in contexts_to_delete:
-            if project_name == "Unity" and is_protected_unity_task_context_name(
-                ctx.name,
+            if (
+                project_name == TASK_MACHINE_PROJECT_NAME
+                and is_internal_task_machine_context_name(ctx.name)
+            ) or (
+                project_name == "Unity"
+                and is_protected_task_surface_context_name(ctx.name)
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Cannot delete built-in Tasks context or internal task machine contexts.",
+                    detail="Cannot delete protected task machine contexts.",
                 )
 
         deleted_names = []
@@ -903,10 +910,18 @@ def rename_context(
     context_name = context_name.lstrip("/")
     new_name = body.name.lstrip("/")
 
-    if project_name == "Unity" and context_name == "Tasks":
+    if (
+        project_name == TASK_MACHINE_PROJECT_NAME
+        and (
+            is_task_surface_context_name(context_name)
+            or is_internal_task_machine_context_name(context_name)
+        )
+    ) or (
+        project_name == "Unity" and is_protected_task_surface_context_name(context_name)
+    ):
         raise HTTPException(
             status_code=403,
-            detail="Cannot modify built-in Tasks context.",
+            detail="Cannot modify protected task machine contexts.",
         )
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
