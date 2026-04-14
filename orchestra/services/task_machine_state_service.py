@@ -49,6 +49,10 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
 
 _SCHEDULED_ACTIVATION_STATUSES = {"scheduled", "queued", "primed"}
 _TRIGGERABLE_STATUS = "triggerable"
+_DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
+_RECURRING_WAKE_HINT = "recurring"
+_ONE_OFF_WAKE_HINT = "one_off"
+_TASK_SUMMARY_MAX_CHARS = 240
 
 logger = logging.getLogger(__name__)
 
@@ -776,6 +780,40 @@ def _scheduled_activation_snapshot(
     }
 
 
+def _compact_task_summary(text: Any, *, fallback: str) -> str:
+    """Return one compact wake-summary line for scheduled task delivery."""
+
+    candidate = " ".join((_coerce_optional_str(text) or "").split())
+    if not candidate:
+        candidate = " ".join(fallback.split())
+    if len(candidate) <= _TASK_SUMMARY_MAX_CHARS:
+        return candidate
+    truncated = candidate[: _TASK_SUMMARY_MAX_CHARS - 3].rstrip(" ,.;:")
+    return f"{truncated}..."
+
+
+def _scheduled_activation_wake_context(
+    activation: Mapping[str, Any],
+) -> dict[str, str]:
+    """Return the compact human-facing wake context for one scheduled activation."""
+
+    task_id = _coerce_int(activation.get("task_id"))
+    task_label = _coerce_optional_str(activation.get("task_name")) or (
+        f"task {task_id}" if task_id is not None else "scheduled task"
+    )
+    repeat = _coerce_optional_list(activation.get("repeat")) or []
+    recurrence_hint = _RECURRING_WAKE_HINT if repeat else _ONE_OFF_WAKE_HINT
+    return {
+        "task_label": task_label,
+        "task_summary": _compact_task_summary(
+            activation.get("task_description"),
+            fallback=task_label,
+        ),
+        "visibility_policy": _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY,
+        "recurrence_hint": recurrence_hint,
+    }
+
+
 def _scheduled_activation_upsert_body(
     activation: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -791,6 +829,7 @@ def _scheduled_activation_upsert_body(
         **snapshot,
         "source_task_log_id": source_task_log_id,
         "source_type": "scheduled",
+        **_scheduled_activation_wake_context(activation),
     }
 
 

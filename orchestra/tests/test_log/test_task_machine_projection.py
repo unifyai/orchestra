@@ -123,6 +123,35 @@ def _offline_task_entries(
     return entries
 
 
+def test_scheduled_activation_upsert_body_includes_wake_context():
+    """Scheduled activation sync should carry compact human-facing wake context."""
+
+    body = task_machine_state_service._scheduled_activation_upsert_body(
+        {
+            "assistant_id": "42",
+            "task_id": 101,
+            "source_task_log_id": 555,
+            "activation_kind": "scheduled",
+            "execution_mode": "live",
+            "activation_revision": "rev-1",
+            "next_due_at": "2026-04-10T09:00:00+00:00",
+            "task_name": "Morning briefing",
+            "task_description": (
+                "Prepare the morning update before the user checks in."
+            ),
+            "repeat": [{"unit": "day", "count": 1}],
+        },
+    )
+
+    assert body is not None
+    assert body["task_label"] == "Morning briefing"
+    assert (
+        body["task_summary"] == "Prepare the morning update before the user checks in."
+    )
+    assert body["visibility_policy"] == "silent_by_default"
+    assert body["recurrence_hint"] == "recurring"
+
+
 @pytest.mark.anyio
 async def test_unity_task_create_projects_scheduled_activation(
     client: AsyncClient,
