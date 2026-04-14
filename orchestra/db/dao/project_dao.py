@@ -265,22 +265,13 @@ class ProjectDAO:
                     f"Phase 2: Cleaned up GCS media for {total_gcs_deleted} log events",
                 )
 
-            # Phase 3a: Null out embedding ref_ids before deleting log_events
-            nulled_count = embedding_dao.null_ref_ids(project_id=id)
-            self.session.commit()
-
-            if nulled_count > 0:
-                logger.info(
-                    f"Phase 3a: Nulled ref_id on {nulled_count} embeddings for project {id}",
-                )
-
-            # Phase 3b: Delete log_events in batches (avoids cascade avalanche)
+            # Phase 3: Delete log_events in batches (avoids cascade avalanche)
             total_log_events_deleted = 0
 
             while True:
                 # SKIP LOCKED avoids blocking on rows held by embedding workers.
-                # Since embedding ref_ids are already nulled, the FK SET NULL
-                # trigger is a no-op — no more cascaded writes to the embedding table.
+                # soft_delete (Phase 1) already set is_deleted=true, so the FK
+                # SET NULL cascade here only touches fast B-tree indexes.
                 result = self.session.execute(
                     text(
                         """
@@ -308,10 +299,10 @@ class ProjectDAO:
                     f"(total: {total_log_events_deleted})",
                 )
 
-            # Phase 3c: Catch any rows that SKIP LOCKED missed (e.g. rows that
-            # were locked by embedding workers during 3b). This blocking delete
-            # ensures zero log_events remain before the project delete, so the
-            # CASCADE in Phase 4 has no work to do.
+            # Catch any rows that SKIP LOCKED missed (e.g. rows that were
+            # locked by embedding workers). This blocking delete ensures zero
+            # log_events remain before the project delete, so the CASCADE in
+            # Phase 4 has no work to do.
             remaining = self.session.execute(
                 text(
                     "SELECT COUNT(*) FROM log_event WHERE project_id = :project_id",
@@ -321,7 +312,7 @@ class ProjectDAO:
 
             if remaining and remaining > 0:
                 logger.info(
-                    f"Phase 3c: {remaining} log_events survived SKIP LOCKED, "
+                    f"Phase 3: {remaining} log_events survived SKIP LOCKED, "
                     f"deleting with blocking lock...",
                 )
                 while True:

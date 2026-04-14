@@ -88,7 +88,6 @@ def delete_orphaned_log_events(
             reason="Context deleted",
         )
         embedding_dao.soft_delete(log_event_ids=orphaned_ids)
-        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
 
     session.execute(
         text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
@@ -3119,16 +3118,11 @@ class ContextDAO:
                         soft_deleted = embedding_dao.soft_delete(
                             log_event_ids=orphaned_ids,
                         )
-                        nulled = embedding_dao.null_ref_ids(
-                            log_event_ids=orphaned_ids,
-                        )
-                        self.session.commit()
 
                         if soft_deleted > 0 or cancelled > 0:
                             logger.info(
                                 f"Phase 4a: Cancelled {cancelled} queue items, "
-                                f"soft-deleted {soft_deleted} embeddings, "
-                                f"nulled {nulled} ref_ids for "
+                                f"soft-deleted {soft_deleted} embeddings for "
                                 f"{len(orphaned_ids)} orphaned logs",
                             )
 
