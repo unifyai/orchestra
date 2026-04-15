@@ -983,6 +983,18 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
         default=None,
         description="Scheduled due time when the run came from a scheduled activation.",
     )
+    source_medium: Optional[str] = Field(
+        default=None,
+        description="Inbound medium that triggered the run when applicable.",
+    )
+    source_ref: Optional[str] = Field(
+        default=None,
+        description="Stable reference for the triggering communication or wake.",
+    )
+    source_contact_id: Optional[str] = Field(
+        default=None,
+        description="Contact identifier associated with the triggering inbound.",
+    )
     started_at: Optional[datetime] = Field(
         default=None,
         description="Optional explicit run start timestamp.",
@@ -1007,6 +1019,9 @@ class TaskRunUpdateRequest(BaseModel):
     project_name: str = Field(
         default=TASK_MACHINE_PROJECT_NAME,
         description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(
+        description="Assistant identifier that owns the run being updated.",
     )
     run_key: str = Field(description="Idempotency key for the run to update.")
     updates: Dict[str, Any] = Field(

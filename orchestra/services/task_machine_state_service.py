@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.context_dao import delete_orphaned_log_events
 from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.models.orchestra_models import (
+    Assistant,
     Context,
     FieldType,
     LogEvent,
@@ -37,6 +38,8 @@ TASKS_CONTEXT_NAME = "Tasks"
 TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
 TASK_RUNS_CONTEXT_NAME = "Tasks/Runs"
 _ALL_CONTEXT_SEGMENT = "All"
+_TASK_ACTIVATIONS_CONTEXT_LEAF = "Activations"
+_TASK_RUNS_CONTEXT_LEAF = "Runs"
 _TASK_ACTIVATION_UNIQUE_FIELD = "activation_key"
 _TASK_RUN_UNIQUE_FIELD = "run_key"
 _TASK_ACTIVATION_UPSERT_PATH = "/infra/task-activation/upsert"
@@ -68,6 +71,15 @@ class TaskMachineContextIds:
 
 
 @dataclass(frozen=True)
+class TaskMachineContextNames:
+    """Resolved assistant-scoped context names for task machine state."""
+
+    tasks_context_name: str
+    activations_context_name: str
+    runs_context_name: str
+
+
+@dataclass(frozen=True)
 class _TaskRow:
     """Minimal task row snapshot used by projector logic."""
 
@@ -94,6 +106,52 @@ def _assistant_id_from_context_name(context_name: str | None) -> str | None:
     if segments[-2] == _ALL_CONTEXT_SEGMENT:
         return None
     return segments[-2]
+
+
+def build_task_activation_context_name(tasks_context_name: str) -> str:
+    """Return the assistant-scoped activations context for one Tasks table."""
+
+    return _build_task_machine_context_name(
+        tasks_context_name=tasks_context_name,
+        leaf_name=_TASK_ACTIVATIONS_CONTEXT_LEAF,
+    )
+
+
+def build_task_runs_context_name(tasks_context_name: str) -> str:
+    """Return the assistant-scoped runs context for one Tasks table."""
+
+    return _build_task_machine_context_name(
+        tasks_context_name=tasks_context_name,
+        leaf_name=_TASK_RUNS_CONTEXT_LEAF,
+    )
+
+
+def _build_task_machine_context_name(*, tasks_context_name: str, leaf_name: str) -> str:
+    """Return one assistant-scoped internal context derived from `.../Tasks`."""
+
+    normalized_tasks_context_name = (tasks_context_name or "").strip("/")
+    if not is_task_surface_context_name(normalized_tasks_context_name):
+        raise ValueError(
+            f"Expected an assistant-scoped Tasks context, got {tasks_context_name!r}.",
+        )
+    return f"{normalized_tasks_context_name}/{leaf_name}"
+
+
+def _resolve_task_machine_context_names(
+    tasks_context_name: str,
+) -> TaskMachineContextNames:
+    """Return the assistant-scoped machine-state context names for one Tasks table."""
+
+    normalized_tasks_context_name = (tasks_context_name or "").strip("/")
+    return TaskMachineContextNames(
+        tasks_context_name=normalized_tasks_context_name,
+        activations_context_name=build_task_activation_context_name(
+            normalized_tasks_context_name,
+        ),
+        runs_context_name=build_task_runs_context_name(
+            normalized_tasks_context_name,
+        ),
+    )
 
 
 def _resolve_assistant_id(
@@ -135,15 +193,155 @@ def is_internal_task_machine_context_name(context_name: str | None) -> bool:
     """Return True when the name refers to an internal task machine context."""
 
     normalized = (context_name or "").strip("/")
-    return normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES
+    if normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES:
+        return True
+    segments = _split_context_name(normalized)
+    if len(segments) < 4:
+        return False
+    return "/".join(segments[-2:]) in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES
 
 
 def is_protected_task_surface_context_name(context_name: str | None) -> bool:
     """Return True for built-in task contexts that should not be removed."""
 
     normalized = (context_name or "").strip("/")
-    return is_task_surface_context_name(normalized) or (
-        normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES
+    return is_task_surface_context_name(
+        normalized,
+    ) or is_internal_task_machine_context_name(
+        normalized,
+    )
+
+
+def resolve_tasks_context_name(
+    session: Session,
+    project_id: int,
+    *,
+    assistant_id: str | None = None,
+    source_task_log_id: int | None = None,
+    tasks_context_name: str | None = None,
+) -> str:
+    """Resolve the assistant-scoped `.../Tasks` context for task-machine IO.
+
+    Resolution prefers an explicit context name when one is already available,
+    then falls back to the source task log id, and finally derives the path from
+    assistant identity.
+    """
+
+    normalized_tasks_context_name = (tasks_context_name or "").strip("/")
+    if is_task_surface_context_name(normalized_tasks_context_name):
+        return normalized_tasks_context_name
+
+    if source_task_log_id is not None:
+        source_context_name = _get_task_surface_context_name_for_log_id(
+            session=session,
+            project_id=project_id,
+            log_event_id=source_task_log_id,
+        )
+        if source_context_name is not None:
+            return source_context_name
+
+    derived_context_name = _derive_tasks_context_name_from_assistant(
+        session=session,
+        project_id=project_id,
+        assistant_id=assistant_id,
+    )
+    if derived_context_name is not None:
+        return derived_context_name
+
+    raise ValueError(
+        "Unable to resolve an assistant-scoped Tasks context for task-machine access.",
+    )
+
+
+def _get_task_surface_context_name_for_log_id(
+    session: Session,
+    *,
+    project_id: int,
+    log_event_id: int,
+) -> str | None:
+    """Return the task-surface context name for one task log when present."""
+
+    context_names = (
+        session.query(Context.name)
+        .join(LogEventContext, LogEventContext.context_id == Context.id)
+        .filter(
+            Context.project_id == project_id,
+            LogEventContext.log_event_id == log_event_id,
+        )
+        .all()
+    )
+    for (context_name,) in context_names:
+        if is_task_surface_context_name(context_name):
+            return str(context_name).strip("/")
+    return None
+
+
+def _derive_tasks_context_name_from_assistant(
+    session: Session,
+    *,
+    project_id: int,
+    assistant_id: str | None,
+) -> str | None:
+    """Return the canonical `.../Tasks` context for one assistant when resolvable."""
+
+    normalized_assistant_id = _coerce_optional_str(assistant_id)
+    if not normalized_assistant_id:
+        return None
+
+    assistant = _get_assistant_for_task_machine_lookup(
+        session=session,
+        assistant_id=normalized_assistant_id,
+    )
+    if assistant is not None and assistant.user_id:
+        return _build_assistant_tasks_context_name(
+            user_id=str(assistant.user_id),
+            assistant_id=normalized_assistant_id,
+        )
+
+    candidate_context_names = [
+        str(context_name).strip("/")
+        for (context_name,) in session.query(Context.name)
+        .filter(
+            Context.project_id == project_id,
+            Context.name.like(f"%/{normalized_assistant_id}/{TASKS_CONTEXT_NAME}"),
+        )
+        .all()
+    ]
+    matches = [
+        context_name
+        for context_name in candidate_context_names
+        if is_task_surface_context_name(context_name)
+        and _assistant_id_from_context_name(context_name) == normalized_assistant_id
+    ]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous Tasks contexts found for assistant_id={normalized_assistant_id!r}.",
+        )
+    return matches[0]
+
+
+def _get_assistant_for_task_machine_lookup(
+    session: Session,
+    *,
+    assistant_id: str,
+) -> Assistant | None:
+    """Return the assistant row used to derive the owner-scoped Tasks path."""
+
+    assistant_id_int = _coerce_int(assistant_id)
+    if assistant_id_int is None:
+        return None
+    return session.execute(
+        select(Assistant).where(Assistant.agent_id == assistant_id_int),
+    ).scalar_one_or_none()
+
+
+def _build_assistant_tasks_context_name(*, user_id: str, assistant_id: str) -> str:
+    """Return the canonical assistant-scoped user Tasks context path."""
+
+    return (
+        f"{str(user_id).strip('/')}/{str(assistant_id).strip('/')}/{TASKS_CONTEXT_NAME}"
     )
 
 
@@ -308,6 +506,21 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Scheduled timestamp when the run originated from a due activation.",
     },
+    "source_medium": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Inbound medium that triggered the run when applicable.",
+    },
+    "source_ref": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Stable external reference for the triggering event or wake.",
+    },
+    "source_contact_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Contact identifier associated with the triggering event.",
+    },
     "started_at": {
         "field_type": "datetime",
         "mutable": True,
@@ -328,19 +541,28 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Hidden internal error payload for failed runs.",
     },
+    "job_name": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Owning runtime job name for offline or live execution when known.",
+    },
 }
 
 
 def ensure_task_machine_contexts(
     session: Session,
     project_id: int,
+    *,
+    tasks_context_name: str,
 ) -> TaskMachineContextIds:
-    """Ensure the task machine contexts and field schemas exist."""
+    """Ensure the assistant-scoped task machine contexts and schemas exist."""
+
+    context_names = _resolve_task_machine_context_names(tasks_context_name)
 
     activations_context_id = _upsert_context(
         session=session,
         project_id=project_id,
-        name=TASK_ACTIVATIONS_CONTEXT_NAME,
+        name=context_names.activations_context_name,
         description="Internal machine-facing activation state for assistant tasks.",
         allow_duplicates=False,
         unique_keys={_TASK_ACTIVATION_UNIQUE_FIELD: "str"},
@@ -348,7 +570,7 @@ def ensure_task_machine_contexts(
     runs_context_id = _upsert_context(
         session=session,
         project_id=project_id,
-        name=TASK_RUNS_CONTEXT_NAME,
+        name=context_names.runs_context_name,
         description="Internal idempotent execution history for assistant tasks.",
         allow_duplicates=False,
         unique_keys={_TASK_RUN_UNIQUE_FIELD: "str"},
@@ -393,7 +615,11 @@ def sync_task_activations_for_task_ids(
     if tasks_context_id is None:
         return {"upserted": 0, "deleted": 0}
 
-    context_ids = ensure_task_machine_contexts(session=session, project_id=project_id)
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=tasks_context_name,
+    )
     task_rows = _load_task_rows(
         session=session,
         project_id=project_id,
@@ -482,15 +708,35 @@ def get_task_activation(
 ) -> LogEvent | None:
     """Return the current activation row for one assistant/task pair, if present."""
 
-    context_ids = ensure_task_machine_contexts(session=session, project_id=project_id)
-    return _get_machine_row_by_unique_field(
+    tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project_id,
+        assistant_id=assistant_id,
+    )
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=tasks_context_name,
+    )
+    activation_key = _build_activation_key(
+        assistant_id=assistant_id,
+        task_id=task_id,
+    )
+    activation = _get_machine_row_by_unique_field(
         session=session,
         context_id=context_ids.activations_context_id,
         unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-        unique_field_value=_build_activation_key(
-            assistant_id=assistant_id,
-            task_id=task_id,
-        ),
+        unique_field_value=activation_key,
+    )
+    if activation is not None:
+        return activation
+    return _migrate_legacy_machine_row_if_present(
+        session=session,
+        project_id=project_id,
+        legacy_context_name=TASK_ACTIVATIONS_CONTEXT_NAME,
+        nested_context_id=context_ids.activations_context_id,
+        unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
+        unique_field_value=activation_key,
     )
 
 
@@ -505,7 +751,17 @@ def create_task_run_if_absent(
     if not isinstance(run_key, str) or not run_key:
         raise ValueError("Task run payload must include a non-empty run_key.")
 
-    context_ids = ensure_task_machine_contexts(session=session, project_id=project_id)
+    tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project_id,
+        assistant_id=_coerce_optional_str(payload.get("assistant_id")),
+        source_task_log_id=_coerce_int(payload.get("source_task_log_id")),
+    )
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=tasks_context_name,
+    )
     existing = _get_machine_row_by_unique_field(
         session=session,
         context_id=context_ids.runs_context_id,
@@ -514,6 +770,16 @@ def create_task_run_if_absent(
     )
     if existing is not None:
         return existing, False
+    migrated = _migrate_legacy_machine_row_if_present(
+        session=session,
+        project_id=project_id,
+        legacy_context_name=TASK_RUNS_CONTEXT_NAME,
+        nested_context_id=context_ids.runs_context_id,
+        unique_field_name=_TASK_RUN_UNIQUE_FIELD,
+        unique_field_value=run_key,
+    )
+    if migrated is not None:
+        return migrated, False
 
     materialized_payload = dict(payload)
     materialized_payload.setdefault("state", "pending")
@@ -536,18 +802,37 @@ def create_task_run_if_absent(
 def update_task_run(
     session: Session,
     project_id: int,
+    assistant_id: str | None,
     run_key: str,
     updates: Mapping[str, Any],
 ) -> LogEvent:
     """Apply a partial update to an existing task run row."""
 
-    context_ids = ensure_task_machine_contexts(session=session, project_id=project_id)
+    tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project_id,
+        assistant_id=assistant_id,
+    )
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=tasks_context_name,
+    )
     existing = _get_machine_row_by_unique_field(
         session=session,
         context_id=context_ids.runs_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
+    if existing is None:
+        existing = _migrate_legacy_machine_row_if_present(
+            session=session,
+            project_id=project_id,
+            legacy_context_name=TASK_RUNS_CONTEXT_NAME,
+            nested_context_id=context_ids.runs_context_id,
+            unique_field_name=_TASK_RUN_UNIQUE_FIELD,
+            unique_field_value=run_key,
+        )
     if existing is None:
         raise ValueError(f"Task run with run_key='{run_key}' not found.")
 
@@ -563,13 +848,38 @@ def get_task_run(
     session: Session,
     project_id: int,
     run_key: str,
+    *,
+    assistant_id: str | None = None,
+    source_task_log_id: int | None = None,
+    tasks_context_name: str | None = None,
 ) -> LogEvent | None:
     """Return an existing task run row by run_key."""
 
-    context_ids = ensure_task_machine_contexts(session=session, project_id=project_id)
-    return _get_machine_row_by_unique_field(
+    resolved_tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project_id,
+        assistant_id=assistant_id,
+        source_task_log_id=source_task_log_id,
+        tasks_context_name=tasks_context_name,
+    )
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=resolved_tasks_context_name,
+    )
+    existing = _get_machine_row_by_unique_field(
         session=session,
         context_id=context_ids.runs_context_id,
+        unique_field_name=_TASK_RUN_UNIQUE_FIELD,
+        unique_field_value=run_key,
+    )
+    if existing is not None:
+        return existing
+    return _migrate_legacy_machine_row_if_present(
+        session=session,
+        project_id=project_id,
+        legacy_context_name=TASK_RUNS_CONTEXT_NAME,
+        nested_context_id=context_ids.runs_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
@@ -1192,6 +1502,50 @@ def _get_machine_row_by_unique_field(
     if not rows:
         return None
     return rows[0]
+
+
+def _migrate_legacy_machine_row_if_present(
+    session: Session,
+    *,
+    project_id: int,
+    legacy_context_name: str,
+    nested_context_id: int,
+    unique_field_name: str,
+    unique_field_value: int | str,
+) -> LogEvent | None:
+    """Move one legacy global machine row into the assistant-scoped context."""
+
+    legacy_context_id = _get_context_id(
+        session=session,
+        project_id=project_id,
+        name=legacy_context_name,
+    )
+    if legacy_context_id is None:
+        return None
+    legacy_row = _get_machine_row_by_unique_field(
+        session=session,
+        context_id=legacy_context_id,
+        unique_field_name=unique_field_name,
+        unique_field_value=unique_field_value,
+    )
+    if legacy_row is None:
+        return None
+    migrated_row = _upsert_machine_row(
+        session=session,
+        project_id=project_id,
+        context_id=nested_context_id,
+        unique_field_name=unique_field_name,
+        unique_field_value=unique_field_value,
+        payload=dict(legacy_row.data or {}),
+    )
+    _delete_machine_row_by_unique_field(
+        session=session,
+        project_id=project_id,
+        context_id=legacy_context_id,
+        unique_field_name=unique_field_name,
+        unique_field_value=unique_field_value,
+    )
+    return migrated_row
 
 
 def _replace_log_payload(log_event: LogEvent, payload: Mapping[str, Any]) -> None:

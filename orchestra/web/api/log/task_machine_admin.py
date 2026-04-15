@@ -101,6 +101,7 @@ def patch_task_run(
     run = update_task_run(
         session=session,
         project_id=project.id,
+        assistant_id=request.assistant_id,
         run_key=request.run_key,
         updates=request.updates,
     )
