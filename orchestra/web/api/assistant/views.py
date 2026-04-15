@@ -1705,15 +1705,26 @@ async def get_email_connect_url(
 
     adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
 
-    state_payload = json.dumps(
-        {
-            "assistant_id": assistant_id,
-            "provider": provider,
-            "redirect_after": redirect_after,
-            "byod": True,
-        },
-    )
-    encoded_state = base64.urlsafe_b64encode(state_payload.encode()).decode()
+    state_dict = {
+        "assistant_id": assistant_id,
+        "provider": provider,
+        "redirect_after": redirect_after,
+        "byod": True,
+    }
+    if settings.oauth_state_signing_key:
+        import hashlib
+        import hmac
+
+        canonical = json.dumps(state_dict, sort_keys=True)
+        state_dict["_sig"] = hmac.new(
+            settings.oauth_state_signing_key.encode(),
+            canonical.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    encoded_state = base64.urlsafe_b64encode(
+        json.dumps(state_dict).encode(),
+    ).decode()
 
     if provider == "gmail":
         client_id = settings.google_oauth_client_id
