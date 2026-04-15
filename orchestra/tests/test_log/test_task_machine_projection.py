@@ -17,7 +17,14 @@ from orchestra.tests.utils import ADMIN_HEADERS
 
 TASKS_CONTEXT = "1/42/Tasks"
 TASK_MACHINE_PROJECT_NAME = task_machine_state_service.TASK_MACHINE_PROJECT_NAME
-TASK_ACTIVATIONS_CONTEXT = task_machine_state_service.TASK_ACTIVATIONS_CONTEXT_NAME
+TASK_ACTIVATIONS_CONTEXT = (
+    task_machine_state_service.build_task_activation_context_name(
+        TASKS_CONTEXT,
+    )
+)
+TASK_RUNS_CONTEXT = task_machine_state_service.build_task_runs_context_name(
+    TASKS_CONTEXT,
+)
 
 
 async def _ensure_task_machine_project(client: AsyncClient) -> None:
@@ -361,16 +368,27 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     """The internal run API should reuse the same row for duplicate run_keys."""
 
     await _ensure_task_machine_project(client)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=101),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
     payload = {
         "project_name": TASK_MACHINE_PROJECT_NAME,
         "run_key": "offline:42:101:rev-1",
         "assistant_id": "42",
         "task_id": 101,
-        "source_task_log_id": 555,
+        "source_task_log_id": source_task_log_id,
         "source_type": "scheduled",
         "execution_mode": "offline",
         "activation_revision": "rev-1",
         "scheduled_for": "2026-04-10T09:00:00+00:00",
+        "source_medium": "email",
+        "source_ref": "message-101",
+        "source_contact_id": "17",
         "state": "pending",
     }
 
@@ -386,6 +404,9 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     assert first_run["run_key"] == payload["run_key"]
     assert first_run["run_id"]
     assert first_run["execution_mode"] == "offline"
+    assert first_run["source_medium"] == "email"
+    assert first_run["source_ref"] == "message-101"
+    assert first_run["source_contact_id"] == "17"
 
     second = await client.post(
         "/v0/admin/task-run/create-or-adopt",
@@ -403,6 +424,14 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     """The internal run API should merge partial updates into an existing row."""
 
     await _ensure_task_machine_project(client)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=202),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
     run_key = "offline:42:202:rev-2"
     create_response = await client.post(
         "/v0/admin/task-run/create-or-adopt",
@@ -411,6 +440,7 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
             "run_key": run_key,
             "assistant_id": "42",
             "task_id": 202,
+            "source_task_log_id": source_task_log_id,
             "source_type": "triggered",
             "execution_mode": "offline",
             "state": "running",
@@ -423,6 +453,7 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
         "/v0/admin/task-run/update",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
             "run_key": run_key,
             "updates": {
                 "state": "completed",
