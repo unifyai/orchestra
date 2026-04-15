@@ -228,6 +228,9 @@ class Settings(BaseSettings):
         "MICROSOFT_BYOD_CLIENT_ID",
     )
 
+    # HMAC-SHA256 key for signing OAuth state params (shared with Communication)
+    oauth_state_signing_key: Optional[str] = os.environ.get("OAUTH_STATE_SIGNING_KEY")
+
     # Variables for voice management
     selected_voice_provider: Optional[str] = "elevenlabs"
     cartesia_api_key: Optional[str] = os.environ.get("CARTESIA_API_KEY")
