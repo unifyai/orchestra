@@ -4150,6 +4150,7 @@ class TestEmailConnectEndpoint:
         ) as mock_settings:
             mock_settings.google_oauth_client_id = "test-google-client-id"
             mock_settings.microsoft_byod_client_id = None
+            mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
 
             resp = await client.get(
@@ -4173,6 +4174,7 @@ class TestEmailConnectEndpoint:
         parsed = urlparse(oauth_url)
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
+        assert "_sig" not in state
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "gmail"
         assert state["redirect_after"] == "https://app.test/done"
@@ -4198,6 +4200,7 @@ class TestEmailConnectEndpoint:
         ) as mock_settings:
             mock_settings.google_oauth_client_id = None
             mock_settings.microsoft_byod_client_id = "test-ms-client-id"
+            mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
 
             resp = await client.get(
@@ -4232,6 +4235,7 @@ class TestEmailConnectEndpoint:
         ) as mock_settings:
             mock_settings.google_oauth_client_id = None
             mock_settings.microsoft_byod_client_id = None
+            mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
 
             resp = await client.get(
@@ -4241,3 +4245,59 @@ class TestEmailConnectEndpoint:
             )
 
         assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    @pytest.mark.anyio
+    async def test_gmail_oauth_url_signed(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """When signing key is set, state includes a valid HMAC signature."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "OAuth", "surname": "Signed", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-client-id"
+            mock_settings.microsoft_byod_client_id = None
+            mock_settings.oauth_state_signing_key = "test-signing-secret"
+            mock_settings.is_staging = True
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/email/connect",
+                params={"provider": "gmail", "redirect_after": "https://app.test/done"},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+
+        import base64
+        import hashlib
+        import hmac
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(oauth_url)
+        qs = parse_qs(parsed.query)
+        state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
+
+        sig = state.pop("_sig")
+        assert len(sig) == 64
+        assert state["assistant_id"] == agent_id
+        assert state["provider"] == "gmail"
+        assert state["redirect_after"] == "https://app.test/done"
+        assert state["byod"] is True
+
+        expected_sig = hmac.new(
+            b"test-signing-secret",
+            json.dumps(state, sort_keys=True).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        assert sig == expected_sig
