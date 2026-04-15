@@ -4127,17 +4127,17 @@ class TestBYODContactDeletion:
         assert all_rows[0].status == "deleted"
 
 
-class TestEmailConnectEndpoint:
-    """Tests for GET /assistant/{id}/email/connect."""
+class TestConnectEndpoint:
+    """Tests for POST /assistant/{id}/connect."""
 
     @pytest.mark.anyio
-    async def test_gmail_oauth_url(
+    async def test_google_email_oauth_url(
         self,
         client: AsyncClient,
         dbsession: Session,
         mock_all_infra,
     ):
-        """Gmail OAuth URL is correctly generated."""
+        """Google OAuth URL is correctly generated for email-only connect."""
         create_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "OAuth", "surname": "Gmail", "create_infra": False},
@@ -4153,9 +4153,13 @@ class TestEmailConnectEndpoint:
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
 
-            resp = await client.get(
-                f"/v0/assistant/{agent_id}/email/connect",
-                params={"provider": "gmail", "redirect_after": "https://app.test/done"},
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={
+                    "provider": "google",
+                    "features": ["email"],
+                    "redirect_after": "https://app.test/done",
+                },
                 headers=HEADERS,
             )
 
@@ -4165,8 +4169,8 @@ class TestEmailConnectEndpoint:
         assert "test-google-client-id" in oauth_url
         assert "gmail.send" in oauth_url
         assert "gmail.readonly" in oauth_url
+        assert "include_granted_scopes=true" in oauth_url
 
-        # Verify state contains assistant_id
         import base64
         import json
         from urllib.parse import parse_qs, urlparse
@@ -4176,9 +4180,44 @@ class TestEmailConnectEndpoint:
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
         assert "_sig" not in state
         assert state["assistant_id"] == agent_id
-        assert state["provider"] == "gmail"
+        assert state["provider"] == "google"
+        assert state["features"] == ["email"]
         assert state["redirect_after"] == "https://app.test/done"
         assert state["byod"] is True
+
+    @pytest.mark.anyio
+    async def test_google_multi_feature_oauth_url(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Google OAuth URL includes scopes for multiple features."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "OAuth", "surname": "Multi", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-client-id"
+            mock_settings.microsoft_byod_client_id = None
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email", "calendar"]},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "gmail.send" in oauth_url
+        assert "calendar" in oauth_url
 
     @pytest.mark.anyio
     async def test_microsoft_oauth_url(
@@ -4203,9 +4242,9 @@ class TestEmailConnectEndpoint:
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
 
-            resp = await client.get(
-                f"/v0/assistant/{agent_id}/email/connect",
-                params={"provider": "microsoft"},
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "microsoft", "features": ["email"]},
                 headers=HEADERS,
             )
 
@@ -4238,16 +4277,46 @@ class TestEmailConnectEndpoint:
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
 
-            resp = await client.get(
-                f"/v0/assistant/{agent_id}/email/connect",
-                params={"provider": "gmail"},
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google"},
                 headers=HEADERS,
             )
 
         assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     @pytest.mark.anyio
-    async def test_gmail_oauth_url_signed(
+    async def test_invalid_feature_rejected(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Unknown feature names are rejected with 422."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "OAuth", "surname": "Bad", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-client-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email", "nonexistent"]},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    @pytest.mark.anyio
+    async def test_google_oauth_url_signed(
         self,
         client: AsyncClient,
         dbsession: Session,
@@ -4269,9 +4338,13 @@ class TestEmailConnectEndpoint:
             mock_settings.oauth_state_signing_key = "test-signing-secret"
             mock_settings.is_staging = True
 
-            resp = await client.get(
-                f"/v0/assistant/{agent_id}/email/connect",
-                params={"provider": "gmail", "redirect_after": "https://app.test/done"},
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={
+                    "provider": "google",
+                    "features": ["email"],
+                    "redirect_after": "https://app.test/done",
+                },
                 headers=HEADERS,
             )
 
@@ -4291,7 +4364,8 @@ class TestEmailConnectEndpoint:
         sig = state.pop("_sig")
         assert len(sig) == 64
         assert state["assistant_id"] == agent_id
-        assert state["provider"] == "gmail"
+        assert state["provider"] == "google"
+        assert state["features"] == ["email"]
         assert state["redirect_after"] == "https://app.test/done"
         assert state["byod"] is True
 
@@ -4301,3 +4375,125 @@ class TestEmailConnectEndpoint:
             hashlib.sha256,
         ).hexdigest()
         assert sig == expected_sig
+
+
+class TestGrantedFeaturesEndpoint:
+    """Tests for GET /assistant/{id}/granted-features."""
+
+    @pytest.mark.anyio
+    async def test_no_scopes_returns_empty(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Feat", "surname": "Empty", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["provider"] is None
+        assert data["features"] == []
+
+    @pytest.mark.anyio
+    async def test_google_scopes_mapped(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Feat", "surname": "Google", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "GOOGLE_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://www.googleapis.com/auth/gmail.send "
+                        "https://www.googleapis.com/auth/gmail.readonly "
+                        "https://www.googleapis.com/auth/gmail.modify "
+                        "https://www.googleapis.com/auth/userinfo.email "
+                        "https://www.googleapis.com/auth/calendar "
+                        "https://www.googleapis.com/auth/calendar.events"
+                    ),
+                },
+                headers=HEADERS,
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["provider"] == "google"
+        assert sorted(data["features"]) == ["calendar", "email"]
+
+    @pytest.mark.anyio
+    async def test_microsoft_scopes_mapped(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Feat", "surname": "MS", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "MICROSOFT_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://graph.microsoft.com/Mail.Read "
+                        "https://graph.microsoft.com/Mail.Send "
+                        "https://graph.microsoft.com/Mail.ReadWrite "
+                        "https://graph.microsoft.com/User.Read "
+                        "offline_access"
+                    ),
+                },
+                headers=HEADERS,
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["provider"] == "microsoft"
+        assert data["features"] == ["email"]
