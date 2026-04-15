@@ -168,7 +168,8 @@ class TestAssistantSecretModel:
         assert row.secret_value == "abc123"
         assert row.created_at is not None
 
-    def test_composite_primary_key_rejects_duplicate(self, dbsession: Session):
+    def test_primary_key_rejects_duplicate(self, dbsession: Session):
+        """PK is (agent_id, secret_name) — same combo must be rejected."""
         user, _ba = _make_user_ba(dbsession, "sec-model-2")
         a = _make_assistant(dbsession, user.id)
         dbsession.add(
@@ -185,6 +186,33 @@ class TestAssistantSecretModel:
                 user_id=user.id,
                 agent_id=a.agent_id,
                 secret_name="DUP",
+                secret_value="v2",
+            ),
+        )
+        with pytest.raises(IntegrityError):
+            dbsession.flush()
+        dbsession.rollback()
+
+    def test_different_users_same_assistant_secret_collides(self, dbsession: Session):
+        """user_id is no longer part of the PK — same (agent_id, name) from
+        different users should raise IntegrityError."""
+        user1, _ = _make_user_ba(dbsession, "sec-model-2b-u1")
+        user2, _ = _make_user_ba(dbsession, "sec-model-2b-u2")
+        a = _make_assistant(dbsession, user1.id)
+        dbsession.add(
+            AssistantSecret(
+                user_id=user1.id,
+                agent_id=a.agent_id,
+                secret_name="TOKEN",
+                secret_value="v1",
+            ),
+        )
+        dbsession.flush()
+        dbsession.add(
+            AssistantSecret(
+                user_id=user2.id,
+                agent_id=a.agent_id,
+                secret_name="TOKEN",
                 secret_value="v2",
             ),
         )
