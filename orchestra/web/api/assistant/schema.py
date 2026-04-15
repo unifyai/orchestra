@@ -1387,12 +1387,58 @@ class AssistantContactUpdate(BaseModel):
         }
 
 
-class EmailConnectResponse(BaseModel):
-    """Response from the email-connect endpoint with the OAuth authorization URL."""
+class ConnectRequest(BaseModel):
+    """Request body for ``POST /assistant/{id}/connect``."""
+
+    provider: Literal["google", "microsoft"] = Field(
+        ...,
+        description="OAuth provider to connect.",
+    )
+    features: List[str] = Field(
+        ["email"],
+        description=(
+            "Suite features to request access for (e.g. 'email', 'calendar', "
+            "'drive').  Defaults to email-only for initial connect."
+        ),
+    )
+    redirect_after: Optional[str] = Field(
+        None,
+        description="URL to redirect the user to after OAuth completes.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_features(self) -> "ConnectRequest":
+        from orchestra.web.api.assistant.scopes import available_features
+
+        valid = set(available_features(self.provider))
+        invalid = set(self.features) - valid
+        if invalid:
+            raise ValueError(
+                f"Unknown features for {self.provider}: {sorted(invalid)}. "
+                f"Valid: {sorted(valid)}",
+            )
+        return self
+
+
+class ConnectResponse(BaseModel):
+    """Response from the connect endpoint with the OAuth authorization URL."""
 
     oauth_url: str = Field(
         ...,
-        description="OAuth authorization URL the user should visit to grant email access.",
+        description="OAuth authorization URL the user should visit to grant access.",
+    )
+
+
+class GrantedFeaturesResponse(BaseModel):
+    """Response from the granted-features endpoint."""
+
+    provider: Optional[str] = Field(
+        None,
+        description="The connected OAuth provider ('google' or 'microsoft'), or null if none.",
+    )
+    features: List[str] = Field(
+        [],
+        description="Feature names whose scopes are fully granted.",
     )
 
 

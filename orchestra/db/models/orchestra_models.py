@@ -1579,7 +1579,7 @@ class AssistantSecret(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (sa.PrimaryKeyConstraint("user_id", "agent_id", "secret_name"),)
+    __table_args__ = (sa.PrimaryKeyConstraint("agent_id", "secret_name"),)
 
 
 class OneTimeCreditGrantLink(Base):

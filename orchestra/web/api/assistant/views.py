@@ -6,7 +6,7 @@ import math
 import time
 import urllib.request
 from decimal import Decimal
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 import mutagen
 from fastapi import (
@@ -89,10 +89,12 @@ from orchestra.web.api.assistant.schema import (
     AssistantTransferToPersonalRequest,
     AssistantUpdate,
     AssistantVideoUploadResponse,
+    ConnectRequest,
+    ConnectResponse,
     Contact,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
-    EmailConnectResponse,
+    GrantedFeaturesResponse,
     InfoResponse,
     PhotoGenerateRequest,
     ReplicatePredictionResponse,
@@ -1641,39 +1643,40 @@ async def list_assistant_contacts(
     return InfoResponse(info=contact_reads)
 
 
-@router.get(
-    "/assistant/{assistant_id}/email/connect",
-    response_model=InfoResponse[EmailConnectResponse],
+@router.post(
+    "/assistant/{assistant_id}/connect",
+    response_model=InfoResponse[ConnectResponse],
     status_code=status.HTTP_200_OK,
-    summary="Get an OAuth URL to connect a user's own email",
+    summary="Get an OAuth URL to connect a user's account",
     description=(
         "Returns an OAuth authorization URL that the user visits to grant "
-        "delegated email access (BYOD). Works for both Gmail and Microsoft "
-        "accounts (personal and enterprise)."
+        "delegated access to suite features (email, calendar, drive, etc.). "
+        "Supports both Google and Microsoft, initial connect and scope edits."
     ),
     tags=["Assistant Management"],
     responses={
         200: {"description": "OAuth URL generated successfully."},
         404: {"description": "Assistant not found."},
-        422: {"description": "Missing OAuth configuration."},
+        422: {"description": "Missing OAuth configuration or invalid features."},
     },
 )
-async def get_email_connect_url(
+async def connect_assistant_account(
     assistant_id: int,
+    body: ConnectRequest,
     request: Request,
-    provider: Literal["gmail", "microsoft"] = Query(
-        ...,
-        description="Email provider to connect: 'gmail' or 'microsoft'.",
-    ),
-    redirect_after: Optional[str] = Query(
-        None,
-        description="URL to redirect the user to after OAuth completes.",
-    ),
     session: Session = Depends(get_db_session),
-) -> InfoResponse[EmailConnectResponse]:
-    """Build an OAuth authorization URL for BYOD email access."""
+) -> InfoResponse[ConnectResponse]:
+    """Build an OAuth authorization URL for BYOD suite access."""
+    import hashlib
+    import hmac as hmac_mod
     import json
     import os
+    from urllib.parse import urlencode
+
+    from orchestra.web.api.assistant.scopes import (
+        build_scope_string,
+        map_scopes_to_features,
+    )
 
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -1703,20 +1706,52 @@ async def get_email_connect_url(
                 detail="You do not have permission to modify this assistant.",
             )
 
+    provider = body.provider
+    features = body.features
+    redirect_after = body.redirect_after
     adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
 
-    state_dict = {
+    # Determine if this is scope reduction (requires revocation for Google)
+    secret_dao = AssistantSecretDAO(session)
+    scope_key = (
+        "GOOGLE_GRANTED_SCOPES" if provider == "google" else "MICROSOFT_GRANTED_SCOPES"
+    )
+    current_scopes = secret_dao.get(assistant_id, scope_key)
+    current_features = (
+        set(map_scopes_to_features(provider, current_scopes))
+        if current_scopes
+        else set()
+    )
+    requested_features = set(features)
+    is_scope_reduction = bool(current_features - requested_features)
+
+    # Google scope reduction: revoke the entire token first
+    if provider == "google" and is_scope_reduction and adapters_url:
+        import httpx
+
+        access_token = secret_dao.get(assistant_id, "GOOGLE_ACCESS_TOKEN")
+        if access_token:
+            async with httpx.AsyncClient(timeout=10) as http:
+                await http.post(
+                    f"{adapters_url}/google/revoke",
+                    json={
+                        "assistant_id": assistant_id,
+                        "token": access_token,
+                    },
+                )
+
+    scope_string = build_scope_string(provider, features)
+
+    state_dict: dict = {
         "assistant_id": assistant_id,
         "provider": provider,
+        "features": features,
         "redirect_after": redirect_after,
         "byod": True,
     }
     if settings.oauth_state_signing_key:
-        import hashlib
-        import hmac
-
         canonical = json.dumps(state_dict, sort_keys=True)
-        state_dict["_sig"] = hmac.new(
+        state_dict["_sig"] = hmac_mod.new(
             settings.oauth_state_signing_key.encode(),
             canonical.encode(),
             hashlib.sha256,
@@ -1726,29 +1761,24 @@ async def get_email_connect_url(
         json.dumps(state_dict).encode(),
     ).decode()
 
-    if provider == "gmail":
+    if provider == "google":
         client_id = settings.google_oauth_client_id
         if not client_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Google OAuth is not configured on this deployment.",
             )
-        params = {
+        params: dict = {
             "client_id": client_id,
             "response_type": "code",
             "redirect_uri": f"{adapters_url}/google/auth/callback",
-            "scope": (
-                "https://www.googleapis.com/auth/gmail.send "
-                "https://www.googleapis.com/auth/gmail.readonly "
-                "https://www.googleapis.com/auth/gmail.modify "
-                "https://www.googleapis.com/auth/userinfo.email"
-            ),
+            "scope": scope_string,
             "access_type": "offline",
             "prompt": "consent",
             "state": encoded_state,
         }
-        from urllib.parse import urlencode
-
+        if not is_scope_reduction:
+            params["include_granted_scopes"] = "true"
         oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
     else:
@@ -1762,24 +1792,89 @@ async def get_email_connect_url(
             "client_id": client_id,
             "response_type": "code",
             "redirect_uri": f"{adapters_url}/microsoft/auth/callback",
-            "scope": (
-                "https://graph.microsoft.com/Mail.Send "
-                "https://graph.microsoft.com/Mail.Read "
-                "https://graph.microsoft.com/Mail.ReadWrite "
-                "https://graph.microsoft.com/User.Read "
-                "offline_access"
-            ),
+            "scope": scope_string,
             "response_mode": "query",
+            "prompt": "consent",
             "state": encoded_state,
         }
-        from urllib.parse import urlencode
-
         oauth_url = (
             f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
             f"?{urlencode(params)}"
         )
 
-    return InfoResponse(info=EmailConnectResponse(oauth_url=oauth_url))
+    return InfoResponse(info=ConnectResponse(oauth_url=oauth_url))
+
+
+@router.get(
+    "/assistant/{assistant_id}/granted-features",
+    response_model=InfoResponse[GrantedFeaturesResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Get granted suite features for an assistant",
+    description=(
+        "Returns the OAuth provider and the suite features whose scopes "
+        "have been fully granted for this assistant."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Granted features retrieved."},
+        404: {"description": "Assistant not found."},
+    },
+)
+async def get_granted_features(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[GrantedFeaturesResponse]:
+    from orchestra.web.api.assistant.scopes import map_scopes_to_features
+
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:read",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to view this assistant.",
+            )
+
+    secret_dao = AssistantSecretDAO(session)
+    google_scopes = secret_dao.get(assistant_id, "GOOGLE_GRANTED_SCOPES")
+    ms_scopes = secret_dao.get(assistant_id, "MICROSOFT_GRANTED_SCOPES")
+
+    if google_scopes:
+        return InfoResponse(
+            info=GrantedFeaturesResponse(
+                provider="google",
+                features=map_scopes_to_features("google", google_scopes),
+            ),
+        )
+    if ms_scopes:
+        return InfoResponse(
+            info=GrantedFeaturesResponse(
+                provider="microsoft",
+                features=map_scopes_to_features("microsoft", ms_scopes),
+            ),
+        )
+
+    return InfoResponse(info=GrantedFeaturesResponse())
 
 
 # =========================================================================
@@ -1808,10 +1903,28 @@ async def create_assistant_secret(
     session: Session = Depends(get_db_session),
 ):
     user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
     assistant_dao = AssistantDAO(session)
-    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to modify this assistant.",
+            )
 
     secret_dao = AssistantSecretDAO(session)
     existing = secret_dao.get(assistant_id, body.secret_name)
@@ -1820,7 +1933,12 @@ async def create_assistant_secret(
             status_code=409,
             detail=f"Secret '{body.secret_name}' already exists. Use PUT to update.",
         )
-    secret_dao.upsert(user_id, assistant_id, body.secret_name, body.secret_value)
+    secret_dao.upsert(
+        assistant.user_id,
+        assistant_id,
+        body.secret_name,
+        body.secret_value,
+    )
     session.commit()
     return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
 
@@ -1844,10 +1962,28 @@ async def update_assistant_secret(
     session: Session = Depends(get_db_session),
 ):
     user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
     assistant_dao = AssistantDAO(session)
-    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to modify this assistant.",
+            )
 
     secret_dao = AssistantSecretDAO(session)
     existing = secret_dao.get(assistant_id, secret_name)
@@ -1856,7 +1992,12 @@ async def update_assistant_secret(
             status_code=404,
             detail=f"Secret '{secret_name}' not found.",
         )
-    secret_dao.upsert(user_id, assistant_id, secret_name, body.secret_value)
+    secret_dao.upsert(
+        assistant.user_id,
+        assistant_id,
+        secret_name,
+        body.secret_value,
+    )
     session.commit()
     return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
 
@@ -1879,10 +2020,28 @@ async def delete_assistant_secret(
     session: Session = Depends(get_db_session),
 ):
     user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
     assistant_dao = AssistantDAO(session)
-    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to modify this assistant.",
+            )
 
     secret_dao = AssistantSecretDAO(session)
     removed = secret_dao.delete(assistant_id, secret_name)
