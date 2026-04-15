@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from orchestra.db.models.orchestra_models import Assistant
 from orchestra.services import task_machine_state_service
 from orchestra.tests.test_log import (
     HEADERS,
+    HEADERS_2,
     _create_log,
     _create_project,
     _delete_logs,
@@ -25,6 +27,7 @@ TASK_ACTIVATIONS_CONTEXT = (
 TASK_RUNS_CONTEXT = task_machine_state_service.build_task_runs_context_name(
     TASKS_CONTEXT,
 )
+SECONDARY_USER_ID = "seconday_user"
 
 
 async def _ensure_task_machine_project(client: AsyncClient) -> None:
@@ -38,16 +41,51 @@ async def _get_context_logs(
     client: AsyncClient,
     *,
     context_name: str,
+    user: int = 1,
 ) -> list[dict]:
     """Fetch logs from one task-machine context and return the payload list."""
 
+    headers = HEADERS if user == 1 else HEADERS_2
     response = await client.get(
         "/v0/logs",
         params={"project_name": TASK_MACHINE_PROJECT_NAME, "context": context_name},
-        headers=HEADERS,
+        headers=headers,
     )
     assert response.status_code == 200, response.json()
     return response.json()["logs"]
+
+
+def _assistant_tasks_context(*, user_id: str, assistant_id: int) -> str:
+    """Return the assistant-scoped Tasks context for one seeded owner."""
+
+    return f"{user_id}/{assistant_id}/Tasks"
+
+
+def _assistant_scoped_scheduled_entries(
+    *,
+    user_id: str,
+    assistant_id: int,
+    task_id: int,
+) -> dict:
+    """Return a scheduled task row bound to one explicit assistant scope."""
+
+    entries = _scheduled_task_entries(task_id=task_id)
+    entries["_user_id"] = user_id
+    entries["_assistant_id"] = str(assistant_id)
+    return entries
+
+
+def _make_assistant(dbsession, *, user_id: str) -> Assistant:
+    """Create a minimal assistant row for task-machine admin lookup tests."""
+
+    assistant = Assistant(
+        user_id=user_id,
+        first_name="Task",
+        surname="Admin",
+    )
+    dbsession.add(assistant)
+    dbsession.flush()
+    return assistant
 
 
 @pytest.fixture(autouse=True)
@@ -469,3 +507,126 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     assert updated_run["state"] == "completed"
     assert updated_run["completed_at"] == "2026-04-10T09:05:00+00:00"
     assert updated_run["result_summary"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_task_activation_lookup_resolves_assistant_scoped_project(
+    client: AsyncClient,
+    dbsession,
+):
+    """Admin activation lookup should use the assistant owner's Assistants project."""
+
+    await _ensure_task_machine_project(client)
+    secondary_project = await _create_project(client, TASK_MACHINE_PROJECT_NAME, user=2)
+    assert secondary_project.status_code in (200, 400), secondary_project.json()
+
+    assistant = _make_assistant(dbsession, user_id=SECONDARY_USER_ID)
+    task_id = 909
+    tasks_context = _assistant_tasks_context(
+        user_id=SECONDARY_USER_ID,
+        assistant_id=assistant.agent_id,
+    )
+    create_response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        user=2,
+        context=tasks_context,
+        entries=_assistant_scoped_scheduled_entries(
+            user_id=SECONDARY_USER_ID,
+            assistant_id=assistant.agent_id,
+            task_id=task_id,
+        ),
+    )
+    assert create_response.status_code == 200, create_response.json()
+
+    lookup_response = await client.post(
+        "/v0/admin/task-activation/current",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(assistant.agent_id),
+            "task_id": task_id,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert lookup_response.status_code == 200, lookup_response.json()
+    activation = lookup_response.json()["activation"]
+    assert activation is not None
+    assert activation["assistant_id"] == str(assistant.agent_id)
+    assert activation["task_id"] == task_id
+
+
+@pytest.mark.anyio
+async def test_task_run_admin_mutations_resolve_assistant_scoped_project(
+    client: AsyncClient,
+    dbsession,
+):
+    """Admin run mutations should land in the assistant owner's Assistants project."""
+
+    await _ensure_task_machine_project(client)
+    secondary_project = await _create_project(client, TASK_MACHINE_PROJECT_NAME, user=2)
+    assert secondary_project.status_code in (200, 400), secondary_project.json()
+
+    assistant = _make_assistant(dbsession, user_id=SECONDARY_USER_ID)
+    task_id = 910
+    tasks_context = _assistant_tasks_context(
+        user_id=SECONDARY_USER_ID,
+        assistant_id=assistant.agent_id,
+    )
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        user=2,
+        context=tasks_context,
+        entries=_assistant_scoped_scheduled_entries(
+            user_id=SECONDARY_USER_ID,
+            assistant_id=assistant.agent_id,
+            task_id=task_id,
+        ),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
+    run_key = f"offline:{assistant.agent_id}:{task_id}:rev-2"
+
+    create_response = await client.post(
+        "/v0/admin/task-run/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": run_key,
+            "assistant_id": str(assistant.agent_id),
+            "task_id": task_id,
+            "source_task_log_id": source_task_log_id,
+            "source_type": "scheduled",
+            "execution_mode": "offline",
+            "state": "running",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+    assert create_response.json()["created"] is True
+
+    update_response = await client.post(
+        "/v0/admin/task-run/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(assistant.agent_id),
+            "run_key": run_key,
+            "updates": {
+                "state": "completed",
+                "completed_at": "2026-04-10T09:10:00+00:00",
+            },
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+    assert update_response.json()["run"]["state"] == "completed"
+
+    run_logs = await _get_context_logs(
+        client,
+        context_name=task_machine_state_service.build_task_runs_context_name(
+            tasks_context,
+        ),
+        user=2,
+    )
+    assert len(run_logs) == 1
+    assert run_logs[0]["entries"]["run_key"] == run_key
+    assert run_logs[0]["entries"]["state"] == "completed"
