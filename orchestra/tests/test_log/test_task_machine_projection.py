@@ -427,6 +427,9 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
         "source_medium": "email",
         "source_ref": "message-101",
         "source_contact_id": "17",
+        "source_contact_display_name": "Alice Owner",
+        "task_name": "Morning briefing",
+        "task_description": "Prepare the team's daily summary.",
         "state": "pending",
     }
 
@@ -445,6 +448,9 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     assert first_run["source_medium"] == "email"
     assert first_run["source_ref"] == "message-101"
     assert first_run["source_contact_id"] == "17"
+    assert first_run["source_contact_display_name"] == "Alice Owner"
+    assert first_run["task_name"] == "Morning briefing"
+    assert first_run["task_description"] == "Prepare the team's daily summary."
 
     second = await client.post(
         "/v0/admin/task-run/create-or-adopt",
