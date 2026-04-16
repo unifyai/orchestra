@@ -995,6 +995,18 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
         default=None,
         description="Contact identifier associated with the triggering inbound.",
     )
+    source_contact_display_name: Optional[str] = Field(
+        default=None,
+        description="Human-readable contact name associated with the triggering inbound.",
+    )
+    task_name: Optional[str] = Field(
+        default=None,
+        description="Human-readable task title mirrored into the run row.",
+    )
+    task_description: Optional[str] = Field(
+        default=None,
+        description="Human-readable task description mirrored into the run row.",
+    )
     started_at: Optional[datetime] = Field(
         default=None,
         description="Optional explicit run start timestamp.",
