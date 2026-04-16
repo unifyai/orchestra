@@ -97,12 +97,23 @@ class SuspensionResult:
 async def _deprovision_contact(contact: AssistantContact) -> None:
     """Deprovision the external resource for a contact.
 
-    Calls the appropriate infra deletion function (Twilio / Google Workspace).
+    Calls the appropriate infra deletion function based on contact type and
+    provider (Twilio / Google Workspace / MS365).  BYOD contacts are
+    skipped — we don't own the user's mailbox / phone number.
     """
+    if contact.provisioned_by == "user":
+        logger.info(
+            "Skipping deprovisioning for user-provisioned contact %d (%s)",
+            contact.id,
+            contact.contact_value,
+        )
+        return
+
     from sqlalchemy.orm import object_session
 
     from orchestra.web.api.utils.assistant_infra import (
         delete_email,
+        delete_outlook_email,
         delete_phone_number,
     )
 
@@ -129,7 +140,13 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
             )
     elif contact.contact_type == "email":
         if contact.contact_value:
-            await delete_email(contact.contact_value, deploy_env=deploy_env)
+            if contact.provider == "microsoft_365":
+                await delete_outlook_email(
+                    contact.contact_value,
+                    deploy_env=deploy_env,
+                )
+            else:
+                await delete_email(contact.contact_value, deploy_env=deploy_env)
             logger.info(
                 "Deprovisioned email %s (contact %d)",
                 contact.contact_value,

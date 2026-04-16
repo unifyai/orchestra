@@ -222,6 +222,15 @@ class Settings(BaseSettings):
         "/secrets/gcp/mail_sender_service_account_key.json",
     )
 
+    # BYOD email OAuth client IDs (for building OAuth authorization URLs)
+    google_oauth_client_id: Optional[str] = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
+    microsoft_byod_client_id: Optional[str] = os.environ.get(
+        "MICROSOFT_BYOD_CLIENT_ID",
+    )
+
+    # HMAC-SHA256 key for signing OAuth state params (shared with Communication)
+    oauth_state_signing_key: Optional[str] = os.environ.get("OAUTH_STATE_SIGNING_KEY")
+
     # Variables for voice management
     selected_voice_provider: Optional[str] = "elevenlabs"
     cartesia_api_key: Optional[str] = os.environ.get("CARTESIA_API_KEY")

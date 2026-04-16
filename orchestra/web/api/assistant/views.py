@@ -6,7 +6,7 @@ import math
 import time
 import urllib.request
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import mutagen
 from fastapi import (
@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -91,9 +92,12 @@ from orchestra.web.api.assistant.schema import (
     Contact,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
+    EmailConnectResponse,
     InfoResponse,
     PhotoGenerateRequest,
     ReplicatePredictionResponse,
+    SecretCreate,
+    SecretUpdate,
     SpendingLimitRequest,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
@@ -104,9 +108,11 @@ from orchestra.web.api.assistant.schema import (
 )
 from orchestra.web.api.utils.assistant_infra import (
     create_email,
+    create_outlook_email,
     create_phone_number,
     create_pubsub_topic,
     delete_email,
+    delete_outlook_email,
     delete_phone_number,
     delete_pubsub_topic,
     get_runtime_status,
@@ -114,6 +120,7 @@ from orchestra.web.api.utils.assistant_infra import (
     reawaken_assistant,
     wake_up_assistant,
     watch_email,
+    watch_outlook_email,
 )
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
@@ -185,6 +192,7 @@ def _build_assistant_read(
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
     contacts: Optional[list] = None,
+    secrets: Optional[dict] = None,
     include_internal: bool = False,
 ) -> AssistantRead:
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
@@ -265,6 +273,7 @@ def _build_assistant_read(
         updated_at=a.updated_at,
         phone=(phone_contact.contact_value if phone_contact else None),
         email=(email_contact.contact_value if email_contact else None),
+        email_provider=(email_contact.provider if email_contact else None),
         user_phone=user_phone_number,
         user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=(
@@ -293,6 +302,7 @@ def _build_assistant_read(
         user_email=user_email,
         user_image=user_image,
         team_ids=team_ids,
+        secrets=secrets,
     )
 
 
@@ -1034,29 +1044,37 @@ async def delete_assistant_contact(
         )
 
         if contact:
-            if contact_type == "phone" and contact.contact_value:
-                await delete_phone_number(
-                    contact.contact_value,
-                    deploy_env=assistant.deploy_env,
-                )
-            elif contact_type == "email" and contact.contact_value:
-                await delete_email(
-                    contact.contact_value,
-                    deploy_env=assistant.deploy_env,
-                )
-            elif contact_type == "whatsapp":
-                from orchestra.web.api.utils.assistant_infra import (
-                    delete_whatsapp_routes,
-                )
+            # BYOD contacts: skip external deprovisioning (we don't own the resource)
+            if contact.provisioned_by != "user":
+                if contact_type == "phone" and contact.contact_value:
+                    await delete_phone_number(
+                        contact.contact_value,
+                        deploy_env=assistant.deploy_env,
+                    )
+                elif contact_type == "email" and contact.contact_value:
+                    if contact.provider == "microsoft_365":
+                        await delete_outlook_email(
+                            contact.contact_value,
+                            deploy_env=assistant.deploy_env,
+                        )
+                    else:
+                        await delete_email(
+                            contact.contact_value,
+                            deploy_env=assistant.deploy_env,
+                        )
+                elif contact_type == "whatsapp":
+                    from orchestra.web.api.utils.assistant_infra import (
+                        delete_whatsapp_routes,
+                    )
 
-                await delete_whatsapp_routes(assistant_id, session)
+                    await delete_whatsapp_routes(assistant_id, session)
 
-            elif contact_type == "discord":
-                from orchestra.web.api.utils.assistant_infra import (
-                    delete_discord_routes,
-                )
+                elif contact_type == "discord":
+                    from orchestra.web.api.utils.assistant_infra import (
+                        delete_discord_routes,
+                    )
 
-                await delete_discord_routes(assistant_id, session)
+                    await delete_discord_routes(assistant_id, session)
 
             # Soft-delete the AssistantContact row
             contact_dao.soft_delete_assistant_contact(
@@ -1172,6 +1190,7 @@ async def create_assistant_contact(
             )
 
     contact_type = contact_request.contact_type
+    is_byod = contact_request.provisioned_by == "user"
 
     # 2. Require verified profile identity for phone/whatsapp/discord contacts
     if contact_type in ("phone", "whatsapp", "discord"):
@@ -1218,18 +1237,85 @@ async def create_assistant_contact(
             detail=f"An active {contact_type} contact already exists for this assistant.",
         )
 
-    # 3. Look up costs
+    # Determine provider
     provider = None
     country_code = None
     if contact_type == "phone":
         provider = "twilio"
         country_code = contact_request.phone_country or "US"
     elif contact_type == "email":
-        provider = "google_workspace"
+        provider = contact_request.email_provider or "google_workspace"
     elif contact_type == "whatsapp":
         provider = "twilio"
     elif contact_type == "discord":
         provider = "discord"
+
+    if is_byod:
+        # ── BYOD path: no external provisioning, no billing ──
+        created_value = contact_request.contact_value
+
+        refreshed_session = _open_request_session(request)
+        try:
+            assistant_dao = AssistantDAO(refreshed_session)
+            contact_dao = AssistantContactDAO(refreshed_session)
+
+            assistant = assistant_dao.get_assistant_by_id(
+                user_id=user_id,
+                agent_id=assistant_id,
+                organization_id=organization_id,
+            )
+            if not assistant:
+                raise Exception("Assistant not found.")
+
+            contact = contact_dao.upsert_assistant_contact(
+                assistant_id=assistant_id,
+                contact_type=contact_type,
+                contact_value=created_value,
+                provider=provider,
+                country_code=country_code,
+                provisioned_by="user",
+            )
+
+            refreshed_session.commit()
+        except Exception as db_error:
+            refreshed_session.rollback()
+            logging.error(
+                "Failed to save BYOD %s contact for assistant %s: %s",
+                contact_type,
+                assistant_id,
+                db_error,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save {contact_type} contact: {str(db_error)}",
+            )
+
+        try:
+            await reawaken_assistant(
+                str(assistant_id),
+                deploy_env=assistant.deploy_env,
+            )
+        except Exception as e:
+            logging.warning(
+                "Failed to reawaken assistant %s after BYOD contact creation: %s",
+                assistant_id,
+                e,
+            )
+
+        assistant = assistant_dao.get_assistant_by_id(
+            user_id=user_id,
+            agent_id=assistant_id,
+            organization_id=organization_id,
+        )
+        try:
+            return InfoResponse(
+                info=_build_assistant_read(assistant, refreshed_session),
+            )
+        finally:
+            refreshed_session.close()
+
+    # ── Platform-provisioned path (original) ──
 
     monthly_cost = contact_dao.get_contact_monthly_cost(
         contact_type,
@@ -1282,24 +1368,41 @@ async def create_assistant_contact(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="email_local is required for email contacts.",
                 )
-            email_response = await create_email(
-                contact_request.email_local,
-                contact_request.first_name or "",
-                contact_request.last_name or "",
-                deploy_env=assistant.deploy_env,
-            )
+
+            if provider == "microsoft_365":
+                email_response = await create_outlook_email(
+                    contact_request.email_local,
+                    contact_request.first_name or "",
+                    contact_request.last_name or "",
+                    deploy_env=assistant.deploy_env,
+                )
+            else:
+                email_response = await create_email(
+                    contact_request.email_local,
+                    contact_request.first_name or "",
+                    contact_request.last_name or "",
+                    deploy_env=assistant.deploy_env,
+                )
+
             if "detail" in email_response:
                 raise Exception(
                     f"Email creation failed: {email_response['detail']}",
                 )
             created_value = email_response.get("user", {}).get("primaryEmail")
 
-            # Set up email watch
             await asyncio.sleep(10)
-            watch_response = await watch_email(
-                created_value,
-                deploy_env=assistant.deploy_env,
-            )
+
+            if provider == "microsoft_365":
+                watch_response = await watch_outlook_email(
+                    created_value,
+                    deploy_env=assistant.deploy_env,
+                )
+            else:
+                watch_response = await watch_email(
+                    created_value,
+                    deploy_env=assistant.deploy_env,
+                )
+
             if "detail" in watch_response:
                 raise Exception(
                     f"Email watch setup failed: {watch_response['detail']}",
@@ -1421,11 +1524,16 @@ async def create_assistant_contact(
                     deploy_env=assistant.deploy_env,
                 )
             elif contact_type == "email":
-                await delete_email(
-                    created_value,
-                    deploy_env=assistant.deploy_env,
-                )
-            # WhatsApp/Discord: no explicit deprovisioning needed (pool stays)
+                if provider == "microsoft_365":
+                    await delete_outlook_email(
+                        created_value,
+                        deploy_env=assistant.deploy_env,
+                    )
+                else:
+                    await delete_email(
+                        created_value,
+                        deploy_env=assistant.deploy_env,
+                    )
         except Exception as rollback_error:
             logging.error(
                 f"RESOURCE LEAK: Failed to rollback {contact_type} "
@@ -1531,6 +1639,260 @@ async def list_assistant_contacts(
         for c in contacts
     ]
     return InfoResponse(info=contact_reads)
+
+
+@router.get(
+    "/assistant/{assistant_id}/email/connect",
+    response_model=InfoResponse[EmailConnectResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Get an OAuth URL to connect a user's own email",
+    description=(
+        "Returns an OAuth authorization URL that the user visits to grant "
+        "delegated email access (BYOD). Works for both Gmail and Microsoft "
+        "accounts (personal and enterprise)."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "OAuth URL generated successfully."},
+        404: {"description": "Assistant not found."},
+        422: {"description": "Missing OAuth configuration."},
+    },
+)
+async def get_email_connect_url(
+    assistant_id: int,
+    request: Request,
+    provider: Literal["gmail", "microsoft"] = Query(
+        ...,
+        description="Email provider to connect: 'gmail' or 'microsoft'.",
+    ),
+    redirect_after: Optional[str] = Query(
+        None,
+        description="URL to redirect the user to after OAuth completes.",
+    ),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[EmailConnectResponse]:
+    """Build an OAuth authorization URL for BYOD email access."""
+    import json
+    import os
+
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
+
+    adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
+
+    state_dict = {
+        "assistant_id": assistant_id,
+        "provider": provider,
+        "redirect_after": redirect_after,
+        "byod": True,
+    }
+    if settings.oauth_state_signing_key:
+        import hashlib
+        import hmac
+
+        canonical = json.dumps(state_dict, sort_keys=True)
+        state_dict["_sig"] = hmac.new(
+            settings.oauth_state_signing_key.encode(),
+            canonical.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    encoded_state = base64.urlsafe_b64encode(
+        json.dumps(state_dict).encode(),
+    ).decode()
+
+    if provider == "gmail":
+        client_id = settings.google_oauth_client_id
+        if not client_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Google OAuth is not configured on this deployment.",
+            )
+        params = {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": f"{adapters_url}/google/auth/callback",
+            "scope": (
+                "https://www.googleapis.com/auth/gmail.send "
+                "https://www.googleapis.com/auth/gmail.readonly "
+                "https://www.googleapis.com/auth/gmail.modify "
+                "https://www.googleapis.com/auth/userinfo.email"
+            ),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": encoded_state,
+        }
+        from urllib.parse import urlencode
+
+        oauth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+
+    else:
+        client_id = settings.microsoft_byod_client_id
+        if not client_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Microsoft BYOD OAuth is not configured on this deployment.",
+            )
+        params = {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": f"{adapters_url}/microsoft/auth/callback",
+            "scope": (
+                "https://graph.microsoft.com/Mail.Send "
+                "https://graph.microsoft.com/Mail.Read "
+                "https://graph.microsoft.com/Mail.ReadWrite "
+                "https://graph.microsoft.com/User.Read "
+                "offline_access"
+            ),
+            "response_mode": "query",
+            "state": encoded_state,
+        }
+        from urllib.parse import urlencode
+
+        oauth_url = (
+            f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+            f"?{urlencode(params)}"
+        )
+
+    return InfoResponse(info=EmailConnectResponse(oauth_url=oauth_url))
+
+
+# =========================================================================
+# Secret CRUD (used by Communication to persist OAuth tokens)
+# =========================================================================
+
+
+@router.post(
+    "/assistant/{assistant_id}/secret",
+    response_model=InfoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Create a secret for an assistant",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Secret created."},
+        404: {"description": "Assistant not found."},
+        409: {
+            "description": "Secret with that name already exists (use PUT to update).",
+        },
+    },
+)
+async def create_assistant_secret(
+    assistant_id: int,
+    body: SecretCreate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    secret_dao = AssistantSecretDAO(session)
+    existing = secret_dao.get(assistant_id, body.secret_name)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Secret '{body.secret_name}' already exists. Use PUT to update.",
+        )
+    secret_dao.upsert(user_id, assistant_id, body.secret_name, body.secret_value)
+    session.commit()
+    return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
+
+
+@router.put(
+    "/assistant/{assistant_id}/secret/{secret_name}",
+    response_model=InfoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update an existing secret",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Secret updated."},
+        404: {"description": "Assistant or secret not found."},
+    },
+)
+async def update_assistant_secret(
+    assistant_id: int,
+    secret_name: str,
+    body: SecretUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    secret_dao = AssistantSecretDAO(session)
+    existing = secret_dao.get(assistant_id, secret_name)
+    if existing is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Secret '{secret_name}' not found.",
+        )
+    secret_dao.upsert(user_id, assistant_id, secret_name, body.secret_value)
+    session.commit()
+    return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
+
+
+@router.delete(
+    "/assistant/{assistant_id}/secret/{secret_name}",
+    response_model=InfoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete a secret",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Secret deleted."},
+        404: {"description": "Assistant or secret not found."},
+    },
+)
+async def delete_assistant_secret(
+    assistant_id: int,
+    secret_name: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(user_id, assistant_id)
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    secret_dao = AssistantSecretDAO(session)
+    removed = secret_dao.delete(assistant_id, secret_name)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Secret '{secret_name}' not found.",
+        )
+    session.commit()
+    return InfoResponse(info={"secret_name": secret_name, "status": "deleted"})
 
 
 @router.put(
@@ -4604,6 +4966,26 @@ def admin_list_all_assistants(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        # Batch-fetch secrets for all assistants
+        from orchestra.db.models.orchestra_models import AssistantSecret
+
+        skip_secrets = (
+            requested_fields is not None and "secrets" not in requested_fields
+        )
+        secrets_by_assistant: dict[int, dict[str, str]] = {}
+        if not skip_secrets:
+            agent_ids = [a.agent_id for a in assistants]
+            if agent_ids:
+                all_secret_rows = (
+                    session.query(AssistantSecret)
+                    .filter(AssistantSecret.agent_id.in_(agent_ids))
+                    .all()
+                )
+                for s in all_secret_rows:
+                    secrets_by_assistant.setdefault(s.agent_id, {})[
+                        s.secret_name
+                    ] = s.secret_value
+
         # Build AssistantRead objects
         assistant_reads = [
             _build_assistant_read(
@@ -4617,6 +4999,11 @@ def admin_list_all_assistants(
                 user_whatsapp_number=(users[i].whatsapp_number if users else None),
                 team_ids=[] if skip_teams else None,
                 contacts=contacts_by_assistant.get(a.agent_id, []),
+                secrets=(
+                    secrets_by_assistant.get(a.agent_id, {})
+                    if not skip_secrets
+                    else None
+                ),
                 include_internal=True,
             )
             for i, a in enumerate(assistants)

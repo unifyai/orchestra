@@ -384,7 +384,7 @@ class UserAccountCleanupService:
         contact_rows = self.session.execute(
             text(
                 """
-                SELECT assistant_id, id, contact_type, contact_value
+                SELECT assistant_id, id, contact_type, contact_value, provider
                 FROM assistant_contacts
                 WHERE assistant_id = ANY(:assistant_ids) AND status != 'deleted'
                 """,
@@ -398,6 +398,7 @@ class UserAccountCleanupService:
                     contact_type=row[2],
                     contact_value=row[3],
                     contact_id=row[1],
+                    provider=row[4],
                 ),
             )
 
