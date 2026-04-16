@@ -1409,7 +1409,10 @@ class ConnectRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_and_filter_features(self) -> "ConnectRequest":
-        from orchestra.web.api.assistant.scopes import available_features
+        from orchestra.web.api.assistant.scopes import (
+            REQUIRED_FEATURES,
+            available_features,
+        )
 
         valid_for_provider = set(available_features(self.provider))
         all_known = set(available_features("google")) | set(
@@ -1422,6 +1425,11 @@ class ConnectRequest(BaseModel):
                 f"Valid: {sorted(all_known)}",
             )
         self.features = [f for f in self.features if f in valid_for_provider]
+
+        for feat in REQUIRED_FEATURES.get(self.provider, []):
+            if feat not in self.features:
+                self.features.append(feat)
+
         return self
 
 
@@ -1444,6 +1452,10 @@ class GrantedFeaturesResponse(BaseModel):
     features: List[str] = Field(
         [],
         description="Feature names whose scopes are fully granted.",
+    )
+    required_features: List[str] = Field(
+        [],
+        description="Features that cannot be removed (Console should grey these out).",
     )
 
 

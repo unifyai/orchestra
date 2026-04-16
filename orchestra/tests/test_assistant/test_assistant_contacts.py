@@ -39,7 +39,7 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     User,
 )
-from orchestra.tests.utils import HEADERS, create_test_user
+from orchestra.tests.utils import HEADERS, create_test_org, create_test_user
 
 # ============================================================================
 # Fixtures
@@ -4747,3 +4747,1088 @@ class TestConnectEndpointEdgeCases:
         assert "Calendars.Read" in oauth_url
         assert "Chat.Read" in oauth_url
         assert "offline_access" in oauth_url
+
+
+class TestCompulsoryFeatures:
+    """Tests for required-features enforcement in ConnectRequest."""
+
+    @pytest.mark.anyio
+    async def test_google_always_includes_email(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Even if user sends features=['calendar'], email is auto-added."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Comp", "surname": "Google", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["calendar"]},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "gmail.send" in oauth_url
+        assert "calendar" in oauth_url
+
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        state = json.loads(
+            base64.urlsafe_b64decode(
+                parse_qs(urlparse(oauth_url).query)["state"][0],
+            ),
+        )
+        assert "email" in state["features"]
+        assert "calendar" in state["features"]
+
+    @pytest.mark.anyio
+    async def test_microsoft_always_includes_email_and_teams(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Microsoft connect with features=['calendar'] auto-adds email + teams."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Comp", "surname": "MS", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.microsoft_byod_client_id = "test-ms-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "microsoft", "features": ["calendar"]},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "Mail.Send" in oauth_url
+        assert "Chat.Read" in oauth_url
+        assert "Calendars.Read" in oauth_url
+
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        state = json.loads(
+            base64.urlsafe_b64decode(
+                parse_qs(urlparse(oauth_url).query)["state"][0],
+            ),
+        )
+        assert sorted(state["features"]) == ["calendar", "email", "teams"]
+
+
+class TestGrantedFeaturesRequiredField:
+    """Tests for the required_features field in granted-features response."""
+
+    @pytest.mark.anyio
+    async def test_google_required_features(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Req", "surname": "Google", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "GOOGLE_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://www.googleapis.com/auth/gmail.send "
+                        "https://www.googleapis.com/auth/gmail.readonly "
+                        "https://www.googleapis.com/auth/gmail.modify "
+                        "https://www.googleapis.com/auth/userinfo.email"
+                    ),
+                },
+                headers=HEADERS,
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["required_features"] == ["email"]
+
+    @pytest.mark.anyio
+    async def test_microsoft_required_features(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Req", "surname": "MS", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "MICROSOFT_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://graph.microsoft.com/Mail.Read "
+                        "https://graph.microsoft.com/Mail.Send "
+                        "https://graph.microsoft.com/Mail.ReadWrite "
+                        "https://graph.microsoft.com/User.Read "
+                        "offline_access"
+                    ),
+                },
+                headers=HEADERS,
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert sorted(data["required_features"]) == ["email", "teams"]
+
+    @pytest.mark.anyio
+    async def test_no_scopes_empty_required(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Req", "surname": "None", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["required_features"] == []
+
+
+class TestDisconnectEndpoint:
+    """Tests for DELETE /assistant/{id}/connect."""
+
+    @pytest.mark.anyio
+    async def test_disconnect_no_account_404(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Disc", "surname": "None", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        resp = await client.delete(
+            f"/v0/assistant/{agent_id}/connect",
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.anyio
+    async def test_disconnect_nonexistent_assistant_404(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        resp = await client.delete(
+            "/v0/assistant/999999/connect",
+            headers=HEADERS,
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.anyio
+    async def test_disconnect_google_clears_secrets(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Disc", "surname": "Google", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            for name, value in [
+                ("GOOGLE_ACCESS_TOKEN", "access-tok"),
+                ("GOOGLE_REFRESH_TOKEN", "refresh-tok"),
+                ("GOOGLE_TOKEN_EXPIRES_AT", "9999999999"),
+                ("GOOGLE_GRANTED_SCOPES", "https://www.googleapis.com/auth/gmail.send"),
+            ]:
+                await client.post(
+                    f"/v0/assistant/{agent_id}/secret",
+                    json={"secret_name": name, "secret_value": value},
+                    headers=HEADERS,
+                )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        assert resp.json()["info"]["status"] == "disconnected"
+
+        dao = AssistantSecretDAO(dbsession)
+        for name in (
+            "GOOGLE_ACCESS_TOKEN",
+            "GOOGLE_REFRESH_TOKEN",
+            "GOOGLE_TOKEN_EXPIRES_AT",
+            "GOOGLE_GRANTED_SCOPES",
+        ):
+            assert dao.get(agent_id, name) is None
+
+    @pytest.mark.anyio
+    async def test_disconnect_microsoft_clears_secrets(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Disc", "surname": "MS", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            for name, value in [
+                ("MICROSOFT_ACCESS_TOKEN", "ms-access"),
+                ("MICROSOFT_REFRESH_TOKEN", "ms-refresh"),
+                ("MICROSOFT_TOKEN_EXPIRES_AT", "9999999999"),
+                ("MICROSOFT_GRANTED_SCOPES", "https://graph.microsoft.com/Mail.Read"),
+            ]:
+                await client.post(
+                    f"/v0/assistant/{agent_id}/secret",
+                    json={"secret_name": name, "secret_value": value},
+                    headers=HEADERS,
+                )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        assert resp.json()["info"]["status"] == "disconnected"
+
+        dao = AssistantSecretDAO(dbsession)
+        for name in (
+            "MICROSOFT_ACCESS_TOKEN",
+            "MICROSOFT_REFRESH_TOKEN",
+            "MICROSOFT_TOKEN_EXPIRES_AT",
+            "MICROSOFT_GRANTED_SCOPES",
+        ):
+            assert dao.get(agent_id, name) is None
+
+    @pytest.mark.anyio
+    async def test_disconnect_soft_deletes_byod_contact(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Disc", "surname": "Contact", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        byod_contact = AssistantContact(
+            assistant_id=agent_id,
+            contact_type="email",
+            contact_value="user@byod.com",
+            provider="microsoft",
+            provisioned_by="user",
+            status="active",
+        )
+        dbsession.add(byod_contact)
+        dbsession.commit()
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "MICROSOFT_GRANTED_SCOPES",
+                    "secret_value": "https://graph.microsoft.com/Mail.Read",
+                },
+                headers=HEADERS,
+            )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+
+        dbsession.refresh(byod_contact)
+        assert byod_contact.status == "deleted"
+
+    @pytest.mark.anyio
+    async def test_disconnect_does_not_delete_platform_contact(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Platform-provisioned contacts should not be soft-deleted by disconnect."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Disc", "surname": "Platform", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        platform_contact = AssistantContact(
+            assistant_id=agent_id,
+            contact_type="email",
+            contact_value="asst@unify.ai",
+            provider="google_workspace",
+            provisioned_by="platform",
+            status="active",
+        )
+        dbsession.add(platform_contact)
+        dbsession.commit()
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "GOOGLE_GRANTED_SCOPES",
+                    "secret_value": "https://www.googleapis.com/auth/gmail.send",
+                },
+                headers=HEADERS,
+            )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+
+        dbsession.refresh(platform_contact)
+        assert platform_contact.status == "active"
+
+
+# ============================================================================
+# Org assistant tests for connect / disconnect / granted-features
+# ============================================================================
+
+
+async def _setup_org_assistant_with_members(
+    client: AsyncClient,
+    dbsession: Session,
+    *,
+    grant_member_write: bool = True,
+):
+    """Create org + assistant + two members (one writer, one reader).
+
+    Returns ``(owner, org, agent_id, writer_headers, reader_headers)``.
+    """
+    from orchestra.db.dao.permission_dao import PermissionDAO
+    from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+    from orchestra.db.dao.role_dao import RoleDAO
+
+    owner = await create_test_user(client, "org-byod-owner@test.com")
+    org = await create_test_org(client, owner, "BYODOrgTest")
+
+    asst_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Org", "surname": "BYOD", "create_infra": False},
+        headers=org["headers"],
+    )
+    assert asst_resp.status_code == status.HTTP_200_OK, asst_resp.json()
+    agent_id = int(asst_resp.json()["info"]["agent_id"])
+
+    role_dao = RoleDAO(dbsession)
+    perm_dao = PermissionDAO(dbsession)
+    ra_dao = ResourceAccessDAO(dbsession)
+
+    # Writer member (Member role → has assistant:write)
+    writer = await create_test_user(client, "org-byod-writer@test.com")
+    add_resp = await client.post(
+        f"/v0/organizations/{org['id']}/members",
+        json={"user_id": writer["id"]},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == status.HTTP_201_CREATED
+    writer_headers = {"Authorization": f"Bearer {add_resp.json()['api_key']}"}
+
+    if grant_member_write:
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        ra_dao.grant_access(
+            resource_type="assistant",
+            resource_id=agent_id,
+            role_id=member_role.id,
+            grantee_type="user",
+            grantee_id=writer["id"],
+        )
+
+    # Reader member (custom role with assistant:read only)
+    reader_role = role_dao.create(
+        name="BYODReader",
+        organization_id=org["id"],
+    )
+    read_perm = perm_dao.get_by_name("assistant:read")
+    role_dao.add_permission(reader_role.id, read_perm.id)
+
+    reader = await create_test_user(client, "org-byod-reader@test.com")
+    add_resp = await client.post(
+        f"/v0/organizations/{org['id']}/members",
+        json={"user_id": reader["id"], "role_id": reader_role.id},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == status.HTTP_201_CREATED
+    reader_headers = {"Authorization": f"Bearer {add_resp.json()['api_key']}"}
+
+    ra_dao.grant_access(
+        resource_type="assistant",
+        resource_id=agent_id,
+        role_id=reader_role.id,
+        grantee_type="user",
+        grantee_id=reader["id"],
+    )
+
+    dbsession.commit()
+
+    return owner, org, agent_id, writer_headers, reader_headers
+
+
+class TestConnectEndpointOrg:
+    """Tests for POST /assistant/{id}/connect with org assistants."""
+
+    @pytest.mark.anyio
+    async def test_org_owner_can_connect_google(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email"]},
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "accounts.google.com" in oauth_url
+        assert "gmail.send" in oauth_url
+
+    @pytest.mark.anyio
+    async def test_org_owner_can_connect_microsoft(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.microsoft_byod_client_id = "test-ms-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "microsoft", "features": ["email", "teams"]},
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "login.microsoftonline.com" in oauth_url
+        assert "Mail.Send" in oauth_url
+        assert "Chat.Read" in oauth_url
+
+    @pytest.mark.anyio
+    async def test_org_member_with_write_can_connect(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, _, agent_id, writer_headers, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email"]},
+                headers=writer_headers,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+    @pytest.mark.anyio
+    async def test_org_member_read_only_cannot_connect(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, _, agent_id, _, reader_headers = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email"]},
+                headers=reader_headers,
+            )
+
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    @pytest.mark.anyio
+    async def test_compulsory_features_apply_for_org_microsoft(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Org assistant: features=['calendar'] for Microsoft auto-adds email+teams."""
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.microsoft_byod_client_id = "test-ms-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "microsoft", "features": ["calendar"]},
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "Mail.Send" in oauth_url
+        assert "Chat.Read" in oauth_url
+        assert "Calendars.Read" in oauth_url
+
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        state = json.loads(
+            base64.urlsafe_b64decode(
+                parse_qs(urlparse(oauth_url).query)["state"][0],
+            ),
+        )
+        assert sorted(state["features"]) == ["calendar", "email", "teams"]
+
+
+class TestDisconnectEndpointOrg:
+    """Tests for DELETE /assistant/{id}/connect with org assistants."""
+
+    @pytest.mark.anyio
+    async def test_org_owner_can_disconnect_google(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            for name, value in [
+                ("GOOGLE_ACCESS_TOKEN", "g-access"),
+                ("GOOGLE_REFRESH_TOKEN", "g-refresh"),
+                ("GOOGLE_TOKEN_EXPIRES_AT", "9999999999"),
+                ("GOOGLE_GRANTED_SCOPES", "https://www.googleapis.com/auth/gmail.send"),
+            ]:
+                await client.post(
+                    f"/v0/assistant/{agent_id}/secret",
+                    json={"secret_name": name, "secret_value": value},
+                    headers=org["headers"],
+                )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        assert resp.json()["info"]["status"] == "disconnected"
+
+        dao = AssistantSecretDAO(dbsession)
+        for name in (
+            "GOOGLE_ACCESS_TOKEN",
+            "GOOGLE_REFRESH_TOKEN",
+            "GOOGLE_TOKEN_EXPIRES_AT",
+            "GOOGLE_GRANTED_SCOPES",
+        ):
+            assert dao.get(agent_id, name) is None
+
+    @pytest.mark.anyio
+    async def test_org_owner_can_disconnect_microsoft(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            for name, value in [
+                ("MICROSOFT_ACCESS_TOKEN", "ms-access"),
+                ("MICROSOFT_REFRESH_TOKEN", "ms-refresh"),
+                ("MICROSOFT_TOKEN_EXPIRES_AT", "9999999999"),
+                ("MICROSOFT_GRANTED_SCOPES", "https://graph.microsoft.com/Mail.Read"),
+            ]:
+                await client.post(
+                    f"/v0/assistant/{agent_id}/secret",
+                    json={"secret_name": name, "secret_value": value},
+                    headers=org["headers"],
+                )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        assert resp.json()["info"]["status"] == "disconnected"
+
+        dao = AssistantSecretDAO(dbsession)
+        for name in (
+            "MICROSOFT_ACCESS_TOKEN",
+            "MICROSOFT_REFRESH_TOKEN",
+            "MICROSOFT_TOKEN_EXPIRES_AT",
+            "MICROSOFT_GRANTED_SCOPES",
+        ):
+            assert dao.get(agent_id, name) is None
+
+    @pytest.mark.anyio
+    async def test_org_member_with_write_can_disconnect(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, org, agent_id, writer_headers, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "GOOGLE_GRANTED_SCOPES",
+                    "secret_value": "https://www.googleapis.com/auth/gmail.send",
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=writer_headers,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+    @pytest.mark.anyio
+    async def test_org_member_read_only_cannot_disconnect(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, org, agent_id, _, reader_headers = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "GOOGLE_GRANTED_SCOPES",
+                    "secret_value": "https://www.googleapis.com/auth/gmail.send",
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=reader_headers,
+            )
+
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    @pytest.mark.anyio
+    async def test_disconnect_soft_deletes_byod_contact_org(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        byod_contact = AssistantContact(
+            assistant_id=agent_id,
+            contact_type="email",
+            contact_value="orguser@byod.com",
+            provider="microsoft",
+            provisioned_by="user",
+            status="active",
+        )
+        dbsession.add(byod_contact)
+        dbsession.commit()
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "MICROSOFT_GRANTED_SCOPES",
+                    "secret_value": "https://graph.microsoft.com/Mail.Read",
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        dbsession.refresh(byod_contact)
+        assert byod_contact.status == "deleted"
+
+
+class TestGrantedFeaturesEndpointOrg:
+    """Tests for GET /assistant/{id}/granted-features with org assistants."""
+
+    @pytest.mark.anyio
+    async def test_org_owner_can_read_granted_features(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "GOOGLE_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://www.googleapis.com/auth/gmail.send "
+                        "https://www.googleapis.com/auth/gmail.readonly "
+                        "https://www.googleapis.com/auth/gmail.modify "
+                        "https://www.googleapis.com/auth/userinfo.email"
+                    ),
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["provider"] == "google"
+        assert "email" in data["features"]
+        assert data["required_features"] == ["email"]
+
+    @pytest.mark.anyio
+    async def test_org_member_with_read_can_read(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, org, agent_id, _, reader_headers = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "MICROSOFT_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://graph.microsoft.com/Mail.Read "
+                        "https://graph.microsoft.com/Mail.Send "
+                        "https://graph.microsoft.com/Mail.ReadWrite "
+                        "https://graph.microsoft.com/User.Read "
+                        "offline_access"
+                    ),
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=reader_headers,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["provider"] == "microsoft"
+        assert "email" in data["features"]
+        assert sorted(data["required_features"]) == ["email", "teams"]
+
+    @pytest.mark.anyio
+    async def test_org_member_no_access_cannot_read(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Member with no ResourceAccess grant on the assistant gets 403."""
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        outsider = await create_test_user(client, "org-byod-outsider@test.com")
+        add_resp = await client.post(
+            f"/v0/organizations/{org['id']}/members",
+            json={"user_id": outsider["id"]},
+            headers=owner["headers"],
+        )
+        assert add_resp.status_code == status.HTTP_201_CREATED
+        outsider_headers = {
+            "Authorization": f"Bearer {add_resp.json()['api_key']}",
+        }
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "GOOGLE_GRANTED_SCOPES",
+                    "secret_value": "https://www.googleapis.com/auth/gmail.send",
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=outsider_headers,
+            )
+
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    @pytest.mark.anyio
+    async def test_required_features_populated_for_org_microsoft(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "MICROSOFT_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://graph.microsoft.com/Mail.Read "
+                        "https://graph.microsoft.com/Mail.Send "
+                        "https://graph.microsoft.com/Mail.ReadWrite "
+                        "https://graph.microsoft.com/Chat.Read "
+                        "https://graph.microsoft.com/Chat.ReadWrite "
+                        "https://graph.microsoft.com/ChannelMessage.Send "
+                        "https://graph.microsoft.com/User.Read "
+                        "offline_access"
+                    ),
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()["info"]
+        assert data["provider"] == "microsoft"
+        assert sorted(data["features"]) == ["email", "teams"]
+        assert sorted(data["required_features"]) == ["email", "teams"]

@@ -9,6 +9,7 @@ from orchestra.web.api.assistant.scopes import (
     GOOGLE_SCOPE_BUNDLES,
     MICROSOFT_BASE_SCOPES,
     MICROSOFT_SCOPE_BUNDLES,
+    REQUIRED_FEATURES,
     available_features,
     build_scope_string,
     map_scopes_to_features,
@@ -165,3 +166,18 @@ class TestMapScopesToFeatures:
         scope_str = build_scope_string("microsoft", features)
         recovered = map_scopes_to_features("microsoft", scope_str)
         assert sorted(recovered) == sorted(features)
+
+
+class TestRequiredFeatures:
+
+    def test_google_requires_email(self):
+        assert REQUIRED_FEATURES["google"] == ["email"]
+
+    def test_microsoft_requires_email_and_teams(self):
+        assert sorted(REQUIRED_FEATURES["microsoft"]) == ["email", "teams"]
+
+    def test_required_features_are_valid(self):
+        for provider, required in REQUIRED_FEATURES.items():
+            valid = set(available_features(provider))
+            for feat in required:
+                assert feat in valid, f"{feat} not valid for {provider}"
