@@ -521,6 +521,21 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Contact identifier associated with the triggering event.",
     },
+    "source_contact_display_name": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Human-readable contact name associated with the triggering event.",
+    },
+    "task_name": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Human-readable task title mirrored into the run row.",
+    },
+    "task_description": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Human-readable task description mirrored into the run row.",
+    },
     "started_at": {
         "field_type": "datetime",
         "mutable": True,
