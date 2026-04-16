@@ -1,7 +1,9 @@
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 from orchestra.web.api.context.schema import ContextCreateRequest
 
 
@@ -930,4 +932,108 @@ class AtomicFieldUpdateResponse(BaseModel):
     mirrored_contexts: Optional[List[str]] = Field(
         default=None,
         description="List of archive contexts the log was mirrored to (upsert mode only).",
+    )
+
+
+class TaskActivationLookupRequest(BaseModel):
+    """Lookup one projected task activation row by assistant/task id."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(description="Assistant identifier that owns the task.")
+    task_id: int = Field(description="Logical task identifier.")
+
+
+class TaskActivationLookupResponse(BaseModel):
+    """Internal activation lookup response."""
+
+    activation: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="The current activation row payload, or null when missing.",
+    )
+
+
+class TaskRunCreateOrAdoptRequest(BaseModel):
+    """Create a task run by run_key if absent, or adopt the existing row."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    run_key: str = Field(description="Idempotency key for this execution attempt.")
+    assistant_id: str = Field(description="Assistant identifier that owns the run.")
+    task_id: int = Field(description="Logical task identifier.")
+    source_task_log_id: Optional[int] = Field(
+        default=None,
+        description="Owning Unity/Tasks row for the activation instance.",
+    )
+    source_type: str = Field(
+        description="Why the run exists: scheduled, triggered, etc.",
+    )
+    execution_mode: Literal["live", "offline"] = Field(
+        description="Which execution lane owns the run.",
+    )
+    activation_revision: Optional[str] = Field(
+        default=None,
+        description="Activation revision adopted when the run was created.",
+    )
+    scheduled_for: Optional[datetime] = Field(
+        default=None,
+        description="Scheduled due time when the run came from a scheduled activation.",
+    )
+    source_medium: Optional[str] = Field(
+        default=None,
+        description="Inbound medium that triggered the run when applicable.",
+    )
+    source_ref: Optional[str] = Field(
+        default=None,
+        description="Stable reference for the triggering communication or wake.",
+    )
+    source_contact_id: Optional[str] = Field(
+        default=None,
+        description="Contact identifier associated with the triggering inbound.",
+    )
+    started_at: Optional[datetime] = Field(
+        default=None,
+        description="Optional explicit run start timestamp.",
+    )
+    state: str = Field(
+        default="pending",
+        description="Initial machine state for the run lifecycle.",
+    )
+    result_summary: Optional[str] = Field(
+        default=None,
+        description="Optional hidden run summary.",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Optional hidden error payload.",
+    )
+
+
+class TaskRunUpdateRequest(BaseModel):
+    """Apply a partial update to an existing task run row."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(
+        description="Assistant identifier that owns the run being updated.",
+    )
+    run_key: str = Field(description="Idempotency key for the run to update.")
+    updates: Dict[str, Any] = Field(
+        description="Partial field updates to merge into the run row payload.",
+    )
+
+
+class TaskRunMutationResponse(BaseModel):
+    """Serialized task run payload returned by internal mutation endpoints."""
+
+    run: Dict[str, Any] = Field(description="Materialized run row payload.")
+    created: Optional[bool] = Field(
+        default=None,
+        description="Whether the mutation created a new run row.",
     )

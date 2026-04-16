@@ -47,6 +47,14 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
 )
+from orchestra.services.task_machine_state_service import (
+    TASK_MACHINE_PROJECT_NAME,
+    get_task_ids_for_log_ids,
+    is_internal_task_machine_context_name,
+    is_protected_task_surface_context_name,
+    is_task_surface_context_name,
+    sync_task_activations_for_task_ids,
+)
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
     AtomicFieldUpdateRequest,
@@ -75,6 +83,7 @@ from .python2SQL import (
     build_sql_query,
     str_filter_exp_to_dict,
 )
+from .task_machine_admin import router as task_machine_admin_router
 from .utils import (
     _build_grouped_data,
     _compute_metric_for_key_grouped,
@@ -99,6 +108,26 @@ router = APIRouter()
 
 # Admin router for protected endpoints
 admin_router = APIRouter()
+admin_router.include_router(task_machine_admin_router)
+
+
+def _require_mutable_task_machine_context(
+    *,
+    project_name: str,
+    context_name: str | None,
+) -> None:
+    """Reject writes against system-managed task-machine contexts."""
+
+    if (
+        project_name == TASK_MACHINE_PROJECT_NAME
+        and is_internal_task_machine_context_name(context_name)
+    ) or (
+        project_name == "Unity" and is_protected_task_surface_context_name(context_name)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot modify protected task machine contexts - they are system-managed",
+        )
 
 
 def _check_project_write_permission(
@@ -222,6 +251,31 @@ def _recompute_derived_for_logs(
             f"Error in derived recomputation for project {project_id}: "
             f"{ripple_error}",
         )
+
+
+def _sync_task_activations_if_needed(
+    *,
+    session,
+    project_name: str | None,
+    project_id: int,
+    task_ids: Set[int],
+    tasks_context_name: str | None,
+) -> None:
+    """Project task machine state when the user-authored Tasks table changed."""
+
+    if (
+        project_name != TASK_MACHINE_PROJECT_NAME
+        or not task_ids
+        or not tasks_context_name
+        or not is_task_surface_context_name(tasks_context_name)
+    ):
+        return
+    sync_task_activations_for_task_ids(
+        session=session,
+        project_id=project_id,
+        task_ids=task_ids,
+        tasks_context_name=tasks_context_name,
+    )
 
 
 ###########################
@@ -391,6 +445,26 @@ def create_logs(
                 entry_keys=entry_keys,
                 derived_log_dao=derived_log_dao,
                 field_type_dao=field_type_dao,
+            )
+
+        if (
+            project.name == TASK_MACHINE_PROJECT_NAME
+            and context_obj
+            and is_task_surface_context_name(context_obj.name)
+            and result.get("log_event_ids")
+        ):
+            task_ids = get_task_ids_for_log_ids(
+                session=session,
+                project_id=project_id,
+                context_name=context_obj.name,
+                log_event_ids=result["log_event_ids"],
+            )
+            _sync_task_activations_if_needed(
+                session=session,
+                project_name=project.name,
+                project_id=project_id,
+                task_ids=task_ids,
+                tasks_context_name=context_obj.name,
             )
 
         return {
@@ -2027,10 +2101,13 @@ def _update_logs(
     # Get the common project_id for all logs
     project_id = next(iter(log_id_to_project.values()))
     _check_project_write_permission(session, user_id, organization_id, project_id)
+    project_obj = session.get(Project, project_id)
+    project_name = project_obj.name if project_obj else None
 
     # Fetch context object once for duplicate checks (cache)
     # This is done early to avoid N queries in the duplicate check loop later
     ctx_obj_cache = None  # Will be populated after ctx_id is determined
+    pre_sync_task_ids: Set[int] = set()
 
     # Get or create context - JSONB mode uses single context_id (simplification)
     if body.context:
@@ -2070,8 +2147,18 @@ def _update_logs(
         ctx_id = context_dao.get_or_create(project_id, name="")
 
     # Populate context object cache for duplicate checks (single query, reused later)
+    ctx_obj_cache = None
     if ctx_id is not None:
         ctx_obj_cache = context_dao.session.query(Context).filter_by(id=ctx_id).first()
+        if project_name == TASK_MACHINE_PROJECT_NAME and is_task_surface_context_name(
+            getattr(ctx_obj_cache, "name", None),
+        ):
+            pre_sync_task_ids = get_task_ids_for_log_ids(
+                session=session,
+                project_id=project_id,
+                context_name=ctx_obj_cache.name,
+                log_event_ids=ids_to_update,
+            )
 
     # Fetch field types once
     try:
@@ -2500,6 +2587,25 @@ def _update_logs(
             field_type_dao=field_type_dao,
         )
 
+    if (
+        project_name == TASK_MACHINE_PROJECT_NAME
+        and successful_update_ids
+        and is_task_surface_context_name(getattr(ctx_obj_cache, "name", None))
+    ):
+        post_sync_task_ids = get_task_ids_for_log_ids(
+            session=session,
+            project_id=project_id,
+            context_name=ctx_obj_cache.name,
+            log_event_ids=successful_update_ids,
+        )
+        _sync_task_activations_if_needed(
+            session=session,
+            project_name=project_name,
+            project_id=project_id,
+            task_ids=pre_sync_task_ids | post_sync_task_ids,
+            tasks_context_name=ctx_obj_cache.name,
+        )
+
     # Return response with modified_keys for derived log recomputation
     return {
         "info": "Logs updated successfully!",
@@ -2602,6 +2708,22 @@ def _delete_logs(
         .filter(LogEventContext.context_id == context_id)
         .all()
     ]
+    pre_sync_task_ids: Set[int] = set()
+    if body.project_name == TASK_MACHINE_PROJECT_NAME and is_task_surface_context_name(
+        context_name,
+    ):
+        candidate_task_log_ids: Set[int] = set()
+        for log_id, fields in ids_and_fields.items():
+            if log_id is None:
+                candidate_task_log_ids.update(context_log_ids)
+            else:
+                candidate_task_log_ids.add(log_id)
+        pre_sync_task_ids = get_task_ids_for_log_ids(
+            session=session,
+            project_id=project_id,
+            context_name=context_name,
+            log_event_ids=candidate_task_log_ids,
+        )
 
     # Collect all log_event_ids that need media deletion
     all_log_event_ids_for_media = []
@@ -3089,6 +3211,14 @@ def _delete_logs(
                         status_code=500,
                         detail=f"Error deleting field type {field}: {str(e)}",
                     )
+
+        _sync_task_activations_if_needed(
+            session=session,
+            project_name=body.project_name,
+            project_id=project_id,
+            task_ids=pre_sync_task_ids,
+            tasks_context_name=context_name,
+        )
 
     return {"info": "Logs and fields deleted successfully!"}
 
@@ -4529,12 +4659,11 @@ def rename_field(
     log_dao = LogEventDAO(session, context_dao)
 
     try:
-        # Check if this is the protected Unity/Tasks context
-        if request.project_name == "Unity" and request.context == "Tasks":
-            raise HTTPException(
-                status_code=403,
-                detail="Cannot modify fields in the built-in Tasks table - it is immutable",
-            )
+        # Check if this is a protected task-machine context
+        _require_mutable_task_machine_context(
+            project_name=request.project_name,
+            context_name=request.context,
+        )
 
         # Validate project and permissions
         user_id = request_fastapi.state.user_id
@@ -5385,11 +5514,10 @@ def update_field(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
 
-    if request.project_name == "Unity" and request.context == "Tasks":
-        raise HTTPException(
-            status_code=403,
-            detail="Cannot modify fields in the built-in Tasks table - it is immutable",
-        )
+    _require_mutable_task_machine_context(
+        project_name=request.project_name,
+        context_name=request.context,
+    )
 
     try:
         user_id = request_fastapi.state.user_id
@@ -5487,12 +5615,11 @@ def delete_fields(
     field_type_dao = FieldTypeDAO(session)
     log_dao = LogEventDAO(session, context_dao)
 
-    # Check if this is the protected Unity/Tasks context
-    if request.project_name == "Unity" and request.context == "Tasks":
-        raise HTTPException(
-            status_code=403,
-            detail="Cannot modify fields in the built-in Tasks table - it is immutable",
-        )
+    # Check if this is a protected task-machine context
+    _require_mutable_task_machine_context(
+        project_name=request.project_name,
+        context_name=request.context,
+    )
 
     # Validate project
     try:

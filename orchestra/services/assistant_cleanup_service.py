@@ -21,6 +21,7 @@ from orchestra.services.bucket_service import BucketService
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import (
     delete_email,
+    delete_outlook_email,
     delete_phone_number,
     teardown_assistant_runtime,
 )
@@ -50,12 +51,14 @@ class ContactCleanupSpec:
     contact_type: str
     contact_value: str | None = None
     contact_id: int | None = None
+    provider: str | None = None
 
     def to_payload(self) -> dict:
         """Persist the subset of fields needed for retryable cleanup."""
         return {
             "contact_type": self.contact_type,
             "contact_value": self.contact_value,
+            "provider": self.provider,
         }
 
     @classmethod
@@ -64,6 +67,7 @@ class ContactCleanupSpec:
         return cls(
             contact_type=str(payload.get("contact_type", "")),
             contact_value=payload.get("contact_value"),
+            provider=payload.get("provider"),
         )
 
 
@@ -128,6 +132,7 @@ def build_cleanup_spec(
                 contact_type=contact.contact_type,
                 contact_value=contact.contact_value,
                 contact_id=contact.id,
+                provider=contact.provider,
             )
             for contact in (contacts or [])
         ],
@@ -205,10 +210,16 @@ async def deprovision_assistant_contacts(
                         deploy_env=spec.deploy_env,
                     )
                 elif contact.contact_type == "email" and contact.contact_value:
-                    await delete_email(
-                        contact.contact_value,
-                        deploy_env=spec.deploy_env,
-                    )
+                    if contact.provider == "microsoft_365":
+                        await delete_outlook_email(
+                            contact.contact_value,
+                            deploy_env=spec.deploy_env,
+                        )
+                    else:
+                        await delete_email(
+                            contact.contact_value,
+                            deploy_env=spec.deploy_env,
+                        )
                 elif contact.contact_type == "whatsapp":
                     if not whatsapp_cleared:
                         shared_pool_dao.delete_routes_for_assistant(spec.assistant_id)
@@ -235,6 +246,18 @@ async def deprovision_assistant_contacts(
                     soft_deleted += 1
 
         spec.contacts = remaining_contacts
+
+    # Clean up any stored secrets for each assistant
+    from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+    secret_dao = AssistantSecretDAO(session)
+    for spec in cleanup_specs:
+        try:
+            secret_dao.delete_all(int(spec.assistant_id))
+        except Exception as exc:
+            errors.append(
+                f"Failed to delete secrets for assistant {spec.assistant_id}: {exc}",
+            )
 
     return {
         "success": not errors,

@@ -1553,6 +1553,35 @@ class AssistantContactCost(Base):
     )
 
 
+class AssistantSecret(Base):
+    """External service credentials stored per assistant.
+
+    Used by Communication to persist OAuth tokens (e.g. MICROSOFT_ACCESS_TOKEN,
+    GOOGLE_ACCESS_TOKEN) that are written via the REST API and read back
+    through the admin assistant response.
+    """
+
+    __tablename__ = "assistant_secrets"
+
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    agent_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    secret_name = Column(String, nullable=False)
+    secret_value = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (sa.PrimaryKeyConstraint("user_id", "agent_id", "secret_name"),)
+
+
 class OneTimeCreditGrantLink(Base):
     """
     Credit grant links that award credits when claimed.
