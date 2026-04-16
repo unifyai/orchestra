@@ -4587,13 +4587,14 @@ class TestConnectEndpointEdgeCases:
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.anyio
-    async def test_connect_default_features(
+    async def test_connect_default_features_google(
         self,
         client: AsyncClient,
         dbsession: Session,
         mock_all_infra,
     ):
-        """When features is omitted, defaults to ['email']."""
+        """Default features=['email','teams'] drops 'teams' for Google (not
+        available), so only email scopes appear."""
         create_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "OAuth", "surname": "Default", "create_infra": False},
@@ -4627,16 +4628,62 @@ class TestConnectEndpointEdgeCases:
         assert state["features"] == ["email"]
 
         assert "gmail.send" in oauth_url
+        assert "Chat.Read" not in oauth_url
         assert "calendar" not in oauth_url
 
     @pytest.mark.anyio
-    async def test_connect_cross_provider_feature_rejected(
+    async def test_connect_default_features_microsoft(
         self,
         client: AsyncClient,
         dbsession: Session,
         mock_all_infra,
     ):
-        """Microsoft-only feature 'teams' should be rejected for Google."""
+        """Default features=['email','teams'] — both are valid for Microsoft,
+        so both email and Teams scopes appear."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "OAuth", "surname": "MsDef", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = None
+            mock_settings.microsoft_byod_client_id = "test-ms-client-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "microsoft"},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(oauth_url)
+        qs = parse_qs(parsed.query)
+        state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
+        assert sorted(state["features"]) == ["email", "teams"]
+
+        assert "Mail.Send" in oauth_url
+        assert "Chat.Read" in oauth_url
+
+    @pytest.mark.anyio
+    async def test_connect_cross_provider_feature_silently_dropped(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Microsoft-only feature 'teams' is silently dropped for Google."""
         create_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "OAuth", "surname": "Cross", "create_infra": False},
@@ -4657,7 +4704,10 @@ class TestConnectEndpointEdgeCases:
                 headers=HEADERS,
             )
 
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_200_OK
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "gmail.send" in oauth_url
+        assert "Chat.Read" not in oauth_url
 
     @pytest.mark.anyio
     async def test_connect_microsoft_all_features(

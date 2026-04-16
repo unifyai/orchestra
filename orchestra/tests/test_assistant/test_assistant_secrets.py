@@ -1014,6 +1014,9 @@ class TestOrgAssistantSecrets:
     ):
         """When an org member writes a secret, the stored user_id is the
         assistant creator's, not the requesting member's."""
+        from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+        from orchestra.db.dao.role_dao import RoleDAO
+
         owner, org, agent_id = await self._setup_org_assistant(client)
 
         member = await create_test_user(client, "sec-org-member@test.com")
@@ -1026,6 +1029,18 @@ class TestOrgAssistantSecrets:
         member_org_headers = {
             "Authorization": f"Bearer {add_resp.json()['api_key']}",
         }
+
+        role_dao = RoleDAO(dbsession)
+        ra_dao = ResourceAccessDAO(dbsession)
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        ra_dao.grant_access(
+            resource_type="assistant",
+            resource_id=agent_id,
+            role_id=member_role.id,
+            grantee_type="user",
+            grantee_id=member["id"],
+        )
+        dbsession.commit()
 
         resp = await client.post(
             f"/v0/assistant/{agent_id}/secret",
@@ -1054,19 +1069,24 @@ class TestOrgAssistantSecrets:
         mock_infra,
     ):
         """Org member without assistant:write cannot create/update/delete secrets."""
+        from orchestra.db.dao.permission_dao import PermissionDAO
+        from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
         from orchestra.db.dao.role_dao import RoleDAO
 
         owner = await create_test_user(client, "sec-perm-owner@test.com")
         org = await create_test_org(client, owner, "SecretPermOrg")
 
-        # Create a viewer role (only assistant:read)
         role_dao = RoleDAO(dbsession)
+        perm_dao = PermissionDAO(dbsession)
+        ra_dao = ResourceAccessDAO(dbsession)
+
         viewer_role = role_dao.create(
-            name="Viewer",
+            name="ReadOnlyViewer",
             organization_id=org["id"],
-            permissions=["assistant:read"],
         )
-        dbsession.commit()
+        read_perm = perm_dao.get_by_name("assistant:read")
+        role_dao.add_permission(viewer_role.id, read_perm.id)
+        dbsession.flush()
 
         viewer = await create_test_user(client, "sec-perm-viewer@test.com")
         add_resp = await client.post(
@@ -1079,7 +1099,6 @@ class TestOrgAssistantSecrets:
             "Authorization": f"Bearer {add_resp.json()['api_key']}",
         }
 
-        # Owner creates org assistant
         asst_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "Perm", "surname": "Check", "create_infra": False},
@@ -1088,7 +1107,16 @@ class TestOrgAssistantSecrets:
         assert asst_resp.status_code == status.HTTP_200_OK
         agent_id = int(asst_resp.json()["info"]["agent_id"])
 
-        # Viewer tries to create secret → 403
+        ra_dao.grant_access(
+            resource_type="assistant",
+            resource_id=agent_id,
+            role_id=viewer_role.id,
+            grantee_type="user",
+            grantee_id=viewer["id"],
+        )
+        dbsession.commit()
+
+        # Viewer tries to create secret → 403 (has assistant:read, not assistant:write)
         resp = await client.post(
             f"/v0/assistant/{agent_id}/secret",
             json={"secret_name": "NOPE", "secret_value": "x"},

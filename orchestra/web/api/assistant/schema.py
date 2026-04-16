@@ -1395,10 +1395,11 @@ class ConnectRequest(BaseModel):
         description="OAuth provider to connect.",
     )
     features: List[str] = Field(
-        ["email"],
+        ["email", "teams"],
         description=(
             "Suite features to request access for (e.g. 'email', 'calendar', "
-            "'drive').  Defaults to email-only for initial connect."
+            "'drive').  Defaults to email+teams.  Features unavailable for "
+            "the chosen provider are silently dropped (e.g. 'teams' on Google)."
         ),
     )
     redirect_after: Optional[str] = Field(
@@ -1407,16 +1408,20 @@ class ConnectRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_features(self) -> "ConnectRequest":
+    def _validate_and_filter_features(self) -> "ConnectRequest":
         from orchestra.web.api.assistant.scopes import available_features
 
-        valid = set(available_features(self.provider))
-        invalid = set(self.features) - valid
-        if invalid:
+        valid_for_provider = set(available_features(self.provider))
+        all_known = set(available_features("google")) | set(
+            available_features("microsoft"),
+        )
+        truly_unknown = set(self.features) - all_known
+        if truly_unknown:
             raise ValueError(
-                f"Unknown features for {self.provider}: {sorted(invalid)}. "
-                f"Valid: {sorted(valid)}",
+                f"Unknown features: {sorted(truly_unknown)}. "
+                f"Valid: {sorted(all_known)}",
             )
+        self.features = [f for f in self.features if f in valid_for_provider]
         return self
 
 
