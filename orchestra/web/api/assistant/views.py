@@ -1729,6 +1729,7 @@ async def connect_assistant_account(
     if provider == "google" and is_scope_reduction and adapters_url:
         import httpx
 
+        admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         access_token = secret_dao.get(assistant_id, "GOOGLE_ACCESS_TOKEN")
         if access_token:
             async with httpx.AsyncClient(timeout=10) as http:
@@ -1738,6 +1739,7 @@ async def connect_assistant_account(
                         "assistant_id": assistant_id,
                         "token": access_token,
                     },
+                    headers={"Authorization": f"Bearer {admin_key}"},
                 )
 
     scope_string = build_scope_string(provider, features)
@@ -1805,6 +1807,148 @@ async def connect_assistant_account(
     return InfoResponse(info=ConnectResponse(oauth_url=oauth_url))
 
 
+@router.delete(
+    "/assistant/{assistant_id}/connect",
+    response_model=InfoResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Disconnect a user's connected account",
+    description=(
+        "Fully disconnects the BYOD OAuth account: revokes tokens, "
+        "stops watches, clears secrets, and soft-deletes the BYOD contact."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Account disconnected successfully."},
+        404: {"description": "Assistant not found or no account connected."},
+    },
+)
+async def disconnect_assistant_account(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse:
+    import os
+
+    import httpx
+
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        if not ra_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
+
+    secret_dao = AssistantSecretDAO(session)
+    google_scopes = secret_dao.get(assistant_id, "GOOGLE_GRANTED_SCOPES")
+    ms_scopes = secret_dao.get(assistant_id, "MICROSOFT_GRANTED_SCOPES")
+
+    if not google_scopes and not ms_scopes:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No connected account found for this assistant.",
+        )
+
+    adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    auth_headers = {"Authorization": f"Bearer {admin_key}"}
+
+    if google_scopes:
+        access_token = secret_dao.get(assistant_id, "GOOGLE_ACCESS_TOKEN")
+        if access_token and adapters_url:
+            async with httpx.AsyncClient(timeout=10) as http:
+                await http.post(
+                    f"{adapters_url}/google/revoke",
+                    json={"assistant_id": assistant_id, "token": access_token},
+                    headers=auth_headers,
+                )
+        for key in (
+            "GOOGLE_ACCESS_TOKEN",
+            "GOOGLE_REFRESH_TOKEN",
+            "GOOGLE_TOKEN_EXPIRES_AT",
+            "GOOGLE_GRANTED_SCOPES",
+        ):
+            secret_dao.delete(assistant_id, key)
+
+    contact_dao = AssistantContactDAO(session)
+    contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+    byod_email = next(
+        (
+            c.contact_value
+            for c in contacts
+            if c.contact_type == "email" and c.provisioned_by == "user"
+        ),
+        None,
+    )
+
+    if ms_scopes:
+        if byod_email and comms_url:
+            async with httpx.AsyncClient(timeout=10) as http:
+                await http.request(
+                    "DELETE",
+                    f"{comms_url}/outlook/watch",
+                    json={"primary_email": byod_email},
+                    headers=auth_headers,
+                )
+                await http.request(
+                    "DELETE",
+                    f"{comms_url}/teams/watch",
+                    json={"primary_email": byod_email},
+                    headers=auth_headers,
+                )
+
+        for key in (
+            "MICROSOFT_ACCESS_TOKEN",
+            "MICROSOFT_REFRESH_TOKEN",
+            "MICROSOFT_TOKEN_EXPIRES_AT",
+            "MICROSOFT_GRANTED_SCOPES",
+        ):
+            secret_dao.delete(assistant_id, key)
+
+    for c in contacts:
+        if c.contact_type == "email" and c.provisioned_by == "user":
+            contact_dao.soft_delete_assistant_contact(
+                assistant_id=assistant_id,
+                contact_type="email",
+            )
+            break
+
+    session.commit()
+
+    try:
+        await reawaken_assistant(
+            str(assistant_id),
+            deploy_env=assistant.deploy_env,
+        )
+    except Exception as e:
+        logging.warning(
+            f"Failed to reawaken assistant {assistant_id} after disconnect: {e}",
+        )
+
+    return InfoResponse(info={"status": "disconnected"})
+
+
 @router.get(
     "/assistant/{assistant_id}/granted-features",
     response_model=InfoResponse[GrantedFeaturesResponse],
@@ -1825,7 +1969,10 @@ async def get_granted_features(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[GrantedFeaturesResponse]:
-    from orchestra.web.api.assistant.scopes import map_scopes_to_features
+    from orchestra.web.api.assistant.scopes import (
+        REQUIRED_FEATURES,
+        map_scopes_to_features,
+    )
 
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -1864,6 +2011,7 @@ async def get_granted_features(
             info=GrantedFeaturesResponse(
                 provider="google",
                 features=map_scopes_to_features("google", google_scopes),
+                required_features=REQUIRED_FEATURES["google"],
             ),
         )
     if ms_scopes:
@@ -1871,6 +2019,7 @@ async def get_granted_features(
             info=GrantedFeaturesResponse(
                 provider="microsoft",
                 features=map_scopes_to_features("microsoft", ms_scopes),
+                required_features=REQUIRED_FEATURES["microsoft"],
             ),
         )
 

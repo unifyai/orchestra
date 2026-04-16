@@ -53,6 +53,11 @@ _BASE = {
     "microsoft": MICROSOFT_BASE_SCOPES,
 }
 
+REQUIRED_FEATURES: dict[str, list[str]] = {
+    "google": ["email"],
+    "microsoft": ["email", "teams"],
+}
+
 
 def available_features(provider: str) -> list[str]:
     """Return the feature names available for *provider*."""
