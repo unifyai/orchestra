@@ -4182,6 +4182,11 @@ class TestConnectEndpoint:
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
         assert state["features"] == ["email"]
+        assert state["actions"] == {
+            "register_email_contact": True,
+            "setup_email_watch": True,
+            "setup_teams_watch": False,
+        }
         assert state["redirect_after"] == "https://app.test/done"
         assert state["byod"] is True
 
@@ -4366,6 +4371,11 @@ class TestConnectEndpoint:
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
         assert state["features"] == ["email"]
+        assert state["actions"] == {
+            "register_email_contact": True,
+            "setup_email_watch": True,
+            "setup_teams_watch": False,
+        }
         assert state["redirect_after"] == "https://app.test/done"
         assert state["byod"] is True
 
@@ -4626,6 +4636,11 @@ class TestConnectEndpointEdgeCases:
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
         assert state["features"] == ["email"]
+        assert state["actions"] == {
+            "register_email_contact": True,
+            "setup_email_watch": True,
+            "setup_teams_watch": False,
+        }
 
         assert "gmail.send" in oauth_url
         assert "Chat.Read" not in oauth_url
@@ -4672,6 +4687,11 @@ class TestConnectEndpointEdgeCases:
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
         assert sorted(state["features"]) == ["email", "teams"]
+        assert state["actions"] == {
+            "register_email_contact": True,
+            "setup_email_watch": True,
+            "setup_teams_watch": True,
+        }
 
         assert "Mail.Send" in oauth_url
         assert "Chat.Read" in oauth_url
@@ -4796,6 +4816,9 @@ class TestCompulsoryFeatures:
         )
         assert "email" in state["features"]
         assert "calendar" in state["features"]
+        assert state["actions"]["register_email_contact"] is True
+        assert state["actions"]["setup_email_watch"] is True
+        assert state["actions"]["setup_teams_watch"] is False
 
     @pytest.mark.anyio
     async def test_microsoft_always_includes_email_and_teams(
@@ -4841,6 +4864,11 @@ class TestCompulsoryFeatures:
             ),
         )
         assert sorted(state["features"]) == ["calendar", "email", "teams"]
+        assert state["actions"] == {
+            "register_email_contact": True,
+            "setup_email_watch": True,
+            "setup_teams_watch": True,
+        }
 
 
 class TestGrantedFeaturesRequiredField:
@@ -5440,6 +5468,11 @@ class TestConnectEndpointOrg:
             ),
         )
         assert sorted(state["features"]) == ["calendar", "email", "teams"]
+        assert state["actions"] == {
+            "register_email_contact": True,
+            "setup_email_watch": True,
+            "setup_teams_watch": True,
+        }
 
 
 class TestDisconnectEndpointOrg:

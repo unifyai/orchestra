@@ -1748,6 +1748,11 @@ async def connect_assistant_account(
         "assistant_id": assistant_id,
         "provider": provider,
         "features": features,
+        "actions": {
+            "register_email_contact": "email" in features,
+            "setup_email_watch": "email" in features,
+            "setup_teams_watch": "teams" in features,
+        },
         "redirect_after": redirect_after,
         "byod": True,
     }
