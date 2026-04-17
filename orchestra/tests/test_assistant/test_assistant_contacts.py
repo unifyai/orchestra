@@ -102,7 +102,7 @@ def seed_contact_type_costs(dbsession: Session):
                 contact_type="email",
                 provider="microsoft_365",
                 country_code=None,
-                monthly_cost=Decimal("12.50"),
+                monthly_cost=Decimal("25.00"),
                 one_time_cost=Decimal("5.00"),
             ),
         ]
@@ -2593,7 +2593,7 @@ class TestCreateMS365EmailContact:
             "email",
         )
         assert contact is not None
-        assert Decimal(str(contact.monthly_cost)) == Decimal("12.50")
+        assert Decimal(str(contact.monthly_cost)) == Decimal("25.00")
 
     @pytest.mark.anyio
     async def test_ms365_email_requires_email_local(
@@ -2916,7 +2916,7 @@ class TestMS365CostLookup:
         ms365_cost = dao.get_contact_monthly_cost("email", provider="microsoft_365")
         gw_cost = dao.get_contact_monthly_cost("email", provider="google_workspace")
 
-        assert ms365_cost == Decimal("12.50")
+        assert ms365_cost == Decimal("25.00")
         assert gw_cost == Decimal("14.00")
         assert ms365_cost != gw_cost
 
