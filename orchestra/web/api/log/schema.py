@@ -1049,3 +1049,99 @@ class TaskRunMutationResponse(BaseModel):
         default=None,
         description="Whether the mutation created a new run row.",
     )
+
+
+class TaskOutboundOperationCreateOrAdoptRequest(BaseModel):
+    """Create an outbound operation by operation_key if absent, or adopt it."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    operation_key: str = Field(
+        description="Idempotency key for this outbound communication attempt.",
+    )
+    assistant_id: str = Field(
+        description="Assistant identifier that owns the outbound attempt.",
+    )
+    task_run_key: str = Field(description="Owning task run key for the operation.")
+    task_id: Optional[int] = Field(
+        default=None,
+        description="Logical task identifier when the outbound attempt came from a task.",
+    )
+    source_task_log_id: Optional[int] = Field(
+        default=None,
+        description="Owning Unity/Tasks row for the outbound attempt.",
+    )
+    operation_index: int = Field(
+        description="Stable ordinal for this outbound attempt within the task run.",
+    )
+    method_name: str = Field(
+        description="Comms primitive method used for the outbound attempt.",
+    )
+    medium: str = Field(description="Communication medium used for the attempt.")
+    target_kind: str = Field(
+        description="Target category such as contact, discord_channel, or email.",
+    )
+    contact_id: Optional[int] = Field(
+        default=None,
+        description="Resolved contact identifier when the target is contact-anchored.",
+    )
+    target_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Serialized destination details for the outbound attempt.",
+    )
+    status: str = Field(
+        default="pending",
+        description="Initial ledger state for the outbound attempt.",
+    )
+    provider_message_id: Optional[str] = Field(
+        default=None,
+        description="Provider-specific delivery identifier when available.",
+    )
+    created_at: Optional[datetime] = Field(
+        default=None,
+        description="Optional explicit creation timestamp.",
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        description="Optional explicit update timestamp.",
+    )
+    completed_at: Optional[datetime] = Field(
+        default=None,
+        description="Optional explicit completion timestamp.",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Optional hidden error payload for failed attempts.",
+    )
+
+
+class TaskOutboundOperationUpdateRequest(BaseModel):
+    """Apply a partial update to an existing outbound operation row."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(
+        description="Assistant identifier that owns the outbound operation.",
+    )
+    operation_key: str = Field(
+        description="Idempotency key for the outbound operation to update.",
+    )
+    updates: Dict[str, Any] = Field(
+        description="Partial field updates to merge into the outbound operation row.",
+    )
+
+
+class TaskOutboundOperationMutationResponse(BaseModel):
+    """Serialized outbound operation payload returned by internal endpoints."""
+
+    operation: Dict[str, Any] = Field(
+        description="Materialized outbound operation row payload.",
+    )
+    created: Optional[bool] = Field(
+        default=None,
+        description="Whether the mutation created a new outbound operation row.",
+    )
