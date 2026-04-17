@@ -117,7 +117,7 @@ def seed_contact_type_costs(dbsession: Session):
                 contact_type="email",
                 provider="microsoft_365",
                 country_code=None,
-                monthly_cost=Decimal("12.50"),
+                monthly_cost=Decimal("25.00"),
                 one_time_cost=Decimal("5.00"),
             ),
         ]
