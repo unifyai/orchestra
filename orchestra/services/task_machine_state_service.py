@@ -3,7 +3,7 @@
 This module keeps scheduled and triggerable task machine state inside the
 existing Orchestra log/context system. The public assistant-scoped `.../Tasks`
 table in the `Assistants` project remains the user-authored surface;
-`Tasks/Activations` and `Tasks/Runs` are internal contexts derived from or
+`Tasks/Activations`, `Tasks/Runs`, and `Tasks/OutboundOperations` are internal contexts derived from or
 driven by that surface.
 """
 
@@ -37,11 +37,14 @@ TASK_MACHINE_PROJECT_NAME = "Assistants"
 TASKS_CONTEXT_NAME = "Tasks"
 TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
 TASK_RUNS_CONTEXT_NAME = "Tasks/Runs"
+TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME = "Tasks/OutboundOperations"
 _ALL_CONTEXT_SEGMENT = "All"
 _TASK_ACTIVATIONS_CONTEXT_LEAF = "Activations"
 _TASK_RUNS_CONTEXT_LEAF = "Runs"
+_TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
 _TASK_ACTIVATION_UNIQUE_FIELD = "activation_key"
 _TASK_RUN_UNIQUE_FIELD = "run_key"
+_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD = "operation_key"
 _TASK_ACTIVATION_UPSERT_PATH = "/infra/task-activation/upsert"
 _TASK_ACTIVATION_DELETE_PATH = "/infra/task-activation/delete"
 _TASK_ACTIVATION_SYNC_TIMEOUT_SECONDS = 15.0
@@ -49,6 +52,7 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
     {
         TASK_ACTIVATIONS_CONTEXT_NAME,
         TASK_RUNS_CONTEXT_NAME,
+        TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME,
     },
 )
 
@@ -68,6 +72,7 @@ class TaskMachineContextIds:
 
     activations_context_id: int
     runs_context_id: int
+    outbound_operations_context_id: int
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,15 @@ class TaskMachineContextNames:
     tasks_context_name: str
     activations_context_name: str
     runs_context_name: str
+    outbound_operations_context_name: str
+
+
+@dataclass(frozen=True)
+class _MachineRowUpsertResult:
+    """One internal machine-row upsert outcome."""
+
+    row: LogEvent
+    created: bool
 
 
 @dataclass(frozen=True)
@@ -126,6 +140,15 @@ def build_task_runs_context_name(tasks_context_name: str) -> str:
     )
 
 
+def build_task_outbound_operations_context_name(tasks_context_name: str) -> str:
+    """Return the assistant-scoped outbound-operations context for one Tasks table."""
+
+    return _build_task_machine_context_name(
+        tasks_context_name=tasks_context_name,
+        leaf_name=_TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF,
+    )
+
+
 def _build_task_machine_context_name(*, tasks_context_name: str, leaf_name: str) -> str:
     """Return one assistant-scoped internal context derived from `.../Tasks`."""
 
@@ -149,6 +172,9 @@ def _resolve_task_machine_context_names(
             normalized_tasks_context_name,
         ),
         runs_context_name=build_task_runs_context_name(
+            normalized_tasks_context_name,
+        ),
+        outbound_operations_context_name=build_task_outbound_operations_context_name(
             normalized_tasks_context_name,
         ),
     )
@@ -564,6 +590,111 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
 }
 
 
+_OUTBOUND_OPERATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "assistant_id": {
+        "field_type": "str",
+        "mutable": False,
+        "description": "Assistant identifier that owns this outbound operation.",
+    },
+    "operation_id": {
+        "field_type": "int",
+        "mutable": False,
+        "description": "Stable internal outbound-operation identifier.",
+    },
+    "operation_key": {
+        "field_type": "str",
+        "mutable": False,
+        "unique": True,
+        "description": "Idempotency key for one outbound communication attempt.",
+    },
+    "task_run_key": {
+        "field_type": "str",
+        "mutable": False,
+        "description": "Owning task run key for the outbound attempt.",
+    },
+    "task_id": {
+        "field_type": "int",
+        "mutable": True,
+        "description": "Logical task identifier associated with the outbound attempt.",
+    },
+    "source_task_log_id": {
+        "field_type": "int",
+        "mutable": True,
+        "description": "Owning Unity/Tasks row for the outbound attempt when known.",
+    },
+    "operation_index": {
+        "field_type": "int",
+        "mutable": False,
+        "description": "Monotonic ordinal within one task run for stable operation keys.",
+    },
+    "method_name": {
+        "field_type": "str",
+        "mutable": False,
+        "description": "Comms primitive method used for the outbound attempt.",
+    },
+    "medium": {
+        "field_type": "str",
+        "mutable": False,
+        "description": "Communication medium used by the outbound attempt.",
+    },
+    "target_kind": {
+        "field_type": "str",
+        "mutable": False,
+        "description": "Target category such as contact, discord_channel, or email.",
+    },
+    "contact_id": {
+        "field_type": "int",
+        "mutable": True,
+        "description": "Resolved contact identifier when the outbound is contact-anchored.",
+    },
+    "target_metadata": {
+        "field_type": "dict",
+        "mutable": True,
+        "description": "Serialized destination details needed to understand the attempt.",
+    },
+    "status": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Current ledger state for the outbound attempt.",
+    },
+    "provider_message_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Provider-specific delivery identifier when available.",
+    },
+    "history_exchange_id": {
+        "field_type": "int",
+        "mutable": True,
+        "description": "Transcript exchange id created for this outbound attempt.",
+    },
+    "history_message_id": {
+        "field_type": "int",
+        "mutable": True,
+        "description": "Transcript message id created for this outbound attempt.",
+    },
+    "error": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Hidden error payload for failed outbound attempts.",
+    },
+    "created_at": {
+        "field_type": "datetime",
+        "mutable": False,
+        "description": "Creation timestamp for the outbound ledger row.",
+    },
+    "updated_at": {
+        "field_type": "datetime",
+        "mutable": True,
+        "description": "Last update timestamp for the outbound ledger row.",
+    },
+    "completed_at": {
+        "field_type": "datetime",
+        "mutable": True,
+        "description": "Completion timestamp for the outbound attempt.",
+    },
+}
+
+
 def ensure_task_machine_contexts(
     session: Session,
     project_id: int,
@@ -590,6 +721,14 @@ def ensure_task_machine_contexts(
         allow_duplicates=False,
         unique_keys={_TASK_RUN_UNIQUE_FIELD: "str"},
     )
+    outbound_operations_context_id = _upsert_context(
+        session=session,
+        project_id=project_id,
+        name=context_names.outbound_operations_context_name,
+        description="Internal idempotent outbound communication ledger for assistant tasks.",
+        allow_duplicates=False,
+        unique_keys={_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD: "str"},
+    )
     _upsert_field_types(
         session=session,
         project_id=project_id,
@@ -602,10 +741,17 @@ def ensure_task_machine_contexts(
         context_id=runs_context_id,
         field_definitions=_RUN_FIELD_DEFINITIONS,
     )
+    _upsert_field_types(
+        session=session,
+        project_id=project_id,
+        context_id=outbound_operations_context_id,
+        field_definitions=_OUTBOUND_OPERATION_FIELD_DEFINITIONS,
+    )
     session.flush()
     return TaskMachineContextIds(
         activations_context_id=activations_context_id,
         runs_context_id=runs_context_id,
+        outbound_operations_context_id=outbound_operations_context_id,
     )
 
 
@@ -806,12 +952,13 @@ def create_task_run_if_absent(
         unique_field_value=run_key,
         payload=materialized_payload,
     )
-    if created.data.get("run_id") != created.id:
-        created_payload = dict(created.data or {})
-        created_payload["run_id"] = created.id
-        _replace_log_payload(created, created_payload)
+    created_row = created.row
+    if created_row.data.get("run_id") != created_row.id:
+        created_payload = dict(created_row.data or {})
+        created_payload["run_id"] = created_row.id
+        _replace_log_payload(created_row, created_payload)
     session.flush()
-    return created, True
+    return created_row, created.created
 
 
 def update_task_run(
@@ -898,6 +1045,125 @@ def get_task_run(
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
+
+
+def create_task_outbound_operation_if_absent(
+    session: Session,
+    project_id: int,
+    payload: Mapping[str, Any],
+) -> tuple[LogEvent, bool]:
+    """Create an outbound operation row by `operation_key` if absent."""
+
+    operation_key = payload.get("operation_key")
+    if not isinstance(operation_key, str) or not operation_key:
+        raise ValueError(
+            "Outbound operation payload must include a non-empty operation_key.",
+        )
+
+    tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project_id,
+        assistant_id=_coerce_optional_str(payload.get("assistant_id")),
+        source_task_log_id=_coerce_int(payload.get("source_task_log_id")),
+    )
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=tasks_context_name,
+    )
+    existing = _get_machine_row_by_unique_field(
+        session=session,
+        context_id=context_ids.outbound_operations_context_id,
+        unique_field_name=_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD,
+        unique_field_value=operation_key,
+    )
+    if existing is not None:
+        return existing, False
+    migrated = _migrate_legacy_machine_row_if_present(
+        session=session,
+        project_id=project_id,
+        legacy_context_name=TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME,
+        nested_context_id=context_ids.outbound_operations_context_id,
+        unique_field_name=_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD,
+        unique_field_value=operation_key,
+    )
+    if migrated is not None:
+        return migrated, False
+
+    materialized_payload = dict(payload)
+    materialized_payload.setdefault("status", "pending")
+    created = _upsert_machine_row(
+        session=session,
+        project_id=project_id,
+        context_id=context_ids.outbound_operations_context_id,
+        unique_field_name=_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD,
+        unique_field_value=operation_key,
+        payload=materialized_payload,
+    )
+    created_row = created.row
+    if created_row.data.get("operation_id") != created_row.id:
+        created_payload = dict(created_row.data or {})
+        created_payload["operation_id"] = created_row.id
+        _replace_log_payload(created_row, created_payload)
+    session.flush()
+    return created_row, created.created
+
+
+def update_task_outbound_operation(
+    session: Session,
+    project_id: int,
+    assistant_id: str | None,
+    operation_key: str,
+    updates: Mapping[str, Any],
+) -> LogEvent:
+    """Apply a partial update to an existing outbound operation row."""
+
+    tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project_id,
+        assistant_id=assistant_id,
+    )
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=tasks_context_name,
+    )
+    existing = _get_machine_row_by_unique_field(
+        session=session,
+        context_id=context_ids.outbound_operations_context_id,
+        unique_field_name=_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD,
+        unique_field_value=operation_key,
+    )
+    if existing is None:
+        existing = _migrate_legacy_machine_row_if_present(
+            session=session,
+            project_id=project_id,
+            legacy_context_name=TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME,
+            nested_context_id=context_ids.outbound_operations_context_id,
+            unique_field_name=_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD,
+            unique_field_value=operation_key,
+        )
+    if existing is None:
+        raise ValueError(
+            f"Outbound operation with operation_key='{operation_key}' not found.",
+        )
+
+    payload = dict(existing.data or {})
+    for field_name, value in dict(updates).items():
+        definition = _OUTBOUND_OPERATION_FIELD_DEFINITIONS.get(field_name)
+        if definition is None:
+            raise ValueError(
+                f"Unknown outbound operation field '{field_name}' cannot be updated.",
+            )
+        if not definition.get("mutable", True) and payload.get(field_name) != value:
+            raise ValueError(
+                f"Outbound operation field '{field_name}' is immutable and cannot be changed.",
+            )
+    payload.update(dict(updates))
+    payload.setdefault("operation_id", existing.id)
+    _replace_log_payload(existing, payload)
+    session.flush()
+    return existing
 
 
 def get_task_ids_for_log_ids(
@@ -1381,7 +1647,7 @@ def _upsert_machine_row(
     unique_field_name: str,
     unique_field_value: int | str,
     payload: Mapping[str, Any],
-) -> LogEvent:
+) -> _MachineRowUpsertResult:
     """Create or replace an internal machine row using a logical unique key."""
 
     existing = _get_machine_row_by_unique_field(
@@ -1392,7 +1658,7 @@ def _upsert_machine_row(
     )
     if existing is not None:
         _replace_log_payload(existing, payload)
-        return existing
+        return _MachineRowUpsertResult(row=existing, created=False)
 
     now = datetime.now(timezone.utc)
     log_event = LogEvent(
@@ -1427,7 +1693,7 @@ def _upsert_machine_row(
         .returning(LogUniqueConstraint.log_event_id),
     ).scalar()
     if inserted is not None:
-        return log_event
+        return _MachineRowUpsertResult(row=log_event, created=True)
 
     session.execute(
         delete(LogEventContext).where(
@@ -1451,7 +1717,7 @@ def _upsert_machine_row(
         raise ValueError(
             f"Failed to resolve machine row for {unique_field_name}={unique_field_value!r}.",
         )
-    return existing
+    return _MachineRowUpsertResult(row=existing, created=False)
 
 
 def _delete_machine_row_by_unique_field(
@@ -1560,7 +1826,7 @@ def _migrate_legacy_machine_row_if_present(
         unique_field_name=unique_field_name,
         unique_field_value=unique_field_value,
     )
-    return migrated_row
+    return migrated_row.row
 
 
 def _replace_log_payload(log_event: LogEvent, payload: Mapping[str, Any]) -> None:
