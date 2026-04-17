@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from httpx import AsyncClient
 
@@ -26,6 +28,11 @@ TASK_ACTIVATIONS_CONTEXT = (
 )
 TASK_RUNS_CONTEXT = task_machine_state_service.build_task_runs_context_name(
     TASKS_CONTEXT,
+)
+TASK_OUTBOUND_OPERATIONS_CONTEXT = (
+    task_machine_state_service.build_task_outbound_operations_context_name(
+        TASKS_CONTEXT,
+    )
 )
 SECONDARY_USER_ID = "seconday_user"
 
@@ -513,6 +520,260 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     assert updated_run["state"] == "completed"
     assert updated_run["completed_at"] == "2026-04-10T09:05:00+00:00"
     assert updated_run["result_summary"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_task_outbound_operation_create_or_adopt_is_idempotent(
+    client: AsyncClient,
+):
+    """The internal outbound API should reuse the same row for duplicate keys."""
+
+    await _ensure_task_machine_project(client)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=303),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
+    payload = {
+        "project_name": TASK_MACHINE_PROJECT_NAME,
+        "operation_key": "offline:42:303:run-1:1",
+        "assistant_id": "42",
+        "task_run_key": "offline:42:303:run-1",
+        "task_id": 303,
+        "source_task_log_id": source_task_log_id,
+        "operation_index": 1,
+        "method_name": "send_email",
+        "medium": "email",
+        "target_kind": "contact",
+        "contact_id": 17,
+        "target_metadata": {
+            "email": "alice@example.com",
+            "display_name": "Alice Owner",
+        },
+        "status": "pending",
+    }
+
+    first = await client.post(
+        "/v0/admin/task-outbound-operation/create-or-adopt",
+        json=payload,
+        headers=ADMIN_HEADERS,
+    )
+    assert first.status_code == 200, first.json()
+    first_body = first.json()
+    assert first_body["created"] is True
+    first_operation = first_body["operation"]
+    assert first_operation["operation_key"] == payload["operation_key"]
+    assert first_operation["operation_id"]
+    assert first_operation["task_run_key"] == payload["task_run_key"]
+    assert first_operation["medium"] == "email"
+    assert first_operation["target_metadata"]["email"] == "alice@example.com"
+
+    second = await client.post(
+        "/v0/admin/task-outbound-operation/create-or-adopt",
+        json=payload,
+        headers=ADMIN_HEADERS,
+    )
+    assert second.status_code == 200, second.json()
+    second_body = second.json()
+    assert second_body["created"] is False
+    assert second_body["operation"]["operation_id"] == first_operation["operation_id"]
+
+    rows = await _get_context_logs(
+        client,
+        context_name=TASK_OUTBOUND_OPERATIONS_CONTEXT,
+    )
+    assert len(rows) == 1
+    assert rows[0]["entries"]["operation_key"] == payload["operation_key"]
+
+
+def test_task_outbound_operation_create_or_adopt_reports_adoption_after_upsert_race(
+    monkeypatch,
+):
+    """A uniqueness race should surface as adoption, not fresh creation."""
+
+    fake_session = SimpleNamespace(flush=lambda: None)
+    fake_context_ids = SimpleNamespace(outbound_operations_context_id=77)
+    adopted_row = SimpleNamespace(
+        id=91,
+        data={
+            "operation_id": 91,
+            "operation_key": "offline:42:303:run-1:1",
+        },
+    )
+
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "resolve_tasks_context_name",
+        lambda **kwargs: TASKS_CONTEXT,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "ensure_task_machine_contexts",
+        lambda **kwargs: fake_context_ids,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_get_machine_row_by_unique_field",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_migrate_legacy_machine_row_if_present",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_upsert_machine_row",
+        lambda **kwargs: task_machine_state_service._MachineRowUpsertResult(
+            row=adopted_row,
+            created=False,
+        ),
+    )
+
+    operation, created = (
+        task_machine_state_service.create_task_outbound_operation_if_absent(
+            session=fake_session,
+            project_id=1,
+            payload={
+                "operation_key": "offline:42:303:run-1:1",
+                "assistant_id": "42",
+                "task_run_key": "offline:42:303:run-1",
+                "operation_index": 1,
+                "method_name": "send_email",
+                "medium": "email",
+                "target_kind": "contact",
+            },
+        )
+    )
+
+    assert operation is adopted_row
+    assert created is False
+
+
+@pytest.mark.anyio
+async def test_task_outbound_operation_update_mutates_existing_row(
+    client: AsyncClient,
+):
+    """The internal outbound API should merge partial updates into one row."""
+
+    await _ensure_task_machine_project(client)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=404),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
+    operation_key = "offline:42:404:run-2:1"
+    create_response = await client.post(
+        "/v0/admin/task-outbound-operation/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "operation_key": operation_key,
+            "assistant_id": "42",
+            "task_run_key": "offline:42:404:run-2",
+            "task_id": 404,
+            "source_task_log_id": source_task_log_id,
+            "operation_index": 1,
+            "method_name": "send_sms",
+            "medium": "sms",
+            "target_kind": "contact",
+            "contact_id": 55,
+            "target_metadata": {"phone_number": "+15555550123"},
+            "status": "pending",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+
+    update_response = await client.post(
+        "/v0/admin/task-outbound-operation/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "operation_key": operation_key,
+            "updates": {
+                "status": "completed",
+                "provider_message_id": "sm-123",
+                "completed_at": "2026-04-10T09:06:00+00:00",
+                "history_exchange_id": 7,
+                "history_message_id": 9,
+            },
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+    updated_operation = update_response.json()["operation"]
+    assert updated_operation["operation_key"] == operation_key
+    assert updated_operation["status"] == "completed"
+    assert updated_operation["provider_message_id"] == "sm-123"
+    assert updated_operation["completed_at"] == "2026-04-10T09:06:00+00:00"
+    assert updated_operation["history_exchange_id"] == 7
+    assert updated_operation["history_message_id"] == 9
+
+
+@pytest.mark.anyio
+async def test_task_outbound_operation_update_rejects_immutable_field_changes(
+    client: AsyncClient,
+):
+    """Immutable outbound identity fields should reject patch-time changes."""
+
+    await _ensure_task_machine_project(client)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=405),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
+    operation_key = "offline:42:405:run-3:1"
+    create_response = await client.post(
+        "/v0/admin/task-outbound-operation/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "operation_key": operation_key,
+            "assistant_id": "42",
+            "task_run_key": "offline:42:405:run-3",
+            "task_id": 405,
+            "source_task_log_id": source_task_log_id,
+            "operation_index": 1,
+            "method_name": "send_sms",
+            "medium": "sms",
+            "target_kind": "contact",
+            "contact_id": 55,
+            "target_metadata": {"phone_number": "+15555550123"},
+            "status": "pending",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+
+    update_response = await client.post(
+        "/v0/admin/task-outbound-operation/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "operation_key": operation_key,
+            "updates": {
+                "operation_key": "offline:42:405:run-3:mutated",
+            },
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert update_response.status_code == 400, update_response.json()
+    assert "immutable" in update_response.json()["detail"]
+    rows = await _get_context_logs(
+        client,
+        context_name=TASK_OUTBOUND_OPERATIONS_CONTEXT,
+    )
+    assert len(rows) == 1
+    assert rows[0]["entries"]["operation_key"] == operation_key
 
 
 @pytest.mark.anyio
