@@ -25,7 +25,7 @@ Orchestra is the backend API and database layer in a multi-repository system:
               └───────────┘       └────────────┘
 ```
 
-**This repo (Orchestra)** is the source of truth for all persistent data. It provides the REST API at `api.unify.ai/v0` that Unify (Python SDK) and Console (web UI) communicate with.
+**This repo (Orchestra)** is the source of truth for all persistent data. It provides the REST API consumed by Unify (Python SDK), Console (web UI), and the other services in the stack.
 
 Related repositories:
 - [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
@@ -35,9 +35,6 @@ Related repositories:
 ---
 
 This repo includes the code for Orchestra, the core API server and database layer used by Unity, Communication, Unify, and Console.
-
-- Orchestra Production API URL: https://api.unify.ai/v0
-- Orchestra Staging API URL: https://api.staging.internal.saas.unify.ai/v0
 
 ## Security
 
@@ -69,29 +66,15 @@ All responses include: `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Tran
 | `PROMETHEUS_METRICS_TOKEN` | Metrics endpoint authentication |
 | `CLOUD_SCHEDULER_SERVICE_ACCOUNT` | (Optional) Service account email for OIDC-based scheduler auth |
 
-### GCP Infrastructure (not tracked in code)
+### Managed Infrastructure
 
-The following infrastructure settings are configured directly in GCP (`saas-368716`):
-
-- **Cloud SQL**: SSL required on all instances (`prod-ssd`, `staging-ssd`, `dev`). `prod-ssd` uses Auth Proxy enforcement. The `dev` instance requires `sslMode: ENCRYPTED_ONLY`.
-- **Secret Manager**: `EVAL_SERVER_PASSWORD` and `EVAL_SERVER_URL` are stored in Secret Manager and mounted into the Cloud Run service as secrets (not plaintext environment variables).
-- **Firewall rules**: Elasticsearch restricted to VPC internal (`10.0.0.0/8`); Grafana/Loki/Tempo restricted to VPC internal; SSH/RDP restricted to IAP tunnel range (`35.235.240.0/20`); `allow-omniparser-port-8000` restricted to IAP range.
-- **Storage buckets**: `publicAccessPrevention` enforced on all 18 buckets. No `allUsers` or `allAuthenticatedUsers` bindings on any bucket.
-- **Cloud Run ingress**: Currently `all` (default). Restricting to `internal-and-cloud-load-balancing` requires migrating from Cloud Run custom domain mappings to a proper Google Cloud Load Balancer with serverless NEGs first — custom domain mapping traffic is classified as external and gets rejected with 404.
-- **Prometheus VM**: Network tags limited to `monitoring` only (no `http-server`/`https-server`). Grafana, Loki, Tempo, and Prometheus are not directly reachable from the internet; access is via IAP or VPN.
-- **Cloud Armor**: OWASP WAF rules (SQLi, XSS, LFI, RFI, RCE) on all security policies.
-- **Cloud Scheduler**: All scheduler jobs in both `saas-368716` and `responsive-city-458413-a2` include `Authorization` headers.
-
-### GitHub Repository Settings (not tracked in code)
-
-- **Branch protection** on `main`: Requires 1 approving pull request review. Force pushes and branch deletions are blocked.
-- **Dependabot**: Vulnerability alerts and automated security fixes are enabled.
+Managed deployments rely on GCP services such as Cloud SQL, Secret Manager, Cloud Storage, Cloud Scheduler, and Cloud Armor. Those operational settings live outside this repo and are intentionally not reproduced here.
 
 ## Docs and other READMEs
 
 - [API Endpoints README](./orchestra/web/api/README.md): How to add new endpoints to the orchestra API, How to secure the endpoints.
 - [Database README](./orchestra/db/README.md): Migrations, Google Cloud Infrastructure, Syncying staging DB.
-- TODO: [Secrets and Environment Variables](#secrets--environment-variables)
+- [Secrets and Environment Variables](#secrets--environment-variables)
 - [Running the tests](#running-the-tests)
 - [Running orchestra](#running-orchestra)
 - TODO: Tests (unit, integration, load testing, manual)
@@ -143,9 +126,7 @@ pre-commit install
 
 ## Secrets / Environment Variables
 
-TODO: Tool to fetch them from GCP
-
-VSCode will load the .env file by default, but take into account that you might need to configure your IDE to load the variables.
+Use `.env.example` as the starting point for local development and create a local `.env` with the values appropriate for your environment. VSCode will usually load `.env` automatically, but you may need to configure your IDE or shell to do the same.
 
 ## Running the tests
 
@@ -234,20 +215,9 @@ docker-compose -f orchestra/observability/docker-compose.observability.yml up -d
 
 This will start Prometheus, Loki, Tempo, and Grafana containers locally. You can access Grafana at http://localhost:3000.
 
-### Production Setup
+### Managed Observability
 
-In production, we have a dedicated monitoring infrastructure with:
-
-- **Grafana Dashboard**: https://grafana.saas.unify.ai
-  - Secured with Google OAuth authentication
-  - Only accessible to users with @unify.ai email addresses
-
-- **Monitoring Components**:
-  - Prometheus for metrics collection
-  - Loki for log aggregation
-  - Tempo for distributed tracing
-
-For more details on how to use the observability stack, refer to the [Observability README](./orchestra/observability/README.md).
+Managed deployments use Prometheus, Loki, Tempo, and Grafana for metrics, logs, and tracing. For local usage details, refer to the [Observability README](./orchestra/observability/README.md).
 
 ## Configuration
 
