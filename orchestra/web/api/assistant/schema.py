@@ -16,6 +16,18 @@ def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
     return None
 
 
+def _normalize_job_title(v: Optional[str]) -> Optional[str]:
+    """Trim whitespace and treat empty strings as ``None``.
+
+    Avoids storing whitespace-only values that would render as a blank
+    subtitle in the console without actually conveying anything.
+    """
+    if v is None:
+        return None
+    trimmed = v.strip()
+    return trimmed or None
+
+
 class InfoResponse(GenericModel, Generic[T]):
     """
     Generic wrapper for API responses.
@@ -67,6 +79,15 @@ class AssistantCreate(BaseModel):
         None,
         description="Surname of the assistant",
         example="Lovelace",
+    )
+    job_title: Optional[str] = Field(
+        None,
+        description=(
+            "Free-text job title or specialization for the assistant "
+            "(e.g. 'Growth marketing', 'QA engineer')."
+        ),
+        example="Senior Mathematician",
+        max_length=120,
     )
     age: Optional[int] = Field(
         None,
@@ -170,6 +191,11 @@ class AssistantCreate(BaseModel):
     def validate_deploy_env(cls, v: Optional[str]) -> Optional[str]:
         return _validate_deploy_env(v)
 
+    @field_validator("job_title")
+    @classmethod
+    def normalize_job_title(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_job_title(v)
+
     @model_validator(mode="after")
     def check_voice_fields(cls, self):
         voice_id, voice_provider = (
@@ -191,6 +217,7 @@ class AssistantCreate(BaseModel):
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
+                "job_title": "Senior Mathematician",
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
@@ -365,6 +392,7 @@ class AssistantRead(AssistantCreate):
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
+                "job_title": "Senior Mathematician",
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
@@ -577,6 +605,16 @@ class AssistantUpdate(BaseModel):
         description="Surname of the assistant",
         example="Lovelace",
     )
+    job_title: Optional[str] = Field(
+        None,
+        description=(
+            "Free-text job title or specialization for the assistant "
+            "(e.g. 'Growth marketing', 'QA engineer'). Send an empty string or "
+            "null to clear."
+        ),
+        example="Senior Mathematician",
+        max_length=120,
+    )
     age: Optional[int] = Field(
         None,
         description="Age of the assistant",
@@ -708,6 +746,11 @@ class AssistantUpdate(BaseModel):
     def validate_update_deploy_env(cls, v: Optional[str]) -> Optional[str]:
         return _validate_deploy_env(v)
 
+    @field_validator("job_title")
+    @classmethod
+    def normalize_update_job_title(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_job_title(v)
+
     @model_validator(mode="after")
     def check_voice_fields_on_update(cls, self):
         """Validate voice fields for PATCH operations."""
@@ -745,6 +788,7 @@ class AssistantUpdate(BaseModel):
         orm_mode = True
         schema_extra = {
             "example": {
+                "job_title": "Senior Mathematician",
                 "weekly_limit": 20.5,
                 "max_parallel": 3,
                 "profile_photo": "https://example.com/photos/ada.jpg",
@@ -1611,6 +1655,16 @@ class AdminUpdateAssistant(BaseModel):
         description="About/description to set for the assistant.",
         example="AI assistant specializing in customer support.",
     )
+    job_title: Optional[str] = Field(
+        None,
+        description=(
+            "Free-text job title / specialization for the assistant "
+            "(e.g. 'Growth marketing'). Whitespace is trimmed; pass an "
+            "empty string to clear."
+        ),
+        example="Growth marketing",
+        max_length=120,
+    )
     desktop_filesync_sshkey: Optional[str] = Field(
         None,
         description="SSH private key for desktop filesystem sync.",
@@ -1631,6 +1685,11 @@ class AdminUpdateAssistant(BaseModel):
     @classmethod
     def validate_admin_deploy_env(cls, v: Optional[str]) -> Optional[str]:
         return _validate_deploy_env(v)
+
+    @field_validator("job_title")
+    @classmethod
+    def normalize_admin_job_title(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_job_title(v)
 
 
 class AdminUpdateAssistantResponse(BaseModel):

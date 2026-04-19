@@ -258,6 +258,7 @@ def _build_assistant_read(
         deploy_env=a.deploy_env,
         first_name=a.first_name,
         surname=a.surname,
+        job_title=a.job_title,
         age=a.age,
         nationality=a.nationality,
         profile_photo=a.profile_photo,
@@ -462,6 +463,7 @@ async def create_assistant(
             organization_id=organization_id,
             is_local=assistant_in.is_local or False,
             deploy_env=assistant_in.deploy_env,
+            job_title=assistant_in.job_title,
         )
 
         # Org assistants retain the creator in `user_id`; org access is granted
@@ -5117,6 +5119,14 @@ def admin_update_assistant(
         assistant.about = request_body.about
         updated_fields.append("about")
 
+    # job_title is treated like ``about`` — we let an explicit ``None`` (sent
+    # by the contact-sync helper when the user clears the field on the
+    # assistant contact) clear the column. The schema validator already trims
+    # whitespace and normalizes blanks to ``None``.
+    if "job_title" in request_body.model_fields_set:
+        assistant.job_title = request_body.job_title
+        updated_fields.append("job_title")
+
     if request_body.desktop_filesync_sshkey is not None:
         assistant.desktop_filesync_sshkey = request_body.desktop_filesync_sshkey
         updated_fields.append("desktop_filesync_sshkey")
@@ -5972,6 +5982,7 @@ async def create_demo_assistant(
             # Clone from source
             age=source_assistant.age,
             nationality=source_assistant.nationality,
+            job_title=source_assistant.job_title,
             about=source_assistant.about,
             profile_photo=source_assistant.profile_photo,
             profile_video=source_assistant.profile_video,

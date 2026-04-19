@@ -1330,6 +1330,7 @@ class Assistant(Base):
     )
     first_name = Column(String, nullable=True)
     surname = Column(String, nullable=True)
+    job_title = Column(String, nullable=True)
     age = Column(Integer, nullable=True)
     nationality = Column(String, nullable=True)
     profile_photo = Column(String, nullable=True)
