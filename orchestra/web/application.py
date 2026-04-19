@@ -29,7 +29,10 @@ def get_app() -> FastAPI:
     """
     import os
 
-    if os.environ.get("ON_PREM") and os.environ.get("GCP_PROJECT_ID") == "saas-368716":
+    cloud_project = os.environ.get("GCP_PROJECT_ID", settings.gcp_project)
+    managed_project = os.environ.get("ORCHESTRA_MANAGED_GCP_PROJECT", "saas-368716")
+
+    if os.environ.get("ON_PREM") and cloud_project == managed_project:
         raise RuntimeError(
             "ON_PREM must not be set in cloud deployments. "
             "This flag overrides GCP project/location settings "
@@ -38,7 +41,7 @@ def get_app() -> FastAPI:
 
     if (
         os.environ.get("SKIP_STRIPE_SIGNATURE_VERIFICATION", "").lower() == "true"
-        and os.environ.get("GCP_PROJECT_ID") == "saas-368716"
+        and cloud_project == managed_project
     ):
         raise RuntimeError(
             "SKIP_STRIPE_SIGNATURE_VERIFICATION must not be set in cloud deployments. "
