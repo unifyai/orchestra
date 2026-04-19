@@ -194,7 +194,7 @@ class Settings(BaseSettings):
     )
     traffic_log_pubsub_project_id: str = os.environ.get(
         "ORCHESTRA_TRAFFIC_LOG_PUBSUB_PROJECT_ID",
-        "saas-368716",
+        os.environ.get("GCP_PROJECT_ID", "saas-368716"),
     )
 
     # Chat Completions Project
@@ -208,12 +208,8 @@ class Settings(BaseSettings):
         "https://console.unify.ai/",
     ).rstrip("/")
 
-    gcp_project: str = (
-        os.environ.get("GCP_PROJECT_ID") if os.environ.get("ON_PREM") else "saas-368716"
-    )
-    gcp_location: str = (
-        os.environ.get("GCP_LOCATION") if os.environ.get("ON_PREM") else "europe-west1"
-    )
+    gcp_project: str = os.environ.get("GCP_PROJECT_ID", "saas-368716")
+    gcp_location: str = os.environ.get("GCP_LOCATION", "europe-west1")
 
     # Variables for email sending
     google_service_sender_email: Optional[str] = os.environ.get("ONBOARDING_EMAIL")

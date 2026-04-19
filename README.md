@@ -73,7 +73,7 @@ Managed deployments rely on GCP services such as Cloud SQL, Secret Manager, Clou
 ## Docs and other READMEs
 
 - [API Endpoints README](./orchestra/web/api/README.md): How to add new endpoints to the orchestra API, How to secure the endpoints.
-- [Database README](./orchestra/db/README.md): Migrations, Google Cloud Infrastructure, Syncying staging DB.
+- [Database README](./orchestra/db/README.md): Migrations, deployment notes, and staging sync guidance.
 - [Secrets and Environment Variables](#secrets--environment-variables)
 - [Running the tests](#running-the-tests)
 - [Running orchestra](#running-orchestra)

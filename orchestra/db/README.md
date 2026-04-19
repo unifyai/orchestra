@@ -66,11 +66,11 @@ alembic downgrade base
 
 ## Google Cloud Infrastructure (GCP)
 
-Both databases (orchestra and orchestra-staging) live in GCP within the [dev](https://console.cloud.google.com/sql/instances/dev/overview?project=saas-368716) and [staging](https://console.cloud.google.com/sql/instances/staging/overview?project=saas-368716) SQL Servers respectively.
+Managed deployments use Google Cloud SQL for the primary databases. Exact instance names, projects, and access paths vary by environment and are maintained outside this repo.
 
 ## Sync staging DB (GCP)
 
-The staging db is synced with the production database once per week. If you need to sync the latests updates, you can run [this Cloud Run Job](https://console.cloud.google.com/run/jobs/details/europe-west1/orchestra-staging-sync/executions?project=saas-368716) manually.
+The staging database is periodically synchronized from production. If you need a fresh sync in a managed environment, use the corresponding deployment job or operational runbook for your environment.
 
 ## Initial Credit Grant
 
@@ -92,7 +92,7 @@ Once there, you can run `\df` to list active functions. you should see `update_o
 - Save the file
 - Execute `\g` in the psql terminal
 
-The password for the postgres user in staging is [this one](https://console.cloud.google.com/security/secret-manager/secret/STAGING_DB_POSTGRES_PASS/versions?project=saas-368716).
+The postgres credentials for managed environments should be sourced from the deployment secret store rather than copied into local notes.
 
 ## Recurring credit grant
 

@@ -6,6 +6,7 @@ from google.cloud import aiplatform, aiplatform_v1, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
 from google.cloud.pubsub_v1.publisher.exceptions import MessageTooLargeError
 
+from orchestra.settings import settings
 from orchestra.web.api.utils.helpers import CustomEncoder
 
 logger = logging.getLogger(__name__)
@@ -139,8 +140,8 @@ def vertex_ai_endpoint_exists(name: str) -> bool:
 
 
 def vertex_ai_endpoint_list() -> List[str]:
-    region = "europe-west1"
-    project_id = "saas-368716"
+    region = settings.gcp_location
+    project_id = settings.gcp_project
     client_options = {"api_endpoint": f"{region}-aiplatform.googleapis.com"}
     client = aiplatform.gapic.EndpointServiceClient(client_options=client_options)
 
@@ -152,8 +153,8 @@ def vertex_ai_endpoint_list() -> List[str]:
 
 
 def vertex_ai_endpoint_undeploy(user_id, name):
-    region = "europe-west1"
-    project_id = "saas-368716"
+    region = settings.gcp_location
+    project_id = settings.gcp_project
     client_options = {"api_endpoint": f"{region}-aiplatform.googleapis.com"}
     client = aiplatform_v1.EndpointServiceClient(client_options=client_options)
 
