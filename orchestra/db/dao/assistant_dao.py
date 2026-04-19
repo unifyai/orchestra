@@ -59,6 +59,7 @@ class AssistantDAO:
         organization_id: Optional[int] = None,
         is_local: bool = False,
         deploy_env: str | None = None,
+        job_title: Optional[str] = None,
     ) -> Assistant:
         """
         Create a new Assistant.
@@ -81,6 +82,7 @@ class AssistantDAO:
             organization_id=organization_id,
             first_name=first_name,
             surname=surname,
+            job_title=job_title,
             age=age,
             nationality=nationality,
             profile_photo=profile_photo,
