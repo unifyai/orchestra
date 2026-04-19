@@ -1,12 +1,56 @@
 # Orchestra
 
+Orchestra is the backend API and persistence layer behind the Unify stack. It exposes the REST API used by `unify`, `console`, `unity`, and the communication services, and stores the durable state those systems depend on.
+
+## What This Repo Contains
+
+- FastAPI application and API routers
+- SQLAlchemy models, DAOs, and Alembic migrations
+- background routines for billing, cleanup, notifications, and storage workflows
+- observability and deployment configs for managed environments
+- API, database, and service tests
+
+## Related Repositories
+
+- [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
+- [Console](https://github.com/unifyai/console) — Web UI that reads and writes Orchestra data
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain that persists state through Unify
+
+## Quick Start
+
+For a local development instance with PostgreSQL + pgvector:
+
+```bash
+cp .env.example .env
+
+docker run --name orchestra-db -p 5432:5432 \
+  -e POSTGRES_PASSWORD=orchestra -e POSTGRES_USER=orchestra -e POSTGRES_DB=orchestra \
+  pgvector/pgvector:pg15
+
+poetry install --with dev
+alembic upgrade head
+poetry run python -m orchestra
+```
+
+The API will be available at `http://127.0.0.1:8000/v0`.
+
+If you need more detail, start with:
+
+- [API Endpoints README](./orchestra/web/api/README.md)
+- [Database README](./orchestra/db/README.md)
+- [Observability](./orchestra/observability/README.md)
+- [CI/CD](./.github/workflows/README.md)
+- [Running the tests](#running-the-tests)
+- [Running orchestra](#running-orchestra)
+- [Secrets and Environment Variables](#secrets--environment-variables)
+
 ## System Architecture
 
 Orchestra is the backend API and database layer in a multi-repository system:
 
 ```
          User (Console/Phone/SMS/Email)
-                      │
+                     │
     ┌─────────────────┴──────────────────┐
     │           Communication            │
     │    (Webhooks, Voice, SMS, Email)   │
@@ -24,17 +68,6 @@ Orchestra is the backend API and database layer in a multi-repository system:
               │ (LLM API) │       │(Interfaces)│
               └───────────┘       └────────────┘
 ```
-
-**This repo (Orchestra)** is the source of truth for all persistent data. It provides the REST API consumed by Unify (Python SDK), Console (web UI), and the other services in the stack.
-
-Related repositories:
-- [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
-- [Console](https://github.com/unifyai/console) — Web UI that reads/writes Orchestra data
-- [Unity](https://github.com/unifyai/unity) — AI assistant brain (persists state via Unify)
-
----
-
-This repo includes the code for Orchestra, the core API server and database layer used by Unity, Communication, Unify, and Console.
 
 ## Security
 
@@ -69,17 +102,6 @@ All responses include: `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Tran
 ### Managed Infrastructure
 
 Managed deployments rely on GCP services such as Cloud SQL, Secret Manager, Cloud Storage, Cloud Scheduler, and Cloud Armor. Those operational settings live outside this repo and are intentionally not reproduced here.
-
-## Docs and other READMEs
-
-- [API Endpoints README](./orchestra/web/api/README.md): How to add new endpoints to the orchestra API, How to secure the endpoints.
-- [Database README](./orchestra/db/README.md): Migrations, deployment notes, and staging sync guidance.
-- [Secrets and Environment Variables](#secrets--environment-variables)
-- [Running the tests](#running-the-tests)
-- [Running orchestra](#running-orchestra)
-- TODO: Tests (unit, integration, load testing, manual)
-- [Observability](./orchestra/observability/README.md): Monitoring, logging, and tracing setup.
-- [CI/CD](./.github/workflows/README.md)
 
 ## Project structure
 
