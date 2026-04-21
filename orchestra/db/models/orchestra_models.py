@@ -1372,12 +1372,21 @@ class Assistant(Base):
         index=True,
     )
 
+    # Hive membership FK. NULL means the body is solo; a non-NULL value names
+    # the Hive whose shared context tree this body participates in.
+    hive_id = Column(
+        Integer,
+        ForeignKey("hives.hive_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     # Relationship to demo metadata
     demo_meta = relationship(
         "DemoAssistantMeta",
         backref=backref("assistant", uselist=False),
         foreign_keys=[demo_id],
     )
+    hive = relationship("Hive", back_populates="assistants")
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -2866,4 +2875,64 @@ class DashboardToken(Base):
     __table_args__ = (
         Index("idx_dashboard_token_project_id", "project_id"),
         Index("idx_dashboard_token_user_id", "user_id"),
+    )
+
+
+class Hive(Base):
+    """Group of assistants in an organization that share Hive-scoped memory.
+
+    A Hive owns the shared context tree (``Hives/{hive_id}/...``) that every
+    member assistant reads and writes: Contacts, Transcripts, Knowledge,
+    Guidance, Functions, Tasks, Data, Secrets, Images, Files, and Dashboards.
+    Each :class:`Assistant` declares membership via the nullable ``hive_id``
+    FK; ``NULL`` leaves the body solo with no shared tree.
+
+    V0 is single-Hive-per-organization. ``ux_hives_one_per_org`` enforces that
+    atomically against concurrent ``POST /v0/hives`` races; the losing
+    transaction surfaces as HTTP 409. ``ux_hives_org_name`` gives name
+    uniqueness within an organization and becomes the operative constraint
+    once the one-per-org index is dropped for multi-Hive support.
+
+    ``status`` carries the cascade-delete state machine. ``'active'`` is the
+    normal value; ``'deleting'`` marks an in-flight cascade so membership-
+    mutating endpoints can reject writes while teardown resumes.
+    """
+
+    __tablename__ = "hives"
+
+    hive_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    name = Column(String(120), nullable=False)
+    description = Column(String(), nullable=True)
+    status = Column(
+        String(16),
+        nullable=False,
+        server_default="active",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    organization = relationship("Organization")
+    assistants = relationship(
+        "Assistant",
+        back_populates="hive",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("ux_hives_one_per_org", "organization_id", unique=True),
+        Index("ux_hives_org_name", "organization_id", "name", unique=True),
     )
