@@ -1374,11 +1374,27 @@ async def create_assistant_contact(
                 )
 
             if provider == "microsoft_365":
+                api_key_dao = ApiKeyDAO(session)
+                if assistant.organization_id is None:
+                    keys = api_key_dao.get_personal_keys(assistant.user_id)
+                else:
+                    keys = api_key_dao.get_organization_keys(
+                        assistant.user_id,
+                        assistant.organization_id,
+                    )
+                # Comms uses this key to write delegated tokens back via
+                # PUT/POST /assistant/{id}/secret (inline ROPC).  Without
+                # it, the mailbox falls through the legacy app-only path
+                # and Teams change-notification subscriptions break.
+                outlook_api_key = keys[0][0].key if keys else None
                 email_response = await create_outlook_email(
                     contact_request.email_local,
                     contact_request.first_name or "",
                     contact_request.last_name or "",
                     deploy_env=assistant.deploy_env,
+                    assistant_id=assistant.agent_id,
+                    api_key=outlook_api_key,
+                    features=["email", "teams"],
                 )
             else:
                 email_response = await create_email(
@@ -1930,6 +1946,7 @@ async def disconnect_assistant_account(
             "MICROSOFT_REFRESH_TOKEN",
             "MICROSOFT_TOKEN_EXPIRES_AT",
             "MICROSOFT_GRANTED_SCOPES",
+            "MICROSOFT_TOKEN_SOURCE",
         ):
             secret_dao.delete(assistant_id, key)
 

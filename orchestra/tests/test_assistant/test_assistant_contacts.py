@@ -5100,6 +5100,7 @@ class TestDisconnectEndpoint:
                 ("MICROSOFT_REFRESH_TOKEN", "ms-refresh"),
                 ("MICROSOFT_TOKEN_EXPIRES_AT", "9999999999"),
                 ("MICROSOFT_GRANTED_SCOPES", "https://graph.microsoft.com/Mail.Read"),
+                ("MICROSOFT_TOKEN_SOURCE", "byod"),
             ]:
                 await client.post(
                     f"/v0/assistant/{agent_id}/secret",
@@ -5121,6 +5122,7 @@ class TestDisconnectEndpoint:
             "MICROSOFT_REFRESH_TOKEN",
             "MICROSOFT_TOKEN_EXPIRES_AT",
             "MICROSOFT_GRANTED_SCOPES",
+            "MICROSOFT_TOKEN_SOURCE",
         ):
             assert dao.get(agent_id, name) is None
 
@@ -5550,6 +5552,7 @@ class TestDisconnectEndpointOrg:
                 ("MICROSOFT_REFRESH_TOKEN", "ms-refresh"),
                 ("MICROSOFT_TOKEN_EXPIRES_AT", "9999999999"),
                 ("MICROSOFT_GRANTED_SCOPES", "https://graph.microsoft.com/Mail.Read"),
+                ("MICROSOFT_TOKEN_SOURCE", "enterprise"),
             ]:
                 await client.post(
                     f"/v0/assistant/{agent_id}/secret",
@@ -5571,6 +5574,7 @@ class TestDisconnectEndpointOrg:
             "MICROSOFT_REFRESH_TOKEN",
             "MICROSOFT_TOKEN_EXPIRES_AT",
             "MICROSOFT_GRANTED_SCOPES",
+            "MICROSOFT_TOKEN_SOURCE",
         ):
             assert dao.get(agent_id, name) is None
 
