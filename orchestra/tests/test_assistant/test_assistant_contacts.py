@@ -42,6 +42,44 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.tests.utils import HEADERS, create_test_org, create_test_user
 
 # ============================================================================
+# Test helpers
+# ============================================================================
+
+
+def _build_mock_async_client(
+    recorded: list[tuple[str, str, dict | None]],
+) -> MagicMock:
+    """Return a MagicMock that mimics ``httpx.AsyncClient(...)``.
+
+    Every call to ``async with httpx.AsyncClient(...) as http:`` yields a
+    client whose ``.request(method, url, ...)`` and ``.post(url, ...)`` append
+    ``(method, url, json_body)`` tuples to ``recorded`` and return a fake
+    200 response.
+    """
+
+    async def _record_request(method, url, **kwargs):
+        recorded.append((method, url, kwargs.get("json")))
+        resp = MagicMock()
+        resp.status_code = 200
+        return resp
+
+    async def _record_post(url, **kwargs):
+        recorded.append(("POST", url, kwargs.get("json")))
+        resp = MagicMock()
+        resp.status_code = 200
+        return resp
+
+    async_client_instance = MagicMock()
+    async_client_instance.request = AsyncMock(side_effect=_record_request)
+    async_client_instance.post = AsyncMock(side_effect=_record_post)
+
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=async_client_instance)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return ctx
+
+
+# ============================================================================
 # Fixtures
 # ============================================================================
 
@@ -5031,6 +5069,8 @@ class TestDisconnectEndpoint:
         dbsession: Session,
         mock_all_infra,
     ):
+        import os as _os
+
         from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 
         create_resp = await client.post(
@@ -5040,9 +5080,33 @@ class TestDisconnectEndpoint:
         )
         agent_id = int(create_resp.json()["info"]["agent_id"])
 
+        dbsession.add(
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="email",
+                contact_value="user@byod.com",
+                provider="google_workspace",
+                provisioned_by="user",
+                status="active",
+            ),
+        )
+        dbsession.commit()
+
+        http_calls: list[tuple[str, str, dict | None]] = []
+        mock_http = _build_mock_async_client(http_calls)
+
         with patch(
             "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings:
+        ) as mock_settings, patch.dict(
+            _os.environ,
+            {
+                "UNITY_COMMS_URL": "http://comms.test",
+                "UNITY_ADAPTERS_URL": "http://adapters.test",
+            },
+        ), patch(
+            "httpx.AsyncClient",
+            return_value=mock_http,
+        ):
             mock_settings.is_staging = True
 
             for name, value in [
@@ -5073,6 +5137,80 @@ class TestDisconnectEndpoint:
             "GOOGLE_GRANTED_SCOPES",
         ):
             assert dao.get(agent_id, name) is None
+
+        watch_idxs = [
+            i
+            for i, (m, u, _) in enumerate(http_calls)
+            if m == "DELETE" and u == "http://comms.test/gmail/watch"
+        ]
+        revoke_idxs = [
+            i
+            for i, (m, u, _) in enumerate(http_calls)
+            if m == "POST" and u == "http://adapters.test/google/revoke"
+        ]
+        assert len(watch_idxs) == 1, http_calls
+        assert len(revoke_idxs) == 1, http_calls
+        assert watch_idxs[0] < revoke_idxs[0]
+        assert http_calls[watch_idxs[0]][2] == {"primary_email": "user@byod.com"}
+
+    @pytest.mark.anyio
+    async def test_disconnect_google_without_byod_contact_skips_watch_stop(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        import os as _os
+
+        from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Disc", "surname": "NoByod", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        http_calls: list[tuple[str, str, dict | None]] = []
+        mock_http = _build_mock_async_client(http_calls)
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings, patch.dict(
+            _os.environ,
+            {
+                "UNITY_COMMS_URL": "http://comms.test",
+                "UNITY_ADAPTERS_URL": "http://adapters.test",
+            },
+        ), patch(
+            "httpx.AsyncClient",
+            return_value=mock_http,
+        ):
+            mock_settings.is_staging = True
+
+            for name, value in [
+                ("GOOGLE_ACCESS_TOKEN", "access-tok"),
+                ("GOOGLE_GRANTED_SCOPES", "https://www.googleapis.com/auth/gmail.send"),
+            ]:
+                await client.post(
+                    f"/v0/assistant/{agent_id}/secret",
+                    json={"secret_name": name, "secret_value": value},
+                    headers=HEADERS,
+                )
+
+            resp = await client.delete(
+                f"/v0/assistant/{agent_id}/connect",
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+        dao = AssistantSecretDAO(dbsession)
+        assert dao.get(agent_id, "GOOGLE_ACCESS_TOKEN") is None
+
+        assert not [
+            c for c in http_calls if c[1] == "http://comms.test/gmail/watch"
+        ], http_calls
 
     @pytest.mark.anyio
     async def test_disconnect_microsoft_clears_secrets(
@@ -5487,6 +5625,8 @@ class TestDisconnectEndpointOrg:
         dbsession: Session,
         mock_all_infra,
     ):
+        import os as _os
+
         from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 
         owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
@@ -5494,9 +5634,33 @@ class TestDisconnectEndpointOrg:
             dbsession,
         )
 
+        dbsession.add(
+            AssistantContact(
+                assistant_id=agent_id,
+                contact_type="email",
+                contact_value="org-user@byod.com",
+                provider="google_workspace",
+                provisioned_by="user",
+                status="active",
+            ),
+        )
+        dbsession.commit()
+
+        http_calls: list[tuple[str, str, dict | None]] = []
+        mock_http = _build_mock_async_client(http_calls)
+
         with patch(
             "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings:
+        ) as mock_settings, patch.dict(
+            _os.environ,
+            {
+                "UNITY_COMMS_URL": "http://comms.test",
+                "UNITY_ADAPTERS_URL": "http://adapters.test",
+            },
+        ), patch(
+            "httpx.AsyncClient",
+            return_value=mock_http,
+        ):
             mock_settings.is_staging = True
 
             for name, value in [
@@ -5527,6 +5691,21 @@ class TestDisconnectEndpointOrg:
             "GOOGLE_GRANTED_SCOPES",
         ):
             assert dao.get(agent_id, name) is None
+
+        watch_idxs = [
+            i
+            for i, (m, u, _) in enumerate(http_calls)
+            if m == "DELETE" and u == "http://comms.test/gmail/watch"
+        ]
+        revoke_idxs = [
+            i
+            for i, (m, u, _) in enumerate(http_calls)
+            if m == "POST" and u == "http://adapters.test/google/revoke"
+        ]
+        assert len(watch_idxs) == 1, http_calls
+        assert len(revoke_idxs) == 1, http_calls
+        assert watch_idxs[0] < revoke_idxs[0]
+        assert http_calls[watch_idxs[0]][2] == {"primary_email": "org-user@byod.com"}
 
     @pytest.mark.anyio
     async def test_org_owner_can_disconnect_microsoft(
