@@ -419,23 +419,41 @@ async def create_outlook_email(
     first_name: str,
     last_name: str,
     deploy_env: str | None = None,
+    assistant_id: str | int | None = None,
+    api_key: str | None = None,
+    features: list[str] | None = None,
 ):
     """
     Create an MS365 mailbox by calling the Communication service.
 
     Mirrors `create_email` (Gmail) but hits the ``/outlook/create`` endpoint,
     which creates the Azure AD user and assigns an Exchange Online license.
+
+    When ``assistant_id`` and ``api_key`` are supplied, Communication performs
+    an inline ROPC sign-in against the freshly-set mailbox password and
+    stores user-delegated tokens as assistant secrets.  This is required
+    for Teams change-notification subscriptions on unify-provisioned
+    mailboxes — the app-only token path can't subscribe to Teams without
+    a paid billing model.  ``features`` defaults server-side to
+    ``["email", "teams"]`` when omitted.
     """
     comms_url = _comms_url_for(deploy_env)
     client = get_async_client()
+    body: dict = {
+        "local": local,
+        "first_name": first_name,
+        "last_name": last_name,
+    }
+    if assistant_id is not None:
+        body["assistant_id"] = str(assistant_id)
+    if api_key:
+        body["api_key"] = api_key
+    if features is not None:
+        body["features"] = features
     response = await client.post(
         f"{comms_url}/outlook/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "local": local,
-            "first_name": first_name,
-            "last_name": last_name,
-        },
+        json=body,
         timeout=30,
     )
     return response.json()
