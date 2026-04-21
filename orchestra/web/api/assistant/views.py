@@ -1897,7 +1897,27 @@ async def disconnect_assistant_account(
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     auth_headers = {"Authorization": f"Bearer {admin_key}"}
 
+    contact_dao = AssistantContactDAO(session)
+    contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+    byod_email = next(
+        (
+            c.contact_value
+            for c in contacts
+            if c.contact_type == "email" and c.provisioned_by == "user"
+        ),
+        None,
+    )
+
     if google_scopes:
+        if byod_email and comms_url:
+            async with httpx.AsyncClient(timeout=10) as http:
+                await http.request(
+                    "DELETE",
+                    f"{comms_url}/gmail/watch",
+                    json={"primary_email": byod_email},
+                    headers=auth_headers,
+                )
+
         access_token = secret_dao.get(assistant_id, "GOOGLE_ACCESS_TOKEN")
         if access_token and adapters_url:
             async with httpx.AsyncClient(timeout=10) as http:
@@ -1913,17 +1933,6 @@ async def disconnect_assistant_account(
             "GOOGLE_GRANTED_SCOPES",
         ):
             secret_dao.delete(assistant_id, key)
-
-    contact_dao = AssistantContactDAO(session)
-    contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
-    byod_email = next(
-        (
-            c.contact_value
-            for c in contacts
-            if c.contact_type == "email" and c.provisioned_by == "user"
-        ),
-        None,
-    )
 
     if ms_scopes:
         if byod_email and comms_url:
