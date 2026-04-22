@@ -31,6 +31,7 @@ from orchestra.web.api.dependencies import (
 )
 from orchestra.web.api.desktop import router as desktop_router
 from orchestra.web.api.discord import admin_router as discord_admin_router
+from orchestra.web.api.hives import router as hive_router
 from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.messages import admin_router as messages_admin_router
 from orchestra.web.api.messages import router as messages_router
@@ -195,6 +196,11 @@ api_router.include_router(
 api_router.include_router(
     assistant_router,
     dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    hive_router,
+    dependencies=API_KEY_AUTH,
+    tags=["Hives"],
 )
 api_router.include_router(
     assistant_demo_router,
