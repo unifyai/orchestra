@@ -22,7 +22,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import backref, relationship
+from sqlalchemy.orm import backref, relationship, validates
 
 from orchestra.db.base import Base
 
@@ -1387,6 +1387,16 @@ class Assistant(Base):
         foreign_keys=[demo_id],
     )
     hive = relationship("Hive", back_populates="assistants")
+
+    @validates("hive_id")
+    def _hive_id_write_once(self, key, value):
+        """hive_id is set at assistant creation and is immutable thereafter."""
+        if self.hive_id is not None and value != self.hive_id:
+            raise ValueError(
+                f"Assistant.hive_id is write-once: "
+                f"cannot change {self.hive_id!r} → {value!r}",
+            )
+        return value
 
     __table_args__ = (
         ForeignKeyConstraint(
