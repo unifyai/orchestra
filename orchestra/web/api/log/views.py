@@ -26,6 +26,7 @@ from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
+from orchestra.db.context_naming import HIVE_CONTEXT_PREFIX
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import (
@@ -1846,8 +1847,16 @@ def _atomic_upsert_mode(
 
     mirrored_contexts = []
 
+    # Hive-scoped rows live in a single-tier ``Hives/{hive_id}/...`` tree and
+    # have no per-body ``All/*`` archive counterpart. Mirroring them would
+    # fabricate ``Hives/{hive_id}/All/...`` shells that the Hive cascade then
+    # has to clean up, so skip the archive step entirely on Hive writes.
+    mirror_to_all_context = body.add_to_all_context and not body.context.startswith(
+        HIVE_CONTEXT_PREFIX,
+    )
+
     # If add_to_all_context=true, mirror to archive context
-    if body.add_to_all_context:
+    if mirror_to_all_context:
         context_parts = body.context.split("/")
 
         if "_user" in body.initial_data and "_assistant" in body.initial_data:
