@@ -6010,6 +6010,8 @@ class TestGrantedFeaturesEndpointOrg:
         dbsession: Session,
         mock_all_infra,
     ):
+        from orchestra.web.api.assistant.scopes import build_scope_string
+
         owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
             client,
             dbsession,
@@ -6024,15 +6026,9 @@ class TestGrantedFeaturesEndpointOrg:
                 f"/v0/assistant/{agent_id}/secret",
                 json={
                     "secret_name": "MICROSOFT_GRANTED_SCOPES",
-                    "secret_value": (
-                        "https://graph.microsoft.com/Mail.Read "
-                        "https://graph.microsoft.com/Mail.Send "
-                        "https://graph.microsoft.com/Mail.ReadWrite "
-                        "https://graph.microsoft.com/Chat.Read "
-                        "https://graph.microsoft.com/Chat.ReadWrite "
-                        "https://graph.microsoft.com/ChannelMessage.Send "
-                        "https://graph.microsoft.com/User.Read "
-                        "offline_access"
+                    "secret_value": build_scope_string(
+                        "microsoft",
+                        ["email", "teams"],
                     ),
                 },
                 headers=org["headers"],
