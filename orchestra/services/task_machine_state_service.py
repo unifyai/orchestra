@@ -191,19 +191,72 @@ def _resolve_task_machine_context_names(
     )
 
 
+def _build_task_machine_context_names_for_owner(
+    *,
+    user_id: str,
+    assistant_id: str,
+) -> TaskMachineContextNames:
+    """Return the machine-state context names for one owning body."""
+
+    tasks_context_name = _build_assistant_tasks_context_name(
+        user_id=user_id,
+        assistant_id=assistant_id,
+    )
+    return _resolve_task_machine_context_names(tasks_context_name)
+
+
+def _split_per_body_tasks_context_name(
+    tasks_context_name: str,
+) -> tuple[str, str]:
+    """Return ``(user_id, assistant_id)`` for a canonical per-body Tasks path.
+
+    Raises ``ValueError`` for Hive paths or any path shorter than
+    ``{user}/{assistant}/Tasks``; callers that expect to handle Hive-scoped
+    surfaces resolve owners from row data instead.
+    """
+
+    normalized = (tasks_context_name or "").strip("/")
+    if normalized.startswith(HIVE_CONTEXT_PREFIX):
+        raise ValueError(
+            "Hive tasks contexts do not encode a per-body owner; resolve "
+            f"the owning assistant from row data instead (got {tasks_context_name!r}).",
+        )
+    segments = _split_context_name(normalized)
+    if len(segments) < 3 or segments[-1] != TASKS_CONTEXT_NAME:
+        raise ValueError(
+            f"Expected an assistant-scoped Tasks context, got {tasks_context_name!r}.",
+        )
+    assistant_id = segments[-2]
+    user_id = "/".join(segments[:-2])
+    return user_id, assistant_id
+
+
 def _resolve_assistant_id(
     *,
     task_row: _TaskRow | None = None,
     task_data: Mapping[str, Any] | None = None,
     tasks_context_name: str | None = None,
 ) -> str | None:
-    """Resolve assistant ownership from row data first, then the context path."""
+    """Resolve assistant ownership from row data first, then the context path.
+
+    Hive-scoped task rows do not encode the owning body in their path, so the
+    row's ``_assistant_id`` column is the only authoritative signal. When a
+    Hive path arrives without that column populated we raise loudly rather
+    than silently falling back to path inference, which would either return
+    ``None`` (misrouting machine state) or mistake the hive id for an
+    assistant id.
+    """
 
     candidate_data = task_row.data if task_row is not None else task_data
     if isinstance(candidate_data, Mapping):
         assistant_id = _coerce_optional_str(candidate_data.get("_assistant_id"))
         if assistant_id:
             return assistant_id
+    if tasks_context_name and tasks_context_name.startswith(HIVE_CONTEXT_PREFIX):
+        log_event_id = task_row.log_event_id if task_row is not None else None
+        raise ValueError(
+            f"Hive task row missing _assistant_id: log_event_id={log_event_id}",
+        )
     return _assistant_id_from_context_name(tasks_context_name)
 
 
@@ -728,11 +781,23 @@ def ensure_task_machine_contexts(
     session: Session,
     project_id: int,
     *,
-    tasks_context_name: str,
+    user_id: str,
+    assistant_id: str,
 ) -> TaskMachineContextIds:
-    """Ensure the assistant-scoped task machine contexts and schemas exist."""
+    """Ensure the per-body task machine contexts and schemas exist.
 
-    context_names = _resolve_task_machine_context_names(tasks_context_name)
+    Machine state (activations, runs, outbound operations) always lives under
+    the owning body's ``{user_id}/{assistant_id}/Tasks/...`` tree, regardless
+    of where the task definition was authored. Hive-scoped task definitions
+    (``Hives/{hive_id}/Tasks``) route into this same per-body tree by passing
+    the resolved owner explicitly — they never append ``/Activations`` under
+    the Hive path.
+    """
+
+    context_names = _build_task_machine_context_names_for_owner(
+        user_id=user_id,
+        assistant_id=assistant_id,
+    )
 
     activations_context_id = _upsert_context(
         session=session,
@@ -791,7 +856,16 @@ def sync_task_activations_for_task_ids(
     *,
     tasks_context_name: str = TASKS_CONTEXT_NAME,
 ) -> dict[str, int]:
-    """Project one assistant-scoped tasks table into `Tasks/Activations`."""
+    """Project one Tasks surface into each owning body's ``Tasks/Activations``.
+
+    For the canonical per-body surface (``{user}/{assistant}/Tasks``) the
+    batch projects into a single ``{user}/{assistant}/Tasks/Activations``
+    context. For the Hive-shared definition surface
+    (``Hives/{hive_id}/Tasks``), rows are bucketed by the ``_assistant_id``
+    stamped on each row and each bucket projects into its own body's
+    per-body machine-state tree. Batches that mix owners therefore fan out
+    into one ``ensure_task_machine_contexts`` call per distinct body.
+    """
 
     unique_task_ids = sorted({int(task_id) for task_id in task_ids})
     if not unique_task_ids or not is_task_surface_context_name(tasks_context_name):
@@ -805,11 +879,6 @@ def sync_task_activations_for_task_ids(
     if tasks_context_id is None:
         return {"upserted": 0, "deleted": 0}
 
-    context_ids = ensure_task_machine_contexts(
-        session=session,
-        project_id=project_id,
-        tasks_context_name=tasks_context_name,
-    )
     task_rows = _load_task_rows(
         session=session,
         project_id=project_id,
@@ -824,61 +893,68 @@ def sync_task_activations_for_task_ids(
         if task_id is not None and task_id in rows_by_task_id:
             rows_by_task_id[task_id].append(row)
 
+    owner_buckets = _bucket_task_ids_by_owning_body(
+        session=session,
+        unique_task_ids=unique_task_ids,
+        rows_by_task_id=rows_by_task_id,
+        tasks_context_name=tasks_context_name,
+    )
+
     upserted = 0
     deleted = 0
     materialization_pairs: list[tuple[dict[str, Any] | None, dict[str, Any] | None]] = (
         []
     )
-    for task_id in unique_task_ids:
-        activation_key = _build_activation_key(
-            assistant_id=_resolve_assistant_id(
-                task_data=(
-                    (rows_by_task_id.get(task_id) or [None])[0].data
-                    if rows_by_task_id.get(task_id)
-                    else None
-                ),
-                tasks_context_name=tasks_context_name,
-            ),
-            task_id=task_id,
-        )
-        existing_activation = _get_machine_row_by_unique_field(
+    for (user_id, assistant_id), bucket_task_ids in owner_buckets:
+        context_ids = ensure_task_machine_contexts(
             session=session,
-            context_id=context_ids.activations_context_id,
-            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-            unique_field_value=activation_key,
+            project_id=project_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
         )
-        previous_activation = (
-            dict(existing_activation.data or {})
-            if existing_activation is not None
-            else None
-        )
-        activation_payload = _build_activation_payload(
-            rows=rows_by_task_id.get(task_id, []),
-            tasks_context_name=tasks_context_name,
-        )
-        if activation_payload is None:
-            was_deleted = _delete_machine_row_by_unique_field(
+        for task_id in bucket_task_ids:
+            activation_key = _build_activation_key(
+                assistant_id=assistant_id,
+                task_id=task_id,
+            )
+            existing_activation = _get_machine_row_by_unique_field(
+                session=session,
+                context_id=context_ids.activations_context_id,
+                unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
+                unique_field_value=activation_key,
+            )
+            previous_activation = (
+                dict(existing_activation.data or {})
+                if existing_activation is not None
+                else None
+            )
+            activation_payload = _build_activation_payload(
+                rows=rows_by_task_id.get(task_id, []),
+                tasks_context_name=tasks_context_name,
+            )
+            if activation_payload is None:
+                was_deleted = _delete_machine_row_by_unique_field(
+                    session=session,
+                    project_id=project_id,
+                    context_id=context_ids.activations_context_id,
+                    unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
+                    unique_field_value=activation_key,
+                )
+                deleted += int(was_deleted)
+                if previous_activation is not None and was_deleted:
+                    materialization_pairs.append((previous_activation, None))
+                continue
+
+            _upsert_machine_row(
                 session=session,
                 project_id=project_id,
                 context_id=context_ids.activations_context_id,
                 unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
                 unique_field_value=activation_key,
+                payload=activation_payload,
             )
-            deleted += int(was_deleted)
-            if previous_activation is not None and was_deleted:
-                materialization_pairs.append((previous_activation, None))
-            continue
-
-        _upsert_machine_row(
-            session=session,
-            project_id=project_id,
-            context_id=context_ids.activations_context_id,
-            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-            unique_field_value=activation_key,
-            payload=activation_payload,
-        )
-        materialization_pairs.append((previous_activation, activation_payload))
-        upserted += 1
+            materialization_pairs.append((previous_activation, activation_payload))
+            upserted += 1
 
     session.flush()
     for previous_activation, current_activation in materialization_pairs:
@@ -887,6 +963,62 @@ def sync_task_activations_for_task_ids(
             current_activation=current_activation,
         )
     return {"upserted": upserted, "deleted": deleted}
+
+
+def _bucket_task_ids_by_owning_body(
+    session: Session,
+    *,
+    unique_task_ids: Sequence[int],
+    rows_by_task_id: Mapping[int, Sequence[_TaskRow]],
+    tasks_context_name: str,
+) -> list[tuple[tuple[str, str], list[int]]]:
+    """Group a batch of task ids by the per-body owner of each row.
+
+    Per-body Tasks surfaces produce a single bucket keyed off the path. Hive
+    surfaces enumerate the ``_assistant_id`` on each row, look up the owning
+    body's ``user_id`` in the Assistant table, and emit one bucket per
+    distinct owner. Task ids without any rows in the batch are skipped on
+    Hive surfaces because the owner is unknown; solo surfaces keep them in
+    the single bucket so orphan activations can still be cleared.
+    """
+
+    if not tasks_context_name.startswith(HIVE_CONTEXT_PREFIX):
+        user_id, assistant_id = _split_per_body_tasks_context_name(tasks_context_name)
+        return [((user_id, assistant_id), list(unique_task_ids))]
+
+    task_ids_by_assistant: dict[str, list[int]] = {}
+    for task_id in unique_task_ids:
+        rows = list(rows_by_task_id.get(task_id, []))
+        if not rows:
+            continue
+        assistant_id = _resolve_assistant_id(
+            task_row=rows[0],
+            tasks_context_name=tasks_context_name,
+        )
+        if assistant_id is None:
+            raise ValueError(
+                f"Hive task row missing _assistant_id: log_event_id={rows[0].log_event_id}",
+            )
+        task_ids_by_assistant.setdefault(assistant_id, []).append(task_id)
+
+    ordered_buckets: list[tuple[tuple[str, str], list[int]]] = []
+    for assistant_id in sorted(task_ids_by_assistant):
+        assistant = _get_assistant_for_task_machine_lookup(
+            session=session,
+            assistant_id=assistant_id,
+        )
+        if assistant is None or not assistant.user_id:
+            raise ValueError(
+                "Hive task row references unknown assistant: "
+                f"assistant_id={assistant_id!r}.",
+            )
+        ordered_buckets.append(
+            (
+                (str(assistant.user_id), assistant_id),
+                task_ids_by_assistant[assistant_id],
+            ),
+        )
+    return ordered_buckets
 
 
 def get_task_activation(
@@ -903,10 +1035,14 @@ def get_task_activation(
         project_id=project_id,
         assistant_id=assistant_id,
     )
+    user_id, resolved_assistant_id = _split_per_body_tasks_context_name(
+        tasks_context_name,
+    )
     context_ids = ensure_task_machine_contexts(
         session=session,
         project_id=project_id,
-        tasks_context_name=tasks_context_name,
+        user_id=user_id,
+        assistant_id=resolved_assistant_id,
     )
     activation_key = _build_activation_key(
         assistant_id=assistant_id,
@@ -947,10 +1083,14 @@ def create_task_run_if_absent(
         assistant_id=_coerce_optional_str(payload.get("assistant_id")),
         source_task_log_id=_coerce_int(payload.get("source_task_log_id")),
     )
+    user_id, resolved_assistant_id = _split_per_body_tasks_context_name(
+        tasks_context_name,
+    )
     context_ids = ensure_task_machine_contexts(
         session=session,
         project_id=project_id,
-        tasks_context_name=tasks_context_name,
+        user_id=user_id,
+        assistant_id=resolved_assistant_id,
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
@@ -1004,10 +1144,14 @@ def update_task_run(
         project_id=project_id,
         assistant_id=assistant_id,
     )
+    user_id, resolved_assistant_id = _split_per_body_tasks_context_name(
+        tasks_context_name,
+    )
     context_ids = ensure_task_machine_contexts(
         session=session,
         project_id=project_id,
-        tasks_context_name=tasks_context_name,
+        user_id=user_id,
+        assistant_id=resolved_assistant_id,
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
@@ -1053,10 +1197,14 @@ def get_task_run(
         source_task_log_id=source_task_log_id,
         tasks_context_name=tasks_context_name,
     )
+    user_id, resolved_assistant_id = _split_per_body_tasks_context_name(
+        resolved_tasks_context_name,
+    )
     context_ids = ensure_task_machine_contexts(
         session=session,
         project_id=project_id,
-        tasks_context_name=resolved_tasks_context_name,
+        user_id=user_id,
+        assistant_id=resolved_assistant_id,
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
@@ -1095,10 +1243,14 @@ def create_task_outbound_operation_if_absent(
         assistant_id=_coerce_optional_str(payload.get("assistant_id")),
         source_task_log_id=_coerce_int(payload.get("source_task_log_id")),
     )
+    user_id, resolved_assistant_id = _split_per_body_tasks_context_name(
+        tasks_context_name,
+    )
     context_ids = ensure_task_machine_contexts(
         session=session,
         project_id=project_id,
-        tasks_context_name=tasks_context_name,
+        user_id=user_id,
+        assistant_id=resolved_assistant_id,
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
@@ -1152,10 +1304,14 @@ def update_task_outbound_operation(
         project_id=project_id,
         assistant_id=assistant_id,
     )
+    user_id, resolved_assistant_id = _split_per_body_tasks_context_name(
+        tasks_context_name,
+    )
     context_ids = ensure_task_machine_contexts(
         session=session,
         project_id=project_id,
-        tasks_context_name=tasks_context_name,
+        user_id=user_id,
+        assistant_id=resolved_assistant_id,
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
