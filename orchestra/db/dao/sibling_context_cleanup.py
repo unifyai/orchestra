@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Dict, List, Set, Tuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from orchestra.db.context_naming import HIVE_CONTEXT_PREFIX
 from orchestra.db.models.orchestra_models import Context, LogEvent, LogEventContext
 
 if TYPE_CHECKING:
@@ -72,6 +73,14 @@ def get_assistants_sibling_context_info(
         Empty dict if no sibling contexts found.
     """
     if not log_event_ids or not context_name:
+        return {}
+
+    # Hive-scoped contexts live in a single-tier tree (``Hives/{hive_id}/...``)
+    # with no ``All/`` aggregate segment, so the tier-1/2/3 derivation below has
+    # nothing meaningful to produce. Short-circuit here so a pathological
+    # ``Hives/{id}/.../All/...`` path from a Hive-ignorant writer can't drive
+    # the tier logic to fabricate nonsense candidate siblings either.
+    if context_name.startswith(HIVE_CONTEXT_PREFIX):
         return {}
 
     def _is_topmost_archive(name: str) -> bool:
