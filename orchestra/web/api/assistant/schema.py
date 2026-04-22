@@ -5,6 +5,8 @@ from zoneinfo import available_timezones
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from pydantic.generics import GenericModel
 
+from orchestra.web.api.hives.schema import HiveSummary
+
 T = TypeVar("T")
 
 VALID_TIMEZONES = available_timezones()
@@ -168,6 +170,13 @@ class AssistantCreate(BaseModel):
         None,
         description="Deprecated. Must be null.",
         example=None,
+    )
+    hive_id: Optional[int] = Field(
+        None,
+        description=(
+            "Hive to provision this assistant into at creation time. "
+            "Requires an organization API key. Write-once: cannot be changed after creation."
+        ),
     )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
@@ -384,6 +393,10 @@ class AssistantRead(AssistantCreate):
         None,
         description="External service credentials (OAuth tokens, etc.). "
         "Only populated in admin responses.",
+    )
+    hive: Optional[HiveSummary] = Field(
+        None,
+        description="Hive membership summary for this assistant. Null for solo assistants.",
     )
 
     class Config:
@@ -732,6 +745,14 @@ class AssistantUpdate(BaseModel):
     deploy_env: Optional[str] = Field(
         None,
         description="Deprecated. Must be null.",
+    )
+    hive_id: Optional[int] = Field(
+        None,
+        description=(
+            "Rejected on PATCH. Hive membership is write-once at assistant creation. "
+            "Delete and re-create the assistant to change Hive membership."
+        ),
+        json_schema_extra={"deprecated": True},
     )
 
     @field_validator("timezone")

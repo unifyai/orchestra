@@ -60,6 +60,7 @@ class AssistantDAO:
         is_local: bool = False,
         deploy_env: str | None = None,
         job_title: Optional[str] = None,
+        hive_id: Optional[int] = None,
     ) -> Assistant:
         """
         Create a new Assistant.
@@ -98,6 +99,7 @@ class AssistantDAO:
             timezone=timezone,
             is_local=is_local,
             deploy_env=deploy_env,
+            hive_id=hive_id,
         )
         self.session.add(assistant)
         self.session.flush()

@@ -33,6 +33,7 @@ from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
+from orchestra.db.dao.hive_dao import HiveDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -108,6 +109,7 @@ from orchestra.web.api.assistant.schema import (
     VoiceGenerateRequest,
     VoiceRead,
 )
+from orchestra.web.api.hives.schema import HiveSummary
 from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_outlook_email,
@@ -306,6 +308,11 @@ def _build_assistant_read(
         user_image=user_image,
         team_ids=team_ids,
         secrets=secrets,
+        hive=(
+            HiveSummary(hive_id=a.hive.hive_id, name=a.hive.name)
+            if a.hive_id is not None and a.hive is not None
+            else None
+        ),
     )
 
 
@@ -423,6 +430,27 @@ async def create_assistant(
                     detail="You do not have permission to create assistants in this organization.",
                 )
 
+        # Validate hive_id when provided.
+        hive_id = assistant_in.hive_id
+        if hive_id is not None:
+            if organization_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="hive_id requires an organization API key.",
+                )
+            hive_dao = HiveDAO(session)
+            hive = hive_dao.get_by_id(hive_id)
+            if hive is None or hive.organization_id != organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Hive not found.",
+                )
+            if hive.status == "deleting":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Hive is currently being deleted; cannot add new members.",
+                )
+
         if not settings.is_staging:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -464,6 +492,7 @@ async def create_assistant(
             is_local=assistant_in.is_local or False,
             deploy_env=assistant_in.deploy_env,
             job_title=assistant_in.job_title,
+            hive_id=hive_id,
         )
 
         # Org assistants retain the creator in `user_id`; org access is granted
@@ -2712,6 +2741,16 @@ async def update_assistant_config(
                 detail="You do not have permission to modify this assistant.",
             )
 
+    # hive_id is write-once at assistant creation; reject any attempt to change it.
+    if "hive_id" in update.__pydantic_fields_set__:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "hive_id cannot be changed after assistant creation. "
+                "Delete and re-create the assistant to change Hive membership."
+            ),
+        )
+
     # Determine if the photo is being updated before making changes
     old_photo_url = existing_assistant.profile_photo
     is_photo_changing = (
@@ -2737,6 +2776,7 @@ async def update_assistant_config(
             "phone_country",
             "user_whatsapp_number",
             "create_infra",
+            "hive_id",
         }
 
         update_data = update.model_dump(exclude_unset=True)
