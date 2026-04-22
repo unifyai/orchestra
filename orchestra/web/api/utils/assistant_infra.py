@@ -793,6 +793,28 @@ async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None
     )
 
 
+async def delete_assistant_pool_archive(
+    assistant_id: str,
+    deploy_env: str | None = None,
+):
+    """Delete an assistant's GCS workspace archive (permanent unhire cleanup).
+
+    Pool VMs persist ``/Unity/Local`` to
+    ``gs://unity-assistant-archives/{assistant_id}.tar.gz`` between
+    sessions so a fresh PD can be rehydrated on the next assignment.
+    On permanent delete this archive is orphan state and must be
+    removed in the same teardown flow as the per-assistant PD; otherwise
+    the archive bucket accumulates state for assistants that no longer
+    exist.
+    """
+    return await _request_cleanup_step(
+        name="delete_assistant_pool_archive",
+        deploy_env=deploy_env,
+        method="DELETE",
+        path=f"/infra/vm/pool/archive/{assistant_id}",
+    )
+
+
 async def get_social_platforms_costs():
     """
     Fetch available social platforms and their costs.
@@ -1471,9 +1493,19 @@ async def teardown_assistant_runtime(
         topic_step = await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
         if _requires_assistant_disk_cleanup(desktop_mode):
             disk_step = await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
+            archive_step = await delete_assistant_pool_archive(
+                assistant_id,
+                deploy_env=deploy_env,
+            )
         else:
             disk_step = _cleanup_step_result(
                 "delete_assistant_disk",
+                success=True,
+                skipped=True,
+                reason="desktop_mode_does_not_require_disk_cleanup",
+            )
+            archive_step = _cleanup_step_result(
+                "delete_assistant_pool_archive",
                 success=True,
                 skipped=True,
                 reason="desktop_mode_does_not_require_disk_cleanup",
@@ -1491,6 +1523,12 @@ async def teardown_assistant_runtime(
             skipped=True,
             reason="runtime_cleanup_incomplete",
         )
+        archive_step = _cleanup_step_result(
+            "delete_assistant_pool_archive",
+            success=True,
+            skipped=True,
+            reason="runtime_cleanup_incomplete",
+        )
 
     steps = {
         "stop_assistant_session_runtime": stop_session_step,
@@ -1499,6 +1537,7 @@ async def teardown_assistant_runtime(
         "wait_for_runtime_cleanup": wait_step,
         "delete_pubsub_topic": topic_step,
         "delete_assistant_disk": disk_step,
+        "delete_assistant_pool_archive": archive_step,
     }
     errors = _cleanup_errors_from_steps(steps)
     return {
@@ -1657,9 +1696,21 @@ def teardown_assistant_runtime_sync(
                 method="DELETE",
                 path=f"/infra/vm/pool/disk/{assistant_id}",
             )
+            steps["delete_assistant_pool_archive"] = _request_cleanup_step_sync(
+                name="delete_assistant_pool_archive",
+                deploy_env=deploy_env,
+                method="DELETE",
+                path=f"/infra/vm/pool/archive/{assistant_id}",
+            )
         else:
             steps["delete_assistant_disk"] = _cleanup_step_result(
                 "delete_assistant_disk",
+                success=True,
+                skipped=True,
+                reason="desktop_mode_does_not_require_disk_cleanup",
+            )
+            steps["delete_assistant_pool_archive"] = _cleanup_step_result(
+                "delete_assistant_pool_archive",
                 success=True,
                 skipped=True,
                 reason="desktop_mode_does_not_require_disk_cleanup",
@@ -1673,6 +1724,12 @@ def teardown_assistant_runtime_sync(
         )
         steps["delete_assistant_disk"] = _cleanup_step_result(
             "delete_assistant_disk",
+            success=True,
+            skipped=True,
+            reason="runtime_cleanup_incomplete",
+        )
+        steps["delete_assistant_pool_archive"] = _cleanup_step_result(
+            "delete_assistant_pool_archive",
             success=True,
             skipped=True,
             reason="runtime_cleanup_incomplete",
