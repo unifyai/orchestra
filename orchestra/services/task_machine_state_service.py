@@ -38,6 +38,7 @@ TASKS_CONTEXT_NAME = "Tasks"
 TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
 TASK_RUNS_CONTEXT_NAME = "Tasks/Runs"
 TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME = "Tasks/OutboundOperations"
+HIVE_CONTEXT_PREFIX = "Hives/"
 _ALL_CONTEXT_SEGMENT = "All"
 _TASK_ACTIVATIONS_CONTEXT_LEAF = "Activations"
 _TASK_RUNS_CONTEXT_LEAF = "Runs"
@@ -112,9 +113,19 @@ def _split_context_name(context_name: str | None) -> list[str]:
 
 
 def _assistant_id_from_context_name(context_name: str | None) -> str | None:
-    """Extract the assistant id from an assistant-scoped tasks context."""
+    """Extract the assistant id from an assistant-scoped tasks context.
 
-    segments = _split_context_name(context_name)
+    Hive paths (``Hives/{hive_id}/Tasks`` and any deeper Hive subtree) never
+    name an assistant — their second segment is a hive id — so the parser
+    refuses them outright. Callers that need the owning body for a Hive row
+    must read ``_assistant_id`` off the row's data instead of inferring it
+    from the path.
+    """
+
+    normalized = (context_name or "").strip("/")
+    if normalized.startswith(HIVE_CONTEXT_PREFIX):
+        return None
+    segments = _split_context_name(normalized)
     if len(segments) < 2 or segments[-1] != TASKS_CONTEXT_NAME:
         return None
     if segments[-2] == _ALL_CONTEXT_SEGMENT:
@@ -205,7 +216,21 @@ def _build_activation_key(*, assistant_id: str | None, task_id: int) -> str:
 
 
 def is_task_surface_context_name(context_name: str | None) -> bool:
-    """Return True when the name refers to the user-authored tasks table."""
+    """Return True when the name refers to the user-authored tasks table.
+
+    This predicate is the projection trigger for ``_sync_task_activations_if_needed``:
+    any ``/logs`` write whose context is a task-surface name causes the
+    task-machine service to re-materialize activations. It deliberately does
+    NOT reject Hive paths — ``Hives/{hive_id}/Tasks`` is the Hive-shared
+    definition surface and every write to it must fire projection so each
+    body's ``{user}/{assistant}/Tasks/Activations`` stays in sync. The
+    asymmetry with :func:`is_internal_task_machine_context_name` and
+    :func:`is_protected_task_surface_context_name` is load-bearing: those two
+    classifiers reject Hive paths so nothing under ``Hives/`` is ever treated
+    as live machine state, while projection correctness for Hive-defined
+    tasks is secured by the per-row ``_assistant_id`` owner stamp and the
+    grouped projection path in :func:`sync_task_activations_for_task_ids`.
+    """
 
     segments = _split_context_name(context_name)
     if not segments or segments[-1] != TASKS_CONTEXT_NAME:
@@ -219,6 +244,8 @@ def is_internal_task_machine_context_name(context_name: str | None) -> bool:
     """Return True when the name refers to an internal task machine context."""
 
     normalized = (context_name or "").strip("/")
+    if normalized.startswith(HIVE_CONTEXT_PREFIX):
+        return False
     if normalized in _INTERNAL_TASK_MACHINE_CONTEXT_NAMES:
         return True
     segments = _split_context_name(normalized)
@@ -231,6 +258,8 @@ def is_protected_task_surface_context_name(context_name: str | None) -> bool:
     """Return True for built-in task contexts that should not be removed."""
 
     normalized = (context_name or "").strip("/")
+    if normalized.startswith(HIVE_CONTEXT_PREFIX):
+        return False
     return is_task_surface_context_name(
         normalized,
     ) or is_internal_task_machine_context_name(
