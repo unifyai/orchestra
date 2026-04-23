@@ -82,6 +82,7 @@ from orchestra.web.api.auth.schema import (
     SetPasswordRequest,
     VerifyCodeResponse,
 )
+from orchestra.web.api.dependencies import enforce_unify_members_only
 from orchestra.web.api.users.schema import AccountRequest
 from orchestra.web.api.utils.auth_rate_limiting import enforce_auth_rate_limit
 
@@ -296,6 +297,10 @@ def create_user_after_verification(
     entry, creates the user, and deletes the entry.
     """
     email, jti = decode_verification_token(body.token, expected_purpose="signup")
+
+    # Defence-in-depth: a verification token issued before the gate was
+    # enabled must still not be exchangeable for a non-Unify account.
+    enforce_unify_members_only(email)
 
     # Check if user was created concurrently
     user_dao = UserDAO(session)
