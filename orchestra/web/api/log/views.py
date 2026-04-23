@@ -5318,6 +5318,14 @@ def create_fields(
     Each field can have an optional description. If a field already exists, its description
     will be updated.
 
+    Backfill behavior:
+        When ``backfill_logs=True``, the endpoint null-merges any field it has
+        not yet stamped into every existing ``log_event`` row of the context.
+        Stamping is recorded on ``field_type.backfilled_at``: once a field has
+        been backfilled, subsequent idempotent re-POSTs short-circuit at the
+        DAO level with a cheap indexed probe, avoiding the full-context scan
+        that previously dominated Cloud SQL CPU.
+
     Response:
         - ``info``: human-readable summary.
         - ``backfilled_count``: number of **log_event rows** whose ``data`` column
@@ -5325,7 +5333,8 @@ def create_fields(
           at least one of the requested field keys before the call. Rows that
           already contained every requested key are skipped (no write, no WAL)
           and do not contribute to this count. Always ``0`` when
-          ``backfill_logs=False`` or when ``fields`` is empty.
+          ``backfill_logs=False``, when ``fields`` is empty, or when every
+          requested field is already stamped as backfilled.
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
@@ -5359,9 +5368,17 @@ def create_fields(
         is_versioned=False,
     )
 
-    # Create fields
+    # Create fields and learn which still need a log_event backfill.
+    #
+    # `create_fields` upserts the field_type rows and RETURNs the subset whose
+    # `backfilled_at IS NULL` after the upsert. That subset is the ONLY work
+    # the backfill UPDATE below must do; stamped fields can be skipped
+    # entirely. This is the primary production fix: ingestion pods re-POST
+    # the same field set hundreds of times per context, and without this gate
+    # every call forced a full-context scan of `log_event` even when no row
+    # needed changing (the `?&` guard suppressed writes but not the scan).
     try:
-        field_type_dao.create_fields(
+        pending_backfill_fields = field_type_dao.create_fields(
             project_id=project_id,
             context_id=context_id,
             fields=request.fields,
@@ -5372,25 +5389,26 @@ def create_fields(
             detail=f"Failed to create fields: {str(e)}",
         )
 
-    # Backfill existing logs with None values for any newly added fields.
+    # Null-merge pending fields into every row of the context, then stamp.
     #
-    # Single server-side UPDATE: the templated null-merge is gated by `?&`
-    # so rows that already carry every requested key are skipped without any
-    # writes or row shipping back to Python. This replaces the former
-    # scoping SELECT + CROSS JOIN existence check + bulk_merge_data +
-    # duplicate views.py UPDATE pipeline (four queries) with a single
-    # statement, which is where most of the production savings come from.
+    # `backfilled_count` is `result.rowcount`, i.e. the number of log_event
+    # ROWS the UPDATE actually touched. A row is touched iff it was missing
+    # at least one of the pending field keys (the `?&` guard filters
+    # fully-populated rows out before any write -- this matters for the
+    # partial-overlap case where some pending fields are already present on
+    # some rows via log-creation side effects).
     #
-    # `backfilled_count` is set from `result.rowcount`, i.e. the number of
-    # log_event ROWS the UPDATE actually touched. A row is touched iff it was
-    # missing at least one of the requested field keys (the `?&` guard filters
-    # fully-populated rows out before any write). Prior to this refactor the
-    # value was a pair count (rows × missing_fields); it is now a row count.
+    # After the UPDATE succeeds we stamp `field_type.backfilled_at = now()`
+    # for the pending subset so subsequent idempotent re-POSTs short-circuit
+    # before this block executes. Stamp + UPDATE + upsert all commit as one
+    # transaction so a crash mid-UPDATE leaves the stamp unset and the next
+    # call will retry.
     backfilled_count = 0
-    if request.backfill_logs and request.fields:
+    if request.backfill_logs and pending_backfill_fields:
         try:
-            field_names = list(request.fields.keys())
-            template_json = json.dumps({name: None for name in field_names})
+            template_json = json.dumps(
+                {name: None for name in pending_backfill_fields},
+            )
 
             result = session.execute(
                 text(
@@ -5407,12 +5425,18 @@ def create_fields(
                 ),
                 {
                     "template": template_json,
-                    "field_names": field_names,
+                    "field_names": pending_backfill_fields,
                     "context_id": context_id,
                     "project_id": project_id,
                 },
             )
             backfilled_count = result.rowcount or 0
+
+            field_type_dao.mark_backfilled(
+                project_id=project_id,
+                context_id=context_id,
+                field_names=pending_backfill_fields,
+            )
             session.commit()
         except Exception as e:
             session.rollback()
