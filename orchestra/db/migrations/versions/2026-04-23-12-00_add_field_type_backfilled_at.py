@@ -28,7 +28,7 @@ trivially cheap, since the common steady-state after ingestion warmup
 is that **no** row matches the partial predicate.
 
 Revision ID: add_field_type_backfilled_at
-Revises: add_assistant_job_title
+Revises: add_hives_and_assistant_hive_id
 Create Date: 2026-04-23 12:00:00.000000
 """
 
@@ -36,7 +36,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "add_field_type_backfilled_at"
-down_revision = "add_assistant_job_title"
+down_revision = "add_hives_and_assistant_hive_id"
 branch_labels = None
 depends_on = None
 
