@@ -147,10 +147,7 @@ def get_app() -> FastAPI:
         async def dispatch(self, request, call_next):
             if not settings.is_staging:
                 return await call_next(request)
-            if (
-                request.method != "POST"
-                or request.url.path not in self.GATED_PATHS
-            ):
+            if request.method != "POST" or request.url.path not in self.GATED_PATHS:
                 return await call_next(request)
 
             # Buffer the body so the downstream handler can re-read it.
