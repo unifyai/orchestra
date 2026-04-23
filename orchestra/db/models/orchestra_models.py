@@ -1175,6 +1175,14 @@ class FieldType(Base):
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")
     description = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    # NULL = field has never been null-merged into every existing log_event
+    # row of its context (initial state for both create_fields inserts and
+    # bulk_create_field_types inserts done as a side effect of log creation).
+    # Non-NULL = a POST /v0/logs/fields call with backfill_logs=True has
+    # already null-merged this field across the whole context, so idempotent
+    # re-POSTs may skip the expensive log_event UPDATE. Kept nullable so
+    # ON CONFLICT DO UPDATE can leave pre-existing stamp values intact.
+    backfilled_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
@@ -1184,6 +1192,12 @@ class FieldType(Base):
             name="uq_project_field_name_context_id",
         ),
         Index("idx_field_type_context_id", "context_id"),
+        Index(
+            "idx_field_type_needs_backfill",
+            "project_id",
+            "context_id",
+            postgresql_where=text("backfilled_at IS NULL"),
+        ),
         sa.CheckConstraint(
             "char_length(description) <= 256",
             name="ck_field_type_description_len",
