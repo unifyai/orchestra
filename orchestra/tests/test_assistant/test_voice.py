@@ -136,24 +136,16 @@ def mock_tts_services_factory(fastapi_app):
     deepgram_mock.detect_language_from_audio.return_value = "en"
     openai_mock.detect_language_from_text.return_value = "en"
 
-    # Patch send_pubsub_msg where it's looked up by the middleware's log_production_traffic function.
-    with patch(
-        "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
-    ) as mock_send_pubsub:
-        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
-            lambda: cartesia_mock
-        )
-        fastapi_app.dependency_overrides[OriginalElevenLabsService] = (
-            lambda: elevenlabs_mock
-        )
-        fastapi_app.dependency_overrides[OriginalDeepgramService] = (
-            lambda: deepgram_mock
-        )
-        fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
+    fastapi_app.dependency_overrides[OriginalCartesiaService] = lambda: cartesia_mock
+    fastapi_app.dependency_overrides[OriginalElevenLabsService] = (
+        lambda: elevenlabs_mock
+    )
+    fastapi_app.dependency_overrides[OriginalDeepgramService] = lambda: deepgram_mock
+    fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
 
-        yield cartesia_mock, elevenlabs_mock, deepgram_mock, openai_mock
+    yield cartesia_mock, elevenlabs_mock, deepgram_mock, openai_mock
 
-        fastapi_app.dependency_overrides.clear()
+    fastapi_app.dependency_overrides.clear()
 
 
 async def get_user_id_from_request_state(

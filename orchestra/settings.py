@@ -171,7 +171,9 @@ class Settings(BaseSettings):
         if p.strip()
     ]
 
-    # Production Traffic Project (for internal monitoring)
+    # Unify admin organization (used for demo-assistant gating and other
+    # admin-only features). The org row itself is provisioned out of band;
+    # these settings only record its name and owner id for lookup.
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
         "Unify",
@@ -179,22 +181,6 @@ class Settings(BaseSettings):
     orchestra_owner_id: str = os.environ.get(
         "ORCHESTRA_OWNER_ID",
         "67abcd12-1fac-4a8f-afe9-c54698c96971",
-    )
-    orchestra_prod_traffic_name: str = os.environ.get(
-        "ORCHESTRA_PROD_TRAFFIC_NAME",
-        "Production Traffic",
-    )
-    traffic_log_pubsub_topic: str = os.environ.get(
-        "ORCHESTRA_TRAFFIC_LOG_PUBSUB_TOPIC",
-        "orchestra-traffic-logs",
-    )
-    traffic_log_pubsub_subscription: str = os.environ.get(
-        "ORCHESTRA_TRAFFIC_LOG_PUBSUB_SUBSCRIPTION",
-        "orchestra-traffic-logs-sub",
-    )
-    traffic_log_pubsub_project_id: str = os.environ.get(
-        "ORCHESTRA_TRAFFIC_LOG_PUBSUB_PROJECT_ID",
-        os.environ.get("GCP_PROJECT_ID", "saas-368716"),
     )
 
     # Chat Completions Project
