@@ -1,13 +1,20 @@
 """Correctness tests for the POST /v0/logs/fields backfill path.
 
-After the single-UPDATE refactor (one ``UPDATE log_event SET data = template ||
+The endpoint runs one ``UPDATE log_event SET data = template ||
 COALESCE(data, '{}'::jsonb) FROM log_event_context ... WHERE NOT (data ?&
-names)``), these cases lock down the invariants that matter to production:
+names)`` gated by a ``field_type.backfilled_at`` check: ``create_fields``
+returns only the fields whose ``backfilled_at IS NULL``, and ``mark_backfilled``
+stamps them after a successful UPDATE. These cases lock down the invariants
+that matter to production:
 
 * Existing non-null values are never overwritten by the null template
   (right-biased merge: ``template || data``).
-* Rows that already have every requested key are skipped by the ``?&`` guard
-  (zero writes, zero WAL, ``backfilled_count == 0``).
+* Idempotent re-POSTs short-circuit at the DAO: once stamped, subsequent
+  calls return an empty pending list and skip the UPDATE entirely (zero
+  writes, zero scans, ``backfilled_count == 0``).
+* The ``?&`` guard remains as a safety net within a single call: if some
+  rows already have the pending field (e.g. via a log-creation side effect)
+  those rows are filtered out before any write.
 * Empty ``fields`` dict short-circuits before any DB work.
 * Heterogeneous rows (different subsets of missing keys) all converge to the
   full requested schema in a single statement.
@@ -17,8 +24,8 @@ names)``), these cases lock down the invariants that matter to production:
 
 These complement ``test_create_fields*backfill*`` in ``test_log_fields.py``;
 they intentionally exercise edge shapes the original tests did not (empty
-fields dict, idempotent second call, mixed heterogeneous rows, and
-preservation across a batch of rows).
+fields dict, idempotent second call, mixed heterogeneous rows, preservation
+across a batch of rows, and the log-creation side-effect path).
 """
 
 import pytest
@@ -31,12 +38,17 @@ from . import HEADERS, _create_log, _create_project
 async def test_backfill_no_op_when_all_rows_already_have_every_field(
     client: AsyncClient,
 ):
-    """Second call with the same fields must short-circuit via the ?& guard.
+    """Second call with the same fields must short-circuit via the backfilled_at gate.
 
     Production hot path: clients re-POST the same field set repeatedly.
-    The new UPDATE must not rewrite rows whose data already contains every
-    requested key — ``backfilled_count`` should drop to 0 on the second call
-    and no row's data should change.
+    First call: both fields are NEW, so ``create_fields`` returns them in
+    the pending list, the UPDATE null-merges them into both rows, and the
+    endpoint stamps ``field_type.backfilled_at = now()`` for both.
+    Second call: ``create_fields`` sees ``backfilled_at`` already set for
+    both and returns an empty pending list — the UPDATE is skipped
+    entirely, never reaching the ``?&`` safety net. This is the fix for the
+    staging Cloud SQL CPU spike: previously, even with `?&` suppressing
+    writes, every idempotent re-POST still forced a full-context scan.
     """
     project_name = "test-backfill-idempotent"
     await _create_project(client, project_name)
@@ -278,6 +290,105 @@ async def test_backfill_with_empty_fields_dict_is_noop(client: AsyncClient):
     logs = logs_resp.json()["logs"]
     assert len(logs) == 1
     assert logs[0]["entries"] == {"existing_field": "value"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "seed_field,new_field",
+    [
+        ("X", "Y"),
+        ("alpha", "beta"),
+    ],
+)
+async def test_backfill_handles_log_creation_side_effect_field(
+    client: AsyncClient,
+    seed_field: str,
+    new_field: str,
+):
+    """Exercises the log-creation-side-effect path that the ``xmax=0`` attempt broke.
+
+    Setup:
+
+    1. ``_create_log`` with ``explicit_types={seed_field: ...}`` and a
+       sibling log *without* ``seed_field``. This registers
+       ``field_type[seed_field]`` via ``bulk_create_field_types`` with
+       ``backfilled_at = NULL`` — the side-effect path. Only one of the two
+       rows carries ``seed_field``.
+    2. POST ``/v0/logs/fields`` with ``{seed_field, new_field}``.
+
+    Correctness demands both fields are treated as pending-backfill even
+    though ``seed_field`` already exists in ``field_type``:
+
+    - ``create_fields`` upserts, ``set_`` excludes ``backfilled_at`` so the
+      NULL stamp is preserved, both names end up in the pending list.
+    - The UPDATE's ``?&`` safety net filters out the row that already has
+      ``seed_field`` (it still gets ``new_field`` via the merge) and fully
+      null-merges both keys into the sibling row.
+
+    First call: ``backfilled_count`` is the number of rows actually
+    touched (both rows are touched — one because it's missing both keys,
+    one because it's missing ``new_field``). Sibling-row assertions
+    guarantee the right-biased merge left existing values intact.
+
+    Second call with the same payload: DAO-level short-circuit returns
+    empty pending list, ``backfilled_count == 0``, no UPDATE issued.
+    """
+    project_name = f"test-backfill-side-effect-{seed_field}-{new_field}"
+    await _create_project(client, project_name)
+
+    resp_seeded = await _create_log(
+        client,
+        project_name,
+        entries={
+            seed_field: "preserve-me",
+            "explicit_types": {seed_field: {"type": "str", "mutable": True}},
+        },
+    )
+    assert resp_seeded.status_code == 200, resp_seeded.json()
+    seeded_log_id = resp_seeded.json()["log_event_ids"][0]
+
+    resp_sibling = await _create_log(
+        client,
+        project_name,
+        entries={"other_field": "sibling"},
+    )
+    assert resp_sibling.status_code == 200, resp_sibling.json()
+    sibling_log_id = resp_sibling.json()["log_event_ids"][0]
+
+    payload = {
+        "project_name": project_name,
+        "fields": {seed_field: "str", new_field: "str"},
+    }
+
+    first = await client.post("/v0/logs/fields", json=payload, headers=HEADERS)
+    assert first.status_code == 200, first.json()
+    assert first.json()["backfilled_count"] == 2, (
+        "Both rows must be touched on the first call: the seeded row is "
+        "missing new_field and the sibling row is missing both keys. The "
+        "seed_field being pre-registered as a log-creation side effect must "
+        "NOT cause it to be skipped — backfilled_at was still NULL."
+    )
+
+    logs_resp = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_resp.status_code == 200
+    logs = {log["id"]: log for log in logs_resp.json()["logs"]}
+
+    assert (
+        logs[seeded_log_id]["entries"][seed_field] == "preserve-me"
+    ), "Right-biased merge must leave the seeded row's existing value untouched."
+    assert logs[seeded_log_id]["entries"][new_field] is None
+    assert logs[sibling_log_id]["entries"][seed_field] is None
+    assert logs[sibling_log_id]["entries"][new_field] is None
+
+    second = await client.post("/v0/logs/fields", json=payload, headers=HEADERS)
+    assert second.status_code == 200, second.json()
+    assert second.json()["backfilled_count"] == 0, (
+        "Second call must be a DAO-level no-op: both fields are now stamped, "
+        "pending list is empty, UPDATE is never issued."
+    )
 
 
 @pytest.mark.anyio
