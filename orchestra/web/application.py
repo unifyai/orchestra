@@ -11,9 +11,6 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
-from orchestra.web.api.utils.production_traffic_middleware import (
-    ProductionTrafficMiddleware,
-)
 from orchestra.web.api.utils.prometheus_middleware import PrometheusMiddleware, metrics
 from orchestra.web.api.utils.request_trace_middleware import RequestTraceMiddleware
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
@@ -216,10 +213,6 @@ def get_app() -> FastAPI:
     app.add_middleware(
         PrometheusMiddleware,
         app_name="orchestra",
-    )
-    # Add Production Traffic middleware
-    app.add_middleware(
-        ProductionTrafficMiddleware,
     )
     # Add request tracing middleware (captures body/params for debugging)
     app.add_middleware(
