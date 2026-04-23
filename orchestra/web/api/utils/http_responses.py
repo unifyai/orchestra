@@ -43,6 +43,11 @@ admin_not_authorized = HTTPException(
     detail="Admin access unauthorized, this incident will be reported.",
 )
 
+staging_restricted = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="This environment is restricted to Unify AI members only.",
+)
+
 
 def not_found(item):
     return HTTPException(

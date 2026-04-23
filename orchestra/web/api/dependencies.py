@@ -10,12 +10,34 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import AdminUser
+from orchestra.settings import settings
 from orchestra.web.api.utils.http_responses import (
     account_frozen,
     admin_not_authorized,
     invalid_api_key,
+    staging_restricted,
 )
 from orchestra.web.api.utils.observability import set_user_context
+
+UNIFY_EMAIL_DOMAIN = "@unify.ai"
+
+
+def _is_unify_member(email: str | None) -> bool:
+    """Return True when ``email`` belongs to a Unify AI member."""
+    return bool(email) and email.lower().endswith(UNIFY_EMAIL_DOMAIN)
+
+
+def enforce_unify_members_only(email: str | None) -> None:
+    """
+    Block non-Unify emails when the environment is gated to Unify members.
+
+    Currently only staging is gated. Shared by the API-key auth dependency,
+    the registration middleware, and the verification-token redemption
+    endpoint so the gate is consistent end-to-end.
+    """
+    if settings.is_staging and not _is_unify_member(email):
+        raise staging_restricted
+
 
 security = HTTPBearer()
 logger = logging.getLogger(__name__)
@@ -64,6 +86,10 @@ def auth_api_key(
             request_fastapi.state.last_name = db_response[0][3]
             request_fastapi.state.organization_id = db_response[0][4]
             request_fastapi.state.api_key = apikey
+
+            # Gate restricted environments (e.g. staging) to Unify members.
+            # Runs after we know the user so the 403 is meaningful in logs.
+            enforce_unify_members_only(request_fastapi.state.user_email)
 
             # Update the user context for logging/tracing
             set_user_context(
