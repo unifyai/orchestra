@@ -32,7 +32,6 @@ from orchestra.db.models.orchestra_models import (
     FieldType,
     LogEvent,
     LogEventContext,
-    Organization,
     Project,
     ResourceAccess,
 )
@@ -914,32 +913,11 @@ def delete_project(
             detail=f"The '{project.name}' project is protected and cannot be deleted.",
         )
 
-    # Check if trying to delete the protected project (Production Traffic)
-    ORGANIZATION_NAME = settings.orchestra_organization_name
-    OWNER_ID = settings.orchestra_owner_id
-    PROD_TRAFFIC_PROJECT_NAME = settings.orchestra_prod_traffic_name
     CHAT_COMPLETIONS_PROJECT_NAME = settings.chat_completions_project_name
-    orchestra_org = (
-        session.query(Organization)
-        .filter(
-            Organization.name == ORGANIZATION_NAME,
-            Organization.owner_id == OWNER_ID,
-        )
-        .first()
-    )
     if project.name == CHAT_COMPLETIONS_PROJECT_NAME:
         raise HTTPException(
             status_code=403,
             detail=f"The '{CHAT_COMPLETIONS_PROJECT_NAME}' project cannot be deleted.",
-        )
-    if (
-        project.name == PROD_TRAFFIC_PROJECT_NAME
-        and orchestra_org
-        and project.organization_id == orchestra_org.id
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
         )
 
     try:
