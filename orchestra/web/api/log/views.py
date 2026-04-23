@@ -5279,7 +5279,8 @@ def get_fields(
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Fields created successfully.",
+                        "info": "Fields created successfully. Backfilled 2 log events with None values.",
+                        "backfilled_count": 2,
                     },
                 },
             },
@@ -5307,6 +5308,15 @@ def create_fields(
 
     Each field can have an optional description. If a field already exists, its description
     will be updated.
+
+    Response:
+        - ``info``: human-readable summary.
+        - ``backfilled_count``: number of **log_event rows** whose ``data`` column
+          was updated by the backfill. A row counts as updated if it was missing
+          at least one of the requested field keys before the call. Rows that
+          already contained every requested key are skipped (no write, no WAL)
+          and do not contribute to this count. Always ``0`` when
+          ``backfill_logs=False`` or when ``fields`` is empty.
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
@@ -5353,111 +5363,48 @@ def create_fields(
             detail=f"Failed to create fields: {str(e)}",
         )
 
-    # Backfill existing logs with None values if requested
+    # Backfill existing logs with None values for any newly added fields.
+    #
+    # Single server-side UPDATE: the templated null-merge is gated by `?&`
+    # so rows that already carry every requested key are skipped without any
+    # writes or row shipping back to Python. This replaces the former
+    # scoping SELECT + CROSS JOIN existence check + bulk_merge_data +
+    # duplicate views.py UPDATE pipeline (four queries) with a single
+    # statement, which is where most of the production savings come from.
+    #
+    # `backfilled_count` is set from `result.rowcount`, i.e. the number of
+    # log_event ROWS the UPDATE actually touched. A row is touched iff it was
+    # missing at least one of the requested field keys (the `?&` guard filters
+    # fully-populated rows out before any write). Prior to this refactor the
+    # value was a pair count (rows × missing_fields); it is now a row count.
     backfilled_count = 0
-    if request.backfill_logs:
+    if request.backfill_logs and request.fields:
         try:
-            # Get all log events in this context
-            le_rows = (
-                session.query(LogEvent.id)
-                .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-                .filter(
-                    LogEvent.project_id == project_id,
-                    LogEventContext.context_id == context_id,
-                )
-                .all()
-            )
+            field_names = list(request.fields.keys())
+            template_json = json.dumps({name: None for name in field_names})
 
-            log_event_ids = [row[0] for row in le_rows]
-
-            if log_event_ids and request.fields:
-                field_names = list(request.fields.keys())
-
-                # Check for existing fields in LogEvent.data JSONB column
-                # Single query to check all (log_event_id, field_name) pairs
-                existing_jsonb_pairs = []
-                if log_event_ids and field_names:
-                    from sqlalchemy import text as sql_text
-
-                    # Build a single batch query using JSONB ? operator with UNNEST
-                    # Use CAST() instead of :: to avoid SQLAlchemy parameter binding issues
-                    # This is O(1) query instead of O(N*M) queries
-                    jsonb_check_query = sql_text(
-                        """
-                        SELECT le.id, f.field_name
-                        FROM log_event le
-                        CROSS JOIN UNNEST(CAST(:field_names AS text[])) AS f(field_name)
-                        WHERE le.id = ANY(:log_event_ids)
-                        AND le.data ? f.field_name
+            result = session.execute(
+                text(
+                    """
+                    UPDATE log_event le
+                    SET data = CAST(:template AS jsonb) || COALESCE(le.data, '{}'::jsonb),
+                        updated_at = now()
+                    FROM log_event_context lec
+                    WHERE lec.log_event_id = le.id
+                      AND lec.context_id = :context_id
+                      AND le.project_id = :project_id
+                      AND NOT (le.data ?& CAST(:field_names AS text[]))
                     """,
-                    )
-                    jsonb_results = session.execute(
-                        jsonb_check_query,
-                        {"log_event_ids": log_event_ids, "field_names": field_names},
-                    ).fetchall()
-                    existing_jsonb_pairs = [(row[0], row[1]) for row in jsonb_results]
-
-                existing_pairs = set(existing_jsonb_pairs)
-
-                # Prepare entries to create for missing pairs only
-                entries_to_create = []
-                for le_id in log_event_ids:
-                    for fname in field_names:
-                        if (le_id, fname) in existing_pairs:
-                            continue
-                        entries_to_create.append(
-                            {
-                                "project_id": project_id,
-                                "log_event_id": le_id,
-                                "key": fname,
-                                "value": None,
-                                "context_id": context_id,
-                            },
-                        )
-
-                backfilled_count = len(entries_to_create)
-
-                if entries_to_create:
-                    # Create LogEventDAO instance for bulk merge
-                    log_dao = LogEventDAO(session, context_dao)
-                    log_dao.bulk_merge_data(entries_to_create)
-
-                    # Update LogEvent.data JSONB column with the new fields
-                    # Uses a single UPDATE with unnest for all log events
-                    from collections import defaultdict
-
-                    from sqlalchemy import text
-
-                    entries_by_log_event = defaultdict(dict)
-                    for entry in entries_to_create:
-                        entries_by_log_event[entry["log_event_id"]][entry["key"]] = None
-
-                    # BATCH UPDATE: Use a single query with VALUES clause
-                    # Build values list for the UPDATE
-                    if entries_by_log_event:
-                        update_values = [
-                            (le_id, json.dumps(fields_to_add))
-                            for le_id, fields_to_add in entries_by_log_event.items()
-                        ]
-
-                        # Use a CTE with VALUES to perform batch update in a single query
-                        # This is O(1) query instead of O(N) queries
-                        session.execute(
-                            text(
-                                """
-                                UPDATE log_event le
-                                SET data = COALESCE(le.data, '{}'::jsonb) || v.fields_json::jsonb
-                                FROM (SELECT unnest(:ids) AS id, unnest(:fields) AS fields_json) AS v
-                                WHERE le.id = v.id
-                            """,
-                            ),
-                            {
-                                "ids": [v[0] for v in update_values],
-                                "fields": [v[1] for v in update_values],
-                            },
-                        )
-
-                    session.commit()
+                ),
+                {
+                    "template": template_json,
+                    "field_names": field_names,
+                    "context_id": context_id,
+                    "project_id": project_id,
+                },
+            )
+            backfilled_count = result.rowcount or 0
+            session.commit()
         except Exception as e:
             session.rollback()
             raise HTTPException(
@@ -5466,7 +5413,7 @@ def create_fields(
             )
 
     return {
-        "info": f"Fields created successfully. {'Backfilled ' + str(backfilled_count) + ' log entries with None values.' if request.backfill_logs and backfilled_count > 0 else ''}",
+        "info": f"Fields created successfully. {'Backfilled ' + str(backfilled_count) + ' log events with None values.' if request.backfill_logs and backfilled_count > 0 else ''}",
         "backfilled_count": backfilled_count if request.backfill_logs else 0,
     }
 

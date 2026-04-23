@@ -523,8 +523,10 @@ class CreateFieldsRequest(BaseModel):
     backfill_logs: bool = Field(
         default=True,
         description="Whether to backfill existing logs in the context with None values for the new fields. "
-        "When True, all existing logs will get the new fields with None values, ensuring all rows can "
-        "participate in derived equations without errors.",
+        "When True, any existing log whose `data` is missing at least one of the requested field keys "
+        "will be updated to include the missing keys with None values; logs that already contain every "
+        "requested key are left untouched. The response's `backfilled_count` reports the number of log "
+        "event rows that were actually updated (not the number of (row, field) pairs).",
         example=True,
     )
 
