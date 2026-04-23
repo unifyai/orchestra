@@ -260,6 +260,36 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalars().all()
         return result
 
+    def list_for_hive(
+        self,
+        hive_id: int,
+        organization_id: Optional[int] = None,
+    ) -> List[tuple[str, int]]:
+        """
+        List ``(user_id, agent_id)`` for every Assistant in the given Hive.
+
+        Demo assistants are intentionally included — Hive membership is
+        defined purely by ``Assistant.hive_id``; callers that need to
+        filter by demo status can do so on the returned list.
+
+        Only the two columns needed to identify a body are projected
+        because the sole consumer (``GET /hives/{id}/assistants``) fans
+        out per-body writes keyed on the identity pair.
+
+        :param hive_id: Hive id to enumerate.
+        :param organization_id: If provided, additionally scope the query
+            by ``organization_id`` so a caller with an org API key cannot
+            enumerate members of a hive owned by another org.
+        :return: List of ``(user_id, agent_id)`` pairs (may be empty).
+        """
+        stmt = select(Assistant.user_id, Assistant.agent_id).where(
+            Assistant.hive_id == hive_id,
+        )
+        if organization_id is not None:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+        result = self.session.execute(stmt).all()
+        return [(user_id, agent_id) for user_id, agent_id in result]
+
     def list_all_org_assistants(
         self,
         organization_id: int,

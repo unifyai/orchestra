@@ -10,12 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.hive_dao import HiveDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.services.hive_service import cascade_delete_hive
 from orchestra.web.api.assistant.schema import InfoResponse
-from orchestra.web.api.hives.schema import HiveCreate, HiveRead, HiveUpdate
+from orchestra.web.api.hives.schema import HiveCreate, HiveMember, HiveRead, HiveUpdate
 
 router = APIRouter()
 
@@ -148,6 +149,40 @@ async def get_hive(
     hive_dao = HiveDAO(session)
     hive = _get_hive_for_org(hive_dao, hive_id, organization_id)
     return HiveRead.model_validate(hive)
+
+
+@router.get(
+    "/hives/{hive_id}/assistants",
+    response_model=list[HiveMember],
+    status_code=status.HTTP_200_OK,
+    summary="List the assistants that belong to a Hive",
+    tags=["Hives"],
+)
+async def list_hive_assistants(
+    hive_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> list[HiveMember]:
+    """Return the (user_id, assistant_id) pair for every Hive member.
+
+    Unity callers use this to enumerate member bodies when they need
+    to fan out per-body writes (e.g. rewriting ``ContactMembership``
+    overlays after merging shared contact rows). The caller must have
+    ``org:read`` on the Hive's organization.
+    """
+    organization_id = _require_org_read(request, session)
+    hive_dao = HiveDAO(session)
+    _get_hive_for_org(hive_dao, hive_id, organization_id)
+
+    assistant_dao = AssistantDAO(session)
+    members = assistant_dao.list_for_hive(
+        hive_id=hive_id,
+        organization_id=organization_id,
+    )
+    return [
+        HiveMember(user_id=user_id, assistant_id=agent_id)
+        for user_id, agent_id in members
+    ]
 
 
 @router.patch(

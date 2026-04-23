@@ -48,3 +48,18 @@ class HiveSummary(BaseModel):
 
     hive_id: int
     name: str
+
+
+class HiveMember(BaseModel):
+    """Identity pair for a single assistant inside a Hive.
+
+    Returned by ``GET /hives/{hive_id}/assistants``. Consumers use this
+    to enumerate every body in the Hive when they need to fan out
+    per-body writes (for example, rewriting ContactMembership overlays
+    after a shared contact merge).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: str = Field(..., description="Owning user id of the member body.")
+    assistant_id: int = Field(..., description="Assistant id of the member body.")
