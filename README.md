@@ -1,6 +1,10 @@
 # Orchestra
 
-Orchestra is the backend API and persistence layer behind the Unify stack. It exposes the REST API used by `unify`, `console`, `unity`, and the communication services, and stores the durable state those systems depend on.
+Orchestra is the open-source backend API and persistence layer behind the Unify stack. It exposes the REST API used by `unify`, `unity`, `console`, and the communication services, and stores the durable state those systems depend on.
+
+If Unity is the runtime brain, Orchestra is the durable substrate: projects, contexts, logs, assistants, storage metadata, auth, and the other stateful APIs that make long-lived assistants possible.
+
+> **Start here:** [API Endpoints README](./orchestra/web/api/README.md) • [Database README](./orchestra/db/README.md) • [Observability](./orchestra/observability/README.md) • [Contributing](CONTRIBUTING.md) • [Security](SECURITY.md)
 
 ## What This Repo Contains
 
@@ -14,11 +18,11 @@ Orchestra is the backend API and persistence layer behind the Unify stack. It ex
 
 - [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
 - [Console](https://github.com/unifyai/console) — Web UI that reads and writes Orchestra data
-- [Unity](https://github.com/unifyai/unity) — AI assistant brain that persists state through Unify
+- [Unity](https://github.com/unifyai/unity) — AI assistant runtime that persists state through Unify
 
 ## Quick Start
 
-For a local development instance with PostgreSQL + pgvector:
+For the smallest local development setup with PostgreSQL + pgvector:
 
 ```bash
 cp .env.example .env
@@ -33,6 +37,10 @@ poetry run python -m orchestra
 ```
 
 The API will be available at `http://127.0.0.1:8000/v0`.
+
+Use `.env.advanced.example` instead if you need the broader hosted/platform
+surface for storage, OAuth, billing, media, scheduler auth, or other managed
+integrations.
 
 If you need more detail, start with:
 
@@ -148,7 +156,10 @@ pre-commit install
 
 ## Secrets / Environment Variables
 
-Use `.env.example` as the starting point for local development and create a local `.env` with the values appropriate for your environment. VSCode will usually load `.env` automatically, but you may need to configure your IDE or shell to do the same.
+Use `.env.example` as the starting point for the minimal local API/database setup.
+Use `.env.advanced.example` if you need the broader hosted/platform configuration
+surface. VSCode will usually load `.env` automatically, but you may need to
+configure your IDE or shell to do the same.
 
 ## Running the tests
 
@@ -287,3 +298,7 @@ This docker configuration is not supposed to be used in production.
 It's only for demo purpose.
 
 You can read more about OpenTelemetry here: https://opentelemetry.io/
+
+## License
+
+MIT — see [LICENSE](LICENSE).
