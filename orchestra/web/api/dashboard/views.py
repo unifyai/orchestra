@@ -8,10 +8,12 @@ Provides endpoints for:
   - Reduce bridge (aggregation on a single context)
   - Join bridge (cross-context row-level join)
   - Join-reduce bridge (cross-context join + aggregation)
+- Dashboard action metadata (admin read/write for Dashboards/Actions context)
 """
 
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -536,3 +538,182 @@ def admin_join_reduce_bridge(
         )
 
     return JoinReduceBridgeResponse(result=result)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard action metadata (admin)
+# ---------------------------------------------------------------------------
+
+
+@admin_router.get(
+    "/dashboards/actions/{tile_token}/{action_name}",
+    responses={
+        200: {"description": "Action metadata found"},
+        404: {"description": "Action not found"},
+    },
+)
+def admin_get_dashboard_action(
+    tile_token: str,
+    action_name: str,
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Resolve a single action for a tile by name.
+
+    Used by Communication's dispatch handler to look up the ``function_id``
+    and request template before launching the offline runner K8s Job.
+    """
+    dao = DashboardTokenDAO(session)
+    entry = dao.get_by_token(tile_token)
+
+    if not entry:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Token '{tile_token}' not found",
+        )
+
+    from orchestra.web.api.log.utils.logging_utils import _get_logs_query
+
+    project_dao, field_type_dao, context_dao = _bridge_daos(session)
+
+    fake_request = SimpleNamespace(
+        state=SimpleNamespace(
+            user_id=entry.user_id,
+            organization_id=entry.organization_id,
+        ),
+    )
+
+    project_name = entry.project.name
+    actions_context = entry.context_name.rsplit("/", 1)[0] + "/Dashboards/Actions"
+
+    rows, total = _get_logs_query(
+        request_fastapi=fake_request,
+        project_name=project_name,
+        context=actions_context,
+        filter_expr=f"tile_token == '{tile_token}' and action_name == '{action_name}'",
+        sorting=None,
+        from_ids=None,
+        exclude_ids=None,
+        from_fields=None,
+        exclude_fields=None,
+        limit=1,
+        offset=0,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+        randomize=False,
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Action '{action_name}' not found for tile '{tile_token}'",
+        )
+
+    row_data = rows[0]
+    entries = {}
+    if hasattr(row_data, "data") and isinstance(row_data.data, dict):
+        entries = row_data.data
+    elif isinstance(row_data, dict):
+        entries = row_data.get("data", row_data)
+
+    return {
+        "tile_token": entries.get("tile_token", tile_token),
+        "action_name": entries.get("action_name", action_name),
+        "function_id": entries.get("function_id"),
+        "request": entries.get("request", ""),
+        "label": entries.get("label", ""),
+        "icon": entries.get("icon"),
+        "scope": entries.get("scope", "dashboard"),
+    }
+
+
+@admin_router.get(
+    "/dashboards/actions/{tile_token}",
+    responses={
+        200: {"description": "Action metadata list"},
+        404: {"description": "Token not found"},
+    },
+)
+def admin_list_dashboard_actions(
+    tile_token: str,
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    """List all actions registered for a tile.
+
+    Used by the Console to render action buttons in ``DashboardTileCard``.
+    """
+    dao = DashboardTokenDAO(session)
+    entry = dao.get_by_token(tile_token)
+
+    if not entry:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Token '{tile_token}' not found",
+        )
+
+    from orchestra.web.api.log.utils.logging_utils import _format_logs, _get_logs_query
+
+    project_dao, field_type_dao, context_dao = _bridge_daos(session)
+
+    fake_request = SimpleNamespace(
+        state=SimpleNamespace(
+            user_id=entry.user_id,
+            organization_id=entry.organization_id,
+        ),
+    )
+
+    project_name = entry.project.name
+    actions_context = entry.context_name.rsplit("/", 1)[0] + "/Dashboards/Actions"
+
+    rows, total = _get_logs_query(
+        request_fastapi=fake_request,
+        project_name=project_name,
+        context=actions_context,
+        filter_expr=f"tile_token == '{tile_token}'",
+        sorting=None,
+        from_ids=None,
+        exclude_ids=None,
+        from_fields=None,
+        exclude_fields=None,
+        limit=100,
+        offset=0,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+        randomize=False,
+    )
+
+    project_id = project_dao.get_by_user_and_name(
+        name=project_name,
+        user_id=entry.user_id,
+        organization_id=entry.organization_id,
+    ).id
+
+    context_id = None
+    context_obj = context_dao.filter(name=actions_context, project_id=project_id)
+    if context_obj:
+        context_id = context_obj[0][0].id
+
+    field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
+    field_order_map = field_type_dao.get_ordered_field_names(
+        project_id,
+        context_id=context_id,
+    )
+
+    logs_out, _ = _format_logs(
+        rows=rows,
+        field_types=field_types,
+        value_limit=None,
+        column_context=None,
+        field_order_map=field_order_map,
+        from_fields=None,
+        exclude_fields=None,
+    )
+
+    actions = [
+        {**log.get("entries", {}), **log.get("derived_entries", {})} for log in logs_out
+    ]
+
+    return {"actions": actions, "total_count": total}
