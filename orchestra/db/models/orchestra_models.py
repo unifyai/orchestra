@@ -1392,6 +1392,12 @@ class Assistant(Base):
         backref=backref("assistant", uselist=False),
         foreign_keys=[demo_id],
     )
+    console_config = relationship(
+        "AssistantConsoleConfig",
+        uselist=False,
+        back_populates="assistant",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -1404,6 +1410,40 @@ class Assistant(Base):
             name="ck_assistant_desktop_mode",
         ),
     )
+
+
+class AssistantConsoleConfig(Base):
+    """Per-assistant UI/UX configuration for forward-deployed Console views.
+
+    One-to-one with ``Assistant``.  Stores typed layout, tab-visibility,
+    and theme override fields so the Console can render client-specific
+    dashboard-centric (or other) layouts without a JSONB grab-bag.
+
+    Created / updated by unity-deploy's startup hook via
+    ``PATCH /admin/assistant/{id}``.
+    """
+
+    __tablename__ = "assistant_console_config"
+
+    id = Column(Integer, primary_key=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    version = Column(String, nullable=False, server_default="1")
+    layout_mode = Column(String, nullable=False, server_default="standard")
+    layout_default_tab = Column(String, nullable=True)
+    tabs_hidden = Column(JSONB, nullable=True)
+    tabs_order = Column(JSONB, nullable=True)
+    theme_brand_name = Column(String, nullable=True)
+    theme_accent_color = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    assistant = relationship("Assistant", back_populates="console_config")
 
 
 class AssistantContact(Base):
