@@ -45,6 +45,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantCleanupTask,
+    AssistantConsoleConfig,
     Context,
     DemoAssistantMeta,
     LogEvent,
@@ -91,6 +92,7 @@ from orchestra.web.api.assistant.schema import (
     AssistantVideoUploadResponse,
     ConnectRequest,
     ConnectResponse,
+    ConsoleConfigRead,
     Contact,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
@@ -180,6 +182,37 @@ def _runtime_update_requires_reawaken(
         if getattr(existing_assistant, field_name, None) != update_data[field_name]:
             return True
     return False
+
+
+def _build_console_config_read(
+    cfg: "AssistantConsoleConfig | None",
+) -> "ConsoleConfigRead | None":
+    """Convert an ORM ``AssistantConsoleConfig`` row to the API schema."""
+    if cfg is None:
+        return None
+    layout: dict = {"mode": cfg.layout_mode}
+    if cfg.layout_default_tab:
+        layout["defaultTab"] = cfg.layout_default_tab
+    tabs = None
+    if cfg.tabs_hidden or cfg.tabs_order:
+        tabs = {}
+        if cfg.tabs_hidden:
+            tabs["hidden"] = cfg.tabs_hidden
+        if cfg.tabs_order:
+            tabs["order"] = cfg.tabs_order
+    theme = None
+    if cfg.theme_brand_name or cfg.theme_accent_color:
+        theme = {}
+        if cfg.theme_brand_name:
+            theme["brandName"] = cfg.theme_brand_name
+        if cfg.theme_accent_color:
+            theme["accentColor"] = cfg.theme_accent_color
+    return ConsoleConfigRead(
+        version=cfg.version,
+        layout=layout,
+        tabs=tabs,
+        theme=theme,
+    )
 
 
 def _build_assistant_read(
@@ -306,6 +339,7 @@ def _build_assistant_read(
         user_image=user_image,
         team_ids=team_ids,
         secrets=secrets,
+        console_config=_build_console_config_read(a.console_config),
     )
 
 
@@ -5160,6 +5194,25 @@ def admin_update_assistant(
     if request_body.deploy_env is not None:
         assistant.deploy_env = request_body.deploy_env
         updated_fields.append("deploy_env")
+
+    if request_body.console_config is not None:
+        cc = request_body.console_config
+        layout = cc.get("layout", {})
+        tabs = cc.get("tabs") or {}
+        theme = cc.get("theme") or {}
+        if assistant.console_config is None:
+            assistant.console_config = AssistantConsoleConfig(
+                assistant_id=assistant_id,
+            )
+        cfg = assistant.console_config
+        cfg.version = cc.get("version", "1")
+        cfg.layout_mode = layout.get("mode", "standard")
+        cfg.layout_default_tab = layout.get("defaultTab")
+        cfg.tabs_hidden = tabs.get("hidden")
+        cfg.tabs_order = tabs.get("order")
+        cfg.theme_brand_name = theme.get("brandName")
+        cfg.theme_accent_color = theme.get("accentColor")
+        updated_fields.append("console_config")
 
     if not updated_fields:
         raise HTTPException(
