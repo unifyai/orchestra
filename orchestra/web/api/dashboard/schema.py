@@ -255,3 +255,27 @@ class JoinReduceBridgeResponse(BaseModel):
     """
 
     result: Any
+
+
+# ---------------------------------------------------------------------------
+# Dashboard action metadata
+# ---------------------------------------------------------------------------
+
+
+class DashboardActionRecord(BaseModel):
+    """Action metadata stored in the Dashboards/Actions context."""
+
+    tile_token: str
+    action_name: str
+    function_id: int
+    request: str = ""
+    label: str = ""
+    icon: Optional[str] = None
+    scope: str = "dashboard"
+
+
+class UpsertDashboardActionsRequest(BaseModel):
+    """Batch upsert of action metadata for a tile."""
+
+    tile_token: str
+    actions: list[DashboardActionRecord]
