@@ -22,20 +22,49 @@ from orchestra.web.api.utils.observability import set_user_context
 UNIFY_EMAIL_DOMAIN = "@unify.ai"
 
 
+def _load_staging_email_allowlist() -> frozenset[str]:
+    """Per-address allowlist that augments the @unify.ai domain rule.
+
+    Sourced from ``STAGING_EMAIL_ALLOWLIST`` (comma-separated). Useful for
+    e.g. founder personal Gmails or stress-test accounts that legitimately
+    need staging access but don't have a @unify.ai address.
+    """
+    raw = os.environ.get("STAGING_EMAIL_ALLOWLIST", "")
+    return frozenset(
+        addr.strip().lower() for addr in raw.split(",") if addr.strip()
+    )
+
+
+STAGING_EMAIL_ALLOWLIST: frozenset[str] = _load_staging_email_allowlist()
+
+
 def _is_unify_member(email: str | None) -> bool:
     """Return True when ``email`` belongs to a Unify AI member."""
     return bool(email) and email.lower().endswith(UNIFY_EMAIL_DOMAIN)
 
 
+def is_staging_allowed_email(email: str | None) -> bool:
+    """Return True when ``email`` is permitted to use a staging-gated env.
+
+    Allows any @unify.ai address plus any exact match in
+    ``STAGING_EMAIL_ALLOWLIST``. Comparison is case-insensitive.
+    """
+    if not email:
+        return False
+    if _is_unify_member(email):
+        return True
+    return email.strip().lower() in STAGING_EMAIL_ALLOWLIST
+
+
 def enforce_unify_members_only(email: str | None) -> None:
     """
-    Block non-Unify emails when the environment is gated to Unify members.
+    Block emails that aren't allowed on a staging-gated environment.
 
     Currently only staging is gated. Shared by the API-key auth dependency,
     the registration middleware, and the verification-token redemption
     endpoint so the gate is consistent end-to-end.
     """
-    if settings.is_staging and not _is_unify_member(email):
+    if settings.is_staging and not is_staging_allowed_email(email):
         raise staging_restricted
 
 

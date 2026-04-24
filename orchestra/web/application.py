@@ -136,6 +136,8 @@ def get_app() -> FastAPI:
     # rule lives in a single place rather than per-endpoint.
     import json as _json
 
+    from orchestra.web.api.dependencies import is_staging_allowed_email
+
     class UnifyMembersOnlyMiddleware(BaseHTTPMiddleware):
         GATED_PATHS = frozenset(
             {
@@ -165,7 +167,7 @@ def get_app() -> FastAPI:
                 return await call_next(request)
 
             email = (payload.get("email") or "").strip().lower()
-            if not email.endswith("@unify.ai"):
+            if not is_staging_allowed_email(email):
                 from starlette.responses import JSONResponse
 
                 return JSONResponse(
