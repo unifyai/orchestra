@@ -244,6 +244,15 @@ class AssistantCreate(BaseModel):
         }
 
 
+class ConsoleConfigRead(BaseModel):
+    """Nested representation of ``AssistantConsoleConfig`` for API responses."""
+
+    version: str = "1"
+    layout: Dict[str, Any]
+    tabs: Optional[Dict[str, Any]] = None
+    theme: Optional[Dict[str, Any]] = None
+
+
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
@@ -397,6 +406,11 @@ class AssistantRead(AssistantCreate):
     hive: Optional[HiveSummary] = Field(
         None,
         description="Hive membership summary for this assistant. Null for solo assistants.",
+    )
+    console_config: Optional[ConsoleConfigRead] = Field(
+        None,
+        description="Per-assistant UI/UX configuration for forward-deployed Console views. "
+        "Null means the assistant uses default console behavior.",
     )
 
     class Config:
@@ -1693,6 +1707,11 @@ class AdminUpdateAssistant(BaseModel):
     deploy_env: Optional[str] = Field(
         None,
         description="Deprecated. Must be null.",
+    )
+    console_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Per-assistant UI/UX configuration (layout, tabs, theme). "
+        "Pass the full nested object to upsert; omit to leave unchanged.",
     )
 
     @field_validator("timezone")
