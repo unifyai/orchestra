@@ -412,6 +412,24 @@ class AssistantRead(AssistantCreate):
         description="Per-assistant UI/UX configuration for forward-deployed Console views. "
         "Null means the assistant uses default console behavior.",
     )
+    self_contact_id: Optional[int] = Field(
+        None,
+        description=(
+            "Shared Contacts.contact_id of this body's self-contact row, "
+            "resolved from the body's ContactMembership overlay row with "
+            "relationship == 'self'. Null for bodies whose overlays have not "
+            "been provisioned yet."
+        ),
+    )
+    boss_contact_id: Optional[int] = Field(
+        None,
+        description=(
+            "Shared Contacts.contact_id of this body's boss-contact row, "
+            "resolved from the body's ContactMembership overlay row with "
+            "relationship == 'boss'. Null for bodies whose overlays have not "
+            "been provisioned yet."
+        ),
+    )
 
     class Config:
         orm_mode = True

@@ -64,6 +64,10 @@ from orchestra.services.assistant_cleanup_service import (
     enqueue_cleanup_tasks,
     process_assistant_cleanup_tasks,
 )
+from orchestra.services.assistant_membership_service import (
+    resolve_membership_contact_ids,
+    resolve_membership_contact_ids_bulk,
+)
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
@@ -230,6 +234,7 @@ def _build_assistant_read(
     team_ids: Optional[List[int]] = None,
     contacts: Optional[list] = None,
     secrets: Optional[dict] = None,
+    membership_contact_ids: Optional[tuple] = None,
     include_internal: bool = False,
 ) -> AssistantRead:
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
@@ -285,6 +290,11 @@ def _build_assistant_read(
     if user_whatsapp_number is None:
         user_whatsapp_number = user_obj.whatsapp_number if user_obj else None
     user_discord_id = user_obj.discord_id if user_obj else None
+
+    if membership_contact_ids is None:
+        self_contact_id, boss_contact_id = resolve_membership_contact_ids(session, a)
+    else:
+        self_contact_id, boss_contact_id = membership_contact_ids
 
     return AssistantRead(
         agent_id=str(a.agent_id),
@@ -347,6 +357,8 @@ def _build_assistant_read(
             else None
         ),
         console_config=_build_console_config_read(a.console_config),
+        self_contact_id=self_contact_id,
+        boss_contact_id=boss_contact_id,
     )
 
 
@@ -1004,6 +1016,13 @@ def list_assistants(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        # Two round-trips total; avoids an O(N) per-body overlay scan
+        # inside the list comprehension below.
+        membership_ids_by_agent = resolve_membership_contact_ids_bulk(
+            session,
+            assistants,
+        )
+
         return InfoResponse(
             info=[
                 _build_assistant_read(
@@ -1023,6 +1042,10 @@ def list_assistants(
                         else None
                     ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    membership_contact_ids=membership_ids_by_agent.get(
+                        a.agent_id,
+                        (None, None),
+                    ),
                 )
                 for a in assistants
             ],
@@ -5399,6 +5422,20 @@ def admin_list_all_assistants(
 
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
 
+        skip_contact_ids = requested_fields is not None and not (
+            requested_fields & {"self_contact_id", "boss_contact_id"}
+        )
+
+        # Two round-trips total when requested; empty dict (→ (None, None)
+        # defaults on lookup) when the caller opted out via ``from_fields``.
+        if skip_contact_ids:
+            membership_ids_by_agent: dict[int, tuple[int | None, int | None]] = {}
+        else:
+            membership_ids_by_agent = resolve_membership_contact_ids_bulk(
+                session,
+                assistants,
+            )
+
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
         all_contacts = contact_dao.get_active_contacts_for_assistants(
@@ -5445,6 +5482,10 @@ def admin_list_all_assistants(
                     secrets_by_assistant.get(a.agent_id, {})
                     if not skip_secrets
                     else None
+                ),
+                membership_contact_ids=membership_ids_by_agent.get(
+                    a.agent_id,
+                    (None, None),
                 ),
                 include_internal=True,
             )
@@ -5651,6 +5692,13 @@ def admin_list_assistants_for_user(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        # Two round-trips total; avoids an O(N) per-body overlay scan
+        # inside the list comprehension below.
+        membership_ids_by_agent = resolve_membership_contact_ids_bulk(
+            session,
+            assistants,
+        )
+
         return InfoResponse(
             info=[
                 _build_assistant_read(
@@ -5659,6 +5707,10 @@ def admin_list_assistants_for_user(
                     api_key=api_keys[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
                     include_internal=True,
+                    membership_contact_ids=membership_ids_by_agent.get(
+                        a.agent_id,
+                        (None, None),
+                    ),
                 )
                 for i, a in enumerate(assistants)
             ],
