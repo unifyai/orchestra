@@ -50,6 +50,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     get_task_ids_for_log_ids,
+    get_task_owner_hints_for_log_ids,
     is_internal_task_machine_context_name,
     is_protected_task_surface_context_name,
     is_task_surface_context_name,
@@ -260,6 +261,7 @@ def _sync_task_activations_if_needed(
     project_id: int,
     task_ids: Set[int],
     tasks_context_name: str | None,
+    owner_hints=None,
 ) -> None:
     """Project task machine state when the user-authored Tasks table changed."""
 
@@ -275,6 +277,7 @@ def _sync_task_activations_if_needed(
         project_id=project_id,
         task_ids=task_ids,
         tasks_context_name=tasks_context_name,
+        owner_hints=owner_hints,
     )
 
 
@@ -2717,6 +2720,7 @@ def _delete_logs(
         .all()
     ]
     pre_sync_task_ids: Set[int] = set()
+    pre_sync_owner_hints = []
     if body.project_name == TASK_MACHINE_PROJECT_NAME and is_task_surface_context_name(
         context_name,
     ):
@@ -2732,6 +2736,13 @@ def _delete_logs(
             context_name=context_name,
             log_event_ids=candidate_task_log_ids,
         )
+        if context_name.startswith(HIVE_CONTEXT_PREFIX):
+            pre_sync_owner_hints = get_task_owner_hints_for_log_ids(
+                session=session,
+                project_id=project_id,
+                context_name=context_name,
+                log_event_ids=candidate_task_log_ids,
+            )
 
     # Collect all log_event_ids that need media deletion
     all_log_event_ids_for_media = []
@@ -3226,6 +3237,7 @@ def _delete_logs(
             project_id=project_id,
             task_ids=pre_sync_task_ids,
             tasks_context_name=context_name,
+            owner_hints=pre_sync_owner_hints,
         )
 
     return {"info": "Logs and fields deleted successfully!"}

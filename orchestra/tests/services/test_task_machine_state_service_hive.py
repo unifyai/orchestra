@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
-from orchestra.db.models.orchestra_models import Context
+from orchestra.db.models.orchestra_models import Context, Project
 from orchestra.services import task_machine_state_service
 from orchestra.services.task_machine_state_service import (
     HIVE_CONTEXT_PREFIX,
@@ -28,7 +28,7 @@ from orchestra.services.task_machine_state_service import (
     is_protected_task_surface_context_name,
     is_task_surface_context_name,
 )
-from orchestra.tests.test_log import _create_log
+from orchestra.tests.test_log import _create_log, _delete_logs
 from orchestra.tests.test_log.test_task_machine_projection import (
     _ensure_task_machine_project,
     _get_context_logs,
@@ -366,3 +366,76 @@ async def test_sync_solo_per_body_path_still_projects_single_bucket(
     assert activation["assistant_id"] == str(assistant.agent_id)
     assert activation["task_id"] == task_id
     assert activation["activation_key"] == f"{assistant.agent_id}:{task_id}"
+
+
+@pytest.mark.anyio
+async def test_delete_hive_task_definition_clears_per_body_machine_rows(
+    client: AsyncClient,
+    dbsession,
+):
+    """Deleting a Hive task row uses owner hints to clear per-body state."""
+
+    await _ensure_task_machine_project(client)
+
+    assistant = _make_assistant(dbsession, user_id="user1")
+    dbsession.commit()
+
+    hive_id = "909"
+    hive_tasks_context = f"Hives/{hive_id}/Tasks"
+    task_id = 4401
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=hive_tasks_context,
+        entries=_hive_scheduled_entries(
+            hive_id=hive_id,
+            user_id=str(assistant.user_id),
+            assistant_id=assistant.agent_id,
+            task_id=task_id,
+        ),
+    )
+    assert response.status_code == 200, response.json()
+    source_task_log_id = response.json()["log_event_ids"][0]
+
+    dbsession.expire_all()
+    project = (
+        dbsession.query(Project).filter(Project.name == TASK_MACHINE_PROJECT_NAME).one()
+    )
+    context_ids = task_machine_state_service.ensure_task_machine_contexts(
+        session=dbsession,
+        project_id=project.id,
+        user_id=str(assistant.user_id),
+        assistant_id=str(assistant.agent_id),
+    )
+    task_machine_state_service._upsert_machine_row(
+        session=dbsession,
+        project_id=project.id,
+        context_id=context_ids.runs_context_id,
+        unique_field_name=task_machine_state_service._TASK_RUN_UNIQUE_FIELD,
+        unique_field_value=f"{assistant.agent_id}:{task_id}:run",
+        payload={
+            "run_key": f"{assistant.agent_id}:{task_id}:run",
+            "assistant_id": str(assistant.agent_id),
+            "task_id": task_id,
+            "source_task_log_id": source_task_log_id,
+            "source_type": "scheduled",
+            "execution_mode": "live",
+            "activation_revision": "test-revision",
+        },
+    )
+    dbsession.commit()
+
+    delete_response = await _delete_logs(
+        client,
+        [(source_task_log_id, None)],
+        project_name=TASK_MACHINE_PROJECT_NAME,
+        context=hive_tasks_context,
+    )
+    assert delete_response.status_code == 200, delete_response.json()
+
+    activations_context = f"{assistant.user_id}/{assistant.agent_id}/Tasks/Activations"
+    runs_context = f"{assistant.user_id}/{assistant.agent_id}/Tasks/Runs"
+    activations = await _get_context_logs(client, context_name=activations_context)
+    runs = await _get_context_logs(client, context_name=runs_context)
+    assert all(log["entries"]["task_id"] != task_id for log in activations)
+    assert all(log["entries"]["task_id"] != task_id for log in runs)

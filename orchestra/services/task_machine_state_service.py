@@ -104,6 +104,15 @@ class _TaskRow:
     created_at: datetime | None
 
 
+@dataclass(frozen=True)
+class TaskOwnerHint:
+    """Owner snapshot for task rows that may be deleted before projection runs."""
+
+    task_id: int
+    user_id: str
+    assistant_id: str
+
+
 def _split_context_name(context_name: str | None) -> list[str]:
     """Return non-empty path segments for a context name."""
 
@@ -855,6 +864,7 @@ def sync_task_activations_for_task_ids(
     task_ids: Iterable[int],
     *,
     tasks_context_name: str = TASKS_CONTEXT_NAME,
+    owner_hints: Iterable[TaskOwnerHint] | None = None,
 ) -> dict[str, int]:
     """Project one Tasks surface into each owning body's ``Tasks/Activations``.
 
@@ -898,6 +908,7 @@ def sync_task_activations_for_task_ids(
         unique_task_ids=unique_task_ids,
         rows_by_task_id=rows_by_task_id,
         tasks_context_name=tasks_context_name,
+        owner_hints=owner_hints,
     )
 
     upserted = 0
@@ -913,6 +924,7 @@ def sync_task_activations_for_task_ids(
             assistant_id=assistant_id,
         )
         for task_id in bucket_task_ids:
+            source_rows = rows_by_task_id.get(task_id, [])
             activation_key = _build_activation_key(
                 assistant_id=assistant_id,
                 task_id=task_id,
@@ -929,7 +941,7 @@ def sync_task_activations_for_task_ids(
                 else None
             )
             activation_payload = _build_activation_payload(
-                rows=rows_by_task_id.get(task_id, []),
+                rows=source_rows,
                 tasks_context_name=tasks_context_name,
             )
             if activation_payload is None:
@@ -943,6 +955,14 @@ def sync_task_activations_for_task_ids(
                 deleted += int(was_deleted)
                 if previous_activation is not None and was_deleted:
                     materialization_pairs.append((previous_activation, None))
+                if not source_rows:
+                    deleted += _delete_machine_rows_by_field(
+                        session=session,
+                        project_id=project_id,
+                        context_id=context_ids.runs_context_id,
+                        field_name="task_id",
+                        field_value=task_id,
+                    )
                 continue
 
             _upsert_machine_row(
@@ -971,50 +991,73 @@ def _bucket_task_ids_by_owning_body(
     unique_task_ids: Sequence[int],
     rows_by_task_id: Mapping[int, Sequence[_TaskRow]],
     tasks_context_name: str,
+    owner_hints: Iterable[TaskOwnerHint] | None = None,
 ) -> list[tuple[tuple[str, str], list[int]]]:
     """Group a batch of task ids by the per-body owner of each row.
 
     Per-body Tasks surfaces produce a single bucket keyed off the path. Hive
-    surfaces enumerate the ``_assistant_id`` on each row, look up the owning
-    body's ``user_id`` in the Assistant table, and emit one bucket per
-    distinct owner. Task ids without any rows in the batch are skipped on
-    Hive surfaces because the owner is unknown; solo surfaces keep them in
-    the single bucket so orphan activations can still be cleared.
+    surfaces enumerate the ``_assistant_id`` on each row and emit one bucket
+    per distinct owner. When a Hive row has already been deleted, callers can
+    pass owner hints captured before deletion so orphan activations and runs
+    can still be cleared.
     """
 
     if not tasks_context_name.startswith(HIVE_CONTEXT_PREFIX):
         user_id, assistant_id = _split_per_body_tasks_context_name(tasks_context_name)
         return [((user_id, assistant_id), list(unique_task_ids))]
 
+    hints_by_task_id: dict[int, list[TaskOwnerHint]] = {}
+    for hint in owner_hints or ():
+        hints_by_task_id.setdefault(int(hint.task_id), []).append(hint)
+
     task_ids_by_assistant: dict[str, list[int]] = {}
+    user_ids_by_assistant: dict[str, str] = {}
     for task_id in unique_task_ids:
         rows = list(rows_by_task_id.get(task_id, []))
         if not rows:
+            for hint in hints_by_task_id.get(task_id, []):
+                task_ids_by_assistant.setdefault(hint.assistant_id, []).append(task_id)
+                user_ids_by_assistant[hint.assistant_id] = hint.user_id
             continue
-        assistant_id = _resolve_assistant_id(
-            task_row=rows[0],
-            tasks_context_name=tasks_context_name,
-        )
-        if assistant_id is None:
-            raise ValueError(
-                f"Hive task row missing _assistant_id: log_event_id={rows[0].log_event_id}",
+
+        for row in rows[:1]:
+            assistant_id = _resolve_assistant_id(
+                task_row=row,
+                tasks_context_name=tasks_context_name,
             )
-        task_ids_by_assistant.setdefault(assistant_id, []).append(task_id)
+            if assistant_id is None:
+                raise ValueError(
+                    f"Hive task row missing _assistant_id: log_event_id={row.log_event_id}",
+                )
+            task_ids_by_assistant.setdefault(assistant_id, []).append(task_id)
+            hinted_user_id = next(
+                (
+                    hint.user_id
+                    for hint in hints_by_task_id.get(task_id, [])
+                    if hint.assistant_id == assistant_id
+                ),
+                None,
+            )
+            if hinted_user_id:
+                user_ids_by_assistant[assistant_id] = hinted_user_id
 
     ordered_buckets: list[tuple[tuple[str, str], list[int]]] = []
     for assistant_id in sorted(task_ids_by_assistant):
-        assistant = _get_assistant_for_task_machine_lookup(
-            session=session,
-            assistant_id=assistant_id,
-        )
-        if assistant is None or not assistant.user_id:
-            raise ValueError(
-                "Hive task row references unknown assistant: "
-                f"assistant_id={assistant_id!r}.",
+        user_id = user_ids_by_assistant.get(assistant_id)
+        if user_id is None:
+            assistant = _get_assistant_for_task_machine_lookup(
+                session=session,
+                assistant_id=assistant_id,
             )
+            if assistant is None or not assistant.user_id:
+                raise ValueError(
+                    "Hive task row references unknown assistant: "
+                    f"assistant_id={assistant_id!r}.",
+                )
+            user_id = str(assistant.user_id)
         ordered_buckets.append(
             (
-                (str(assistant.user_id), assistant_id),
+                (user_id, assistant_id),
                 task_ids_by_assistant[assistant_id],
             ),
         )
@@ -1389,6 +1432,79 @@ def get_task_ids_for_log_ids(
             if task_id is not None:
                 task_ids.add(task_id)
     return task_ids
+
+
+def get_task_owner_hints_for_log_ids(
+    session: Session,
+    project_id: int,
+    *,
+    context_name: str,
+    log_event_ids: Iterable[int],
+) -> list[TaskOwnerHint]:
+    """Return owner snapshots for task rows before a destructive delete."""
+
+    ids = [int(log_id) for log_id in set(log_event_ids)]
+    if not ids:
+        return []
+
+    context_id = _get_context_id(
+        session=session,
+        project_id=project_id,
+        name=context_name,
+    )
+    if context_id is None:
+        return []
+
+    rows = (
+        session.query(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.id.in_(ids),
+            LogEventContext.context_id == context_id,
+        )
+        .all()
+    )
+    owner_hints: list[TaskOwnerHint] = []
+    for row in rows:
+        data = row.data if isinstance(row.data, dict) else {}
+        task_id = _coerce_int(data.get("task_id"))
+        if task_id is None:
+            continue
+        task_row = _TaskRow(
+            log_event_id=row.id,
+            data=data,
+            updated_at=row.updated_at,
+            created_at=row.created_at,
+        )
+        assistant_id = _resolve_assistant_id(
+            task_row=task_row,
+            tasks_context_name=context_name,
+        )
+        if assistant_id is None:
+            continue
+        user_id = _coerce_optional_str(data.get("_user_id"))
+        if user_id is None and context_name.startswith(HIVE_CONTEXT_PREFIX):
+            assistant = _get_assistant_for_task_machine_lookup(
+                session=session,
+                assistant_id=assistant_id,
+            )
+            if assistant is None or not assistant.user_id:
+                raise ValueError(
+                    "Hive task row references unknown assistant: "
+                    f"assistant_id={assistant_id!r}.",
+                )
+            user_id = str(assistant.user_id)
+        if user_id is None:
+            user_id, _ = _split_per_body_tasks_context_name(context_name)
+        owner_hints.append(
+            TaskOwnerHint(
+                task_id=task_id,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            ),
+        )
+    return owner_hints
 
 
 def _build_activation_payload(
@@ -1943,6 +2059,51 @@ def _delete_machine_row_by_unique_field(
     )
     session.flush()
     return True
+
+
+def _delete_machine_rows_by_field(
+    session: Session,
+    *,
+    project_id: int,
+    context_id: int,
+    field_name: str,
+    field_value: int | str,
+) -> int:
+    """Delete internal machine rows that match a non-unique top-level field."""
+
+    rows = (
+        session.query(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .filter(
+            LogEventContext.context_id == context_id,
+            LogEvent.data.has_key(field_name),
+            LogEvent.data.op("->>")(field_name) == str(field_value),
+        )
+        .all()
+    )
+    if not rows:
+        return 0
+
+    log_event_ids = [row.id for row in rows]
+    session.execute(
+        delete(LogUniqueConstraint).where(
+            LogUniqueConstraint.log_event_id.in_(log_event_ids),
+        ),
+    )
+    session.execute(
+        delete(LogEventContext).where(
+            LogEventContext.log_event_id.in_(log_event_ids),
+            LogEventContext.context_id == context_id,
+        ),
+    )
+    delete_orphaned_log_events(
+        session=session,
+        project_id=project_id,
+        skip_embedding_cleanup=True,
+        log_event_ids=log_event_ids,
+    )
+    session.flush()
+    return len(log_event_ids)
 
 
 def _get_machine_row_by_unique_field(
