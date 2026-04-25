@@ -28,23 +28,19 @@ async def cascade_delete_hive(
 ) -> None:
     """Delete a Hive and all of its member assistants in strict phase order.
 
-    Phase 1: Acquire a ``SELECT FOR UPDATE`` lock on the hive row, set
-             ``status='deleting'``, and commit so concurrent assistant-create
-             requests see the marker and 409 immediately.
-    Phase 2: Fan out per-body delete across all member assistants in parallel
-             via ``asyncio.gather``. Individual body failures are logged but
-             do not abort the cascade; each body's durable
-             ``AssistantCleanupTask`` queue handles retry independently.
-    Phase 3: Delete shared ``Hives/{hive_id}/...`` contexts one at a time via
-             the phased ``ContextDAO.delete`` pipeline.
-    Phase 4: Delete the hive row. ``ON DELETE SET NULL`` clears
-             ``assistants.hive_id`` on any member rows that survived.
+    The cascade first acquires a ``SELECT FOR UPDATE`` lock on the hive row,
+    sets ``status='deleting'``, and commits so concurrent assistant-create
+    requests see the marker and 409 immediately. It then deletes member
+    assistants, removes shared ``Hives/{hive_id}/...`` contexts, and deletes
+    the hive row only after every member and shared context has been deleted
+    successfully.
 
     This function is idempotent: re-running after a mid-cascade crash picks up
     from the current state — already-deleted bodies are skipped, already-deleted
     contexts are skipped, and a missing hive row returns cleanly.
     """
-    # Phase 1: lock + mark deleting; commit to release the lock.
+    # Mark deleting and commit immediately so retries and concurrent creates
+    # observe an authoritative in-progress state.
     s1: Session = session_factory()
     try:
         stmt = select(Hive).where(Hive.hive_id == hive_id).with_for_update()
@@ -56,7 +52,7 @@ async def cascade_delete_hive(
     finally:
         s1.close()
 
-    # Phase 2: collect member info, then delete in parallel.
+    # Collect member info, then delete in parallel.
     s2: Session = session_factory()
     try:
         member_rows = (
@@ -82,8 +78,10 @@ async def cascade_delete_hive(
         ],
         return_exceptions=True,
     )
+    failed_member_ids: list[int] = []
     for (agent_id, _), result in zip(member_info, results):
         if isinstance(result, Exception):
+            failed_member_ids.append(int(agent_id))
             logger.error(
                 "Hive %d member assistant %d delete failed: %s",
                 hive_id,
@@ -91,8 +89,13 @@ async def cascade_delete_hive(
                 result,
                 exc_info=result,
             )
+    if failed_member_ids:
+        raise RuntimeError(
+            "Hive cascade failed while deleting member assistants: "
+            f"hive_id={hive_id}, assistant_ids={failed_member_ids}",
+        )
 
-    # Phase 3: delete shared Hives/{hive_id}/... contexts.
+    # Delete shared Hives/{hive_id}/... contexts.
     s3: Session = session_factory()
     try:
         hive_prefix = f"Hives/{hive_id}"
@@ -117,21 +120,29 @@ async def cascade_delete_hive(
                 )
                 .all()
             )
+            failed_context_names: list[str] = []
             for ctx in shared_contexts:
                 try:
                     context_dao.delete(ctx.id)
                 except Exception:
+                    failed_context_names.append(str(ctx.name))
                     logger.exception(
                         "Failed to delete Hive context %d (name=%s) during hive %d cascade",
                         ctx.id,
                         ctx.name,
                         hive_id,
                     )
+            if failed_context_names:
+                s3.rollback()
+                raise RuntimeError(
+                    "Hive cascade failed while deleting shared contexts: "
+                    f"hive_id={hive_id}, contexts={failed_context_names}",
+                )
         s3.commit()
     finally:
         s3.close()
 
-    # Phase 4: delete the hive row.
+    # Delete the hive row after every owned resource has been removed.
     s4: Session = session_factory()
     try:
         hive = s4.get(Hive, hive_id)

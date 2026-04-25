@@ -14,7 +14,7 @@ from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, Hive
+from orchestra.db.models.orchestra_models import Assistant, Context, Hive, Project
 from orchestra.tests.utils import create_test_org, create_test_user
 
 # ---------------------------------------------------------------------------
@@ -92,6 +92,27 @@ async def _create_hive(client: AsyncClient, headers: dict, name: str = "Test Hiv
 async def _create_assistant(client: AsyncClient, headers: dict, **extra):
     payload = {"first_name": "Ada", "create_infra": False, **extra}
     return await client.post("/v0/assistant", json=payload, headers=headers)
+
+
+def _ensure_assistants_project(
+    dbsession: Session,
+    *,
+    organization_id: int,
+) -> Project:
+    project = (
+        dbsession.query(Project)
+        .filter(
+            Project.organization_id == organization_id,
+            Project.name == "Assistants",
+        )
+        .one_or_none()
+    )
+    if project is not None:
+        return project
+    project = Project(name="Assistants", organization_id=organization_id)
+    dbsession.add(project)
+    dbsession.flush()
+    return project
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +356,98 @@ async def test_cascade_delete_fans_out(
     # Both member assistants gone
     assert dbsession.get(Assistant, aid1) is None
     assert dbsession.get(Assistant, aid2) is None
+
+
+@pytest.mark.anyio
+async def test_cascade_member_failure_keeps_hive_for_retry(
+    client_concurrent: AsyncClient,
+    org_owner_concurrent,
+    dbsession: Session,
+):
+    _, org = org_owner_concurrent
+    hive = (await _create_hive(client_concurrent, org["headers"])).json()
+    hive_id = hive["hive_id"]
+    member = (
+        await _create_assistant(client_concurrent, org["headers"], hive_id=hive_id)
+    ).json()["info"]
+    assistant_id = int(member["agent_id"])
+
+    with patch(
+        "orchestra.services.hive_service._delete_member_assistant",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("member cleanup failed"),
+    ):
+        del_resp = await client_concurrent.delete(
+            f"/v0/hives/{hive_id}",
+            headers=org["headers"],
+        )
+
+    assert del_resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    dbsession.expire_all()
+    hive_row = dbsession.get(Hive, hive_id)
+    assert hive_row is not None
+    assert hive_row.status == "deleting"
+    assert dbsession.get(Assistant, assistant_id) is not None
+
+
+@pytest.mark.anyio
+async def test_cascade_shared_context_failure_keeps_hive_for_retry(
+    client_concurrent: AsyncClient,
+    org_owner_concurrent,
+    dbsession: Session,
+):
+    _, org = org_owner_concurrent
+    hive = (await _create_hive(client_concurrent, org["headers"])).json()
+    hive_id = hive["hive_id"]
+    project = _ensure_assistants_project(
+        dbsession,
+        organization_id=org["id"],
+    )
+    context = Context(project_id=project.id, name=f"Hives/{hive_id}/Contacts")
+    dbsession.add(context)
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.hive_service.ContextDAO.delete",
+        side_effect=RuntimeError("context cleanup failed"),
+    ):
+        del_resp = await client_concurrent.delete(
+            f"/v0/hives/{hive_id}",
+            headers=org["headers"],
+        )
+
+    assert del_resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    dbsession.expire_all()
+    hive_row = dbsession.get(Hive, hive_id)
+    assert hive_row is not None
+    assert hive_row.status == "deleting"
+
+
+@pytest.mark.anyio
+async def test_delete_organization_cascades_existing_hive(
+    client_concurrent: AsyncClient,
+    org_owner_concurrent,
+    dbsession: Session,
+):
+    _, org = org_owner_concurrent
+    hive = (await _create_hive(client_concurrent, org["headers"])).json()
+    hive_id = hive["hive_id"]
+    member = (
+        await _create_assistant(client_concurrent, org["headers"], hive_id=hive_id)
+    ).json()["info"]
+    assistant_id = int(member["agent_id"])
+
+    with patch("orchestra.web.api.organization.views.BucketService") as bucket_service:
+        bucket_service.return_value.delete_org_account_photos.return_value = 0
+        del_resp = await client_concurrent.delete(
+            f"/v0/organizations/{org['id']}",
+            headers=org["headers"],
+        )
+
+    assert del_resp.status_code == status.HTTP_204_NO_CONTENT, del_resp.text
+    dbsession.expire_all()
+    assert dbsession.get(Hive, hive_id) is None
+    assert dbsession.get(Assistant, assistant_id) is None
 
 
 # ---------------------------------------------------------------------------

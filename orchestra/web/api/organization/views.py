@@ -29,7 +29,12 @@ from orchestra.db.dao.shared_pool_dao import ConflictResolution
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Assistant, Recharge, RechargeStatus
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    Hive,
+    Recharge,
+    RechargeStatus,
+)
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_specs_for_assistants,
@@ -39,6 +44,7 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
+from orchestra.services.hive_service import cascade_delete_hive
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     AdminOrganizationCreate,
@@ -580,6 +586,36 @@ async def delete_organization(
 
     # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
+
+    hive_ids = [
+        int(hive_id)
+        for (hive_id,) in session.query(Hive.hive_id)
+        .filter(Hive.organization_id == organization_id)
+        .all()
+    ]
+    session_factory = request_fastapi.app.state.db_session_factory
+    for hive_id in hive_ids:
+        try:
+            await cascade_delete_hive(
+                hive_id=hive_id,
+                organization_id=organization_id,
+                session_factory=session_factory,
+            )
+        except Exception as e:
+            session.rollback()
+            logger.error(
+                "Failed to cascade-delete Hive %s before deleting org %s: %s",
+                hive_id,
+                organization_id,
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete organization",
+            )
+    if hive_ids:
+        session.expire_all()
 
     org_assistants = (
         session.query(Assistant)
