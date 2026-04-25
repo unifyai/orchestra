@@ -12,6 +12,7 @@ from httpx import AsyncClient
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.user_dao import UserDAO
+from orchestra.db.models.orchestra_models import AssistantConsoleConfig
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
@@ -570,6 +571,206 @@ async def test_admin_update_assistant_deploy_env(client: AsyncClient, dbsession)
         headers=ADMIN_HEADERS,
     )
     assert update_resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_admin_update_assistant_console_config_creates_row(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "admin_asst_console_config@test.com",
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Console",
+            "surname": "Config",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    console_config = {
+        "version": "1",
+        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "tabs": {
+            "hidden": ["memory", "secrets"],
+            "order": ["dashboards", "chat", "actions", "tasks"],
+        },
+        "theme": {"brandName": "Midland Heart", "accentColor": "#0057ff"},
+    }
+
+    update_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"console_config": console_config},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200, update_resp.json()
+    data = update_resp.json()
+    assert data["updated_fields"] == ["console_config"]
+
+    cfg = (
+        dbsession.query(AssistantConsoleConfig)
+        .filter(AssistantConsoleConfig.assistant_id == agent_id)
+        .one()
+    )
+    assert cfg.version == "1"
+    assert cfg.layout_mode == "dashboard-centric"
+    assert cfg.layout_default_tab == "dashboards"
+    assert cfg.tabs_hidden == ["memory", "secrets"]
+    assert cfg.tabs_order == ["dashboards", "chat", "actions", "tasks"]
+    assert cfg.theme_brand_name == "Midland Heart"
+    assert cfg.theme_accent_color == "#0057ff"
+
+
+@pytest.mark.anyio
+async def test_admin_update_assistant_console_config_updates_existing_row(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "admin_asst_console_config_update@test.com",
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Console",
+            "surname": "Update",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    first_config = {
+        "version": "1",
+        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "tabs": {"hidden": ["memory"], "order": ["dashboards", "chat"]},
+        "theme": {"brandName": "First", "accentColor": "#111111"},
+    }
+    second_config = {
+        "version": "1",
+        "layout": {"mode": "standard", "defaultTab": "chat"},
+        "tabs": {"hidden": ["secrets"], "order": ["chat", "tasks"]},
+        "theme": {"brandName": "Second", "accentColor": "#222222"},
+    }
+
+    first_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"console_config": first_config},
+        headers=ADMIN_HEADERS,
+    )
+    assert first_resp.status_code == 200, first_resp.json()
+
+    second_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"console_config": second_config},
+        headers=ADMIN_HEADERS,
+    )
+    assert second_resp.status_code == 200, second_resp.json()
+
+    rows = (
+        dbsession.query(AssistantConsoleConfig)
+        .filter(AssistantConsoleConfig.assistant_id == agent_id)
+        .all()
+    )
+    assert len(rows) == 1
+    cfg = rows[0]
+    assert cfg.layout_mode == "standard"
+    assert cfg.layout_default_tab == "chat"
+    assert cfg.tabs_hidden == ["secrets"]
+    assert cfg.tabs_order == ["chat", "tasks"]
+    assert cfg.theme_brand_name == "Second"
+    assert cfg.theme_accent_color == "#222222"
+
+
+@pytest.mark.anyio
+async def test_assistant_list_returns_console_config(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "assistant_list_console_config@test.com",
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "List",
+            "surname": "ConsoleConfig",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    console_config = {
+        "version": "1",
+        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "tabs": {"hidden": ["memory", "secrets"]},
+        "theme": {"brandName": "Midland Heart"},
+    }
+
+    update_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"console_config": console_config},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200, update_resp.json()
+
+    list_resp = await client.get("/v0/assistant", headers=owner["headers"])
+    assert list_resp.status_code == 200, list_resp.json()
+    assistant = [a for a in list_resp.json()["info"] if int(a["agent_id"]) == agent_id][
+        0
+    ]
+
+    assert assistant["console_config"] == {
+        "version": "1",
+        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "tabs": {"hidden": ["memory", "secrets"]},
+        "theme": {"brandName": "Midland Heart"},
+    }
+
+
+@pytest.mark.anyio
+async def test_assistant_without_console_config_returns_null(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "assistant_no_console_config@test.com",
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "No",
+            "surname": "ConsoleConfig",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    list_resp = await client.get("/v0/assistant", headers=owner["headers"])
+    assert list_resp.status_code == 200, list_resp.json()
+    assistant = [a for a in list_resp.json()["info"] if int(a["agent_id"]) == agent_id][
+        0
+    ]
+
+    assert assistant["console_config"] is None
 
 
 @pytest.mark.anyio
