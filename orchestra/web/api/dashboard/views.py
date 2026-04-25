@@ -545,6 +545,29 @@ def admin_join_reduce_bridge(
 # ---------------------------------------------------------------------------
 
 
+def _actions_context_for_tile_context(tile_context: str) -> str:
+    """Return the sibling Dashboards/Actions context for a tile context."""
+    if tile_context.endswith("/Dashboards/Tiles"):
+        return tile_context[: -len("/Dashboards/Tiles")] + "/Dashboards/Actions"
+    if tile_context == "Dashboards/Tiles":
+        return "Dashboards/Actions"
+    return tile_context.rsplit("/", 1)[0] + "/Actions"
+
+
+def _action_entries_from_row(row_data: Any) -> dict[str, Any]:
+    """Extract the user-facing action fields from a log row."""
+    if hasattr(row_data, "data") and isinstance(row_data.data, dict):
+        return row_data.data
+    if isinstance(row_data, dict):
+        if isinstance(row_data.get("data"), dict):
+            return row_data["data"]
+        return {
+            **row_data.get("entries", {}),
+            **row_data.get("derived_entries", {}),
+        } or row_data
+    return {}
+
+
 @admin_router.get(
     "/dashboards/actions/{tile_token}/{action_name}",
     responses={
@@ -583,7 +606,7 @@ def admin_get_dashboard_action(
     )
 
     project_name = entry.project.name
-    actions_context = entry.context_name.rsplit("/", 1)[0] + "/Dashboards/Actions"
+    actions_context = _actions_context_for_tile_context(entry.context_name)
 
     rows, total = _get_logs_query(
         request_fastapi=fake_request,
@@ -610,12 +633,7 @@ def admin_get_dashboard_action(
             detail=f"Action '{action_name}' not found for tile '{tile_token}'",
         )
 
-    row_data = rows[0]
-    entries = {}
-    if hasattr(row_data, "data") and isinstance(row_data.data, dict):
-        entries = row_data.data
-    elif isinstance(row_data, dict):
-        entries = row_data.get("data", row_data)
+    entries = _action_entries_from_row(rows[0])
 
     return {
         "tile_token": entries.get("tile_token", tile_token),
@@ -652,7 +670,7 @@ def admin_list_dashboard_actions(
             detail=f"Token '{tile_token}' not found",
         )
 
-    from orchestra.web.api.log.utils.logging_utils import _format_logs, _get_logs_query
+    from orchestra.web.api.log.utils.logging_utils import _get_logs_query
 
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
 
@@ -664,7 +682,7 @@ def admin_list_dashboard_actions(
     )
 
     project_name = entry.project.name
-    actions_context = entry.context_name.rsplit("/", 1)[0] + "/Dashboards/Actions"
+    actions_context = _actions_context_for_tile_context(entry.context_name)
 
     rows, total = _get_logs_query(
         request_fastapi=fake_request,
@@ -685,35 +703,6 @@ def admin_list_dashboard_actions(
         randomize=False,
     )
 
-    project_id = project_dao.get_by_user_and_name(
-        name=project_name,
-        user_id=entry.user_id,
-        organization_id=entry.organization_id,
-    ).id
-
-    context_id = None
-    context_obj = context_dao.filter(name=actions_context, project_id=project_id)
-    if context_obj:
-        context_id = context_obj[0][0].id
-
-    field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
-    field_order_map = field_type_dao.get_ordered_field_names(
-        project_id,
-        context_id=context_id,
-    )
-
-    logs_out, _ = _format_logs(
-        rows=rows,
-        field_types=field_types,
-        value_limit=None,
-        column_context=None,
-        field_order_map=field_order_map,
-        from_fields=None,
-        exclude_fields=None,
-    )
-
-    actions = [
-        {**log.get("entries", {}), **log.get("derived_entries", {})} for log in logs_out
-    ]
+    actions = [_action_entries_from_row(row) for row in rows]
 
     return {"actions": actions, "total_count": total}
