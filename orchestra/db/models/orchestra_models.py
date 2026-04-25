@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -924,6 +925,28 @@ class Context(Base):
             "char_length(description) <= 256",
             name="ck_context_description_len",
         ),
+    )
+
+
+class ContextCounter(Base):
+    """Materialized auto-counter state for context-scoped log IDs."""
+
+    __tablename__ = "context_counter"
+
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    column_name = Column(Text, primary_key=True)
+    parent_values_hash = Column(Text, primary_key=True)
+    parent_values = Column(JSONB, nullable=False)
+    next_value = Column(BigInteger, nullable=False)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 
