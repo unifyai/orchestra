@@ -960,6 +960,7 @@ class AssistantDAO:
         followup_cutoff: datetime,
         limit: Optional[int] = None,
         include_demo: bool = False,
+        include_local: bool = False,
     ) -> List[Assistant]:
         """Return assistants whose next action is an inactivity follow-up.
 
@@ -971,6 +972,8 @@ class AssistantDAO:
             ``last_correspondence_at < followup_cutoff``.
         :param limit: Optional cap on the returned batch.
         :param include_demo: Include demo assistants (default: False).
+        :param include_local: Include ``is_local=True`` (local-runtime
+            test) assistants (default: False).
         :return: Candidate assistants.
         """
         stmt = select(Assistant).where(
@@ -981,6 +984,8 @@ class AssistantDAO:
         )
         if not include_demo:
             stmt = stmt.where(Assistant.demo_id.is_(None))
+        if not include_local:
+            stmt = stmt.where(Assistant.is_local.is_(False))
         stmt = stmt.order_by(Assistant.last_correspondence_at.asc())
         if limit is not None:
             stmt = stmt.limit(limit)
@@ -991,6 +996,7 @@ class AssistantDAO:
         cleanup_cutoff: datetime,
         limit: Optional[int] = None,
         include_demo: bool = False,
+        include_local: bool = False,
     ) -> List[Assistant]:
         """Return assistants eligible for deprovision + hard-delete.
 
@@ -1007,6 +1013,8 @@ class AssistantDAO:
             timestamp pre-dates this value.
         :param limit: Optional cap on the returned batch.
         :param include_demo: Include demo assistants (default: False).
+        :param include_local: Include ``is_local=True`` (local-runtime
+            test) assistants (default: False).
         :return: Candidate assistants.
         """
         stmt = select(Assistant).where(
@@ -1024,6 +1032,8 @@ class AssistantDAO:
         )
         if not include_demo:
             stmt = stmt.where(Assistant.demo_id.is_(None))
+        if not include_local:
+            stmt = stmt.where(Assistant.is_local.is_(False))
         stmt = stmt.order_by(Assistant.agent_id.asc())
         if limit is not None:
             stmt = stmt.limit(limit)
