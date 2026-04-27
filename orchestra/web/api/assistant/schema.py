@@ -1729,7 +1729,7 @@ class AdminUpdateAssistant(BaseModel):
     console_config: Optional[Dict[str, Any]] = Field(
         None,
         description="Per-assistant UI/UX configuration (layout, tabs, theme). "
-        "Pass the full nested object to upsert; omit to leave unchanged.",
+        "Pass the full nested object to upsert; pass null to clear; omit to leave unchanged.",
     )
 
     @field_validator("timezone")
