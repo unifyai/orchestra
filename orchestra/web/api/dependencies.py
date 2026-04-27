@@ -30,9 +30,7 @@ def _load_staging_email_allowlist() -> frozenset[str]:
     need staging access but don't have a @unify.ai address.
     """
     raw = os.environ.get("STAGING_EMAIL_ALLOWLIST", "")
-    return frozenset(
-        addr.strip().lower() for addr in raw.split(",") if addr.strip()
-    )
+    return frozenset(addr.strip().lower() for addr in raw.split(",") if addr.strip())
 
 
 STAGING_EMAIL_ALLOWLIST: frozenset[str] = _load_staging_email_allowlist()
