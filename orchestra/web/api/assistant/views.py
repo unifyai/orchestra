@@ -6411,3 +6411,94 @@ async def list_demo_assistant_meta(
             for meta in demo_metas
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Inactivity follow-up admin endpoints
+# ---------------------------------------------------------------------------
+
+
+@admin_router.post(
+    "/assistant/{assistant_id}/touch-activity",
+    status_code=status.HTTP_200_OK,
+    summary="Admin: record correspondence activity for an assistant",
+    description=(
+        "Stamps ``last_correspondence_at = now()`` and clears "
+        "``last_followup_sent_at`` so a future silence can re-trigger "
+        "the inactivity follow-up. Called by the Unity transcript hook "
+        "on every inbound or outbound message across any contact."
+    ),
+    tags=["Assistants", "Admin"],
+)
+def admin_touch_assistant_activity(
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    from datetime import datetime, timezone
+
+    dao = AssistantDAO(session)
+    rows = dao.touch_last_correspondence_at(assistant_id, datetime.now(timezone.utc))
+    if rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with id {assistant_id} not found.",
+        )
+    session.commit()
+    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
+
+
+@admin_router.post(
+    "/assistant/{assistant_id}/terminate",
+    status_code=status.HTTP_200_OK,
+    summary="Admin: mark an assistant for auto-cleanup",
+    description=(
+        "Sets ``termination_initiated_at = now()`` so the assistant "
+        "enters the pre-cleanup grace period. The Unity brain calls "
+        "this when the boss explicitly declines to continue. Actual "
+        "deprovisioning and hard-delete happen on the next daily run "
+        "of the inactivity follow-up routine, once the grace period "
+        "elapses."
+    ),
+    tags=["Assistants", "Admin"],
+)
+def admin_terminate_assistant(
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    from datetime import datetime, timezone
+
+    dao = AssistantDAO(session)
+    rows = dao.mark_termination_initiated(assistant_id, datetime.now(timezone.utc))
+    if rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with id {assistant_id} not found.",
+        )
+    session.commit()
+    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
+
+
+@admin_router.post(
+    "/assistant/{assistant_id}/cancel-termination",
+    status_code=status.HTTP_200_OK,
+    summary="Admin: cancel an in-flight termination",
+    description=(
+        "Clears ``termination_initiated_at`` so the assistant is no "
+        "longer on the auto-cleanup path. The Unity brain calls this "
+        "when the boss re-engages during the grace period."
+    ),
+    tags=["Assistants", "Admin"],
+)
+def admin_cancel_assistant_termination(
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    dao = AssistantDAO(session)
+    rows = dao.clear_termination_initiated(assistant_id)
+    if rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with id {assistant_id} not found.",
+        )
+    session.commit()
+    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
