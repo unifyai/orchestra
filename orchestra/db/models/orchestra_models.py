@@ -1393,6 +1393,23 @@ class Assistant(Base):
     deploy_env = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    # Re-engagement tracking. last_correspondence_at is touched on any
+    # inbound/outbound message across all contacts; last_followup_sent_at
+    # records when the inactivity follow-up fired and is cleared when fresh
+    # activity resumes; termination_initiated_at marks entry into the
+    # pre-cleanup grace period.
+    last_correspondence_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        server_default=func.now(),
+        index=True,
+    )
+    last_followup_sent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    termination_initiated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        index=True,
+    )
     voice_id = sa.Column(
         sa.String,
         nullable=True,

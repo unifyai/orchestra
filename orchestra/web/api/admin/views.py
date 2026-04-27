@@ -797,6 +797,53 @@ async def trigger_assistant_contact_suspension(
         )
 
 
+@router.post("/assistants/inactivity-followup")
+async def trigger_inactivity_followup(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger the daily re-engagement follow-up + auto-cleanup routine.
+
+    Two stages:
+      1. Dispatch an inactivity follow-up event for assistants whose most
+         recent correspondence pre-dates
+         ``inactivity_followup_days`` and who do not yet have a
+         follow-up in flight. The Unity brain composes and sends the
+         message; Orchestra just records ``last_followup_sent_at``.
+      2. Deprovision + hard-delete assistants whose silent/explicit
+         termination grace period has elapsed
+         (``inactivity_auto_cleanup_days``).
+
+    Called by Cloud Scheduler daily at 01:15 UTC (``15 1 * * *``) —
+    staggered from the billing suspension routine.
+    """
+    try:
+        from orchestra.routines.inactivity_followup import run_inactivity_followup
+
+        result = await run_inactivity_followup(session=session)
+
+        return {
+            "status": "success",
+            "message": "Inactivity follow-up routine completed",
+            "followup_candidates_found": result.followup_candidates_found,
+            "followups_dispatched": result.followups_dispatched,
+            "followups_failed": result.followups_failed,
+            "cleanup_candidates_found": result.cleanup_candidates_found,
+            "cleanups_completed": result.cleanups_completed,
+            "cleanups_failed": result.cleanups_failed,
+        }
+
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("Inactivity follow-up routine failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Inactivity follow-up failed: {str(e)}",
+        )
+
+
 @router.post("/billing/reconcile")
 def trigger_billing_reconciliation(
     auto_fix: str = "none",

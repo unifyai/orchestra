@@ -283,6 +283,23 @@ class Settings(BaseSettings):
     )
     replicate_api_key: Optional[str] = None  # Populated by model_config below
 
+    # Re-engagement follow-up routine.
+    # inactivity_followup_days: days without correspondence before the
+    #   assistant sends its own re-engagement message.
+    # inactivity_auto_cleanup_days: days after the follow-up (and with
+    #   no reply) before the contacts are deprovisioned and the
+    #   assistant is hard-deleted.
+    # inactivity_followup_batch_size: upper bound on assistants
+    #   processed per routine invocation — caps blast radius and
+    #   keeps the daily Cloud Scheduler run bounded.
+    # inactivity_followup_jitter_seconds: per-assistant random delay
+    #   (0..jitter) applied when dispatching follow-ups so a daily run
+    #   does not fire hundreds of messages in the same second.
+    inactivity_followup_days: int = 3
+    inactivity_auto_cleanup_days: int = 7
+    inactivity_followup_batch_size: int = 200
+    inactivity_followup_jitter_seconds: int = 600
+
     @property
     def db_url(self) -> URL:
         """
