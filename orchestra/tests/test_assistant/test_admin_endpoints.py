@@ -693,6 +693,121 @@ async def test_admin_update_assistant_console_config_updates_existing_row(
 
 
 @pytest.mark.anyio
+async def test_admin_update_assistant_console_config_clears_existing_row(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "admin_asst_console_config_clear@test.com",
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Console",
+            "surname": "Clear",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    console_config = {
+        "version": "1",
+        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "tabs": {"hidden": ["memory"]},
+    }
+
+    create_config_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"console_config": console_config},
+        headers=ADMIN_HEADERS,
+    )
+    assert create_config_resp.status_code == 200, create_config_resp.json()
+
+    clear_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"console_config": None},
+        headers=ADMIN_HEADERS,
+    )
+    assert clear_resp.status_code == 200, clear_resp.json()
+    assert clear_resp.json()["updated_fields"] == ["console_config"]
+
+    rows = (
+        dbsession.query(AssistantConsoleConfig)
+        .filter(AssistantConsoleConfig.assistant_id == agent_id)
+        .all()
+    )
+    assert rows == []
+
+    list_resp = await client.get("/v0/assistant", headers=owner["headers"])
+    assert list_resp.status_code == 200, list_resp.json()
+    assistant = [a for a in list_resp.json()["info"] if int(a["agent_id"]) == agent_id][
+        0
+    ]
+    assert assistant["console_config"] is None
+
+
+@pytest.mark.anyio
+async def test_admin_update_assistant_omitted_console_config_leaves_row_unchanged(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "admin_asst_console_config_omit@test.com",
+    )
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Console",
+            "surname": "Omit",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    console_config = {
+        "version": "1",
+        "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+        "tabs": {"hidden": ["memory"], "order": ["dashboards", "chat"]},
+        "theme": {"brandName": "Original", "accentColor": "#111111"},
+    }
+
+    config_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"console_config": console_config},
+        headers=ADMIN_HEADERS,
+    )
+    assert config_resp.status_code == 200, config_resp.json()
+
+    update_resp = await client.patch(
+        f"/v0/admin/assistant/{agent_id}",
+        json={"about": "Updated without touching console config"},
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200, update_resp.json()
+    assert update_resp.json()["updated_fields"] == ["about"]
+
+    cfg = (
+        dbsession.query(AssistantConsoleConfig)
+        .filter(AssistantConsoleConfig.assistant_id == agent_id)
+        .one()
+    )
+    assert cfg.layout_mode == "dashboard-centric"
+    assert cfg.layout_default_tab == "dashboards"
+    assert cfg.tabs_hidden == ["memory"]
+    assert cfg.tabs_order == ["dashboards", "chat"]
+    assert cfg.theme_brand_name == "Original"
+    assert cfg.theme_accent_color == "#111111"
+
+
+@pytest.mark.anyio
 async def test_assistant_list_returns_console_config(
     client: AsyncClient,
     dbsession,

@@ -5195,24 +5195,30 @@ def admin_update_assistant(
         assistant.deploy_env = request_body.deploy_env
         updated_fields.append("deploy_env")
 
-    if request_body.console_config is not None:
-        cc = request_body.console_config
-        layout = cc.get("layout", {})
-        tabs = cc.get("tabs") or {}
-        theme = cc.get("theme") or {}
-        if assistant.console_config is None:
-            assistant.console_config = AssistantConsoleConfig(
-                assistant_id=assistant_id,
-            )
-        cfg = assistant.console_config
-        cfg.version = cc.get("version", "1")
-        cfg.layout_mode = layout.get("mode", "standard")
-        cfg.layout_default_tab = layout.get("defaultTab")
-        cfg.tabs_hidden = tabs.get("hidden")
-        cfg.tabs_order = tabs.get("order")
-        cfg.theme_brand_name = theme.get("brandName")
-        cfg.theme_accent_color = theme.get("accentColor")
-        updated_fields.append("console_config")
+    if "console_config" in request_body.model_fields_set:
+        if request_body.console_config is None:
+            if assistant.console_config is not None:
+                session.delete(assistant.console_config)
+                assistant.console_config = None
+            updated_fields.append("console_config")
+        else:
+            cc = request_body.console_config
+            layout = cc.get("layout", {})
+            tabs = cc.get("tabs") or {}
+            theme = cc.get("theme") or {}
+            if assistant.console_config is None:
+                assistant.console_config = AssistantConsoleConfig(
+                    assistant_id=assistant_id,
+                )
+            cfg = assistant.console_config
+            cfg.version = cc.get("version", "1")
+            cfg.layout_mode = layout.get("mode", "standard")
+            cfg.layout_default_tab = layout.get("defaultTab")
+            cfg.tabs_hidden = tabs.get("hidden")
+            cfg.tabs_order = tabs.get("order")
+            cfg.theme_brand_name = theme.get("brandName")
+            cfg.theme_accent_color = theme.get("accentColor")
+            updated_fields.append("console_config")
 
     if not updated_fields:
         raise HTTPException(
