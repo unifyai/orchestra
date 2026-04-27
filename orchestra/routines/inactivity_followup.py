@@ -291,6 +291,8 @@ async def _cleanup_assistant(
             )
             return result
 
+        await _send_deletion_notification(session, assistant)
+
         session.delete(assistant)
         result.deleted = True
     except Exception as exc:
@@ -300,3 +302,53 @@ async def _cleanup_assistant(
         )
         result.error = str(exc)
     return result
+
+
+async def _send_deletion_notification(
+    session: Session,
+    assistant: Assistant,
+) -> None:
+    """Best-effort: tell the assistant's lifecycle owner why it disappeared.
+
+    Failures are swallowed and logged. A notification hiccup must never
+    block the hard-delete that follows.
+    """
+    try:
+        from orchestra.routines.assistant_contact_notifications import (
+            send_notification_emails,
+        )
+        from orchestra.routines.inactivity_notifications import (
+            DELETION_SUBJECT,
+            build_deletion_email,
+            get_owner_email_for_assistant,
+            get_owner_first_name_for_assistant,
+        )
+
+        owner_email = get_owner_email_for_assistant(session, assistant)
+        if not owner_email:
+            logger.info(
+                "Inactivity deletion: no owner email for assistant %d; "
+                "skipping notification.",
+                assistant.agent_id,
+            )
+            return
+
+        days = settings.inactivity_followup_days + settings.inactivity_auto_cleanup_days
+        await send_notification_emails(
+            [owner_email],
+            DELETION_SUBJECT,
+            build_deletion_email(
+                assistant=assistant,
+                owner_first_name=get_owner_first_name_for_assistant(
+                    session,
+                    assistant,
+                ),
+                days=days,
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "Inactivity deletion notification failed for assistant %d",
+            assistant.agent_id,
+            exc_info=True,
+        )

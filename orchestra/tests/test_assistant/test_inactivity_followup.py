@@ -28,7 +28,12 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.models.orchestra_models import Assistant, DemoAssistantMeta, User
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    DemoAssistantMeta,
+    Organization,
+    User,
+)
 from orchestra.routines.inactivity_followup import (
     InactivityFollowupResult,
     run_inactivity_followup,
@@ -717,3 +722,177 @@ class TestDispatchHelper:
             )
 
         fake_client.post.assert_not_awaited()
+
+
+# ===========================================================================
+# 5. Inactivity deletion notification (Fix C)
+# ===========================================================================
+
+
+def _make_user_with_email(
+    dbsession: Session,
+    uid: str,
+    email: str,
+    first_name: str | None = None,
+) -> User:
+    # Note: User column for the salutation/first name is `name`, not
+    # `first_name`. Helper kwarg stays `first_name` for readability at
+    # call sites; only the SQLAlchemy attribute we set differs.
+    user = User(id=uid, email=email, name=first_name)
+    dbsession.add(user)
+    dbsession.flush()
+    return user
+
+
+class TestInactivityDeletionNotification:
+    """Cleanup must notify the assistant's lifecycle owner before hard-delete."""
+
+    @pytest.mark.anyio
+    async def test_personal_assistant_notifies_user_id_owner(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        owner = _make_user_with_email(
+            dbsession,
+            "del_personal_owner",
+            "owner@test.com",
+            first_name="Olivia",
+        )
+        a = _make_assistant(
+            dbsession,
+            owner.id,
+            first_name="Bert",
+            last_followup_sent_at=datetime.now(timezone.utc) - timedelta(days=10),
+        )
+        dbsession.flush()
+
+        sent: list[tuple] = []
+
+        async def _capture(recipients, subject, body):
+            sent.append((recipients, subject, body))
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_capture,
+        ):
+            result = await run_inactivity_followup(session=dbsession)
+
+        assert result.cleanups_completed == 1
+        assert len(sent) == 1
+        recipients, subject, _body = sent[0]
+        assert recipients == ["owner@test.com"]
+        assert "removed" in subject.lower()
+        # Hard-delete also went through
+        assert dbsession.get(Assistant, a.agent_id) is None
+
+    @pytest.mark.anyio
+    async def test_org_assistant_notifies_creator_not_org_owner(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        """Org assistant must notify Assistant.user_id (the creator),
+        NOT the organization's owner_id user."""
+        org_owner = _make_user_with_email(
+            dbsession,
+            "del_org_root",
+            "org-owner@test.com",
+        )
+        creator = _make_user_with_email(
+            dbsession,
+            "del_org_creator",
+            "creator@test.com",
+            first_name="Cara",
+        )
+        org = Organization(name="DelOrg", owner_id=org_owner.id)
+        dbsession.add(org)
+        dbsession.flush()
+
+        a = _make_assistant(
+            dbsession,
+            creator.id,
+            first_name="Bert",
+            last_followup_sent_at=datetime.now(timezone.utc) - timedelta(days=10),
+        )
+        a.organization_id = org.id
+        dbsession.flush()
+
+        sent: list[tuple] = []
+
+        async def _capture(recipients, subject, body):
+            sent.append((recipients, subject, body))
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_capture,
+        ):
+            await run_inactivity_followup(session=dbsession)
+
+        assert len(sent) == 1
+        recipients, _subj, _body = sent[0]
+        assert recipients == ["creator@test.com"]
+        assert "org-owner@test.com" not in recipients
+
+    @pytest.mark.anyio
+    async def test_deletion_proceeds_when_notification_fails(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        """A notification send failure must not block hard-delete."""
+        owner = _make_user_with_email(
+            dbsession,
+            "del_fail_owner",
+            "owner-fail@test.com",
+        )
+        a = _make_assistant(
+            dbsession,
+            owner.id,
+            last_followup_sent_at=datetime.now(timezone.utc) - timedelta(days=10),
+        )
+        dbsession.flush()
+
+        async def _raise(*_args, **_kwargs):
+            raise RuntimeError("smtp blew up")
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_raise,
+        ):
+            result = await run_inactivity_followup(session=dbsession)
+
+        assert result.cleanups_completed == 1
+        assert dbsession.get(Assistant, a.agent_id) is None
+
+    def test_email_body_contains_required_phrases(self):
+        """Lock the requested copy contract into a regression test."""
+        import re
+
+        from orchestra.routines.inactivity_notifications import build_deletion_email
+
+        assistant = Assistant(
+            agent_id=42,
+            user_id="x",
+            first_name="Bert",
+            surname="Bot",
+        )
+        body = build_deletion_email(
+            assistant=assistant,
+            owner_first_name="Olivia",
+            days=10,
+        )
+        # The HTML body line-wraps the copy; collapse whitespace before
+        # substring matching so future formatting tweaks don't break the
+        # phrase contract.
+        normalized = re.sub(r"\s+", " ", body.lower())
+        assert "previously followed up" in normalized
+        assert (
+            "didn't respond or chose to not keep" in normalized
+        ), "exact product-brief phrasing must be present"
+        assert "10 days" in normalized
+        assert "bert" in normalized
+        assert "olivia" in normalized
