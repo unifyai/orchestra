@@ -54,6 +54,7 @@ def _make_assistant(
     last_followup_sent_at: datetime | None = None,
     termination_initiated_at: datetime | None = None,
     demo_id: int | None = None,
+    is_local: bool = False,
 ) -> Assistant:
     a = Assistant(
         user_id=user_id,
@@ -62,6 +63,7 @@ def _make_assistant(
         last_followup_sent_at=last_followup_sent_at,
         termination_initiated_at=termination_initiated_at,
         demo_id=demo_id,
+        is_local=is_local,
     )
     dbsession.add(a)
     dbsession.flush()
@@ -266,6 +268,57 @@ class TestDAOFindFollowupCandidates:
         )
         assert len(limited) == 2
 
+    def test_excludes_is_local_by_default(self, dbsession: Session):
+        """Local-runtime test assistants must not appear in production runs."""
+        user = _make_user(dbsession, "flw_u6")
+        long_ago = datetime.now(timezone.utc) - timedelta(days=5)
+        local = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="LocalBot",
+            last_correspondence_at=long_ago,
+            is_local=True,
+        )
+        prod = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="ProdBot",
+            last_correspondence_at=long_ago,
+            is_local=False,
+        )
+
+        dao = AssistantDAO(dbsession)
+        ids = {
+            c.agent_id
+            for c in dao.find_followup_candidates(
+                followup_cutoff=datetime.now(timezone.utc) - timedelta(days=3),
+            )
+        }
+        assert local.agent_id not in ids
+        assert prod.agent_id in ids
+
+    def test_include_local_override(self, dbsession: Session):
+        """Tests can opt back in to local assistants via include_local=True."""
+        user = _make_user(dbsession, "flw_u7")
+        long_ago = datetime.now(timezone.utc) - timedelta(days=5)
+        local = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="LocalBot",
+            last_correspondence_at=long_ago,
+            is_local=True,
+        )
+
+        dao = AssistantDAO(dbsession)
+        ids = {
+            c.agent_id
+            for c in dao.find_followup_candidates(
+                followup_cutoff=datetime.now(timezone.utc) - timedelta(days=3),
+                include_local=True,
+            )
+        }
+        assert local.agent_id in ids
+
 
 class TestDAOFindAutoCleanupCandidates:
     def test_silent_path(self, dbsession: Session):
@@ -312,6 +365,78 @@ class TestDAOFindAutoCleanupCandidates:
             cleanup_cutoff=datetime.now(timezone.utc) - timedelta(days=7),
         )
         assert recent.agent_id not in {c.agent_id for c in candidates}
+
+    def test_silent_path_excludes_is_local_by_default(self, dbsession: Session):
+        """Local-runtime test assistants must not be hard-deleted by the routine."""
+        user = _make_user(dbsession, "clu_u4")
+        stale_followup = datetime.now(timezone.utc) - timedelta(days=10)
+        local = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="LocalBot",
+            last_followup_sent_at=stale_followup,
+            is_local=True,
+        )
+        prod = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="ProdBot",
+            last_followup_sent_at=stale_followup,
+            is_local=False,
+        )
+
+        dao = AssistantDAO(dbsession)
+        ids = {
+            c.agent_id
+            for c in dao.find_auto_cleanup_candidates(
+                cleanup_cutoff=datetime.now(timezone.utc) - timedelta(days=7),
+            )
+        }
+        assert local.agent_id not in ids
+        assert prod.agent_id in ids
+
+    def test_explicit_path_excludes_is_local_by_default(self, dbsession: Session):
+        """Even with termination_initiated_at set, is_local assistants are skipped."""
+        user = _make_user(dbsession, "clu_u5")
+        stale_termination = datetime.now(timezone.utc) - timedelta(days=10)
+        local = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="LocalBot",
+            termination_initiated_at=stale_termination,
+            is_local=True,
+        )
+
+        dao = AssistantDAO(dbsession)
+        ids = {
+            c.agent_id
+            for c in dao.find_auto_cleanup_candidates(
+                cleanup_cutoff=datetime.now(timezone.utc) - timedelta(days=7),
+            )
+        }
+        assert local.agent_id not in ids
+
+    def test_include_local_override(self, dbsession: Session):
+        """include_local=True surfaces local assistants for tests."""
+        user = _make_user(dbsession, "clu_u6")
+        stale_followup = datetime.now(timezone.utc) - timedelta(days=10)
+        local = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="LocalBot",
+            last_followup_sent_at=stale_followup,
+            is_local=True,
+        )
+
+        dao = AssistantDAO(dbsession)
+        ids = {
+            c.agent_id
+            for c in dao.find_auto_cleanup_candidates(
+                cleanup_cutoff=datetime.now(timezone.utc) - timedelta(days=7),
+                include_local=True,
+            )
+        }
+        assert local.agent_id in ids
 
 
 # ===========================================================================
