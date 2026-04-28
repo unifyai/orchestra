@@ -23,7 +23,7 @@ have to pretend they sent a follow-up. Indexes target the two routine
 queries (followup candidates, auto-cleanup candidates).
 
 Revision ID: add_assistant_inactivity_columns
-Revises: add_hives_and_assistant_hive_id
+Revises: add_context_counter
 Create Date: 2026-04-27 12:00:00.000000
 """
 
