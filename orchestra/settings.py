@@ -182,7 +182,6 @@ class Settings(BaseSettings):
         "ORCHESTRA_OWNER_ID",
         "67abcd12-1fac-4a8f-afe9-c54698c96971",
     )
-
     # Chat Completions Project
     chat_completions_project_name: str = "Usage"
     chat_completions_markup_rate: float = 1.2
