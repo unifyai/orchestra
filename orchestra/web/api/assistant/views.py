@@ -111,12 +111,8 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
-    create_email,
-    create_outlook_email,
     create_phone_number,
     create_pubsub_topic,
-    delete_email,
-    delete_outlook_email,
     delete_phone_number,
     delete_pubsub_topic,
     get_runtime_status,
@@ -124,8 +120,6 @@ from orchestra.web.api.utils.assistant_infra import (
     reawaken_assistant,
     trigger_contact_sync_safe,
     wake_up_assistant,
-    watch_email,
-    watch_outlook_email,
 )
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
@@ -1083,24 +1077,17 @@ async def delete_assistant_contact(
         )
 
         if contact:
-            # BYOD contacts: skip external deprovisioning (we don't own the resource)
+            # BYOD contacts: skip external deprovisioning (we don't own the resource).
+            # Email contacts are BYOD-only since platform mailboxes were retired,
+            # so they always fall into the user-owned branch — nothing external
+            # to deprovision. Stale platform email rows are handled by the
+            # one-shot orchestra.workers.teardown_platform_mailboxes worker.
             if contact.provisioned_by != "user":
                 if contact_type == "phone" and contact.contact_value:
                     await delete_phone_number(
                         contact.contact_value,
                         deploy_env=assistant.deploy_env,
                     )
-                elif contact_type == "email" and contact.contact_value:
-                    if contact.provider == "microsoft_365":
-                        await delete_outlook_email(
-                            contact.contact_value,
-                            deploy_env=assistant.deploy_env,
-                        )
-                    else:
-                        await delete_email(
-                            contact.contact_value,
-                            deploy_env=assistant.deploy_env,
-                        )
                 elif contact_type == "whatsapp":
                     from orchestra.web.api.utils.assistant_infra import (
                         delete_whatsapp_routes,
@@ -1171,6 +1158,12 @@ async def delete_assistant_contact(
         402: {"description": "Insufficient credits."},
         404: {"description": "Assistant not found."},
         409: {"description": "Contact type already exists for this assistant."},
+        410: {
+            "description": (
+                "Platform-issued email mailbox provisioning is no longer "
+                "supported. Use BYOD (provisioned_by='user') instead."
+            ),
+        },
     },
 )
 async def create_assistant_contact(
@@ -1231,6 +1224,20 @@ async def create_assistant_contact(
     contact_type = contact_request.contact_type
     is_byod = contact_request.provisioned_by == "user"
 
+    # Platform-issued mailbox provisioning is retired. Direct API/SDK
+    # callers can still create BYOD email contacts (provisioned_by="user");
+    # everything else on the email tab must connect their own mailbox.
+    if contact_type == "email" and not is_byod:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "Platform-issued assistant mailboxes (@unify.ai / Microsoft 365) "
+                "are no longer offered. Connect your own email account by "
+                "setting provisioned_by='user' and supplying contact_value + "
+                "email_provider, or use the OAuth connect flow in the console."
+            ),
+        )
+
     # 2. Require verified profile identity for phone/whatsapp/discord contacts
     if contact_type in ("phone", "whatsapp", "discord"):
         user_dao = UserDAO(session)
@@ -1283,7 +1290,7 @@ async def create_assistant_contact(
         provider = "twilio"
         country_code = contact_request.phone_country or "US"
     elif contact_type == "email":
-        provider = contact_request.email_provider or "google_workspace"
+        provider = contact_request.email_provider
     elif contact_type == "whatsapp":
         provider = "twilio"
     elif contact_type == "discord":
@@ -1401,68 +1408,6 @@ async def create_assistant_contact(
                 )
             created_value = phone_response.get("phoneNumber")
 
-        elif contact_type == "email":
-            if not contact_request.email_local:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="email_local is required for email contacts.",
-                )
-
-            if provider == "microsoft_365":
-                api_key_dao = ApiKeyDAO(session)
-                if assistant.organization_id is None:
-                    keys = api_key_dao.get_personal_keys(assistant.user_id)
-                else:
-                    keys = api_key_dao.get_organization_keys(
-                        assistant.user_id,
-                        assistant.organization_id,
-                    )
-                # Comms uses this key to write delegated tokens back via
-                # PUT/POST /assistant/{id}/secret (inline ROPC).  Without
-                # it, the mailbox falls through the legacy app-only path
-                # and Teams change-notification subscriptions break.
-                outlook_api_key = keys[0][0].key if keys else None
-                email_response = await create_outlook_email(
-                    contact_request.email_local,
-                    contact_request.first_name or "",
-                    contact_request.last_name or "",
-                    deploy_env=assistant.deploy_env,
-                    assistant_id=assistant.agent_id,
-                    api_key=outlook_api_key,
-                    features=["email", "teams"],
-                )
-            else:
-                email_response = await create_email(
-                    contact_request.email_local,
-                    contact_request.first_name or "",
-                    contact_request.last_name or "",
-                    deploy_env=assistant.deploy_env,
-                )
-
-            if "detail" in email_response:
-                raise Exception(
-                    f"Email creation failed: {email_response['detail']}",
-                )
-            created_value = email_response.get("user", {}).get("primaryEmail")
-
-            await asyncio.sleep(10)
-
-            if provider == "microsoft_365":
-                watch_response = await watch_outlook_email(
-                    created_value,
-                    deploy_env=assistant.deploy_env,
-                )
-            else:
-                watch_response = await watch_email(
-                    created_value,
-                    deploy_env=assistant.deploy_env,
-                )
-
-            if "detail" in watch_response:
-                raise Exception(
-                    f"Email watch setup failed: {watch_response['detail']}",
-                )
-
         elif contact_type == "whatsapp":
             from orchestra.web.api.utils.assistant_infra import (
                 assign_whatsapp_pool_number,
@@ -1578,17 +1523,6 @@ async def create_assistant_contact(
                     created_value,
                     deploy_env=assistant.deploy_env,
                 )
-            elif contact_type == "email":
-                if provider == "microsoft_365":
-                    await delete_outlook_email(
-                        created_value,
-                        deploy_env=assistant.deploy_env,
-                    )
-                else:
-                    await delete_email(
-                        created_value,
-                        deploy_env=assistant.deploy_env,
-                    )
         except Exception as rollback_error:
             logging.error(
                 f"RESOURCE LEAK: Failed to rollback {contact_type} "
@@ -6111,42 +6045,6 @@ async def create_demo_assistant(
                 detail=f"Failed to provision phone number: {str(e)}",
             )
 
-        # Optionally provision email infrastructure
-        demo_email = None
-        if demo_create.provision_email:
-            try:
-                email_local = assistant_dao.generate_unique_email_local(
-                    demo_create.first_name,
-                    demo_create.surname,
-                )
-                email_response = await create_email(
-                    email_local,
-                    demo_create.first_name,
-                    demo_create.surname,
-                    deploy_env=demo_assistant.deploy_env,
-                )
-                if "detail" in email_response:
-                    raise Exception(
-                        f"Email creation failed: {email_response['detail']}",
-                    )
-                demo_email = email_response.get("user", {}).get("primaryEmail")
-                logging.info(f"Email provisioned for demo assistant: {demo_email}")
-
-                # Wait and set up email watch
-                await asyncio.sleep(10)
-                watch_response = await watch_email(
-                    demo_email,
-                    deploy_env=demo_assistant.deploy_env,
-                )
-                if "detail" in watch_response:
-                    logging.warning(
-                        f"Email watch setup failed for demo assistant: {watch_response['detail']}",
-                    )
-            except Exception as e:
-                logging.error(f"Failed to provision email for demo assistant: {e}")
-                # Don't fail the whole creation - email is optional
-                # The phone is already provisioned, so we continue
-
         # Create pubsub topic
         try:
             await create_pubsub_topic(
@@ -6171,13 +6069,6 @@ async def create_demo_assistant(
                 demo_user = session.get(User, user_id)
                 if demo_user and not demo_user.phone_number:
                     demo_user.phone_number = demo_create.demoer_phone
-        if demo_email:
-            contact_dao.upsert_assistant_contact(
-                assistant_id=demo_assistant.agent_id,
-                contact_type="email",
-                contact_value=demo_email,
-                provider="google_workspace",
-            )
 
         # Commit the transaction BEFORE waking up the assistant
         # This ensures the assistant is visible to Adapters when it queries Orchestra

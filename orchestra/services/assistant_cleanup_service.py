@@ -20,8 +20,6 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.bucket_service import BucketService
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import (
-    delete_email,
-    delete_outlook_email,
     delete_phone_number,
     teardown_assistant_runtime,
 )
@@ -207,11 +205,15 @@ async def deprovision_assistant_contacts(
 
         for contact in spec.contacts:
             attempted += 1
-            # User-provisioned (BYOD) phone/email resources are owned by the
-            # user, not the platform — skip the external deprovision call so
-            # we don't try to delete the user's own Twilio number / mailbox.
+            # User-provisioned (BYOD) phone resources are owned by the user,
+            # not the platform — skip the external deprovision call so we
+            # don't try to delete the user's own Twilio number.
             # WhatsApp routes always live in our shared pool, so they're
             # always cleaned up regardless of provisioning source.
+            # Email contacts are BYOD-only (platform mailboxes were retired
+            # and any historical platform rows are torn down by the dedicated
+            # `orchestra.workers.teardown_platform_mailboxes` worker), so we
+            # never call out to the Communication service for them here.
             is_byod = contact.provisioned_by == "user"
             try:
                 if contact.contact_type == "phone" and contact.contact_value:
@@ -228,23 +230,14 @@ async def deprovision_assistant_contacts(
                             deploy_env=spec.deploy_env,
                         )
                 elif contact.contact_type == "email" and contact.contact_value:
-                    if is_byod:
-                        logger.info(
-                            "Skipping external deprovision for BYOD email "
-                            "%s on assistant %s",
-                            contact.contact_value,
-                            spec.assistant_id,
-                        )
-                    elif contact.provider == "microsoft_365":
-                        await delete_outlook_email(
-                            contact.contact_value,
-                            deploy_env=spec.deploy_env,
-                        )
-                    else:
-                        await delete_email(
-                            contact.contact_value,
-                            deploy_env=spec.deploy_env,
-                        )
+                    logger.info(
+                        "Skipping external deprovision for email contact "
+                        "%s on assistant %s (platform mailboxes are torn down "
+                        "by the dedicated worker; BYOD mailboxes belong to "
+                        "the user).",
+                        contact.contact_value,
+                        spec.assistant_id,
+                    )
                 elif contact.contact_type == "whatsapp":
                     if not whatsapp_cleared:
                         shared_pool_dao.delete_routes_for_assistant(spec.assistant_id)

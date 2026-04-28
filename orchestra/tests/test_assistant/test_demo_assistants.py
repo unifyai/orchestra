@@ -616,315 +616,62 @@ class TestDemoMetaListEndpoint:
 
 
 class TestDemoEmailProvisioning:
-    """Tests for optional email provisioning in demo assistants."""
+    """Demo assistants never get a platform mailbox.
+
+    Platform-issued ``@unify.ai`` mailboxes were retired and the demo
+    schema no longer accepts a ``provision_email`` field.  These tests
+    pin the resulting behaviour: demo creation always returns
+    ``email is None`` regardless of whether legacy SDK callers pass the
+    (now-ignored) field.
+    """
 
     @pytest.mark.anyio
-    async def test_provision_email_false_by_default(
+    async def test_demo_creation_returns_no_email(
         self,
         client: AsyncClient,
         source_assistant: dict,
         unify_member_user: dict,
     ):
-        """provision_email defaults to False and no email is created."""
+        """Default demo creation has no email contact."""
         payload = {
             "source_assistant_id": int(source_assistant["agent_id"]),
             "label": "No Email Demo",
             "first_name": "NoEmail",
             "surname": "Demo",
             "demoer_phone": "+14155559999",
-            # provision_email not provided - should default to False
         }
         resp = await client.post("/v0/demo/assistant", json=payload, headers=HEADERS)
         assert resp.status_code == status.HTTP_200_OK, f"Failed: {resp.json()}"
 
         created = resp.json()["info"]
-        # Email should be None when provision_email is not requested
         assert created["email"] is None
 
     @pytest.mark.anyio
-    async def test_provision_email_explicitly_false(
+    async def test_legacy_provision_email_field_is_silently_ignored(
         self,
         client: AsyncClient,
         source_assistant: dict,
         unify_member_user: dict,
     ):
-        """Explicitly setting provision_email=False should not create email."""
+        """Legacy SDK callers that still pass ``provision_email=True`` get
+        the same outcome as everyone else: a successful demo with no
+        email contact.  The field has been dropped from the request
+        schema; Pydantic's default behaviour is to ignore unknown fields
+        rather than reject them, which preserves SDK back-compat."""
         payload = {
             "source_assistant_id": int(source_assistant["agent_id"]),
-            "label": "Explicit No Email Demo",
-            "first_name": "ExplicitNoEmail",
+            "label": "Email Demo",
+            "first_name": "EmailDemo",
             "surname": "Demo",
             "demoer_phone": "+14155559999",
-            "provision_email": False,
+            "provision_email": True,  # legacy field, silently ignored
         }
-        resp = await client.post("/v0/demo/assistant", json=payload, headers=HEADERS)
+        resp = await client.post(
+            "/v0/demo/assistant",
+            json=payload,
+            headers=HEADERS,
+        )
         assert resp.status_code == status.HTTP_200_OK, f"Failed: {resp.json()}"
 
         created = resp.json()["info"]
         assert created["email"] is None
-
-    @pytest.mark.anyio
-    async def test_provision_email_creates_email(
-        self,
-        client: AsyncClient,
-        source_assistant: dict,
-        unify_member_user: dict,
-    ):
-        """Setting provision_email=True should create an email address."""
-        # Mock create_email and watch_email since they make external calls
-        with patch(
-            "orchestra.web.api.assistant.views.create_email",
-            new_callable=AsyncMock,
-        ) as mock_create_email, patch(
-            "orchestra.web.api.assistant.views.watch_email",
-            new_callable=AsyncMock,
-        ) as mock_watch_email, patch(
-            "orchestra.web.api.assistant.views.asyncio.sleep",
-            new_callable=AsyncMock,
-        ):
-            # Set up mock return values
-            mock_create_email.return_value = {
-                "user": {"primaryEmail": "emaildemo.demo@unify.ai"},
-            }
-            mock_watch_email.return_value = {"success": True}
-
-            payload = {
-                "source_assistant_id": int(source_assistant["agent_id"]),
-                "label": "Email Demo",
-                "first_name": "EmailDemo",
-                "surname": "Demo",
-                "demoer_phone": "+14155559999",
-                "provision_email": True,
-            }
-            resp = await client.post(
-                "/v0/demo/assistant",
-                json=payload,
-                headers=HEADERS,
-            )
-            assert resp.status_code == status.HTTP_200_OK, f"Failed: {resp.json()}"
-
-            created = resp.json()["info"]
-            # Email should be set
-            assert created["email"] == "emaildemo.demo@unify.ai"
-
-            # Verify create_email was called with correct args
-            mock_create_email.assert_called_once()
-            call_args = mock_create_email.call_args
-            # First arg is email_local (without @domain)
-            assert "emaildemo" in call_args[0][0].lower()
-
-    @pytest.mark.anyio
-    async def test_email_provisioning_failure_does_not_fail_creation(
-        self,
-        client: AsyncClient,
-        source_assistant: dict,
-        unify_member_user: dict,
-    ):
-        """Email provisioning failure should not fail the entire demo creation."""
-        with patch(
-            "orchestra.web.api.assistant.views.create_email",
-            new_callable=AsyncMock,
-        ) as mock_create_email, patch(
-            "orchestra.web.api.assistant.views.asyncio.sleep",
-            new_callable=AsyncMock,
-        ):
-            # Simulate email creation failure
-            mock_create_email.return_value = {
-                "detail": "Email service temporarily unavailable",
-            }
-
-            payload = {
-                "source_assistant_id": int(source_assistant["agent_id"]),
-                "label": "Email Failure Demo",
-                "first_name": "EmailFailure",
-                "surname": "Demo",
-                "demoer_phone": "+14155559999",
-                "provision_email": True,
-            }
-            resp = await client.post(
-                "/v0/demo/assistant",
-                json=payload,
-                headers=HEADERS,
-            )
-
-            # Creation should still succeed (email is optional)
-            assert resp.status_code == status.HTTP_200_OK, f"Failed: {resp.json()}"
-
-            created = resp.json()["info"]
-            # Phone should be provisioned even if email failed
-            assert created["phone"] is not None
-            # Email will be None since provisioning failed
-            assert created["email"] is None
-
-
-class TestUniqueEmailGenerationDAO:
-    """Direct unit tests for AssistantDAO.generate_unique_email_local()."""
-
-    @pytest.mark.anyio
-    async def test_generate_unique_email_local_base_case(
-        self,
-        client: AsyncClient,
-        dbsession,
-    ):
-        """First email should use base name without suffix."""
-        from orchestra.db.dao.assistant_dao import AssistantDAO
-
-        dao = AssistantDAO(dbsession)
-        result = dao.generate_unique_email_local("John", "Doe")
-        assert result == "john.doe"
-
-    @pytest.mark.anyio
-    async def test_generate_unique_email_local_normalizes_special_chars(
-        self,
-        client: AsyncClient,
-        dbsession,
-    ):
-        """Special characters should be stripped."""
-        from orchestra.db.dao.assistant_dao import AssistantDAO
-
-        dao = AssistantDAO(dbsession)
-        result = dao.generate_unique_email_local("Mary-Jane", "O'Connor")
-        # Hyphens and apostrophes should be removed
-        assert result == "maryjane.oconnor"
-
-    @pytest.mark.anyio
-    async def test_generate_unique_email_local_handles_collision(
-        self,
-        client: AsyncClient,
-        source_assistant: dict,
-        unify_member_user: dict,
-        dbsession,
-    ):
-        """Should append suffix when base email already exists."""
-        from orchestra.db.dao.assistant_dao import AssistantDAO
-
-        # First, create a demo assistant with email provisioned
-        with patch(
-            "orchestra.web.api.assistant.views.create_email",
-            new_callable=AsyncMock,
-        ) as mock_create_email, patch(
-            "orchestra.web.api.assistant.views.watch_email",
-            new_callable=AsyncMock,
-        ), patch(
-            "orchestra.web.api.assistant.views.asyncio.sleep",
-            new_callable=AsyncMock,
-        ):
-            mock_create_email.return_value = {
-                "user": {"primaryEmail": "collision.test@unify.ai"},
-            }
-
-            payload = {
-                "source_assistant_id": int(source_assistant["agent_id"]),
-                "label": "Collision Demo 1",
-                "first_name": "Collision",
-                "surname": "Test",
-                "demoer_phone": "+14155559999",
-                "provision_email": True,
-            }
-            resp = await client.post(
-                "/v0/demo/assistant",
-                json=payload,
-                headers=HEADERS,
-            )
-            assert resp.status_code == status.HTTP_200_OK
-
-        # Now test that the DAO generates a unique suffix
-        dao = AssistantDAO(dbsession)
-        result = dao.generate_unique_email_local("Collision", "Test")
-        # Should be "collision.test.1" since "collision.test" is taken
-        assert result == "collision.test.1"
-
-
-class TestUniqueEmailGeneration:
-    """Tests for unique email local part generation via API."""
-
-    @pytest.mark.anyio
-    async def test_unique_email_generation_base_case(
-        self,
-        client: AsyncClient,
-        source_assistant: dict,
-        unify_member_user: dict,
-    ):
-        """First email should use base name without suffix."""
-        with patch(
-            "orchestra.web.api.assistant.views.create_email",
-            new_callable=AsyncMock,
-        ) as mock_create_email, patch(
-            "orchestra.web.api.assistant.views.watch_email",
-            new_callable=AsyncMock,
-        ) as mock_watch_email, patch(
-            "orchestra.web.api.assistant.views.asyncio.sleep",
-            new_callable=AsyncMock,
-        ):
-            mock_create_email.return_value = {
-                "user": {"primaryEmail": "unique.base@unify.ai"},
-            }
-            mock_watch_email.return_value = {"success": True}
-
-            payload = {
-                "source_assistant_id": int(source_assistant["agent_id"]),
-                "label": "Unique Base Demo",
-                "first_name": "Unique",
-                "surname": "Base",
-                "demoer_phone": "+14155559999",
-                "provision_email": True,
-            }
-            resp = await client.post(
-                "/v0/demo/assistant",
-                json=payload,
-                headers=HEADERS,
-            )
-            assert resp.status_code == status.HTTP_200_OK
-
-            # Check that create_email was called with base name
-            call_args = mock_create_email.call_args
-            email_local = call_args[0][0]
-            # Should be "unique.base" (no suffix for first)
-            assert email_local == "unique.base"
-
-    @pytest.mark.anyio
-    async def test_unique_email_generation_handles_special_chars(
-        self,
-        client: AsyncClient,
-        source_assistant: dict,
-        unify_member_user: dict,
-    ):
-        """Email generation should handle special characters in names."""
-        with patch(
-            "orchestra.web.api.assistant.views.create_email",
-            new_callable=AsyncMock,
-        ) as mock_create_email, patch(
-            "orchestra.web.api.assistant.views.watch_email",
-            new_callable=AsyncMock,
-        ) as mock_watch_email, patch(
-            "orchestra.web.api.assistant.views.asyncio.sleep",
-            new_callable=AsyncMock,
-        ):
-            mock_create_email.return_value = {
-                "user": {"primaryEmail": "johnpaul.obrien@unify.ai"},
-            }
-            mock_watch_email.return_value = {"success": True}
-
-            payload = {
-                "source_assistant_id": int(source_assistant["agent_id"]),
-                "label": "Special Chars Demo",
-                "first_name": "John-Paul",
-                "surname": "O'Brien",
-                "demoer_phone": "+14155559999",
-                "provision_email": True,
-            }
-            resp = await client.post(
-                "/v0/demo/assistant",
-                json=payload,
-                headers=HEADERS,
-            )
-            assert resp.status_code == status.HTTP_200_OK
-
-            # Check that special chars were normalized
-            call_args = mock_create_email.call_args
-            email_local = call_args[0][0]
-            # Hyphens and apostrophes should be removed
-            assert "-" not in email_local
-            assert "'" not in email_local
-            # Should be lowercase
-            assert email_local == email_local.lower()

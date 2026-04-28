@@ -383,92 +383,24 @@ async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
     return response.json()
 
 
-async def create_email(
-    local: str,
-    first_name: str,
-    last_name: str,
-    deploy_env: str | None = None,
-):
-    """
-    Create an email for the user by making a POST request to the UNIFY_COMMS_URL endpoint.
-
-    Args:
-        local (str): The local part of the email address
-        first_name (str): User's first name
-        last_name (str): User's last name
-
-    Returns:
-        Response from the email creation endpoint
-    """
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    response = await client.post(
-        f"{comms_url}/gmail/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "local": local,
-            "first_name": first_name,
-            "last_name": last_name,
-        },
-        timeout=20,
-    )
-    return response.json()
-
-
-async def create_outlook_email(
-    local: str,
-    first_name: str,
-    last_name: str,
-    deploy_env: str | None = None,
-    assistant_id: str | int | None = None,
-    api_key: str | None = None,
-    features: list[str] | None = None,
-):
-    """
-    Create an MS365 mailbox by calling the Communication service.
-
-    Mirrors `create_email` (Gmail) but hits the ``/outlook/create`` endpoint,
-    which creates the Azure AD user and assigns an Exchange Online license.
-
-    When ``assistant_id`` and ``api_key`` are supplied, Communication performs
-    an inline ROPC sign-in against the freshly-set mailbox password and
-    stores user-delegated tokens as assistant secrets.  This is required
-    for Teams change-notification subscriptions on unify-provisioned
-    mailboxes — the app-only token path can't subscribe to Teams without
-    a paid billing model.  ``features`` defaults server-side to
-    ``["email", "teams"]`` when omitted.
-    """
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    body: dict = {
-        "local": local,
-        "first_name": first_name,
-        "last_name": last_name,
-    }
-    if assistant_id is not None:
-        body["assistant_id"] = str(assistant_id)
-    if api_key:
-        body["api_key"] = api_key
-    if features is not None:
-        body["features"] = features
-    response = await client.post(
-        f"{comms_url}/outlook/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json=body,
-        timeout=30,
-    )
-    return response.json()
+# Platform-issued mailbox provisioning is retired. The corresponding
+# `create_email` / `create_outlook_email` and `watch_email` /
+# `watch_outlook_email` helpers have been removed.
+#
+# `delete_email` / `delete_outlook_email` are kept below because they
+# are still invoked by `orchestra.workers.teardown_platform_mailboxes`
+# to deprovision the lingering platform mailboxes that existed before
+# the feature was retired (and they remain idempotent for any future
+# stragglers).
 
 
 async def delete_email(email: str, deploy_env: str | None = None):
-    """
-    Delete an email by making a DELETE request to the comms endpoint.
+    """Delete a Google Workspace user via the Communication service.
 
-    Args:
-        email (str): The email address to delete
-
-    Returns:
-        JSON response from the email deletion endpoint
+    Used only by the one-shot platform-mailbox teardown worker
+    (``orchestra.workers.teardown_platform_mailboxes``).  Idempotent:
+    Communication returns ``{"already_absent": true}`` for users that
+    have already been removed.
     """
     comms_url = _comms_url_for(deploy_env)
     client = get_async_client()
@@ -484,7 +416,11 @@ async def delete_email(email: str, deploy_env: str | None = None):
 
 
 async def delete_outlook_email(email: str, deploy_env: str | None = None):
-    """Delete an MS365 user/mailbox via the Communication service."""
+    """Delete an MS365 user/mailbox via the Communication service.
+
+    Used only by the one-shot platform-mailbox teardown worker
+    (``orchestra.workers.teardown_platform_mailboxes``).  Idempotent.
+    """
     comms_url = _comms_url_for(deploy_env)
     client = get_async_client()
     response = await client.request(
@@ -495,47 +431,6 @@ async def delete_outlook_email(email: str, deploy_env: str | None = None):
         timeout=20,
     )
     response.raise_for_status()
-    return response.json()
-
-
-async def watch_email(email: str, deploy_env: str | None = None):
-    """
-    Watch an email by making a POST request to the comms endpoint.
-
-    Args:
-        email (str): The email to watch
-        deploy_env: Reserved for future use; currently ignored.
-
-    Returns:
-        JSON response from the email watch endpoint
-    """
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    response = await client.post(
-        f"{comms_url}/gmail/watch",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "primary_email": email,
-            "topic": f"gmail-notifications{_env_suffix(deploy_env)}",
-        },
-        timeout=20,
-    )
-    return response.json()
-
-
-async def watch_outlook_email(email: str, deploy_env: str | None = None):
-    """Set up Outlook change-notification subscription via the Communication service."""
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    response = await client.post(
-        f"{comms_url}/outlook/watch",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "primary_email": email,
-            "topic": f"outlook-notifications{_env_suffix(deploy_env)}",
-        },
-        timeout=20,
-    )
     return response.json()
 
 

@@ -488,12 +488,6 @@ class DemoAssistantCreate(BaseModel):
         description="Country code for phone number provisioning (e.g., US, GB). If not provided, uses source assistant's country or defaults to US.",
         example="US",
     )
-    # Optional email provisioning
-    provision_email: bool = Field(
-        default=False,
-        description="Whether to provision an email address for the demo assistant (default: false)",
-        example=False,
-    )
     # Optional prospect details - if provided, Unity will pre-populate the boss contact
     prospect_first_name: Optional[str] = Field(
         None,
@@ -525,7 +519,6 @@ class DemoAssistantCreate(BaseModel):
                 "surname": "Branson-Demo",
                 "demoer_phone": "+14155559999",
                 "monthly_spending_cap": 10.0,
-                "provision_email": False,
                 "prospect_first_name": "Richard",
                 "prospect_surname": "Branson",
                 "prospect_email": "richard@virgin.com",
@@ -1285,11 +1278,14 @@ class AssistantContactCreate(BaseModel):
     Schema for creating a new contact detail for an assistant.
 
     For ``provisioned_by="platform"`` (default) the endpoint provisions
-    external infrastructure (Twilio phone, Google Workspace / MS365 email,
-    WhatsApp sender) and creates the corresponding AssistantContact row.
+    external infrastructure (Twilio phone, WhatsApp sender, Discord bot)
+    and creates the corresponding AssistantContact row.
 
-    For ``provisioned_by="user"`` (BYOD) the caller supplies the full
-    ``contact_value`` directly — no external provisioning or billing occurs.
+    Email contacts are **BYOD-only**: ``provisioned_by="user"`` plus a
+    ``contact_value`` that the user connected via the OAuth flow.
+    Platform-issued mailboxes (``provisioned_by="platform"`` with
+    ``contact_type="email"``) are no longer offered and the endpoint
+    returns HTTP 410 GONE for that combination.
     """
 
     contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
@@ -1300,8 +1296,9 @@ class AssistantContactCreate(BaseModel):
     provisioned_by: Literal["platform", "user"] = Field(
         "platform",
         description=(
-            "Who owns the resource. 'platform' = we provision and bill; "
-            "'user' = BYOD, the user connected their own account via OAuth."
+            "Who owns the resource. 'platform' = we provision and bill "
+            "(phone / whatsapp / discord only); 'user' = BYOD, the user "
+            "connected their own account via OAuth (required for email)."
         ),
     )
     # BYOD field — the full contact value (email address, phone number, etc.)
@@ -1319,26 +1316,15 @@ class AssistantContactCreate(BaseModel):
         description="Country code for phone number provisioning (e.g., 'US', 'GB'). Only used for phone contacts.",
         example="US",
     )
-    # Email-specific fields
+    # Email-specific fields (BYOD only — platform email is retired)
     email_provider: Optional[Literal["google_workspace", "microsoft_365"]] = Field(
-        "google_workspace",
-        description="Email provider to use for provisioning. Only used for email contacts.",
+        None,
+        description=(
+            "Provider of the user's connected mailbox. Required for BYOD "
+            "email contacts; must be set explicitly to avoid mislabelling "
+            "Microsoft mailboxes as Google Workspace."
+        ),
         example="google_workspace",
-    )
-    email_local: Optional[str] = Field(
-        None,
-        description="Local part of the email address (before @). Only used for platform-provisioned email contacts.",
-        example="ada.lovelace",
-    )
-    first_name: Optional[str] = Field(
-        None,
-        description="First name for the email account. Only used for platform-provisioned email contacts.",
-        example="Ada",
-    )
-    last_name: Optional[str] = Field(
-        None,
-        description="Last name for the email account. Only used for platform-provisioned email contacts.",
-        example="Lovelace",
     )
 
     @model_validator(mode="after")

@@ -1352,13 +1352,13 @@ async def test_delete_assistant_deletes_contexts(
 @pytest.mark.anyio
 async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session):
     # Mock the infrastructure deletion calls to avoid external API calls during testing
+    # NOTE: email contacts are BYOD-only since the platform mailbox feature
+    # was retired, so the DELETE endpoint never calls the (removed)
+    # ``delete_email`` infra helper for them — it just soft-deletes the row.
     with patch(
         "orchestra.web.api.assistant.views.delete_phone_number",
         new_callable=AsyncMock,
-    ) as mock_delete_phone, patch(
-        "orchestra.web.api.assistant.views.delete_email",
-        new_callable=AsyncMock,
-    ) as mock_delete_email:
+    ) as mock_delete_phone:
 
         # 1. Create a base assistant
         base_payload = {
@@ -1411,10 +1411,7 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         email_deleted_info = delete_email_resp.json()["info"]
         assert email_deleted_info["email"] is None
         assert email_deleted_info["phone"] == "+15558675309"  # Should be unchanged
-        mock_delete_email.assert_called_once_with(
-            "contact.remover@example.com",
-            deploy_env=None,
-        )
+        # No external mailbox call — email is BYOD-only.
 
         # 5. Delete Phone contact
         delete_phone_payload = {"contact_type": "phone"}

@@ -34,16 +34,15 @@ def mock_all_infra(dbsession):
     Mock all infrastructure utilities for create_infra=True testing.
     Yields dict of mocks for test configuration and assertion.
     """
+    # NOTE: ``create_email`` / ``watch_email`` / ``delete_email`` (and their
+    # MS365 siblings) are no longer imported into ``views`` — platform mailbox
+    # provisioning was retired alongside the ``@unify.ai`` mailbox feature.
+    # We only patch helpers the create endpoint still calls.
     patches = {
-        "create_email": AsyncMock(
-            return_value={"user": {"primaryEmail": "testassistant@assistant.unify.ai"}},
-        ),
-        "watch_email": AsyncMock(return_value={"historyId": "123456"}),
         "create_phone_number": AsyncMock(
             return_value={"phoneNumber": "+15551234567"},
         ),
         "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
-        "delete_email": AsyncMock(return_value={"success": True}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
         "process_assistant_cleanup_tasks": AsyncMock(
@@ -148,13 +147,11 @@ async def test_create_assistant_with_infra_full(
     mock_all_infra["wake_up_assistant"].assert_called_once()
 
     # Contact provisioning removed from create
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
     mock_all_infra["register_whatsapp_sender"].assert_not_called()
 
     # Verify no rollback functions were called
-    mock_all_infra["delete_email"].assert_not_called()
     mock_all_infra["delete_phone_number"].assert_not_called()
     mock_all_infra["delete_pubsub_topic"].assert_not_called()
 
@@ -183,8 +180,6 @@ async def test_create_assistant_with_infra_email_only(
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
     # Contact provisioning removed from create
-    mock_all_infra["create_email"].assert_not_called()
-    mock_all_infra["watch_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
     mock_all_infra["register_whatsapp_sender"].assert_not_called()
@@ -219,9 +214,6 @@ async def test_create_assistant_with_infra_phone_only(
 
     # Phone/email provisioning removed from create endpoint
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["create_email"].assert_not_called()
-    mock_all_infra["watch_email"].assert_not_called()
-
 
 @pytest.mark.anyio
 async def test_create_assistant_with_infra_no_email_no_phone(
@@ -244,7 +236,6 @@ async def test_create_assistant_with_infra_no_email_no_phone(
 
     # Only pubsub should be created
     mock_all_infra["create_pubsub_topic"].assert_called_once()
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
 
 
@@ -274,7 +265,6 @@ async def test_create_infra_email_creation_fails(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     # Email/phone provisioning functions should not be called during create
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
@@ -299,8 +289,6 @@ async def test_create_infra_email_watch_fails(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     # Email provisioning functions should not be called during create
-    mock_all_infra["create_email"].assert_not_called()
-    mock_all_infra["watch_email"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
@@ -325,7 +313,6 @@ async def test_create_infra_phone_creation_fails(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     mock_all_infra["create_phone_number"].assert_not_called()
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
@@ -352,7 +339,6 @@ async def test_create_infra_whatsapp_fails(
 
     mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
     mock_all_infra["register_whatsapp_sender"].assert_not_called()
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
@@ -381,7 +367,6 @@ async def test_create_infra_pubsub_fails(
     assert "Infrastructure setup failed" in error_detail
 
     # No contact infra to roll back (contact provisioning removed from create)
-    mock_all_infra["delete_email"].assert_not_called()
     mock_all_infra["delete_phone_number"].assert_not_called()
     mock_all_infra["delete_pubsub_topic"].assert_not_called()
 
@@ -473,7 +458,6 @@ async def test_create_infra_with_pre_hire_chat(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     # Verify pubsub and chat logging happened (email provisioning removed from create)
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
     mock_all_infra["log_pre_hire_chat"].assert_called_once()
 
@@ -497,7 +481,6 @@ async def test_create_infra_email_extracts_local_part(
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
     # Email provisioning removed from create endpoint
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
@@ -624,7 +607,6 @@ async def test_org_assistant_with_infra_full(
     mock_all_infra["wake_up_assistant"].assert_called_once()
 
     # Contact provisioning removed from create
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
     mock_all_infra["assign_whatsapp_pool_number"].assert_not_called()
     mock_all_infra["register_whatsapp_sender"].assert_not_called()
@@ -659,7 +641,6 @@ async def test_org_assistant_with_infra_email_only(
     assert data["phone"] is None
 
     mock_all_infra["create_pubsub_topic"].assert_called_once()
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_phone_number"].assert_not_called()
 
 
@@ -693,7 +674,6 @@ async def test_org_assistant_infra_pubsub_fails_rollback(
     assert "Infrastructure setup failed" in error_detail
 
     # No contact infra to roll back (contact provisioning removed from create)
-    mock_all_infra["delete_email"].assert_not_called()
     mock_all_infra["delete_phone_number"].assert_not_called()
 
 
@@ -721,7 +701,6 @@ async def test_org_assistant_infra_email_fails_no_rollback_needed(
     # Create succeeds because email provisioning is no longer part of create
     assert resp.status_code == status.HTTP_200_OK, resp.json()
 
-    mock_all_infra["create_email"].assert_not_called()
     mock_all_infra["create_pubsub_topic"].assert_called_once()
 
 
@@ -790,7 +769,6 @@ async def test_org_assistant_infra_rollback_also_fails(
     assert "Infrastructure setup failed" in error_detail
 
     # No contact infra to roll back
-    mock_all_infra["delete_email"].assert_not_called()
     mock_all_infra["delete_phone_number"].assert_not_called()
 
 
@@ -865,9 +843,6 @@ async def test_org_assistant_with_pre_hire_chat_and_infra(
     # Verify both infra and chat logging happened
     mock_all_infra["create_pubsub_topic"].assert_called_once()
     mock_all_infra["log_pre_hire_chat"].assert_called_once()
-
-    # Contact provisioning removed from create
-    mock_all_infra["create_email"].assert_not_called()
 
 
 # =============================================================================

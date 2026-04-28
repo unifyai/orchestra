@@ -112,8 +112,6 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
     from sqlalchemy.orm import object_session
 
     from orchestra.web.api.utils.assistant_infra import (
-        delete_email,
-        delete_outlook_email,
         delete_phone_number,
     )
 
@@ -139,19 +137,17 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
                 contact.id,
             )
     elif contact.contact_type == "email":
-        if contact.contact_value:
-            if contact.provider == "microsoft_365":
-                await delete_outlook_email(
-                    contact.contact_value,
-                    deploy_env=deploy_env,
-                )
-            else:
-                await delete_email(contact.contact_value, deploy_env=deploy_env)
-            logger.info(
-                "Deprovisioned email %s (contact %d)",
-                contact.contact_value,
-                contact.id,
-            )
+        # Email contacts are BYOD-only since platform mailboxes were
+        # retired; suspension just clears the row, the user keeps their
+        # mailbox.  Historical platform rows are torn down out-of-band by
+        # the dedicated `orchestra.workers.teardown_platform_mailboxes`
+        # worker, never via the suspension path.
+        logger.info(
+            "Skipping external deprovision for email contact %s "
+            "(contact %d): nothing to remove on the platform side.",
+            contact.contact_value,
+            contact.id,
+        )
     elif contact.contact_type == "whatsapp":
         from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
