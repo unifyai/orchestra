@@ -64,6 +64,7 @@ from orchestra.web.api.organization.schema import (
     OrgSpendResponse,
 )
 from orchestra.web.api.users.views import generate_key
+from orchestra.web.api.utils.assistant_infra import fan_out_contact_sync_for_org
 from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
 
@@ -817,6 +818,8 @@ async def add_organization_member(
 
         await _run_pool_resolution_followups(pool_resolutions, session)
 
+        await fan_out_contact_sync_for_org(organization_id, session)
+
         return {
             "message": "Member added successfully",
             "user_id": member_data.user_id,
@@ -991,6 +994,8 @@ async def remove_organization_member(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to remove member",
         )
+
+    await fan_out_contact_sync_for_org(organization_id, session)
 
     if cleanup_task_ids:
         cleanup_summary = await process_assistant_cleanup_tasks(
@@ -1805,29 +1810,7 @@ async def accept_invite(
 
         await _run_pool_resolution_followups(pool_resolutions, session)
 
-        # Trigger contact sync for all org assistants (non-blocking)
-        from orchestra.db.dao.assistant_dao import AssistantDAO
-        from orchestra.web.api.utils.assistant_infra import trigger_contact_sync
-
-        assistant_dao = AssistantDAO(session)
-        org_assistants = assistant_dao.list_all_org_assistants(
-            organization_id=invite.organization_id,
-        )
-
-        for assistant in org_assistants:
-            try:
-                await trigger_contact_sync(
-                    assistant.agent_id,
-                    deploy_env=assistant.deploy_env,
-                )
-                logger.info(
-                    f"Triggered contact sync for assistant {assistant.agent_id}",
-                )
-            except Exception as e_sync:
-                logger.warning(
-                    f"Failed to trigger contact sync for assistant "
-                    f"{assistant.agent_id}: {e_sync}",
-                )
+        await fan_out_contact_sync_for_org(invite.organization_id, session)
 
         # Mark user as onboarded (they're joining via invite, no workspace selection needed)
         from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
