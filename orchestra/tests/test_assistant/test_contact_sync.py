@@ -6,6 +6,7 @@ Tests the automatic synchronization of User/Assistant profile fields
 in the Assistants project.
 """
 
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -436,7 +437,6 @@ async def test_assistant_timezone_sync_updates_contact_log(
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact log for the assistant (contact_id=0)
     await client.post(
         "/v0/logs",
         json={
@@ -444,8 +444,8 @@ async def test_assistant_timezone_sync_updates_contact_log(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "_assistant": str(agent_id),
-                    "contact_id": 0,
+                    "assistant_id": agent_id,
+                    "contact_id": 100,
                     "timezone": "America/New_York",
                     "bio": "Original assistant bio",
                 },
@@ -454,7 +454,6 @@ async def test_assistant_timezone_sync_updates_contact_log(
         headers=user["headers"],
     )
 
-    # Update assistant timezone via API
     update_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json={"timezone": "Europe/Paris", "create_infra": False},
@@ -462,16 +461,14 @@ async def test_assistant_timezone_sync_updates_contact_log(
     )
     assert update_resp.status_code == 200
 
-    # Verify Contact log was updated
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.status_code == 200
     logs = logs_resp.json()["logs"]
-    # Find the assistant's contact log
     asst_log = next(
-        (log for log in logs if log["entries"].get("contact_id") == 0),
+        (log for log in logs if log["entries"].get("assistant_id") == agent_id),
         None,
     )
     assert asst_log is not None
@@ -479,17 +476,23 @@ async def test_assistant_timezone_sync_updates_contact_log(
 
 
 @pytest.mark.anyio
-async def test_assistant_timezone_sync_filters_by_contact_id_zero(
+async def test_assistant_timezone_sync_only_updates_self_row(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Test that assistant timezone only syncs to contact_id=0 logs."""
+    """Profile sync must only touch the body's self-row.
+
+    A self-row is identified by ``assistant_id == agent_id``; a regular
+    contact (e.g. someone the assistant added to its address book) has
+    ``assistant_id`` unset. Without that identity-based filter, any row
+    that happens to share the same numeric ``contact_id`` could be
+    overwritten even though it represents a different contact.
+    """
     user = await create_test_user(
         client,
         "asst_tz_filter@test.com",
     )
 
-    # Create assistant
     assistant_resp = await client.post(
         "/v0/assistant",
         json={
@@ -503,39 +506,45 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact logs - one with contact_id=0, one with contact_id=999
     await client.post(
         "/v0/logs",
         json={
             "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"_assistant": str(agent_id), "contact_id": 0, "timezone": "UTC"},
-                {"_assistant": str(agent_id), "contact_id": 999, "timezone": "UTC"},
+                {
+                    "assistant_id": agent_id,
+                    "contact_id": 50,
+                    "timezone": "UTC",
+                },
+                {
+                    "contact_id": 51,
+                    "first_name": "Bob",
+                    "timezone": "UTC",
+                },
             ],
         },
         headers=user["headers"],
     )
 
-    # Update assistant timezone
     await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json={"timezone": "Europe/London", "create_infra": False},
         headers=user["headers"],
     )
 
-    # Verify only contact_id=0 was updated
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
 
-    for log in logs:
-        if log["entries"].get("contact_id") == 0:
-            assert log["entries"].get("timezone") == "Europe/London"
-        elif log["entries"].get("contact_id") == 999:
-            assert log["entries"].get("timezone") == "UTC"  # Unchanged
+    self_row = next(
+        log for log in logs if log["entries"].get("assistant_id") == agent_id
+    )
+    bob_row = next(log for log in logs if log["entries"].get("contact_id") == 51)
+    assert self_row["entries"]["timezone"] == "Europe/London"
+    assert bob_row["entries"]["timezone"] == "UTC"
 
 
 # =============================================================================
@@ -568,20 +577,22 @@ async def test_assistant_bio_sync_updates_contact_log(
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact log for the assistant (contact_id=0)
     await client.post(
         "/v0/logs",
         json={
             "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"_assistant": str(agent_id), "contact_id": 0, "bio": "Original bio"},
+                {
+                    "assistant_id": agent_id,
+                    "contact_id": 100,
+                    "bio": "Original bio",
+                },
             ],
         },
         headers=user["headers"],
     )
 
-    # Update assistant about via API
     update_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json={"about": "Updated assistant bio", "create_infra": False},
@@ -589,14 +600,13 @@ async def test_assistant_bio_sync_updates_contact_log(
     )
     assert update_resp.status_code == 200
 
-    # Verify Contact log was updated
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
     asst_log = next(
-        (log for log in logs if log["entries"].get("contact_id") == 0),
+        (log for log in logs if log["entries"].get("assistant_id") == agent_id),
         None,
     )
     assert asst_log is not None
@@ -629,7 +639,6 @@ async def test_assistant_bio_and_timezone_sync_together(
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact log
     await client.post(
         "/v0/logs",
         json={
@@ -637,8 +646,8 @@ async def test_assistant_bio_and_timezone_sync_together(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "_assistant": str(agent_id),
-                    "contact_id": 0,
+                    "assistant_id": agent_id,
+                    "contact_id": 100,
                     "bio": "Old bio",
                     "timezone": "UTC",
                 },
@@ -647,7 +656,6 @@ async def test_assistant_bio_and_timezone_sync_together(
         headers=user["headers"],
     )
 
-    # Update both fields
     update_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json={
@@ -659,14 +667,13 @@ async def test_assistant_bio_and_timezone_sync_together(
     )
     assert update_resp.status_code == 200
 
-    # Verify both fields updated
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
     asst_log = next(
-        (log for log in logs if log["entries"].get("contact_id") == 0),
+        (log for log in logs if log["entries"].get("assistant_id") == agent_id),
         None,
     )
     assert asst_log is not None
@@ -722,22 +729,23 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
     assert assistant_resp.json()["info"]["organization_id"] == org_id
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact log in org's Assistants project
     log_create_resp = await client.post(
         "/v0/logs",
         json={
             "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"_assistant": str(agent_id), "contact_id": 0, "timezone": "UTC"},
+                {
+                    "assistant_id": agent_id,
+                    "contact_id": 100,
+                    "timezone": "UTC",
+                },
             ],
         },
         headers=org_headers,
     )
     assert log_create_resp.status_code == 200
 
-    # Update assistant timezone using org API key
-    # (must use same API key type that was used to create the assistant)
     update_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json={"timezone": "America/Los_Angeles", "create_infra": False},
@@ -745,7 +753,6 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
     )
     assert update_resp.status_code == 200
 
-    # Verify Contact log was updated
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=org_headers,
@@ -753,7 +760,7 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
     assert logs_resp.status_code == 200
     logs = logs_resp.json()["logs"]
     asst_log = next(
-        (log for log in logs if log["entries"].get("contact_id") == 0),
+        (log for log in logs if log["entries"].get("assistant_id") == agent_id),
         None,
     )
     assert asst_log is not None
@@ -1190,7 +1197,6 @@ async def test_assistant_name_sync_updates_contact_log(
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact log for the assistant (contact_id=0)
     await client.post(
         "/v0/logs",
         json={
@@ -1198,8 +1204,8 @@ async def test_assistant_name_sync_updates_contact_log(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "_assistant": str(agent_id),
-                    "contact_id": 0,
+                    "assistant_id": agent_id,
+                    "contact_id": 100,
                     "first_name": "OriginalFirst",
                     "surname": "OriginalLast",
                 },
@@ -1208,7 +1214,6 @@ async def test_assistant_name_sync_updates_contact_log(
         headers=user["headers"],
     )
 
-    # Update assistant name via API
     update_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json={
@@ -1220,7 +1225,6 @@ async def test_assistant_name_sync_updates_contact_log(
     )
     assert update_resp.status_code == 200
 
-    # Verify Contact log was updated
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=user["headers"],
@@ -1228,7 +1232,7 @@ async def test_assistant_name_sync_updates_contact_log(
     assert logs_resp.status_code == 200
     logs = logs_resp.json()["logs"]
     asst_log = next(
-        (log for log in logs if log["entries"].get("contact_id") == 0),
+        (log for log in logs if log["entries"].get("assistant_id") == agent_id),
         None,
     )
     assert asst_log is not None
@@ -1267,7 +1271,6 @@ async def test_assistant_all_contact_fields_sync_together(
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact log
     await client.post(
         "/v0/logs",
         json={
@@ -1275,8 +1278,8 @@ async def test_assistant_all_contact_fields_sync_together(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "_assistant": str(agent_id),
-                    "contact_id": 0,
+                    "assistant_id": agent_id,
+                    "contact_id": 100,
                     "first_name": "Old",
                     "surname": "Name",
                     "bio": "Old bio",
@@ -1287,7 +1290,6 @@ async def test_assistant_all_contact_fields_sync_together(
         headers=user["headers"],
     )
 
-    # Update all syncable profile fields
     update_resp = await client.patch(
         f"/v0/assistant/{agent_id}/config",
         json={
@@ -1301,14 +1303,13 @@ async def test_assistant_all_contact_fields_sync_together(
     )
     assert update_resp.status_code == 200
 
-    # Verify all synced fields updated
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
     asst_log = next(
-        (log for log in logs if log["entries"].get("contact_id") == 0),
+        (log for log in logs if log["entries"].get("assistant_id") == agent_id),
         None,
     )
     assert asst_log is not None
@@ -1350,3 +1351,186 @@ async def test_assistant_sync_no_project_no_error(
         headers=user["headers"],
     )
     assert update_resp.status_code == 200
+
+
+# =============================================================================
+# HIVE-AWARE ASSISTANT SYNC TESTS
+# =============================================================================
+
+
+def _seed_contacts_context(
+    dbsession: Session,
+    *,
+    project: object,
+    context_name: str,
+    rows: list[dict],
+) -> int:
+    """Provision a Contacts context within ``project`` and insert ``rows``.
+
+    Returns the context id so callers can assert against the underlying
+    ``log_event`` rows after the service runs.
+    """
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.models.orchestra_models import LogEvent, LogEventContext
+
+    context_dao = ContextDAO(dbsession)
+    context_id = context_dao.get_or_create(project_id=project.id, name=context_name)
+    for data in rows:
+        log = LogEvent(project_id=project.id, data=data)
+        dbsession.add(log)
+        dbsession.flush()
+        dbsession.add(LogEventContext(log_event_id=log.id, context_id=context_id))
+    dbsession.flush()
+    return context_id
+
+
+def _read_self_row(
+    dbsession: Session,
+    context_id: int,
+    agent_id: int,
+) -> Optional[dict]:
+    """Return the ``data`` payload of the self-row in ``context_id`` if any."""
+    from sqlalchemy import text as _text
+
+    row = dbsession.execute(
+        _text(
+            """
+            SELECT le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND (le.data->>'assistant_id')::int = :agent_id
+            LIMIT 1
+            """,
+        ),
+        {"context_id": context_id, "agent_id": agent_id},
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+@pytest.mark.anyio
+async def test_hive_assistant_timezone_sync_targets_hive_contacts_context(
+    client: AsyncClient,
+    dbsession: Session,
+    contact_sync_service: ContactSyncService,
+):
+    """Hive members must update ``Hives/{hive_id}/Contacts`` directly.
+
+    Hive Contacts rows are not mirrored into the project ``All/Contacts``
+    archive — Hive paths short-circuit aggregation — so a sync service
+    that only knew the archive name would silently no-op for every body
+    in a Hive. Passing ``hive_id`` tells the service to address the Hive
+    root by name and the body's self-row picks up the new value.
+    """
+    user = await create_test_user(client, "hive_asst_tz@test.com")
+    project_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=user["headers"],
+    )
+    assert project_resp.status_code == 200
+    from orchestra.db.models.orchestra_models import Project
+
+    project = (
+        dbsession.query(Project)
+        .filter(Project.user_id == user["id"], Project.name == "Assistants")
+        .first()
+    )
+    assert project is not None
+
+    agent_id = 4242
+    hive_id = 99
+    hive_context_id = _seed_contacts_context(
+        dbsession,
+        project=project,
+        context_name=f"Hives/{hive_id}/Contacts",
+        rows=[
+            {
+                "assistant_id": agent_id,
+                "contact_id": 7,
+                "timezone": "UTC",
+            },
+        ],
+    )
+    archive_context_id = _seed_contacts_context(
+        dbsession,
+        project=project,
+        context_name="All/Contacts",
+        rows=[
+            {
+                "assistant_id": agent_id,
+                "contact_id": 8,
+                "timezone": "UTC",
+            },
+        ],
+    )
+
+    updated = contact_sync_service.sync_assistant_timezone(
+        user_id=user["id"],
+        organization_id=None,
+        agent_id=agent_id,
+        new_timezone="Asia/Tokyo",
+        hive_id=hive_id,
+    )
+    dbsession.commit()
+
+    assert updated == 1
+    hive_row = _read_self_row(dbsession, hive_context_id, agent_id)
+    archive_row = _read_self_row(dbsession, archive_context_id, agent_id)
+    assert hive_row is not None and hive_row["timezone"] == "Asia/Tokyo"
+    assert archive_row is not None and archive_row["timezone"] == "UTC"
+
+
+@pytest.mark.anyio
+async def test_solo_assistant_sync_uses_project_archive(
+    client: AsyncClient,
+    dbsession: Session,
+    contact_sync_service: ContactSyncService,
+):
+    """Solo bodies (no ``hive_id``) keep using the project ``All/Contacts``.
+
+    The archive holds references to the underlying log row, so a single
+    UPDATE on it propagates wherever else the row is referenced.
+    """
+    user = await create_test_user(client, "solo_asst_archive@test.com")
+    project_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=user["headers"],
+    )
+    assert project_resp.status_code == 200
+    from orchestra.db.models.orchestra_models import Project
+
+    project = (
+        dbsession.query(Project)
+        .filter(Project.user_id == user["id"], Project.name == "Assistants")
+        .first()
+    )
+    assert project is not None
+
+    agent_id = 7777
+    archive_context_id = _seed_contacts_context(
+        dbsession,
+        project=project,
+        context_name="All/Contacts",
+        rows=[
+            {
+                "assistant_id": agent_id,
+                "contact_id": 12,
+                "bio": "old",
+            },
+        ],
+    )
+
+    updated = contact_sync_service.sync_assistant_bio(
+        user_id=user["id"],
+        organization_id=None,
+        agent_id=agent_id,
+        new_bio="new",
+        hive_id=None,
+    )
+    dbsession.commit()
+
+    assert updated == 1
+    archive_row = _read_self_row(dbsession, archive_context_id, agent_id)
+    assert archive_row is not None and archive_row["bio"] == "new"

@@ -3,8 +3,23 @@ Service for syncing User/Assistant profile fields to Contact logs.
 
 When users or assistants update their profile fields (timezone, bio,
 first_name, surname), this service propagates those changes to the
-corresponding Contact log entries in the "Assistants" project's
-"All/Contacts" context.
+``Contacts`` log row that represents the editing entity inside the
+``Assistants`` project.
+
+Two Contact roots are addressed depending on the body's Hive
+membership:
+
+* solo bodies write ``{user_id}/{assistant_id}/Contacts`` and the row
+  is referenced from the project-level ``All/Contacts`` archive — a
+  single ``UPDATE … JOIN log_event_context`` on that archive reaches
+  the underlying ``log_event`` row.
+* Hive members write ``Hives/{hive_id}/Contacts`` directly; those rows
+  do not aggregate into ``All/Contacts`` (Hive paths short-circuit
+  archival), so updates target the Hive context by name.
+
+The assistant's self-row is identified by ``assistant_id == agent_id``
+on the shared ``Contacts`` table — the stable per-body marker. User
+self-rows are identified by ``email_address`` plus ``is_system = true``.
 """
 
 import logging
@@ -13,6 +28,7 @@ from typing import List, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from orchestra.db.context_naming import HIVE_CONTEXT_PREFIX
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.models.orchestra_models import Context, Project
 
@@ -20,20 +36,19 @@ logger = logging.getLogger(__name__)
 
 
 class ContactSyncService:
-    """
-    Service for syncing profile fields between User/Assistant and Contact logs.
+    """Sync profile fields between User/Assistant rows and Contact logs.
 
     Handles:
-    - User timezone → Contact logs (first_name + surname, is_system=True)
-    - User bio → Contact logs (first_name + surname, is_system=True)
-    - Assistant timezone → Contact logs (_assistant=str(agent_id), contact_id=0)
-    - Assistant about → Contact logs (_assistant=str(agent_id), contact_id=0)
-    - Assistant first_name → Contact logs (_assistant=str(agent_id), contact_id=0)
-    - Assistant surname → Contact logs (_assistant=str(agent_id), contact_id=0)
+
+    * User timezone/bio → Contact logs matched by email + ``is_system``.
+    * Assistant timezone/about/first_name/surname → the ``Contacts`` row
+      whose ``assistant_id`` field names the body (Hive-aware: shared
+      Hive Contacts for Hive members, the project ``All/Contacts``
+      archive for solo bodies).
     """
 
     ASSISTANTS_PROJECT_NAME = "Assistants"
-    CONTACTS_CONTEXT_NAME = "All/Contacts"
+    SOLO_CONTACTS_CONTEXT_NAME = "All/Contacts"
 
     def __init__(self, session: Session):
         self.session = session
@@ -112,16 +127,40 @@ class ContactSyncService:
                 .first()
             )
 
-    def _get_contacts_context(self, project_id: int) -> Optional[Context]:
-        """Get the All/Contacts context for a project."""
+    def _get_contacts_context(
+        self,
+        project_id: int,
+        context_name: Optional[str] = None,
+    ) -> Optional[Context]:
+        """Look up a Contacts context within an Assistants project.
+
+        ``context_name`` defaults to the solo aggregation archive
+        (``All/Contacts``); Hive callers pass ``Hives/{hive_id}/Contacts``
+        to address the shared root directly.
+        """
         return (
             self.session.query(Context)
             .filter(
                 Context.project_id == project_id,
-                Context.name == self.CONTACTS_CONTEXT_NAME,
+                Context.name == (context_name or self.SOLO_CONTACTS_CONTEXT_NAME),
             )
             .first()
         )
+
+    def _resolve_assistant_contacts_context_name(
+        self,
+        hive_id: Optional[int],
+    ) -> str:
+        """Pick the Contacts context where this body's self-row lives.
+
+        Hive members write to ``Hives/{hive_id}/Contacts`` directly and
+        bypass the project ``All/Contacts`` archive; solo bodies live in
+        that archive via reference. Returning the right name keeps the
+        ``UPDATE`` join reachable for both shapes.
+        """
+        if hive_id is not None:
+            return f"{HIVE_CONTEXT_PREFIX}{hive_id}/Contacts"
+        return self.SOLO_CONTACTS_CONTEXT_NAME
 
     def _update_contact_logs_user(
         self,
@@ -172,21 +211,27 @@ class ContactSyncService:
     def _update_contact_logs_assistant(
         self,
         context_id: int,
-        assistant_context_id: str,
+        agent_id: int,
         update_field: str,
         new_value: Optional[str],
     ) -> int:
-        """
-        Update Contact logs for an assistant (where _assistant matches and contact_id=0).
+        """Update the Contacts row that represents an assistant body.
+
+        The body's self-row is identified by ``assistant_id == agent_id``
+        — the shared ``Contacts`` table sets that field only on the row
+        the body owns, so the filter is identity-based. Aggregation
+        contexts hold log references, not copies, so a single ``UPDATE``
+        on ``log_event`` propagates to every view that points at the
+        same log id.
 
         Args:
-            context_id: The context ID to search within
-            assistant_context_id: The _assistant value to filter by (str(agent_id))
-            update_field: The field name to update (e.g., "timezone", "bio")
-            new_value: The new value to set
+            context_id: Contacts context to scope the join through.
+            agent_id: The body's ``Assistant.agent_id``.
+            update_field: Field name to overwrite (``timezone`` etc.).
+            new_value: New value to write.
 
         Returns:
-            Number of logs updated
+            Number of ``log_event`` rows updated.
         """
         query = text(
             """
@@ -198,8 +243,7 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND le.data->>'_assistant' = :assistant_context_id
-                  AND (le.data->>'contact_id')::int = 0
+                  AND (le.data->>'assistant_id')::int = :agent_id
             )
         """,
         )
@@ -208,7 +252,7 @@ class ContactSyncService:
             query,
             {
                 "context_id": context_id,
-                "assistant_context_id": assistant_context_id,
+                "agent_id": agent_id,
                 "update_field": update_field,
                 "new_value": new_value,
             },
@@ -324,50 +368,77 @@ class ContactSyncService:
     # ASSISTANT SYNC METHODS
     # =========================================================================
 
+    def _sync_assistant_field(
+        self,
+        *,
+        user_id: str,
+        organization_id: Optional[int],
+        agent_id: int,
+        hive_id: Optional[int],
+        field: str,
+        value: Optional[str],
+    ) -> int:
+        """Update a single field on the body's self-row in Contacts.
+
+        Resolves the Assistants project for this body, picks the right
+        Contacts context (Hive root for Hive members, project archive
+        for solo bodies), and rewrites the named field on the row whose
+        ``assistant_id`` equals ``agent_id``. Missing project, context,
+        or row is logged at debug and treated as a no-op so callers can
+        invoke this eagerly on every profile change.
+        """
+        project = self._get_assistants_project_for_assistant(user_id, organization_id)
+        if not project:
+            logger.debug(
+                "Skipping assistant %s sync: no Assistants project",
+                field,
+            )
+            return 0
+
+        context_name = self._resolve_assistant_contacts_context_name(hive_id)
+        context = self._get_contacts_context(project.id, context_name=context_name)
+        if not context:
+            logger.debug(
+                "Skipping assistant %s sync: no %s context in project %s",
+                field,
+                context_name,
+                project.id,
+            )
+            return 0
+
+        updated = self._update_contact_logs_assistant(
+            context_id=context.id,
+            agent_id=agent_id,
+            update_field=field,
+            new_value=value,
+        )
+        if updated > 0:
+            logger.debug(
+                "Synced assistant %s to %d logs in project %s (%s)",
+                field,
+                updated,
+                project.id,
+                context_name,
+            )
+        return updated
+
     def sync_assistant_timezone(
         self,
         user_id: str,
         organization_id: Optional[int],
         agent_id: int,
         new_timezone: Optional[str],
+        hive_id: Optional[int] = None,
     ) -> int:
-        """
-        Sync assistant timezone to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id = 0
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_timezone: The new timezone value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant timezone sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant timezone sync: no All/Contacts context")
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            update_field="timezone",
-            new_value=new_timezone,
+        """Propagate an assistant timezone update into its Contacts row."""
+        return self._sync_assistant_field(
+            user_id=user_id,
+            organization_id=organization_id,
+            agent_id=agent_id,
+            hive_id=hive_id,
+            field="timezone",
+            value=new_timezone,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant timezone to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def sync_assistant_bio(
         self,
@@ -375,44 +446,17 @@ class ContactSyncService:
         organization_id: Optional[int],
         agent_id: int,
         new_bio: Optional[str],
+        hive_id: Optional[int] = None,
     ) -> int:
-        """
-        Sync assistant about/bio to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id = 0
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_bio: The new bio value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant bio sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant bio sync: no All/Contacts context")
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            update_field="bio",
-            new_value=new_bio,
+        """Propagate an assistant ``about`` update into its Contacts row."""
+        return self._sync_assistant_field(
+            user_id=user_id,
+            organization_id=organization_id,
+            agent_id=agent_id,
+            hive_id=hive_id,
+            field="bio",
+            value=new_bio,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant bio to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def sync_assistant_first_name(
         self,
@@ -420,44 +464,17 @@ class ContactSyncService:
         organization_id: Optional[int],
         agent_id: int,
         new_first_name: Optional[str],
+        hive_id: Optional[int] = None,
     ) -> int:
-        """
-        Sync assistant first_name to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id = 0
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_first_name: The new first_name value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant first_name sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant first_name sync: no All/Contacts context")
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            update_field="first_name",
-            new_value=new_first_name,
+        """Propagate an assistant first-name update into its Contacts row."""
+        return self._sync_assistant_field(
+            user_id=user_id,
+            organization_id=organization_id,
+            agent_id=agent_id,
+            hive_id=hive_id,
+            field="first_name",
+            value=new_first_name,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant first_name to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def sync_assistant_surname(
         self,
@@ -465,44 +482,17 @@ class ContactSyncService:
         organization_id: Optional[int],
         agent_id: int,
         new_surname: Optional[str],
+        hive_id: Optional[int] = None,
     ) -> int:
-        """
-        Sync assistant surname to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id = 0
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_surname: The new surname value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant surname sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant surname sync: no All/Contacts context")
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            update_field="surname",
-            new_value=new_surname,
+        """Propagate an assistant surname update into its Contacts row."""
+        return self._sync_assistant_field(
+            user_id=user_id,
+            organization_id=organization_id,
+            agent_id=agent_id,
+            hive_id=hive_id,
+            field="surname",
+            value=new_surname,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant surname to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def mark_member_contact_as_non_system(
         self,

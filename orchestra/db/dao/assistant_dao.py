@@ -478,12 +478,14 @@ class AssistantDAO:
             from orchestra.services.contact_sync_service import ContactSyncService
 
             sync_service = ContactSyncService(self.session)
+            hive_id = assistant.hive_id
             if should_sync_timezone:
                 sync_service.sync_assistant_timezone(
                     user_id=user_id,
                     organization_id=organization_id,
                     agent_id=assistant.agent_id,
                     new_timezone=assistant.timezone,
+                    hive_id=hive_id,
                 )
             if should_sync_bio:
                 sync_service.sync_assistant_bio(
@@ -491,6 +493,7 @@ class AssistantDAO:
                     organization_id=organization_id,
                     agent_id=assistant.agent_id,
                     new_bio=assistant.about,
+                    hive_id=hive_id,
                 )
             if should_sync_first_name:
                 sync_service.sync_assistant_first_name(
@@ -498,6 +501,7 @@ class AssistantDAO:
                     organization_id=organization_id,
                     agent_id=assistant.agent_id,
                     new_first_name=assistant.first_name,
+                    hive_id=hive_id,
                 )
             if should_sync_surname:
                 sync_service.sync_assistant_surname(
@@ -505,6 +509,7 @@ class AssistantDAO:
                     organization_id=organization_id,
                     agent_id=assistant.agent_id,
                     new_surname=assistant.surname,
+                    hive_id=hive_id,
                 )
 
         return assistant
