@@ -122,6 +122,7 @@ from orchestra.web.api.utils.assistant_infra import (
     get_runtime_status,
     log_pre_hire_chat,
     reawaken_assistant,
+    trigger_contact_sync_safe,
     wake_up_assistant,
     watch_email,
     watch_outlook_email,
@@ -2871,7 +2872,7 @@ async def update_assistant_config(
         400: {"description": "Invalid transfer request"},
     },
 )
-def transfer_assistant_to_org(
+async def transfer_assistant_to_org(
     assistant_id: int,
     transfer_request: AssistantTransferToOrgRequest,
     request: Request,
@@ -3171,6 +3172,10 @@ def transfer_assistant_to_org(
 
         session.commit()
 
+        # Refresh the moved assistant's Contacts so it picks up the destination
+        # org's members and drops anything tied to the personal scope.
+        await trigger_contact_sync_safe(assistant_id, deploy_env=assistant.deploy_env)
+
         return InfoResponse(
             info=AssistantTransferResponse(
                 message="Assistant transferred to organization successfully.",
@@ -3208,7 +3213,7 @@ def transfer_assistant_to_org(
         400: {"description": "Invalid transfer request"},
     },
 )
-def transfer_assistant_to_personal(
+async def transfer_assistant_to_personal(
     assistant_id: int,
     transfer_request: AssistantTransferToPersonalRequest,
     request: Request,
@@ -3334,6 +3339,10 @@ def transfer_assistant_to_personal(
             )
 
         session.commit()
+
+        # Refresh the moved assistant's Contacts so it drops org-scoped rows
+        # and reseeds for its new personal owner.
+        await trigger_contact_sync_safe(assistant_id, deploy_env=assistant.deploy_env)
 
         return InfoResponse(
             info=AssistantTransferResponse(
