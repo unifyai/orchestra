@@ -182,6 +182,7 @@ async def _run_in_session(session: Session) -> InactivityFollowupResult:
 
         for assistant in followup_candidates:
             dispatch_result = await _dispatch_followup_for_assistant(
+                session=session,
                 dao=dao,
                 assistant=assistant,
                 now=now,
@@ -239,20 +240,39 @@ async def _run_in_session(session: Session) -> InactivityFollowupResult:
 
 
 async def _dispatch_followup_for_assistant(
+    session: Session,
     dao: AssistantDAO,
     assistant: Assistant,
     now: _dt.datetime,
     jitter_seconds: int,
 ) -> FollowupDispatchResult:
-    """Fire the follow-up event for one assistant and record the send."""
+    """Fire the follow-up event for one assistant and record the send.
+
+    Branches on whether the assistant has a provisioned email contact:
+
+    * **Has email** → wake the unity pod via the communication adapter
+      so the brain composes and sends from the assistant's own mailbox.
+    * **No email** → orchestra sends a first-person fallback message
+      from ``hello@unify.ai`` redirecting the boss to the Unify console.
+
+    ``last_followup_sent_at`` is stamped only on a successful send so a
+    failed fallback path remains eligible for retry on the next run.
+    """
     result = FollowupDispatchResult(agent_id=int(assistant.agent_id))
     try:
-        if jitter_seconds > 0:
-            await asyncio.sleep(random.uniform(0, jitter_seconds))
-        await _dispatch_inactivity_followup_event(
-            agent_id=int(assistant.agent_id),
-            deploy_env=assistant.deploy_env,
-        )
+        if _assistant_has_provisioned_email(session, assistant):
+            if jitter_seconds > 0:
+                await asyncio.sleep(random.uniform(0, jitter_seconds))
+            await _dispatch_inactivity_followup_event(
+                agent_id=int(assistant.agent_id),
+                deploy_env=assistant.deploy_env,
+            )
+        else:
+            sent = await _send_console_redirect_followup(session, assistant)
+            if not sent:
+                result.error = "console_redirect_send_failed"
+                return result
+
         dao.mark_followup_sent(int(assistant.agent_id), now)
         result.dispatched = True
     except Exception as exc:
@@ -262,6 +282,81 @@ async def _dispatch_followup_for_assistant(
         )
         result.error = str(exc)
     return result
+
+
+def _assistant_has_provisioned_email(
+    session: Session,
+    assistant: Assistant,
+) -> bool:
+    """True iff the assistant has a non-deleted email AssistantContact.
+
+    Reuses :meth:`AssistantContactDAO.get_contact_by_assistant_and_type`,
+    which already filters out ``status='deleted'`` rows.
+    """
+    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+    contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
+        assistant_id=int(assistant.agent_id),
+        contact_type="email",
+    )
+    return contact is not None
+
+
+async def _send_console_redirect_followup(
+    session: Session,
+    assistant: Assistant,
+) -> bool:
+    """Send the orchestra-side fallback follow-up. True on a clean send.
+
+    Routes through ``send_notification_emails`` (the same Google
+    service-account / ``hello@unify.ai`` mailbox the deletion notifier
+    uses). The message is in the assistant's first-person voice and
+    redirects the boss to the Unify console for chat.
+    """
+    try:
+        from orchestra.routines.assistant_contact_notifications import (
+            send_notification_emails,
+        )
+        from orchestra.routines.inactivity_notifications import (
+            CONSOLE_REDIRECT_SUBJECT_TEMPLATE,
+            build_console_redirect_email,
+            get_owner_email_for_assistant,
+            get_owner_first_name_for_assistant,
+        )
+
+        owner_email = get_owner_email_for_assistant(session, assistant)
+        if not owner_email:
+            logger.info(
+                "Inactivity console-redirect: no owner email for assistant %d; "
+                "skipping send.",
+                assistant.agent_id,
+            )
+            return False
+
+        first_name_for_subject = (
+            assistant.first_name or ""
+        ).strip() or f"agent {assistant.agent_id}"
+        await send_notification_emails(
+            [owner_email],
+            CONSOLE_REDIRECT_SUBJECT_TEMPLATE.format(
+                first_name=first_name_for_subject,
+            ),
+            build_console_redirect_email(
+                assistant=assistant,
+                owner_first_name=get_owner_first_name_for_assistant(
+                    session,
+                    assistant,
+                ),
+            ),
+        )
+        return True
+    except Exception:
+        logger.warning(
+            "Inactivity console-redirect send failed for assistant %d",
+            assistant.agent_id,
+            exc_info=True,
+        )
+        return False
 
 
 async def _cleanup_assistant(
