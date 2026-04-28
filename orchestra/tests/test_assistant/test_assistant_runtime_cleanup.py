@@ -5,7 +5,10 @@ import pytest
 
 from orchestra.db.models.orchestra_models import AssistantCleanupTask
 from orchestra.services.assistant_cleanup_service import (
+    AssistantCleanupSpec,
     CleanupSource,
+    ContactCleanupSpec,
+    deprovision_assistant_contacts,
     process_assistant_cleanup_tasks,
 )
 from orchestra.web.api.utils import assistant_infra
@@ -683,3 +686,106 @@ async def test_process_assistant_cleanup_tasks_defers_gcs_until_runtime_is_clean
     assert refreshed.status == "pending"
     assert refreshed.last_result["storage"]["skipped"] is True
     mock_bucket_cls.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_deprovision_assistant_contacts_skips_external_calls_for_byod(
+    dbsession,
+):
+    """BYOD (user-provisioned) phone/email contacts must not trigger external
+    deprovision calls — we don't own the user's mailbox or phone number.
+
+    Platform-provisioned contacts in the same spec must still be deprovisioned.
+    """
+    spec = AssistantCleanupSpec(
+        assistant_id=4242,
+        deploy_env=None,
+        desktop_mode="ubuntu",
+        contacts=[
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="user@gmail.com",
+                provider="google_workspace",
+                provisioned_by="user",
+            ),
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="user@outlook.com",
+                provider="microsoft_365",
+                provisioned_by="user",
+            ),
+            ContactCleanupSpec(
+                contact_type="phone",
+                contact_value="+15555550101",
+                provisioned_by="user",
+            ),
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="bot@unify.ai",
+                provider="google_workspace",
+                provisioned_by="platform",
+            ),
+        ],
+    )
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.delete_email",
+        new_callable=AsyncMock,
+    ) as mock_del_email, patch(
+        "orchestra.services.assistant_cleanup_service.delete_outlook_email",
+        new_callable=AsyncMock,
+    ) as mock_del_outlook, patch(
+        "orchestra.services.assistant_cleanup_service.delete_phone_number",
+        new_callable=AsyncMock,
+    ) as mock_del_phone, patch(
+        "orchestra.db.dao.assistant_secret_dao.AssistantSecretDAO.delete_all",
+    ):
+        result = await deprovision_assistant_contacts(
+            dbsession,
+            [spec],
+            soft_delete_successes=False,
+        )
+
+    assert result["success"] is True
+    assert result["attempted"] == 4
+    mock_del_outlook.assert_not_called()
+    mock_del_phone.assert_not_called()
+    mock_del_email.assert_called_once_with("bot@unify.ai", deploy_env=None)
+
+
+@pytest.mark.anyio
+async def test_deprovision_assistant_contacts_treats_missing_provisioned_by_as_platform(
+    dbsession,
+):
+    """Already-queued cleanup tasks predate the ``provisioned_by`` field; we
+    must preserve the historical behaviour of deleting the external resource
+    so in-flight retries don't silently leak platform mailboxes.
+    """
+    spec = AssistantCleanupSpec(
+        assistant_id=4243,
+        deploy_env=None,
+        desktop_mode="ubuntu",
+        contacts=[
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="legacy@unify.ai",
+                provider="google_workspace",
+                provisioned_by=None,
+            ),
+        ],
+    )
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.delete_email",
+        new_callable=AsyncMock,
+    ) as mock_del_email, patch(
+        "orchestra.db.dao.assistant_secret_dao.AssistantSecretDAO.delete_all",
+    ):
+        result = await deprovision_assistant_contacts(
+            dbsession,
+            [spec],
+            soft_delete_successes=False,
+        )
+
+    assert result["success"] is True
+    mock_del_email.assert_called_once_with("legacy@unify.ai", deploy_env=None)
