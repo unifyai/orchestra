@@ -1,38 +1,47 @@
 """Re-engagement follow-up + auto-cleanup for inactive assistants.
 
-Two-stage daily routine:
+Two-stage routine, run twice a day:
 
     Stage 1 (follow-up dispatch)
         Find assistants whose most recent correspondence predates
         ``settings.inactivity_followup_days``, have no follow-up in
-        flight, and have not been marked for termination. Fire an
-        inactivity-followup event so the Unity brain composes and sends
-        a re-engagement message, and record
-        ``last_followup_sent_at = now()`` so we do not re-trigger on the
-        next daily run.
+        flight, and have not been marked for termination. Per
+        candidate, branch on whether the assistant has a provisioned
+        email contact:
+
+          * **Has email** — call the communication-adapter webhook
+            ``POST /assistant/inactivity-followup``, which dispatches
+            a cold-pod start intent or a hot-pod Pub/Sub event
+            depending on whether the assistant is currently running.
+            The Unity brain composes and sends the re-engagement
+            message from the assistant's own mailbox.
+          * **No email** — orchestra sends a first-person email from
+            ``hello@unify.ai`` directly, redirecting the boss to the
+            Unify console for chat (see
+            ``_send_console_redirect_followup``).
+
+        After a successful send (either path), record
+        ``last_followup_sent_at = now()`` so we do not re-trigger on
+        the next run.
 
     Stage 2 (auto-cleanup)
         Find assistants whose grace period has elapsed — either the
         silent path (``last_followup_sent_at < cleanup_cutoff``, no
         fresh inbound has cleared it) or the explicit path
         (``termination_initiated_at < cleanup_cutoff``, set by the
-        brain when the boss declined continued engagement). Deprovision
-        their contacts (releasing pool WhatsApp numbers, closing email
-        mailboxes, releasing phone numbers) and hard-delete the
-        assistant row.
+        brain when the boss declined continued engagement). Send a
+        deletion notification to the assistant's lifecycle owner,
+        deprovision their contacts (releasing pool WhatsApp numbers,
+        closing email mailboxes, releasing phone numbers), and
+        hard-delete the assistant row.
 
 Scheduling:
     Cloud Scheduler: POST /v0/admin/assistants/inactivity-followup
-    Cron: ``15 1 * * *``  (01:15 UTC daily — staggered from the
-        billing suspension routine that runs at 01:00 UTC)
+    Cron: ``15 1,13 * * *``  (01:15 and 13:15 UTC — twice daily,
+        staggered 15 min after the billing suspension routine at
+        01:00 UTC)
     Headers: Authorization: Bearer <ORCHESTRA_ADMIN_KEY>
     Retry: 3
-
-The Unity brain is reached via a communication-adapter webhook (see
-``_dispatch_inactivity_followup_event``). That webhook does not exist
-yet — the dispatch helper currently logs the intended event and will
-be wired to the real adapter call when the communication-side changes
-land.
 """
 
 from __future__ import annotations
