@@ -5,6 +5,7 @@ import time
 from typing import Any, List
 
 import httpx
+from sqlalchemy.orm import Session
 
 from orchestra.web.api.utils.http_client import get_async_client
 
@@ -1816,18 +1817,16 @@ async def log_pre_hire_chat(
     return {"status": "success"}
 
 
-async def trigger_contact_sync(
+async def _trigger_contact_sync(
     assistant_id: int,
     deploy_env: str | None = None,
 ) -> dict:
-    """
-    Trigger contact sync for an assistant via the system-event webhook.
+    """Hit the Adapters ``sync_contacts`` system-event webhook.
 
-    Args:
-        assistant_id: The assistant ID to sync contacts for
-
-    Returns:
-        JSON response from the webhook
+    Internal helper for the public :func:`trigger_contact_sync_safe` and
+    :func:`fan_out_contact_sync_for_org` entry points: callers that hold
+    user-facing responses must always go through the safe wrappers so a
+    transient Adapters failure does not surface as a 500.
     """
     url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
     client = get_async_client()
@@ -1846,3 +1845,55 @@ async def trigger_contact_sync(
     )
     response.raise_for_status()
     return response.json()
+
+
+async def trigger_contact_sync_safe(
+    assistant_id: int,
+    deploy_env: str | None = None,
+) -> None:
+    """Kick a single-assistant Contacts re-derivation, swallowing failures.
+
+    Membership-mutating endpoints (invite accept, member add/remove,
+    assistant transfer) call this so a temporary Adapters outage cannot
+    fail the user-facing request. Unity's next session bootstrap
+    re-derives Contacts on its own, so a missed kick is a soft regression
+    at worst.
+    """
+    try:
+        await _trigger_contact_sync(assistant_id, deploy_env=deploy_env)
+        logging.info("Triggered contact sync for assistant %s", assistant_id)
+    except Exception as exc:
+        logging.warning(
+            "Failed to trigger contact sync for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+
+
+async def fan_out_contact_sync_for_org(
+    organization_id: int,
+    session: Session,
+) -> None:
+    """Refresh Contacts for every assistant in an organization.
+
+    Org membership changes (invite acceptance, direct add, removal)
+    reshape the contact set every org assistant should see. This helper
+    looks up every assistant in ``organization_id`` and asks the Adapters
+    runtime to re-derive each one's Contacts table via the
+    ``sync_contacts`` system event, in parallel. Per-assistant failures
+    are logged by :func:`trigger_contact_sync_safe` but do not interrupt
+    the rest — Unity's next session bootstrap will reconcile.
+    """
+    from orchestra.db.dao.assistant_dao import AssistantDAO
+
+    org_assistants = AssistantDAO(session).list_all_org_assistants(
+        organization_id=organization_id,
+    )
+    if not org_assistants:
+        return
+    await asyncio.gather(
+        *(
+            trigger_contact_sync_safe(a.agent_id, deploy_env=a.deploy_env)
+            for a in org_assistants
+        ),
+    )
