@@ -470,7 +470,7 @@ async def send_phone_verification(
                 "Content-Type": "application/json",
             },
             json={
-                "platform": "phone",
+                "platform": body.phone_type,
                 "account_identifier": body.phone_number,
             },
             timeout=30.0,
