@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    AssistantContact,
     DemoAssistantMeta,
     Organization,
     User,
@@ -73,6 +74,34 @@ def _make_assistant(
     dbsession.add(a)
     dbsession.flush()
     return a
+
+
+def _attach_email_contact(
+    dbsession: Session,
+    assistant_id: int,
+    *,
+    status: str = "active",
+    contact_value: str | None = None,
+    contact_type: str = "email",
+    provider: str | None = "google_workspace",
+) -> AssistantContact:
+    """Attach a single AssistantContact row to an existing assistant.
+
+    Used by the no-email fallback tests to control whether the routine
+    sees an active email contact, a soft-deleted one, or another
+    contact_type entirely.
+    """
+    c = AssistantContact(
+        assistant_id=assistant_id,
+        contact_type=contact_type,
+        contact_value=contact_value or f"a{assistant_id}@assistant.unify.ai",
+        provider=provider,
+        provisioned_by="platform",
+        status=status,
+    )
+    dbsession.add(c)
+    dbsession.flush()
+    return c
 
 
 @pytest.fixture
@@ -477,6 +506,11 @@ class TestInactivityFollowupRoutine:
             user.id,
             last_correspondence_at=datetime.now(timezone.utc) - timedelta(days=5),
         )
+        # Attach an active email contact so the routine takes the unity
+        # dispatch path. The orchestra-side fallback (no-email) path is
+        # covered by TestFallbackForAssistantsWithNoEmail.
+        _attach_email_contact(dbsession, stale.agent_id)
+        dbsession.flush()
 
         result = await run_inactivity_followup(session=dbsession)
 
@@ -896,3 +930,249 @@ class TestInactivityDeletionNotification:
         assert "10 days" in normalized
         assert "bert" in normalized
         assert "olivia" in normalized
+
+
+# ===========================================================================
+# 6. Fallback follow-up for assistants with no provisioned email
+# ===========================================================================
+
+
+class TestFallbackForAssistantsWithNoEmail:
+    """Stage-1 dispatch must branch on whether the assistant has its own
+    email. With email → wake unity (current path). Without → orchestra
+    sends the first-person console-redirect from hello@unify.ai."""
+
+    @pytest.mark.anyio
+    async def test_assistant_with_email_dispatches_to_unity(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        owner = _make_user_with_email(
+            dbsession,
+            "fb_with_email",
+            "owner@test.com",
+            first_name="Olivia",
+        )
+        a = _make_assistant(
+            dbsession,
+            owner.id,
+            last_correspondence_at=datetime.now(timezone.utc) - timedelta(days=5),
+        )
+        _attach_email_contact(dbsession, a.agent_id)
+        dbsession.flush()
+
+        sent: list[tuple] = []
+
+        async def _capture(*_a, **_kw):
+            sent.append(_a)
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_capture,
+        ):
+            result = await run_inactivity_followup(session=dbsession)
+
+        assert result.followups_dispatched == 1
+        mock_dispatch.assert_awaited_once()
+        assert sent == []
+        dbsession.refresh(a)
+        assert a.last_followup_sent_at is not None
+
+    @pytest.mark.anyio
+    async def test_assistant_without_email_routes_through_general_address(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        owner = _make_user_with_email(
+            dbsession,
+            "fb_no_email",
+            "owner@test.com",
+            first_name="Olivia",
+        )
+        a = _make_assistant(
+            dbsession,
+            owner.id,
+            first_name="Bert",
+            last_correspondence_at=datetime.now(timezone.utc) - timedelta(days=5),
+        )
+        # No AssistantContact row at all.
+        dbsession.flush()
+
+        sent: list[tuple] = []
+
+        async def _capture(recipients, subject, body):
+            sent.append((recipients, subject, body))
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_capture,
+        ):
+            result = await run_inactivity_followup(session=dbsession)
+
+        assert result.followups_dispatched == 1
+        mock_dispatch.assert_not_awaited()
+        assert len(sent) == 1
+        recipients, subject, _body = sent[0]
+        assert recipients == ["owner@test.com"]
+        assert "Bert" in subject
+        dbsession.refresh(a)
+        assert a.last_followup_sent_at is not None
+
+    @pytest.mark.anyio
+    async def test_only_deleted_email_counts_as_no_email(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        owner = _make_user_with_email(
+            dbsession,
+            "fb_deleted_email",
+            "owner@test.com",
+        )
+        a = _make_assistant(
+            dbsession,
+            owner.id,
+            last_correspondence_at=datetime.now(timezone.utc) - timedelta(days=5),
+        )
+        _attach_email_contact(dbsession, a.agent_id, status="deleted")
+        dbsession.flush()
+
+        sent: list[tuple] = []
+
+        async def _capture(*_a, **_kw):
+            sent.append(_a)
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_capture,
+        ):
+            await run_inactivity_followup(session=dbsession)
+
+        mock_dispatch.assert_not_awaited()
+        assert len(sent) == 1  # fallback fired
+
+    @pytest.mark.anyio
+    async def test_phone_only_assistant_uses_console_redirect(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        owner = _make_user_with_email(
+            dbsession,
+            "fb_phone_only",
+            "owner@test.com",
+        )
+        a = _make_assistant(
+            dbsession,
+            owner.id,
+            last_correspondence_at=datetime.now(timezone.utc) - timedelta(days=5),
+        )
+        _attach_email_contact(
+            dbsession,
+            a.agent_id,
+            contact_type="phone",
+            contact_value="+15551112222",
+            provider="twilio",
+        )
+        dbsession.flush()
+
+        sent: list[tuple] = []
+
+        async def _capture(*_a, **_kw):
+            sent.append(_a)
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_capture,
+        ):
+            await run_inactivity_followup(session=dbsession)
+
+        mock_dispatch.assert_not_awaited()
+        assert len(sent) == 1  # fallback fired
+
+    @pytest.mark.anyio
+    async def test_console_redirect_send_failure_does_not_mark_followup_sent(
+        self,
+        dbsession: Session,
+        mock_dispatch,
+        mock_deprovision,
+    ):
+        owner = _make_user_with_email(
+            dbsession,
+            "fb_send_fail",
+            "owner@test.com",
+        )
+        a = _make_assistant(
+            dbsession,
+            owner.id,
+            last_correspondence_at=datetime.now(timezone.utc) - timedelta(days=5),
+        )
+        # No email contact → fallback path.
+        dbsession.flush()
+
+        async def _raise(*_args, **_kwargs):
+            raise RuntimeError("smtp blew up")
+
+        with patch(
+            "orchestra.routines.assistant_contact_notifications.send_notification_emails",
+            side_effect=_raise,
+        ):
+            result = await run_inactivity_followup(session=dbsession)
+
+        assert result.followups_failed == 1
+        assert result.followups_dispatched == 0
+        dbsession.refresh(a)
+        assert a.last_followup_sent_at is None
+
+    def test_console_redirect_body_is_in_assistant_voice(self):
+        """Body uses the assistant's first-person voice, redirects to
+        console, and includes the no-reply line. No Unify-team
+        attribution; no email/whatsapp explanations."""
+        import re
+
+        from orchestra.routines.inactivity_notifications import (
+            build_console_redirect_email,
+        )
+
+        assistant = Assistant(
+            agent_id=42,
+            user_id="x",
+            first_name="Bert",
+            surname="Bot",
+        )
+        body = build_console_redirect_email(
+            assistant=assistant,
+            owner_first_name="Olivia",
+        )
+        normalized = re.sub(r"\s+", " ", body.lower())
+
+        # First-person voice markers
+        assert "it's bert" in normalized
+        assert "i noticed" in normalized
+        assert "— bert" in normalized
+
+        # Console redirect + no-reply nudge
+        assert "https://console.unify.ai/" in body
+        assert "please don't reply" in normalized
+        assert "chat with me on the console" in normalized
+
+        # Locks in the cleaner copy: no Unify-team attribution, no
+        # explanation of why the email is routed differently.
+        assert "unify team" not in normalized
+        assert "don't have my own email" not in normalized
+        assert "whatsapp" not in normalized
+        assert "olivia" in normalized
+
+    def test_console_redirect_subject_uses_assistant_first_name(self):
+        from orchestra.routines.inactivity_notifications import (
+            CONSOLE_REDIRECT_SUBJECT_TEMPLATE,
+        )
+
+        rendered = CONSOLE_REDIRECT_SUBJECT_TEMPLATE.format(first_name="Bert")
+        assert rendered == "Hi from Bert on Unify"

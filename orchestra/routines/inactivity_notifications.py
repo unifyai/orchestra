@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 DELETION_SUBJECT = "Your Unify assistant has been removed"
+CONSOLE_REDIRECT_SUBJECT_TEMPLATE = "Hi from {first_name} on Unify"
 
 _CONSOLE_URL = "https://console.unify.ai/"
 _FOOTER = (
@@ -155,6 +156,56 @@ def build_deletion_email(
         </p>
 
         <p>— The Unify team</p>
+
+        {_FOOTER}
+    </body>
+    </html>
+    """
+
+
+def build_console_redirect_email(
+    *,
+    assistant: Assistant,
+    owner_first_name: Optional[str],
+) -> str:
+    """Build the HTML body for the orchestra-sent fallback follow-up.
+
+    Used when the assistant has no provisioned email of its own. The
+    copy is in the assistant's first-person voice and simply nudges
+    the boss to chat on the Unify console — no attribution to the
+    Unify team in the body, no mention of why the email is routed
+    through ``hello@unify.ai``.
+
+    A "please don't reply to this email" line is included to prevent
+    bounces or ignored replies hitting the general outbound mailbox;
+    the boss is steered to the console instead.
+    """
+    salutation = (
+        f"Hi {owner_first_name.strip()},"
+        if (owner_first_name and owner_first_name.strip())
+        else "Hi,"
+    )
+    short_name = _assistant_short_name(assistant)
+    return f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <p>{salutation}</p>
+
+        <p>
+            It's {short_name}! I noticed we haven't been in touch in a
+            while. If you'd like to get started — or pick up where we
+            left off — you can chat with me any time on the Unify
+            console:
+        </p>
+
+        <p><a href="{_CONSOLE_URL}">{_CONSOLE_URL}</a></p>
+
+        <p>
+            Please don't reply to this email — chat with me on the
+            console instead.
+        </p>
+
+        <p>Looking forward to hearing from you,<br/>— {short_name}</p>
 
         {_FOOTER}
     </body>
