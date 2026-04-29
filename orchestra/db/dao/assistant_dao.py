@@ -282,6 +282,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        agent_id: Optional[int] = None,
         include_demo: bool = False,
         demo_only: bool = False,
     ) -> List[Assistant]:
@@ -372,6 +373,8 @@ class AssistantDAO:
                     ),
                 ),
             )
+        if agent_id is not None:
+            stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
 
@@ -383,6 +386,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        agent_id: Optional[int] = None,
         include_demo: bool = False,
         demo_only: bool = False,
     ) -> List[Assistant]:
@@ -458,6 +462,8 @@ class AssistantDAO:
                     ),
                 ),
             )
+        if agent_id is not None:
+            stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
 
