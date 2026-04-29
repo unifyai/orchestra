@@ -38,6 +38,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.space_dao import SpaceDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
@@ -221,6 +222,7 @@ def _build_assistant_read(
     user_image: Optional[str] = None,
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
+    space_ids: Optional[List[int]] = None,
     contacts: Optional[list] = None,
     secrets: Optional[dict] = None,
     include_internal: bool = False,
@@ -257,6 +259,9 @@ def _build_assistant_read(
             team_ids = [t.id for t in teams]
         else:
             team_ids = []
+
+    if space_ids is None:
+        space_ids = SpaceDAO(session).space_ids_for_assistant(a.agent_id)
 
     # Resolve contact fields from AssistantContact rows
     if contacts is None:
@@ -334,6 +339,7 @@ def _build_assistant_read(
         user_email=user_email,
         user_image=user_image,
         team_ids=team_ids,
+        space_ids=space_ids,
         secrets=secrets,
         console_config=_build_console_config_read(a.console_config),
     )
@@ -896,6 +902,10 @@ def list_assistants(
         None,
         description="Only return assistants whose email address matches this value.",
     ),
+    agent_id: Optional[int] = Query(
+        None,
+        description="Only return assistants whose agent_id matches this value.",
+    ),
     list_all_org: bool = Query(
         False,
         description="If True and using an org API key, list ALL assistants in the organization (not just those created by the current user). Requires assistant:read permission.",
@@ -944,6 +954,7 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                agent_id=agent_id,
                 include_demo=demo,
                 demo_only=demo_only,
             )
@@ -954,6 +965,7 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                agent_id=agent_id,
                 include_demo=demo,
                 demo_only=demo_only,
             )
@@ -970,6 +982,10 @@ def list_assistants(
         contacts_by_assistant: dict[int, list] = {}
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
+
+        space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
+            [a.agent_id for a in assistants],
+        )
 
         return InfoResponse(
             info=[
@@ -990,6 +1006,7 @@ def list_assistants(
                         else None
                     ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    space_ids=space_ids_by_assistant.get(a.agent_id, []),
                 )
                 for a in assistants
             ],
@@ -5303,6 +5320,9 @@ def admin_list_all_assistants(
         )
 
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
+        skip_spaces = (
+            requested_fields is not None and "space_ids" not in requested_fields
+        )
 
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
@@ -5333,6 +5353,12 @@ def admin_list_all_assistants(
                         s.secret_name
                     ] = s.secret_value
 
+        space_ids_by_assistant = {}
+        if not skip_spaces:
+            space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
+                [a.agent_id for a in assistants],
+            )
+
         # Build AssistantRead objects
         assistant_reads = [
             _build_assistant_read(
@@ -5345,6 +5371,9 @@ def admin_list_all_assistants(
                 user_image=users[i].image if users else None,
                 user_whatsapp_number=(users[i].whatsapp_number if users else None),
                 team_ids=[] if skip_teams else None,
+                space_ids=(
+                    [] if skip_spaces else space_ids_by_assistant.get(a.agent_id, [])
+                ),
                 contacts=contacts_by_assistant.get(a.agent_id, []),
                 secrets=(
                     secrets_by_assistant.get(a.agent_id, {})
@@ -5556,6 +5585,10 @@ def admin_list_assistants_for_user(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
+            [a.agent_id for a in assistants],
+        )
+
         return InfoResponse(
             info=[
                 _build_assistant_read(
@@ -5563,6 +5596,7 @@ def admin_list_assistants_for_user(
                     session,
                     api_key=api_keys[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    space_ids=space_ids_by_assistant.get(a.agent_id, []),
                     include_internal=True,
                 )
                 for i, a in enumerate(assistants)
