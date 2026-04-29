@@ -1200,6 +1200,7 @@ class TestDeleteContactWithDedicatedEndpoint:
         assert len(all_rows) == 1
         assert all_rows[0].status == "deleted"
 
+
 class TestDeleteAssistantSoftDeletesContacts:
     """Verify that deleting an assistant soft-deletes all its contacts first."""
 
@@ -2190,7 +2191,6 @@ class TestEndToEndContactLifecycle:
 # (``provisioned_by="user"``) coverage lives in ``TestBYODContactCreation``
 # and ``TestBYODContactDeletion`` further down. The 410-on-platform-create
 # behaviour is asserted in ``TestPlatformEmailCreationDisabled``.
-
 
 
 # ============================================================================

@@ -29,7 +29,6 @@ from orchestra.workers.teardown_platform_mailboxes import (
     select_target_rows,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
