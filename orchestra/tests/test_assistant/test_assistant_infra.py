@@ -215,6 +215,7 @@ async def test_create_assistant_with_infra_phone_only(
     # Phone/email provisioning removed from create endpoint
     mock_all_infra["create_phone_number"].assert_not_called()
 
+
 @pytest.mark.anyio
 async def test_create_assistant_with_infra_no_email_no_phone(
     client: AsyncClient,
