@@ -570,6 +570,11 @@ class Organization(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    spaces = relationship(
+        "Space",
+        back_populates="organization",
+        passive_deletes=True,
+    )
 
 
 class OrganizationMember(Base):
@@ -635,6 +640,170 @@ class OrganizationInvite(Base):
     )  # Role to assign when invite is accepted
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class Space(Base):
+    """A named shared memory pool owned by a user.
+
+    Spaces may be associated with an organization, but ownership always
+    resolves to a user so personal-user and organization-backed spaces share
+    one lifecycle model.
+    """
+
+    __tablename__ = "spaces"
+
+    space_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    owner_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(
+        Text,
+        nullable=False,
+        default="active",
+        server_default="active",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    organization = relationship("Organization", back_populates="spaces")
+    owner = relationship(
+        "User",
+        backref=backref("owned_spaces", passive_deletes=True),
+        foreign_keys=[owner_user_id],
+    )
+    memberships = relationship(
+        "AssistantSpaceMembership",
+        back_populates="space",
+        passive_deletes=True,
+    )
+    invites = relationship(
+        "SpaceInvite",
+        back_populates="space",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("ix_spaces_organization_id", "organization_id"),
+        Index("ix_spaces_owner_user_id", "owner_user_id"),
+        sa.CheckConstraint(
+            "length(name) BETWEEN 1 AND 200",
+            name="ck_spaces_name_length",
+        ),
+        sa.CheckConstraint(
+            "status IN ('active', 'deleting')",
+            name="ck_spaces_status",
+        ),
+    )
+
+
+class AssistantSpaceMembership(Base):
+    """Live membership connecting an assistant to a shared space."""
+
+    __tablename__ = "assistant_space_memberships"
+
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    space_id = Column(
+        BigInteger,
+        ForeignKey("spaces.space_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    added_by = Column(String, nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    assistant = relationship("Assistant", back_populates="space_memberships")
+    space = relationship("Space", back_populates="memberships")
+
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("assistant_id", "space_id"),
+        Index("ix_asm_space_id", "space_id"),
+    )
+
+
+class SpaceInvite(Base):
+    """User-anchored invitation for adding an assistant to a space."""
+
+    __tablename__ = "space_invites"
+
+    invite_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    space_id = Column(
+        BigInteger,
+        ForeignKey("spaces.space_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    invited_by = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    invited_owner_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(
+        Text,
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    decided_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    space = relationship("Space", back_populates="invites")
+    assistant = relationship("Assistant")
+    inviter = relationship("User", foreign_keys=[invited_by])
+    invited_owner = relationship("User", foreign_keys=[invited_owner_id])
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('pending', 'accepted', 'declined', 'cancelled', 'expired')",
+            name="ck_space_invites_status",
+        ),
+        Index(
+            "ix_space_invites_pending",
+            "space_id",
+            "assistant_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_space_invites_invited_owner", "invited_owner_id"),
+    )
 
 
 class Permission(Base):
@@ -1437,6 +1606,11 @@ class Assistant(Base):
         uselist=False,
         back_populates="assistant",
         cascade="all, delete-orphan",
+    )
+    space_memberships = relationship(
+        "AssistantSpaceMembership",
+        back_populates="assistant",
+        passive_deletes=True,
     )
 
     __table_args__ = (
