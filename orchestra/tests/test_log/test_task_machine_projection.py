@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
 
-from orchestra.db.models.orchestra_models import Assistant
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    AssistantSpaceMembership,
+    Context,
+    Space,
+)
 from orchestra.services import task_machine_state_service
 from orchestra.tests.test_log import (
     HEADERS,
@@ -34,6 +40,7 @@ TASK_OUTBOUND_OPERATIONS_CONTEXT = (
         TASKS_CONTEXT,
     )
 )
+PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID") or "1")
 SECONDARY_USER_ID = "seconday_user"
 
 
@@ -93,6 +100,32 @@ def _make_assistant(dbsession, *, user_id: str) -> Assistant:
     dbsession.add(assistant)
     dbsession.flush()
     return assistant
+
+
+def _make_space_member(
+    dbsession,
+    *,
+    assistant: Assistant,
+    owner_user_id: str = PRIMARY_USER_ID,
+) -> Space:
+    """Create a shared space and attach the assistant as a live member."""
+
+    space = Space(
+        name="Project Room",
+        owner_user_id=owner_user_id,
+        status="active",
+    )
+    dbsession.add(space)
+    dbsession.flush()
+    dbsession.add(
+        AssistantSpaceMembership(
+            assistant_id=assistant.agent_id,
+            space_id=space.space_id,
+            added_by=owner_user_id,
+        ),
+    )
+    dbsession.flush()
+    return space
 
 
 @pytest.fixture(autouse=True)
@@ -234,6 +267,115 @@ async def test_task_create_projects_scheduled_activation(
     assert activation["repeat"] == [{"unit": "day", "count": 1}]
     assert activation["activation_revision"]
     assert materialization_calls == [(None, activation)]
+
+
+@pytest.mark.anyio
+async def test_space_task_projects_activation_into_executor_context(
+    client: AsyncClient,
+    dbsession,
+    materialization_calls,
+):
+    """Shared task definitions should create executor-owned activation rows."""
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    space = _make_space_member(dbsession, assistant=assistant)
+    space_tasks_context = f"Spaces/{space.space_id}/Tasks"
+    executor_activation_context = (
+        task_machine_state_service.build_task_activation_context_name(
+            _assistant_tasks_context(
+                user_id=PRIMARY_USER_ID,
+                assistant_id=assistant.agent_id,
+            ),
+        )
+    )
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=111,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=space_tasks_context,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    matching = [
+        log["entries"] for log in activations if log["entries"]["task_id"] == 111
+    ]
+    assert len(matching) == 1
+    activation = matching[0]
+    assert activation["assistant_id"] == str(assistant.agent_id)
+    assert activation["destination"] == f"space:{space.space_id}"
+    assert (
+        activation["activation_key"]
+        == f"{assistant.agent_id}:space:{space.space_id}:111"
+    )
+    assert materialization_calls == [(None, activation)]
+
+    shared_activation_context = f"Spaces/{space.space_id}/Tasks/Activations"
+    assert (
+        dbsession.query(Context)
+        .filter(Context.name == shared_activation_context)
+        .one_or_none()
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_space_task_membership_mismatch_does_not_project_activation(
+    client: AsyncClient,
+    dbsession,
+    materialization_calls,
+):
+    """Shared task rows should not arm assistants that no longer belong to the space."""
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    space = Space(
+        name="Restricted Room",
+        owner_user_id=PRIMARY_USER_ID,
+        status="active",
+    )
+    dbsession.add(space)
+    dbsession.flush()
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=112,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=f"Spaces/{space.space_id}/Tasks",
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    executor_activation_context = (
+        task_machine_state_service.build_task_activation_context_name(
+            _assistant_tasks_context(
+                user_id=PRIMARY_USER_ID,
+                assistant_id=assistant.agent_id,
+            ),
+        )
+    )
+    activations = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    assert all(log["entries"]["task_id"] != 112 for log in activations)
+    assert materialization_calls == []
 
 
 @pytest.mark.anyio

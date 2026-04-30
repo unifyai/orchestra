@@ -137,6 +137,7 @@ def get_current_task_activation(
         project_id=project.id,
         assistant_id=request.assistant_id,
         task_id=request.task_id,
+        destination=request.destination,
     )
     return {
         "activation": dict(activation.data or {}) if activation is not None else None,
