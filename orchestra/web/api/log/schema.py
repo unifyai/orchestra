@@ -946,6 +946,10 @@ class TaskActivationLookupRequest(BaseModel):
     )
     assistant_id: str = Field(description="Assistant identifier that owns the task.")
     task_id: int = Field(description="Logical task identifier.")
+    destination: Optional[str] = Field(
+        default=None,
+        description="Shared-space destination for the task definition, if any.",
+    )
 
 
 class TaskActivationLookupResponse(BaseModel):
