@@ -2,7 +2,14 @@ from datetime import datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 from zoneinfo import available_timezones
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 from pydantic.generics import GenericModel
 
 from orchestra.web.api.utils.safe_text import (
@@ -223,9 +230,10 @@ class AssistantCreate(BaseModel):
                 )
         return self
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
@@ -244,7 +252,8 @@ class AssistantCreate(BaseModel):
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
             },
-        }
+        },
+    )
 
 
 class ConsoleConfigRead(BaseModel):
@@ -472,9 +481,10 @@ class AssistantRead(AssistantCreate):
         "Null means the assistant uses default console behavior.",
     )
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
@@ -522,7 +532,43 @@ class AssistantRead(AssistantCreate):
                 "is_local": False,
                 "is_coordinator": False,
             },
-        }
+        },
+    )
+
+
+class CoordinatorTranscriptSeed(BaseModel):
+    """Request body for persisting the Coordinator's opener transcript row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(..., min_length=1)
+    source_assistant_id: Optional[str] = Field(None)
+
+
+class CoordinatorTranscriptSeedResponse(BaseModel):
+    """Response returned after the opener row is present in the transcript."""
+
+    log_event_id: int
+
+
+class CoordinatorResetResponse(BaseModel):
+    """Response returned after Coordinator-owned conversation state is reset."""
+
+    coordinator_id: str
+
+
+class CoordinatorStateUpdate(BaseModel):
+    """Request body for updating the Coordinator onboarding mode."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["active", "skipped", "ready_to_go"]
+
+
+class CoordinatorStateResponse(BaseModel):
+    """Current Coordinator onboarding mode."""
+
+    mode: Literal["active", "skipped", "ready_to_go"]
 
 
 class DemoAssistantCreate(BaseModel):
@@ -874,9 +920,10 @@ class AssistantUpdate(BaseModel):
 
         return self
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "job_title": "Senior Mathematician",
                 "weekly_limit": 20.5,
@@ -897,7 +944,8 @@ class AssistantUpdate(BaseModel):
                 "phone_country": "GB",
                 "timezone": "Europe/London",
             },
-        }
+        },
+    )
 
 
 class AssistantStatus(BaseModel):
