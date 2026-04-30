@@ -18,6 +18,7 @@ from orchestra.db.models.orchestra_models import (
 )
 
 SPACE_STATUS_ACTIVE = "active"
+SPACE_STATUS_DELETING = "deleting"
 SPACE_INVITE_STATUS_PENDING = "pending"
 SPACE_INVITE_STATUS_ACCEPTED = "accepted"
 SPACE_INVITE_STATUS_DECLINED = "declined"
@@ -213,7 +214,10 @@ class SpaceDAO:
                 AssistantSpaceMembership,
                 AssistantSpaceMembership.space_id == Space.space_id,
             )
-            .filter(AssistantSpaceMembership.assistant_id == assistant_id)
+            .filter(
+                AssistantSpaceMembership.assistant_id == assistant_id,
+                Space.status == SPACE_STATUS_ACTIVE,
+            )
             .order_by(Space.space_id.asc())
             .all(),
         )
@@ -222,9 +226,16 @@ class SpaceDAO:
         """Return sorted live space ids for an assistant."""
 
         rows = (
-            self.session.query(AssistantSpaceMembership.space_id)
-            .filter(AssistantSpaceMembership.assistant_id == assistant_id)
-            .order_by(AssistantSpaceMembership.space_id.asc())
+            self.session.query(Space.space_id)
+            .join(
+                AssistantSpaceMembership,
+                AssistantSpaceMembership.space_id == Space.space_id,
+            )
+            .filter(
+                AssistantSpaceMembership.assistant_id == assistant_id,
+                Space.status == SPACE_STATUS_ACTIVE,
+            )
+            .order_by(Space.space_id.asc())
             .all()
         )
         return [int(row[0]) for row in rows]
@@ -241,12 +252,17 @@ class SpaceDAO:
         rows = (
             self.session.query(
                 AssistantSpaceMembership.assistant_id,
-                AssistantSpaceMembership.space_id,
+                Space.space_id,
+            )
+            .join(
+                Space,
+                Space.space_id == AssistantSpaceMembership.space_id,
             )
             .filter(AssistantSpaceMembership.assistant_id.in_(ids))
+            .filter(Space.status == SPACE_STATUS_ACTIVE)
             .order_by(
                 AssistantSpaceMembership.assistant_id.asc(),
-                AssistantSpaceMembership.space_id.asc(),
+                Space.space_id.asc(),
             )
             .all()
         )

@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.context_naming import is_space_context_name
 from orchestra.db.dao.context_dao import delete_orphaned_log_events
+from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE
 from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
@@ -33,6 +34,7 @@ from orchestra.db.models.orchestra_models import (
     LogEvent,
     LogEventContext,
     LogUniqueConstraint,
+    Space,
 )
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
@@ -447,9 +449,12 @@ def _assistant_is_space_member(
         return False
     return (
         session.execute(
-            select(AssistantSpaceMembership).where(
+            select(AssistantSpaceMembership)
+            .join(Space, Space.space_id == AssistantSpaceMembership.space_id)
+            .where(
                 AssistantSpaceMembership.assistant_id == assistant_id_int,
                 AssistantSpaceMembership.space_id == space_id,
+                Space.status == SPACE_STATUS_ACTIVE,
             ),
         ).scalar_one_or_none()
         is not None

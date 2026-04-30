@@ -380,6 +380,50 @@ async def test_space_task_membership_mismatch_does_not_project_activation(
 
 
 @pytest.mark.anyio
+async def test_deleting_space_does_not_project_activation(
+    client: AsyncClient,
+    dbsession,
+    materialization_calls,
+):
+    """Deleting spaces stop arming new scheduled work for member assistants."""
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    space = _make_space_member(dbsession, assistant=assistant)
+    space.status = "deleting"
+    dbsession.flush()
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=113,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=f"Spaces/{space.space_id}/Tasks",
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    executor_activation_context = (
+        task_machine_state_service.build_task_activation_context_name(
+            _assistant_tasks_context(
+                user_id=PRIMARY_USER_ID,
+                assistant_id=assistant.agent_id,
+            ),
+        )
+    )
+    activations = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    assert all(log["entries"]["task_id"] != 113 for log in activations)
+    assert materialization_calls == []
+
+
+@pytest.mark.anyio
 async def test_task_update_reconciles_new_schedule_head(
     client: AsyncClient,
     materialization_calls,
