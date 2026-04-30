@@ -103,6 +103,47 @@ def test_personal_coordinator_unique_index_scopes_to_personal_rows(
 
 
 def test_org_coordinator_unique_index_scopes_to_org_rows(
+<<<<<<< HEAD
+=======
+    dbsession: Session,
+) -> None:
+    """Each organization can have one Coordinator while other scopes remain valid."""
+    owner = _make_user(dbsession, "org-coordinator-unique")
+    organization = _make_organization(dbsession, owner, "org-coordinator-unique")
+    other_org = _make_organization(dbsession, owner, "org-coordinator-other")
+    _make_assistant(dbsession, owner, organization=organization, is_coordinator=True)
+    _make_assistant(dbsession, owner, organization=organization)
+    _make_assistant(dbsession, owner, organization=other_org, is_coordinator=True)
+    _make_assistant(dbsession, owner, is_coordinator=True)
+
+    duplicate = Assistant(
+        user_id=owner.id,
+        organization_id=organization.id,
+        first_name="Duplicate",
+        surname="Coordinator",
+        is_coordinator=True,
+    )
+    dbsession.add(duplicate)
+    with pytest.raises(
+        IntegrityError,
+        match="ux_assistants_one_coordinator_per_org",
+    ):
+        dbsession.flush()
+
+
+def test_is_coordinator_is_immutable_after_persistence(
+    dbsession: Session,
+) -> None:
+    """Coordinator role assignment is allowed on insert but not after persistence."""
+    owner = _make_user(dbsession, "coordinator-immutable")
+    assistant = _make_assistant(dbsession, owner, is_coordinator=True)
+
+    with pytest.raises(ValueError, match="is_coordinator is immutable"):
+        assistant.is_coordinator = False
+
+
+def test_space_kind_defaults_to_team_and_limits_org_default_to_one_per_org(
+>>>>>>> fbccd204 (test(coordinator): cover coordinator endpoint contracts)
     dbsession: Session,
 ) -> None:
     """Each organization can have one Coordinator while other scopes remain valid."""
