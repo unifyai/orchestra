@@ -12,9 +12,11 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -31,6 +33,11 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.services.coordinator_service import (
+    create_personal_coordinator,
+    get_personal_coordinator,
+    pubsub_topic_response_failed,
+)
 from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
     run_user_runtime_cleanup_tasks,
@@ -62,6 +69,10 @@ from orchestra.web.api.users.schema import (
     UserSpendingLimitRequest,
     UserSpendingLimitResponse,
     UserSpendResponse,
+)
+from orchestra.web.api.utils.assistant_infra import (
+    create_pubsub_topic,
+    delete_pubsub_topic,
 )
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -1153,6 +1164,67 @@ def get_user_basic_info(
         "whatsapp_number": user.whatsapp_number,
         "discord_id": user.discord_id,
     }
+
+
+@router.post("/user/{user_id}/coordinator", status_code=status.HTTP_201_CREATED)
+async def create_personal_coordinator_endpoint(
+    user_id: str,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Create or return the authenticated user's personal Coordinator."""
+    if request.state.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot create a Coordinator for another user.",
+        )
+
+    user_dao = UserDAO(session)
+    if not user_dao.get_by_id(user_id):
+        raise not_found("User")
+
+    existing = get_personal_coordinator(session, user_id)
+    if existing is not None:
+        response.status_code = status.HTTP_200_OK
+        return {"coordinator_id": str(existing.agent_id)}
+
+    created_pubsub_topic = False
+    coordinator_id: int | None = None
+    try:
+        coordinator = create_personal_coordinator(session, user_id)
+        coordinator_id = coordinator.agent_id
+        pubsub_response = await create_pubsub_topic(
+            str(coordinator.agent_id),
+            deploy_env=coordinator.deploy_env,
+        )
+        if pubsub_topic_response_failed(pubsub_response):
+            raise ValueError(
+                f"Coordinator topic provisioning failed: {pubsub_response}",
+            )
+        created_pubsub_topic = not pubsub_response.get("skipped")
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        response.status_code = status.HTTP_200_OK
+        if "ux_assistants_one_personal_coordinator_per_user" not in str(exc.orig):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Failed to create Coordinator.",
+            )
+        coordinator = get_personal_coordinator(session, user_id)
+        if coordinator is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Failed to create Coordinator.",
+            )
+    except Exception:
+        session.rollback()
+        if created_pubsub_topic and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+        raise
+
+    return {"coordinator_id": str(coordinator.agent_id)}
 
 
 @router.patch("/user/query-logging")

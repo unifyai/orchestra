@@ -22,8 +22,13 @@ from sqlalchemy import (
     func,
     text,
 )
+<<<<<<< HEAD
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import backref, relationship
+=======
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import backref, relationship, validates
+>>>>>>> 503eb6aa (feat(coordinator): add coordinator provisioning endpoints)
 
 from orchestra.db.base import Base
 
@@ -2291,6 +2296,14 @@ class Assistant(Base):
         server_default="false",
     )
 
+    @validates("is_coordinator")
+    def _validate_is_coordinator(self, key: str, value: bool) -> bool:
+        """Allow Coordinator role assignment at insert time only."""
+        state = sa.inspect(self)
+        if state.persistent and getattr(self, key) != value:
+            raise ValueError("is_coordinator is immutable after assistant creation.")
+        return value
+
     # Demo assistant metadata FK (NULL for regular assistants)
     demo_id = Column(
         Integer,
@@ -2338,6 +2351,14 @@ class Assistant(Base):
             "user_id",
             unique=True,
             postgresql_where=text("is_coordinator AND organization_id IS NULL"),
+        ),
+        Index(
+            "ux_assistants_one_coordinator_per_org",
+            "organization_id",
+            unique=True,
+            postgresql_where=text(
+                "is_coordinator AND organization_id IS NOT NULL",
+            ),
         ),
     )
 

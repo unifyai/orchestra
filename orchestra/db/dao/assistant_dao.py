@@ -59,6 +59,7 @@ class AssistantDAO:
         timezone: Optional[str] = None,
         organization_id: Optional[int] = None,
         is_local: bool = False,
+        is_coordinator: bool = False,
         deploy_env: str | None = None,
         job_title: Optional[str] = None,
     ) -> Assistant:
@@ -98,6 +99,7 @@ class AssistantDAO:
             voice_provider=voice_provider,
             timezone=timezone,
             is_local=is_local,
+            is_coordinator=is_coordinator,
             deploy_env=deploy_env,
         )
         self.session.add(assistant)

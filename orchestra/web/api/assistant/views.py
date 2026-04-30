@@ -74,6 +74,12 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.coordinator_service import (
+    require_authorized_coordinator,
+    reset_coordinator_state,
+    seed_coordinator_transcript,
+    update_coordinator_mode,
+)
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
@@ -109,6 +115,11 @@ from orchestra.web.api.assistant.schema import (
     ContactMembershipDeleteResponse,
     ContactMembershipRead,
     ContactMembershipUpsertResponse,
+    CoordinatorResetResponse,
+    CoordinatorStateResponse,
+    CoordinatorStateUpdate,
+    CoordinatorTranscriptSeed,
+    CoordinatorTranscriptSeedResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
@@ -1228,6 +1239,90 @@ async def create_assistant(
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
     )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/transcript-seed",
+    response_model=InfoResponse[CoordinatorTranscriptSeedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Seed a Coordinator transcript opener",
+    tags=["Assistant Management"],
+)
+async def seed_coordinator_transcript_endpoint(
+    coordinator_id: int,
+    seed: CoordinatorTranscriptSeed,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorTranscriptSeedResponse]:
+    """Persist the Coordinator opener transcript once."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    log_event_id = seed_coordinator_transcript(
+        session,
+        coordinator=coordinator,
+        content=seed.content,
+        source_assistant_id=seed.source_assistant_id,
+    )
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorTranscriptSeedResponse(log_event_id=log_event_id),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/reset",
+    response_model=InfoResponse[CoordinatorResetResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Reset Coordinator-owned state",
+    tags=["Assistant Management"],
+)
+async def reset_coordinator_endpoint(
+    coordinator_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorResetResponse]:
+    """Clear the Coordinator's state, checklist, transcript, and exchange contexts."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    reset_coordinator_state(session, coordinator=coordinator)
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorResetResponse(coordinator_id=str(coordinator.agent_id)),
+    )
+
+
+@router.patch(
+    "/assistant/{coordinator_id}/coordinator-state",
+    response_model=InfoResponse[CoordinatorStateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Update Coordinator onboarding state",
+    tags=["Assistant Management"],
+)
+async def update_coordinator_state_endpoint(
+    coordinator_id: int,
+    state_update: CoordinatorStateUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorStateResponse]:
+    """Set the Coordinator onboarding mode."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    mode = update_coordinator_mode(
+        session,
+        coordinator=coordinator,
+        mode=state_update.mode,
+    )
+    session.commit()
+    return InfoResponse(info=CoordinatorStateResponse(mode=mode))
 
 
 @router.get(
@@ -2875,6 +2970,12 @@ async def delete_assistant(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
+            )
+
+        if assistant.is_coordinator:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cannot_delete_coordinator",
             )
 
         if organization_id is not None:

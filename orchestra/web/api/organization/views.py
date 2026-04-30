@@ -39,6 +39,10 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
+from orchestra.services.coordinator_service import (
+    create_organization_coordinator,
+    pubsub_topic_response_failed,
+)
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     AdminOrganizationCreate,
@@ -64,7 +68,11 @@ from orchestra.web.api.organization.schema import (
     OrgSpendResponse,
 )
 from orchestra.web.api.users.views import generate_key
-from orchestra.web.api.utils.assistant_infra import fan_out_contact_sync_for_org
+from orchestra.web.api.utils.assistant_infra import (
+    create_pubsub_topic,
+    delete_pubsub_topic,
+    fan_out_contact_sync_for_org,
+)
 from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
 
@@ -161,6 +169,8 @@ async def create_organization(
         org_timezone = owner_row[0].timezone if owner_row else None
 
     # Create organization
+    created_pubsub_topic = False
+    coordinator_id: int | None = None
     try:
         # timezone: provided > owner's timezone > None (runtime defaults to UTC)
         org = org_dao.create(
@@ -190,15 +200,42 @@ async def create_organization(
             organization_id=org.id,
         )
 
+        coordinator = create_organization_coordinator(
+            session,
+            owner_user_id=user_id,
+            organization_id=org.id,
+            timezone=org_timezone,
+            space_name=organization.name,
+        )
+        coordinator_id = coordinator.agent_id
+
+        pubsub_response = await create_pubsub_topic(
+            str(coordinator.agent_id),
+            deploy_env=coordinator.deploy_env,
+        )
+        if pubsub_topic_response_failed(pubsub_response):
+            raise ValueError(
+                f"Coordinator topic provisioning failed: {pubsub_response}",
+            )
+        created_pubsub_topic = not pubsub_response.get("skipped")
+
         session.commit()
 
         org_response = OrganizationResponse.model_validate(org)
         return {
             **org_response.model_dump(),
             "api_key": new_api_key,
+            "coordinator_id": str(coordinator_id),
         }
     except Exception as e:
         session.rollback()
+        if created_pubsub_topic and coordinator_id is not None:
+            try:
+                await delete_pubsub_topic(str(coordinator_id))
+            except Exception:
+                logger.exception(
+                    "Failed to clean up Coordinator topic after org creation rollback",
+                )
         logger.error(f"Failed to create organization: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
