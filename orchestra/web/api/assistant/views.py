@@ -319,6 +319,7 @@ def _build_assistant_read(
         timezone=a.timezone,
         demo_id=a.demo_id,
         is_local=a.is_local,
+        is_coordinator=a.is_coordinator,
         monthly_spending_cap=(
             float(a.monthly_spending_cap)
             if a.monthly_spending_cap is not None
