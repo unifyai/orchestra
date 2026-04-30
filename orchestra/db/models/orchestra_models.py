@@ -671,6 +671,7 @@ class Space(Base):
         default="active",
         server_default="active",
     )
+    kind = Column(Text, nullable=False, default="team", server_default="team")
     created_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
@@ -710,6 +711,16 @@ class Space(Base):
         sa.CheckConstraint(
             "status IN ('active', 'deleting')",
             name="ck_spaces_status",
+        ),
+        sa.CheckConstraint(
+            "kind IN ('team', 'org_default')",
+            name="ck_spaces_kind",
+        ),
+        Index(
+            "ux_spaces_one_org_default_per_org",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("kind = 'org_default'"),
         ),
     )
 
@@ -1586,6 +1597,12 @@ class Assistant(Base):
     )
     voice_provider = Column(String, nullable=True)
     is_local = Column(Boolean, nullable=False, default=False, server_default="false")
+    is_coordinator = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Demo assistant metadata FK (NULL for regular assistants)
     demo_id = Column(
@@ -1622,6 +1639,12 @@ class Assistant(Base):
         sa.CheckConstraint(
             "desktop_mode IN ('ubuntu', 'windows', 'macos')",
             name="ck_assistant_desktop_mode",
+        ),
+        Index(
+            "ux_assistants_one_personal_coordinator_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_coordinator AND organization_id IS NULL"),
         ),
     )
 
