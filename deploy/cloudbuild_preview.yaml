@@ -217,7 +217,6 @@ steps:
       --no-cpu-throttling \
       --cpu-boost \
       --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,preview=true \
-      --remove-env-vars=UNITY_COMMS_URL,UNITY_ADAPTERS_URL \
       --update-env-vars=ORCHESTRA_CLOUD_SQL_INSTANCE=$_CLOUDSQL_INSTANCE,BRANCH_TAG=$${SLUG},UNITY_COMMS_URL=$${COMMS_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
       --quiet; then
       echo "preview deploy failed; restoring canonical service template"
