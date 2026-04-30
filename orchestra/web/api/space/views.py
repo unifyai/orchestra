@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.space_dao import (
@@ -13,6 +14,13 @@ from orchestra.db.dao.space_dao import (
 )
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Space, SpaceInvite
+from orchestra.services.space_cleanup_service import (
+    SpaceCleanupAuthError,
+    SpaceCleanupConflictError,
+    SpaceCleanupFailure,
+    SpaceCleanupNotFoundError,
+)
+from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
 from orchestra.settings import settings
 from orchestra.web.api.space.schema import (
     SpaceCreate,
@@ -281,23 +289,39 @@ def update_space(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["Spaces"],
 )
-def delete_space(
+async def delete_space(
     request: Request,
     space_id: int,
     session: Session = Depends(get_db_session),
 ) -> Response:
-    """Delete a space that has no live members or pending invitations."""
+    """Delete a space and its shared data through the cleanup cascade."""
 
-    space_dao = SpaceDAO(session)
-    space = _get_space_or_404(space_dao, space_id)
-    _require_space_mutation(space_dao, request.state.user_id, space)
-    if space_dao.has_live_members_or_pending_invites(space_id):
+    try:
+        await run_space_cleanup(
+            session,
+            space_id=space_id,
+            user_id=request.state.user_id,
+        )
+    except SpaceCleanupNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Space not found.",
+        )
+    except SpaceCleanupAuthError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="space_mutation_forbidden",
+        )
+    except SpaceCleanupConflictError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="space_not_empty",
+            detail="space_cleanup_in_progress",
         )
-    space_dao.delete(space)
-    session.commit()
+    except SpaceCleanupFailure as exc:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"phase": exc.phase, "reason": exc.reason},
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
