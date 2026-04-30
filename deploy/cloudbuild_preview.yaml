@@ -117,8 +117,8 @@ steps:
     gcloud run services update $_SERVICE_NAME \
       --region=$_DEPLOY_REGION --platform=managed \
       --image="$$CANONICAL_IMAGE" \
-      --remove-env-vars=BRANCH_TAG,UNITY_COMMS_URL,UNITY_ADAPTERS_URL \
-      --update-secrets=UNITY_COMMS_URL=UNITY_COMMS_URL_STAGING:latest,UNITY_ADAPTERS_URL=UNITY_ADAPTERS_URL_STAGING:latest \
+      --remove-env-vars=BRANCH_TAG \
+      --update-env-vars=UNITY_COMMS_URL=https://$_PEER_COMMS_HOST,UNITY_ADAPTERS_URL=https://$_PEER_ADAPTERS_HOST \
       --quiet
     echo "canonical service template restored to image $$CANONICAL_IMAGE"
   waitFor: ['deploy-tagged']
