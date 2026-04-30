@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantSpaceMembership,
+    Space,
     SpaceInvite,
 )
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_org, create_test_user
@@ -169,12 +170,36 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
         second_space["space_id"],
     ]
 
-    blocked_delete = await client.delete(
-        f"/v0/spaces/{first_space['space_id']}",
+    dbsession.get(Space, second_space["space_id"]).status = "deleting"
+    dbsession.commit()
+
+    public_read = await client.get(
+        f"/v0/assistant?agent_id={assistant.agent_id}",
         headers=owner["headers"],
     )
-    assert blocked_delete.status_code == status.HTTP_409_CONFLICT
-    assert blocked_delete.json()["detail"] == "space_not_empty"
+    assert public_read.status_code == status.HTTP_200_OK, public_read.json()
+    assert public_read.json()["info"][0]["space_ids"] == [first_space["space_id"]]
+
+    admin_read = await client.get(
+        f"/v0/admin/assistant?agent_id={assistant.agent_id}&from_fields=agent_id,space_ids",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_read.status_code == status.HTTP_200_OK, admin_read.json()
+    assert admin_read.json()["info"] == [
+        {
+            "agent_id": str(assistant.agent_id),
+            "space_ids": [first_space["space_id"]],
+        },
+    ]
+
+    summaries = await client.get(
+        f"/v0/assistants/{assistant.agent_id}/spaces",
+        headers=owner["headers"],
+    )
+    assert summaries.status_code == status.HTTP_200_OK, summaries.json()
+    assert [space["space_id"] for space in summaries.json()] == [
+        first_space["space_id"],
+    ]
 
 
 @pytest.mark.anyio
@@ -306,12 +331,6 @@ async def test_invite_reissue_cancel_and_already_member_contract(
     )
     assert first_invite.status_code == status.HTTP_201_CREATED, first_invite.json()
     first_body = first_invite.json()
-
-    blocked_delete = await client.delete(
-        f"/v0/spaces/{invite_space['space_id']}",
-        headers=inviter["headers"],
-    )
-    assert blocked_delete.status_code == status.HTTP_409_CONFLICT
 
     reissued = await client.post(
         f"/v0/spaces/{invite_space['space_id']}/invites",

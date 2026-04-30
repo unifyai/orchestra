@@ -2981,7 +2981,12 @@ class ContextDAO:
         self.session.commit()
         return total
 
-    def delete(self, id: int, skip_embedding_cleanup: bool = False) -> None:
+    def delete(
+        self,
+        id: int,
+        skip_embedding_cleanup: bool = False,
+        commit: bool = True,
+    ) -> None:
         """
         Delete a context and clean up associated data in phases.
 
@@ -3149,7 +3154,10 @@ class ContextDAO:
                                 },
                             )
                             deleted = result.rowcount
-                            self.session.commit()
+                            if commit:
+                                self.session.commit()
+                            else:
+                                self.session.flush()
                             if deleted == 0:
                                 break
                             total_deleted += deleted
@@ -3170,7 +3178,10 @@ class ContextDAO:
                         log_event_ids=log_event_ids,
                     )
 
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
 
             logger.info(
                 f"Context {id} ('{context_name}') deleted successfully",
