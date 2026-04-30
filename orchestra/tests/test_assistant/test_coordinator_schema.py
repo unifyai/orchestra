@@ -1,0 +1,150 @@
+"""Schema tests for Coordinator assistants and organization-default spaces."""
+
+from __future__ import annotations
+
+import pytest
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from orchestra.db.models.orchestra_models import Assistant, Organization, Space, User
+from orchestra.web.api.assistant.views import _build_assistant_read
+
+
+def _make_user(dbsession: Session, suffix: str) -> User:
+    user = User(
+        id=f"coordinator-user-{suffix}",
+        email=f"coordinator-user-{suffix}@test.com",
+    )
+    dbsession.add(user)
+    dbsession.flush()
+    return user
+
+
+def _make_organization(
+    dbsession: Session,
+    owner: User,
+    suffix: str,
+) -> Organization:
+    organization = Organization(
+        owner_id=owner.id,
+        name=f"Coordinator Org {suffix}",
+    )
+    dbsession.add(organization)
+    dbsession.flush()
+    return organization
+
+
+def _make_assistant(
+    dbsession: Session,
+    owner: User,
+    *,
+    organization: Organization | None = None,
+    is_coordinator: bool = False,
+) -> Assistant:
+    assistant = Assistant(
+        user_id=owner.id,
+        organization_id=organization.id if organization else None,
+        first_name="Coordinator",
+        surname="Assistant",
+        is_coordinator=is_coordinator,
+    )
+    dbsession.add(assistant)
+    dbsession.flush()
+    return assistant
+
+
+def _make_space(
+    dbsession: Session,
+    owner: User,
+    suffix: str,
+    *,
+    organization: Organization | None = None,
+    kind: str | None = None,
+) -> Space:
+    space = Space(
+        name=f"Coordinator Space {suffix}",
+        owner_user_id=owner.id,
+        organization_id=organization.id if organization else None,
+    )
+    if kind is not None:
+        space.kind = kind
+    dbsession.add(space)
+    dbsession.flush()
+    return space
+
+
+def test_personal_coordinator_unique_index_scopes_to_personal_rows(
+    dbsession: Session,
+) -> None:
+    """A user can have one personal Coordinator while regular assistants remain allowed."""
+    owner = _make_user(dbsession, "personal-unique")
+    organization = _make_organization(dbsession, owner, "personal-unique")
+    _make_assistant(dbsession, owner, is_coordinator=True)
+    _make_assistant(dbsession, owner)
+    _make_assistant(dbsession, owner, organization=organization, is_coordinator=True)
+
+    duplicate = Assistant(
+        user_id=owner.id,
+        first_name="Duplicate",
+        surname="Coordinator",
+        is_coordinator=True,
+    )
+    dbsession.add(duplicate)
+    with pytest.raises(
+        IntegrityError,
+        match="ux_assistants_one_personal_" "coordinator_per_user",
+    ):
+        dbsession.flush()
+
+
+def test_space_kind_defaults_to_team_and_limits_org_default_to_one_per_org(
+    dbsession: Session,
+) -> None:
+    """Regular spaces default to team and each organization can have one default space."""
+    owner = _make_user(dbsession, "org-default")
+    organization = _make_organization(dbsession, owner, "org-default")
+
+    default_space = _make_space(dbsession, owner, "default", organization=organization)
+    assert default_space.kind == "team"
+    _make_space(
+        dbsession,
+        owner,
+        "explicit-default",
+        organization=organization,
+        kind="org_default",
+    )
+    _make_space(dbsession, owner, "team-sibling", organization=organization)
+
+    duplicate_default = Space(
+        name="Duplicate default",
+        owner_user_id=owner.id,
+        organization_id=organization.id,
+        kind="org_default",
+    )
+    dbsession.add(duplicate_default)
+    with pytest.raises(IntegrityError, match="ux_spaces_one_" "org_default_per_org"):
+        dbsession.flush()
+
+
+def test_space_kind_rejects_unknown_values(dbsession: Session) -> None:
+    """Only team and organization-default spaces are valid kinds."""
+    owner = _make_user(dbsession, "invalid-kind")
+    space = Space(
+        name="Archived Space",
+        owner_user_id=owner.id,
+        kind="archived",
+    )
+    dbsession.add(space)
+
+    with pytest.raises(IntegrityError, match="ck_spaces_kind"):
+        dbsession.flush()
+
+
+def test_assistant_read_projects_coordinator_flag(dbsession: Session) -> None:
+    """Assistant reads carry the Coordinator role flag as a concrete boolean."""
+    owner = _make_user(dbsession, "read-projection")
+    assistant = _make_assistant(dbsession, owner, is_coordinator=True)
+
+    assistant_read = _build_assistant_read(assistant, dbsession)
+
+    assert assistant_read.is_coordinator is True

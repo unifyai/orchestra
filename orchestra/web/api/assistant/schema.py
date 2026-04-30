@@ -380,6 +380,10 @@ class AssistantRead(AssistantCreate):
         None,
         description="Whether this is a local assistant (runs unity locally instead of on GKE).",
     )
+    is_coordinator: bool = Field(
+        False,
+        description="Whether this assistant configures and coordinates its workspace.",
+    )
     desktop_filesync_sshkey: Optional[str] = Field(
         None,
         description="SSH private key for desktop filesystem sync. Only returned via admin endpoints.",
@@ -438,6 +442,7 @@ class AssistantRead(AssistantCreate):
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
                 "is_local": False,
+                "is_coordinator": False,
             },
         }
 
