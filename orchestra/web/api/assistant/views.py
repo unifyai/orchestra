@@ -70,6 +70,7 @@ from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramServic
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
+from orchestra.services.space_cleanup_service import purge_assistant_memberships
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AdminUpdateAssistant,
@@ -2456,6 +2457,8 @@ async def delete_assistant(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="You do not have permission to delete this assistant.",
                 )
+
+        await purge_assistant_memberships(session, assistant=assistant)
 
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
