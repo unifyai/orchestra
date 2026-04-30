@@ -1,0 +1,407 @@
+"""Endpoint tests for Coordinator provisioning and lifecycle contracts."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi import status
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    AssistantSecret,
+    AssistantSpaceMembership,
+    Context,
+    LogEvent,
+    LogEventContext,
+    Project,
+    Space,
+)
+from orchestra.tests.utils import HEADERS, create_test_user
+
+
+@pytest.fixture(autouse=True)
+def coordinator_pubsub_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Coordinator tests inside Orchestra's API/database boundary."""
+    monkeypatch.setattr(
+        "orchestra.web.api.organization.views.create_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
+        "orchestra.web.api.organization.views.delete_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
+        "orchestra.web.api.users.views.create_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
+        "orchestra.web.api.users.views.delete_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
+        "orchestra.db.dao.log_event_dao.BucketService",
+        MagicMock(),
+    )
+
+
+async def _create_user(client: AsyncClient, suffix: str) -> dict:
+    return await create_test_user(client, f"coordinator-{suffix}@test.com")
+
+
+async def _create_org(
+    client: AsyncClient,
+    owner: dict,
+    suffix: str,
+) -> dict:
+    response = await client.post(
+        "/v0/organizations",
+        json={"name": f"Coordinator Org {suffix}"},
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.json()
+    return response.json()
+
+
+def _assistant_context_name(coordinator: Assistant, suffix: str) -> str:
+    return f"{coordinator.user_id}/{coordinator.agent_id}/{suffix}"
+
+
+def _assistants_project(
+    dbsession: Session,
+    *,
+    coordinator: Assistant,
+) -> Project:
+    return dbsession.scalar(
+        select(Project).where(
+            Project.organization_id == coordinator.organization_id,
+            Project.name == "Assistants",
+        ),
+    )
+
+
+def _context(
+    dbsession: Session,
+    *,
+    project: Project,
+    name: str,
+) -> Context | None:
+    return dbsession.scalar(
+        select(Context).where(Context.project_id == project.id, Context.name == name),
+    )
+
+
+def _insert_log(
+    dbsession: Session,
+    *,
+    project: Project,
+    context_name: str,
+    data: dict,
+) -> None:
+    context = _context(dbsession, project=project, name=context_name)
+    if context is None:
+        context = Context(project_id=project.id, name=context_name)
+        dbsession.add(context)
+        dbsession.flush()
+    log_event = LogEvent(project_id=project.id, data=data)
+    dbsession.add(log_event)
+    dbsession.flush()
+    dbsession.add(
+        LogEventContext(log_event_id=log_event.id, context_id=context.id),
+    )
+    dbsession.flush()
+
+
+@pytest.mark.anyio
+async def test_create_organization_provisions_coordinator_and_org_default_space(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Organization creation provisions the Coordinator, default space, and grants."""
+    owner = await _create_user(client, "org-provision")
+
+    org_data = await _create_org(client, owner, "provision")
+    coordinator_id = int(org_data["coordinator_id"])
+
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    assert coordinator is not None
+    assert coordinator.is_coordinator is True
+    assert coordinator.organization_id == org_data["id"]
+    assert coordinator.user_id == owner["id"]
+
+    space = dbsession.scalar(
+        select(Space).where(
+            Space.organization_id == org_data["id"],
+            Space.kind == "org_default",
+        ),
+    )
+    assert space is not None
+    assert space.name == org_data["name"]
+    assert space.owner_user_id == owner["id"]
+
+    membership = dbsession.scalar(
+        select(AssistantSpaceMembership).where(
+            AssistantSpaceMembership.assistant_id == coordinator.agent_id,
+            AssistantSpaceMembership.space_id == space.space_id,
+        ),
+    )
+    assert membership is not None
+
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    assert resource_access_dao.check_user_permission(
+        owner["id"],
+        "assistant",
+        coordinator.agent_id,
+        "assistant:write",
+    )
+
+
+@pytest.mark.anyio
+async def test_transcript_seed_is_idempotent_by_assistant_row(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Retried opener seeding returns the first assistant transcript row."""
+    owner = await _create_user(client, "seed")
+    org_data = await _create_org(client, owner, "seed")
+    coordinator_id = int(org_data["coordinator_id"])
+
+    first = await client.post(
+        f"/v0/assistant/{coordinator_id}/transcript-seed",
+        json={"content": "Welcome to your Coordinator."},
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+    )
+    assert first.status_code == status.HTTP_200_OK, first.json()
+    first_id = first.json()["info"]["log_event_id"]
+
+    second = await client.post(
+        f"/v0/assistant/{coordinator_id}/transcript-seed",
+        json={"content": "A different opener should not duplicate."},
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+    )
+    assert second.status_code == status.HTTP_200_OK, second.json()
+    assert second.json()["info"]["log_event_id"] == first_id
+
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    transcripts = _context(
+        dbsession,
+        project=project,
+        name=_assistant_context_name(coordinator, "Transcripts"),
+    )
+    logs = dbsession.scalars(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(LogEventContext.context_id == transcripts.id),
+    ).all()
+    assert [log.data["role"] for log in logs] == ["assistant"]
+
+
+@pytest.mark.anyio
+async def test_state_patch_and_reset_touch_only_coordinator_contexts(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """State updates share one row, and reset clears only named contexts."""
+    owner = await _create_user(client, "state-reset")
+    org_data = await _create_org(client, owner, "state-reset")
+    coordinator_id = int(org_data["coordinator_id"])
+    headers = {"Authorization": f"Bearer {org_data['api_key']}"}
+
+    for mode in ("skipped", "active", "ready_to_go"):
+        response = await client.patch(
+            f"/v0/assistant/{coordinator_id}/coordinator-state",
+            json={"mode": mode},
+            headers=headers,
+        )
+        assert response.status_code == status.HTTP_200_OK, response.json()
+        assert response.json()["info"]["mode"] == mode
+
+    invalid = await client.patch(
+        f"/v0/assistant/{coordinator_id}/coordinator-state",
+        json={"mode": "active", "extra": True},
+        headers=headers,
+    )
+    assert invalid.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    state = _context(
+        dbsession,
+        project=project,
+        name=_assistant_context_name(coordinator, "Coordinator/State"),
+    )
+    state_logs = dbsession.scalars(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(LogEventContext.context_id == state.id),
+    ).all()
+    assert len(state_logs) == 1
+    assert state_logs[0].data["mode"] == "ready_to_go"
+
+    for suffix in ("Coordinator/Checklist", "Transcripts", "Exchanges"):
+        _insert_log(
+            dbsession,
+            project=project,
+            context_name=_assistant_context_name(coordinator, suffix),
+            data={"value": suffix},
+        )
+    dbsession.add(
+        AssistantSecret(
+            user_id=owner["id"],
+            agent_id=coordinator_id,
+            secret_name="OAUTH_TOKEN",
+            secret_value="token",
+        ),
+    )
+    dbsession.flush()
+
+    reset = await client.post(
+        f"/v0/assistant/{coordinator_id}/reset",
+        headers=headers,
+    )
+    assert reset.status_code == status.HTTP_200_OK, reset.json()
+    assert reset.json()["info"]["coordinator_id"] == str(coordinator_id)
+
+    for suffix in (
+        "Coordinator/State",
+        "Coordinator/Checklist",
+        "Transcripts",
+        "Exchanges",
+    ):
+        assert (
+            _context(
+                dbsession,
+                project=project,
+                name=_assistant_context_name(coordinator, suffix),
+            )
+            is None
+        )
+    assert dbsession.get(AssistantSecret, (coordinator_id, "OAUTH_TOKEN")) is not None
+
+    second_reset = await client.post(
+        f"/v0/assistant/{coordinator_id}/reset",
+        headers=headers,
+    )
+    assert second_reset.status_code == status.HTTP_200_OK, second_reset.json()
+
+
+@pytest.mark.anyio
+async def test_personal_opt_in_is_idempotent_and_generic_surfaces_reject_flag(
+    client: AsyncClient,
+) -> None:
+    """Personal Coordinator opt-in is self-scoped; generic assistant writes stay closed."""
+    owner = await _create_user(client, "personal")
+    other = await _create_user(client, "personal-other")
+
+    first = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert first.status_code == status.HTTP_201_CREATED, first.json()
+    coordinator_id = first.json()["coordinator_id"]
+
+    second = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert second.status_code == status.HTTP_200_OK, second.json()
+    assert second.json()["coordinator_id"] == coordinator_id
+
+    mismatch = await client.post(
+        f"/v0/user/{other['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert mismatch.status_code == status.HTTP_403_FORBIDDEN
+
+    create = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Nope", "is_coordinator": True, "is_local": True},
+        headers=HEADERS,
+    )
+    assert create.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    update = await client.patch(
+        f"/v0/assistant/{coordinator_id}/config",
+        json={"is_coordinator": False},
+        headers=owner["headers"],
+    )
+    assert update.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_coordinator_admin_gate_and_direct_delete_guard(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Resource write permission is insufficient without Admin/Owner org role."""
+    owner = await _create_user(client, "admin-gate-owner")
+    member = await _create_user(client, "admin-gate-member")
+    admin = await _create_user(client, "admin-gate-admin")
+    org_data = await _create_org(client, owner, "admin-gate")
+    coordinator_id = int(org_data["coordinator_id"])
+
+    role_dao = RoleDAO(dbsession)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    org_member_dao.create(
+        organization_id=org_data["id"],
+        user_id=member["id"],
+        role_id=member_role.id,
+    )
+    org_member_dao.create(
+        organization_id=org_data["id"],
+        user_id=admin["id"],
+        role_id=admin_role.id,
+    )
+    ResourceAccessDAO(dbsession).grant_access(
+        resource_type="assistant",
+        resource_id=coordinator_id,
+        role_id=owner_role.id,
+        grantee_type="user",
+        grantee_id=member["id"],
+    )
+    dbsession.flush()
+
+    forbidden = await client.patch(
+        f"/v0/assistant/{coordinator_id}/coordinator-state",
+        json={"mode": "skipped"},
+        headers=member["headers"],
+    )
+    assert forbidden.status_code == status.HTTP_403_FORBIDDEN, forbidden.json()
+    assert forbidden.json()["detail"] == "admin_required"
+
+    admin_allowed = await client.patch(
+        f"/v0/assistant/{coordinator_id}/coordinator-state",
+        json={"mode": "active"},
+        headers=admin["headers"],
+    )
+    assert admin_allowed.status_code == status.HTTP_200_OK, admin_allowed.json()
+
+    org_member_dao.update_member_role(
+        user_id=member["id"],
+        organization_id=org_data["id"],
+        role_id=admin_role.id,
+    )
+    allowed = await client.patch(
+        f"/v0/assistant/{coordinator_id}/coordinator-state",
+        json={"mode": "skipped"},
+        headers=member["headers"],
+    )
+    assert allowed.status_code == status.HTTP_200_OK, allowed.json()
+
+    delete = await client.delete(
+        f"/v0/assistant/{coordinator_id}",
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+    )
+    assert delete.status_code == status.HTTP_409_CONFLICT, delete.json()
+    assert delete.json()["detail"] == "cannot_delete_coordinator"
+    assert dbsession.get(Assistant, coordinator_id) is not None
