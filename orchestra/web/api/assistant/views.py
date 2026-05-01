@@ -6,7 +6,7 @@ import math
 import time
 import urllib.request
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 import mutagen
 from fastapi import (
@@ -44,9 +44,13 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     Assistant,
     AssistantCleanupTask,
     AssistantConsoleConfig,
+    ContactMembership,
     Context,
     DemoAssistantMeta,
     LogEvent,
@@ -124,8 +128,17 @@ from orchestra.web.api.utils.assistant_infra import (
     wake_up_assistant,
 )
 
+SELF_CONTACT_ID_FALLBACK = 0
+BOSS_CONTACT_ID_FALLBACK = 1
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
 ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
+
+
+class ResolvedContactIds(NamedTuple):
+    """Resolved self and boss contact ids for one assistant."""
+
+    self_contact_id: int
+    boss_contact_id: int
 
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
@@ -212,6 +225,83 @@ def _build_console_config_read(
     )
 
 
+def _resolved_contact_ids_for_assistants(
+    session: Session,
+    assistant_ids: list[int],
+) -> dict[int, ResolvedContactIds]:
+    """Resolve assistant-self and boss contact ids for AssistantRead payloads."""
+
+    resolved = {
+        assistant_id: ResolvedContactIds(
+            self_contact_id=SELF_CONTACT_ID_FALLBACK,
+            boss_contact_id=BOSS_CONTACT_ID_FALLBACK,
+        )
+        for assistant_id in assistant_ids
+    }
+    if not assistant_ids:
+        return resolved
+
+    relationship_values = {
+        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    }
+    rows = (
+        session.query(
+            ContactMembership.id,
+            ContactMembership.assistant_id,
+            ContactMembership.contact_id,
+            ContactMembership.relationship,
+        )
+        .filter(
+            ContactMembership.assistant_id.in_(assistant_ids),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            ContactMembership.relationship.in_(relationship_values),
+        )
+        .order_by(
+            ContactMembership.assistant_id,
+            ContactMembership.relationship,
+            ContactMembership.id,
+        )
+        .all()
+    )
+
+    seen: set[tuple[int, str]] = set()
+    for _, assistant_id, contact_id, relationship_name in rows:
+        key = (assistant_id, relationship_name)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        contact_ids = resolved[assistant_id]
+        self_contact_id = contact_ids.self_contact_id
+        boss_contact_id = contact_ids.boss_contact_id
+        if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
+            self_contact_id = contact_id
+        elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
+            boss_contact_id = contact_id
+        resolved[assistant_id] = ResolvedContactIds(
+            self_contact_id=self_contact_id,
+            boss_contact_id=boss_contact_id,
+        )
+
+    return resolved
+
+
+def _contact_id_pair(
+    contact_ids_by_assistant: dict[int, ResolvedContactIds],
+    assistant_id: int,
+) -> ResolvedContactIds:
+    """Return resolved contact ids for an assistant, using bootstrap defaults."""
+
+    return contact_ids_by_assistant.get(
+        assistant_id,
+        ResolvedContactIds(
+            self_contact_id=SELF_CONTACT_ID_FALLBACK,
+            boss_contact_id=BOSS_CONTACT_ID_FALLBACK,
+        ),
+    )
+
+
 def _build_assistant_read(
     a: Assistant,
     session: Session,
@@ -224,6 +314,8 @@ def _build_assistant_read(
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
     space_ids: Optional[List[int]] = None,
+    self_contact_id: Optional[int] = None,
+    boss_contact_id: Optional[int] = None,
     contacts: Optional[list] = None,
     secrets: Optional[dict] = None,
     include_internal: bool = False,
@@ -263,6 +355,16 @@ def _build_assistant_read(
 
     if space_ids is None:
         space_ids = SpaceDAO(session).space_ids_for_assistant(a.agent_id)
+
+    if self_contact_id is None or boss_contact_id is None:
+        resolved_contact_ids = _resolved_contact_ids_for_assistants(
+            session,
+            [a.agent_id],
+        )[a.agent_id]
+        if self_contact_id is None:
+            self_contact_id = resolved_contact_ids.self_contact_id
+        if boss_contact_id is None:
+            boss_contact_id = resolved_contact_ids.boss_contact_id
 
     # Resolve contact fields from AssistantContact rows
     if contacts is None:
@@ -341,6 +443,8 @@ def _build_assistant_read(
         user_image=user_image,
         team_ids=team_ids,
         space_ids=space_ids,
+        self_contact_id=self_contact_id,
+        boss_contact_id=boss_contact_id,
         secrets=secrets,
         console_config=_build_console_config_read(a.console_config),
     )
@@ -986,6 +1090,10 @@ def list_assistants(
         space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
             [a.agent_id for a in assistants],
         )
+        contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            [a.agent_id for a in assistants],
+        )
 
         return InfoResponse(
             info=[
@@ -1007,6 +1115,14 @@ def list_assistants(
                     ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
                     space_ids=space_ids_by_assistant.get(a.agent_id, []),
+                    self_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id,
+                    boss_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id,
                 )
                 for a in assistants
             ],
@@ -5327,6 +5443,9 @@ def admin_list_all_assistants(
         skip_spaces = (
             requested_fields is not None and "space_ids" not in requested_fields
         )
+        skip_contact_ids = requested_fields is not None and not (
+            {"self_contact_id", "boss_contact_id"} & requested_fields
+        )
 
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
@@ -5362,6 +5481,12 @@ def admin_list_all_assistants(
             space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
                 [a.agent_id for a in assistants],
             )
+        contact_ids_by_assistant = {}
+        if not skip_contact_ids:
+            contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+                session,
+                [a.agent_id for a in assistants],
+            )
 
         # Build AssistantRead objects
         assistant_reads = [
@@ -5377,6 +5502,22 @@ def admin_list_all_assistants(
                 team_ids=[] if skip_teams else None,
                 space_ids=(
                     [] if skip_spaces else space_ids_by_assistant.get(a.agent_id, [])
+                ),
+                self_contact_id=(
+                    SELF_CONTACT_ID_FALLBACK
+                    if skip_contact_ids
+                    else _contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id
+                ),
+                boss_contact_id=(
+                    BOSS_CONTACT_ID_FALLBACK
+                    if skip_contact_ids
+                    else _contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id
                 ),
                 contacts=contacts_by_assistant.get(a.agent_id, []),
                 secrets=(
@@ -5592,6 +5733,10 @@ def admin_list_assistants_for_user(
         space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
             [a.agent_id for a in assistants],
         )
+        contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            [a.agent_id for a in assistants],
+        )
 
         return InfoResponse(
             info=[
@@ -5601,6 +5746,14 @@ def admin_list_assistants_for_user(
                     api_key=api_keys[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
                     space_ids=space_ids_by_assistant.get(a.agent_id, []),
+                    self_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id,
+                    boss_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id,
                     include_internal=True,
                 )
                 for i, a in enumerate(assistants)

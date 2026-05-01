@@ -397,6 +397,14 @@ class AssistantRead(AssistantCreate):
         default_factory=list,
         description="Sorted shared space IDs where the assistant is a live member.",
     )
+    self_contact_id: int = Field(
+        0,
+        description="Resolved Contacts row ID representing the assistant itself.",
+    )
+    boss_contact_id: int = Field(
+        1,
+        description="Resolved Contacts row ID representing the assistant owner.",
+    )
     secrets: Optional[Dict[str, str]] = Field(
         None,
         description="External service credentials (OAuth tokens, etc.). "
@@ -446,6 +454,8 @@ class AssistantRead(AssistantCreate):
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
                 "space_ids": [101, 205],
+                "self_contact_id": 42,
+                "boss_contact_id": 43,
                 "is_local": False,
                 "is_coordinator": False,
             },
