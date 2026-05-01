@@ -7,11 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.space_dao import (
-    SPACE_INVITE_STATUS_PENDING,
-    SPACE_STATUS_ACTIVE,
-    SpaceDAO,
-)
+from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SpaceDAO
+from orchestra.db.dao.space_invite_dao import SPACE_INVITE_STATUS_PENDING
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Space, SpaceInvite
 from orchestra.services.space_cleanup_service import (

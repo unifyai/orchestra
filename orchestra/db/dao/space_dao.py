@@ -8,6 +8,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dao.space_invite_dao import (
+    SPACE_INVITE_STATUS_ACCEPTED,
+    SPACE_INVITE_STATUS_CANCELLED,
+    SPACE_INVITE_STATUS_DECLINED,
+    SPACE_INVITE_STATUS_PENDING,
+)
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantSpaceMembership,
@@ -19,10 +25,6 @@ from orchestra.db.models.orchestra_models import (
 
 SPACE_STATUS_ACTIVE = "active"
 SPACE_STATUS_DELETING = "deleting"
-SPACE_INVITE_STATUS_PENDING = "pending"
-SPACE_INVITE_STATUS_ACCEPTED = "accepted"
-SPACE_INVITE_STATUS_DECLINED = "declined"
-SPACE_INVITE_STATUS_CANCELLED = "cancelled"
 
 
 class SpaceDAO:
