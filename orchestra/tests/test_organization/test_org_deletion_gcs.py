@@ -34,6 +34,12 @@ def mock_infra_and_bucket(request):
     ) as mock_assistant_cleanup, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings, patch(
+        "orchestra.web.api.organization.views.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_create_topic, patch(
+        "orchestra.web.api.organization.views.delete_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_delete_topic, patch(
         "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_org_cleanup, patch(
@@ -48,6 +54,8 @@ def mock_infra_and_bucket(request):
             "failed": 0,
             "errors": [],
         }
+        mock_create_topic.return_value = {"success": True}
+        mock_delete_topic.return_value = {"success": True}
         mock_org_cleanup.return_value = {
             "processed": 1,
             "completed": 1,
@@ -74,7 +82,7 @@ def mock_infra_and_bucket(request):
 
 
 @pytest.mark.anyio
-async def test_org_deletion_cleans_gcs_for_all_assistants(
+async def test_org_deletion_queues_cleanup_without_direct_assistant_gcs_calls(
     client: AsyncClient,
     dbsession,
     mock_infra_and_bucket,
