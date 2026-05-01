@@ -17,6 +17,7 @@ from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
+from orchestra.db.dao.space_invite_dao import SpaceInviteDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -1593,6 +1594,45 @@ def admin_cleanup_expired_invites(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to cleanup expired invites: {str(e)}",
+        )
+
+
+@router.post(
+    "/cleanup/expired-space-invites",
+    summary="Admin: Cleanup expired space invitations",
+    description="Transition all expired pending space invitations. "
+    "Called by scheduled cleanup job.",
+)
+def admin_cleanup_expired_space_invites(
+    session=Depends(get_db_session),
+) -> dict:
+    """Transition expired space invitations to their terminal status.
+
+    This endpoint is designed to be called by a scheduled job. It marks
+    pending invitations whose expiry timestamp is in the past as expired.
+
+    :param session: Database session.
+    :return: Count of transitioned invitations and timestamp.
+    """
+    invite_dao = SpaceInviteDAO(session)
+
+    try:
+        transitioned_count = invite_dao.expire_pending_invites()
+        session.commit()
+
+        return {
+            "transitioned_count": transitioned_count,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": (
+                f"Transitioned {transitioned_count} pending space-invite(s) "
+                "to expired"
+            ),
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cleanup expired space invites: {str(e)}",
         )
 
 
