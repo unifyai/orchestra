@@ -27,6 +27,10 @@ from sqlalchemy.orm import backref, relationship
 
 from orchestra.db.base import Base
 
+# ContactMembership has a `relationship` column, so keep a callable alias for
+# relationship() inside that class body.
+orm_relationship = relationship
+
 # Python 3.11 ships enum.StrEnum. – Provide a fallback for older versions
 try:
     from enum import StrEnum
@@ -700,6 +704,11 @@ class Space(Base):
         back_populates="space",
         passive_deletes=True,
     )
+    contact_memberships = relationship(
+        "ContactMembership",
+        back_populates="target_space",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("ix_spaces_organization_id", "organization_id"),
@@ -814,6 +823,119 @@ class SpaceInvite(Base):
             postgresql_where=text("status = 'pending'"),
         ),
         Index("ix_space_invites_invited_owner", "invited_owner_id"),
+    )
+
+
+CONTACT_MEMBERSHIP_SCOPE_PERSONAL = "personal"
+CONTACT_MEMBERSHIP_SCOPE_SPACE = "space"
+CONTACT_MEMBERSHIP_RELATIONSHIP_SELF = "self"
+CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS = "boss"
+CONTACT_MEMBERSHIP_RELATIONSHIP_COWORKER = "coworker"
+CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER = "other"
+
+
+class ContactMembership(Base):
+    """Assistant-specific relationship and policy metadata for a contact.
+
+    Contact rows live in personal or shared log-backed contexts. This table
+    stores the assistant-owned overlay that points at one contact id and names
+    the root where that contact id is meaningful.
+    """
+
+    __tablename__ = "contact_memberships"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    contact_id = Column(Integer, nullable=False)
+    target_scope = Column(Text, nullable=False)
+    target_space_id = Column(
+        BigInteger,
+        ForeignKey("spaces.space_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    relationship = Column(Text, nullable=False)
+    should_respond = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+    response_policy = Column(
+        Text,
+        nullable=False,
+        default="standard",
+        server_default="standard",
+    )
+    can_edit = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    assistant = orm_relationship("Assistant", back_populates="contact_memberships")
+    target_space = orm_relationship("Space", back_populates="contact_memberships")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "target_scope IN ('personal', 'space')",
+            name="ck_contact_memberships_target_scope",
+        ),
+        sa.CheckConstraint(
+            "target_scope NOT IN ('personal', 'space') OR ("
+            "target_scope = 'space' AND target_space_id IS NOT NULL"
+            ") OR ("
+            "target_scope = 'personal' AND target_space_id IS NULL"
+            ")",
+            name="ck_contact_memberships_scope_space_consistency",
+        ),
+        sa.CheckConstraint(
+            "relationship IN ('self', 'boss', 'coworker', 'other')",
+            name="ck_contact_memberships_relationship",
+        ),
+        Index("ix_contact_memberships_assistant_id", "assistant_id"),
+        Index(
+            "ix_contact_memberships_target_space_id",
+            "target_space_id",
+            postgresql_where=text("target_space_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_contact_memberships_assistant_space_target",
+            "assistant_id",
+            "target_space_id",
+            postgresql_where=text("target_scope = 'space'"),
+        ),
+        Index(
+            "ix_contact_memberships_assistant_personal_self",
+            "assistant_id",
+            postgresql_where=text(
+                "target_scope = 'personal' AND relationship = 'self'",
+            ),
+        ),
+        Index(
+            "ux_contact_memberships_personal_pair",
+            "assistant_id",
+            "contact_id",
+            unique=True,
+            postgresql_where=text("target_scope = 'personal'"),
+        ),
+        Index(
+            "ux_contact_memberships_space_pair",
+            "assistant_id",
+            "contact_id",
+            "target_space_id",
+            unique=True,
+            postgresql_where=text("target_scope = 'space'"),
+        ),
     )
 
 
@@ -1626,6 +1748,11 @@ class Assistant(Base):
     )
     space_memberships = relationship(
         "AssistantSpaceMembership",
+        back_populates="assistant",
+        passive_deletes=True,
+    )
+    contact_memberships = relationship(
+        "ContactMembership",
         back_populates="assistant",
         passive_deletes=True,
     )
