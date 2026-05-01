@@ -15,6 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -29,7 +30,12 @@ from orchestra.db.dao.shared_pool_dao import ConflictResolution
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Assistant, Recharge, RechargeStatus
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    Recharge,
+    RechargeStatus,
+    Space,
+)
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_specs_for_assistants,
@@ -43,6 +49,7 @@ from orchestra.services.coordinator_service import (
     create_organization_coordinator,
     pubsub_topic_response_failed,
 )
+from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     AdminOrganizationCreate,
@@ -539,9 +546,10 @@ async def delete_organization(
     """
     Delete an organization and enqueue durable runtime cleanup for its assistants.
 
-    The database deletion happens in one transaction. Runtime/contact cleanup is
-    attempted immediately after commit and retried later from the cleanup queue
-    if any external step times out or fails.
+    Space cleanup may commit partial progress before the organization row is
+    dropped. If a later cleanup step fails, the next delete retry resumes from
+    the remaining spaces. Runtime/contact cleanup is attempted after the space
+    cascade and retried later from the cleanup queue if external teardown fails.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
@@ -619,46 +627,59 @@ async def delete_organization(
     # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
 
-    org_assistants = (
-        session.query(Assistant)
-        .filter(Assistant.organization_id == organization_id)
-        .all()
-    )
-    org_cleanup_specs = build_cleanup_specs_for_assistants(session, org_assistants)
     cleanup_task_ids: list[int] = []
-
-    if org_cleanup_specs:
-        try:
-            contact_result = await deprovision_assistant_contacts(
-                session,
-                org_cleanup_specs,
-                soft_delete_successes=True,
-            )
-            if contact_result["errors"]:
-                logger.error(
-                    "Contact deprovision issues while deleting org %s: %s",
-                    organization_id,
-                    contact_result["errors"],
-                )
-        except Exception as e:
-            logger.error(
-                "Failed to deprovision contacts for org %s before deletion: %s",
-                organization_id,
-                e,
-                exc_info=True,
-            )
-
-        cleanup_task_ids = [
-            task.id
-            for task in enqueue_cleanup_tasks(
-                session,
-                org_cleanup_specs,
-                source_flow=CleanupSource.ORGANIZATION_DELETE,
-            )
-        ]
 
     # Delete organization (cascades to related tables)
     try:
+        org_space_ids = session.scalars(
+            select(Space.space_id)
+            .where(Space.organization_id == organization_id)
+            .order_by(Space.space_id.asc()),
+        ).all()
+        for space_id in org_space_ids:
+            await run_space_cleanup(
+                session,
+                space_id=space_id,
+                user_id=request_fastapi.state.user_id,
+            )
+
+        org_assistants = (
+            session.query(Assistant)
+            .filter(Assistant.organization_id == organization_id)
+            .all()
+        )
+        org_cleanup_specs = build_cleanup_specs_for_assistants(session, org_assistants)
+
+        if org_cleanup_specs:
+            try:
+                contact_result = await deprovision_assistant_contacts(
+                    session,
+                    org_cleanup_specs,
+                    soft_delete_successes=True,
+                )
+                if contact_result["errors"]:
+                    logger.error(
+                        "Contact deprovision issues while deleting org %s: %s",
+                        organization_id,
+                        contact_result["errors"],
+                    )
+            except Exception as e:
+                logger.error(
+                    "Failed to deprovision contacts for org %s before deletion: %s",
+                    organization_id,
+                    e,
+                    exc_info=True,
+                )
+
+            cleanup_task_ids = [
+                task.id
+                for task in enqueue_cleanup_tasks(
+                    session,
+                    org_cleanup_specs,
+                    source_flow=CleanupSource.ORGANIZATION_DELETE,
+                )
+            ]
+
         org_dao.delete(organization_id)
         session.commit()
     except Exception as e:
