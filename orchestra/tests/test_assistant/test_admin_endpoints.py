@@ -12,7 +12,13 @@ from httpx import AsyncClient
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra.db.models.orchestra_models import AssistantConsoleConfig
+from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    AssistantConsoleConfig,
+    ContactMembership,
+)
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
@@ -1210,6 +1216,170 @@ async def test_admin_list_assistants_fields_with_filter_combination(
 
     assert "agent_id" not in results[0], "agent_id was not requested in fields"
     assert "email" not in results[0], "email was not requested in fields"
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_projects_contact_ids_from_personal_memberships(
+    client: AsyncClient,
+    dbsession,
+):
+    """Assistant reads expose the resolved self and boss contact ids."""
+
+    owner = await create_test_user(
+        client,
+        "contact-ids-overlay@test.com",
+    )
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "ContactIds",
+            "surname": "Overlay",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    dbsession.add_all(
+        [
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=42,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            ),
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=43,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant?"
+        f"agent_id={agent_id}&from_fields=agent_id,self_contact_id,boss_contact_id",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == 200
+    assert admin_resp.json()["info"] == [
+        {
+            "agent_id": str(agent_id),
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_contact_ids_fallback_without_memberships(
+    client: AsyncClient,
+):
+    """Assistant reads use contact-id defaults when no overlay exists."""
+
+    owner = await create_test_user(
+        client,
+        "contact-ids-fallback@test.com",
+    )
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "ContactIds",
+            "surname": "Fallback",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant?"
+        f"agent_id={agent_id}&from_fields=agent_id,self_contact_id,boss_contact_id",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == 200
+    assert admin_resp.json()["info"] == [
+        {
+            "agent_id": agent_id,
+            "self_contact_id": 0,
+            "boss_contact_id": 1,
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_contact_ids_tolerates_duplicate_personal_relationships(
+    client: AsyncClient,
+    dbsession,
+):
+    """Assistant reads choose the earliest personal relationship row."""
+
+    owner = await create_test_user(
+        client,
+        "contact-ids-duplicate@test.com",
+    )
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "ContactIds",
+            "surname": "Duplicate",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    dbsession.add_all(
+        [
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=42,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            ),
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=44,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            ),
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=43,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            ),
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=45,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant?"
+        f"agent_id={agent_id}&from_fields=agent_id,self_contact_id,boss_contact_id",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == 200
+    assert admin_resp.json()["info"] == [
+        {
+            "agent_id": str(agent_id),
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
+        },
+    ]
 
 
 @pytest.mark.anyio
