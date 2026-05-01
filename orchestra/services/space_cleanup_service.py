@@ -6,11 +6,11 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from orchestra_core.db.dao.context_dao import ContextDAO
 from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SPACE_STATUS_DELETING
 from orchestra.db.models.orchestra_models import (
@@ -234,7 +234,7 @@ def _purge_shared_space_contexts(session: Session, *, space_id: int) -> None:
 
     context_dao = ContextDAO(session)
     for context in _shared_space_contexts(session, space_id=space_id):
-        context_dao.delete(context.id, commit=False)
+        context_dao.delete(context.id)
 
 
 def _drop_space_rows(session: Session, *, space_id: int) -> None:
