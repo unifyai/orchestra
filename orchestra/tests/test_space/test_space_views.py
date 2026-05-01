@@ -8,8 +8,11 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    CONTACT_MEMBERSHIP_SCOPE_SPACE,
     Assistant,
     AssistantSpaceMembership,
+    ContactMembership,
     Space,
     SpaceInvite,
 )
@@ -200,6 +203,82 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
     assert [space["space_id"] for space in summaries.json()] == [
         first_space["space_id"],
     ]
+
+
+@pytest.mark.anyio
+async def test_remove_space_member_cleans_space_contact_overlays(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Direct member removal drops only overlays owned by that membership."""
+    owner = await create_test_user(client, "space-member-remove@test.com")
+    assistant = _make_assistant(dbsession, owner_id=owner["id"])
+    removed_space = await _create_space(client, owner["headers"], name="Removed")
+    retained_space = await _create_space(client, owner["headers"], name="Retained")
+    for space in (removed_space, retained_space):
+        add_member = await client.post(
+            f"/v0/spaces/{space['space_id']}/members",
+            headers=owner["headers"],
+            json={"assistant_id": assistant.agent_id},
+        )
+        assert add_member.status_code == status.HTTP_201_CREATED, add_member.json()
+    dbsession.add_all(
+        [
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                contact_id=1,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                target_space_id=removed_space["space_id"],
+                relationship="coworker",
+            ),
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                contact_id=2,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                target_space_id=retained_space["space_id"],
+                relationship="coworker",
+            ),
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                contact_id=3,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship="self",
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    response = await client.delete(
+        f"/v0/spaces/{removed_space['space_id']}/members/{assistant.agent_id}",
+        headers=owner["headers"],
+    )
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT, response.text
+    remaining = (
+        dbsession.query(ContactMembership.contact_id)
+        .filter(ContactMembership.assistant_id == assistant.agent_id)
+        .order_by(ContactMembership.contact_id)
+        .all()
+    )
+    assert [contact_id for (contact_id,) in remaining] == [2, 3]
+    assert (
+        dbsession.query(AssistantSpaceMembership)
+        .filter(
+            AssistantSpaceMembership.assistant_id == assistant.agent_id,
+            AssistantSpaceMembership.space_id == removed_space["space_id"],
+        )
+        .one_or_none()
+        is None
+    )
+    assert (
+        dbsession.query(AssistantSpaceMembership)
+        .filter(
+            AssistantSpaceMembership.assistant_id == assistant.agent_id,
+            AssistantSpaceMembership.space_id == retained_space["space_id"],
+        )
+        .one_or_none()
+        is not None
+    )
 
 
 @pytest.mark.anyio
