@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -250,3 +251,20 @@ async def test_cleanup_expired_space_invites_endpoint_is_admin_only_and_idempote
     assert second_response.json()["message"] == (
         "Transitioned 0 pending space-invite(s) to expired"
     )
+
+
+def test_expired_space_invites_workflow_calls_admin_cleanup_endpoint() -> None:
+    """The scheduled workflow points at the admin cleanup route."""
+
+    workflow_path = (
+        Path(__file__).resolve().parents[3]
+        / ".github"
+        / "workflows"
+        / "cleanup-expired-space-invites.yml"
+    )
+
+    workflow = workflow_path.read_text()
+
+    assert "/v0/admin/cleanup/expired-space-invites" in workflow
+    assert "secrets.ORCHESTRA_ADMIN_KEY" in workflow
+    assert "# schedule:" in workflow
