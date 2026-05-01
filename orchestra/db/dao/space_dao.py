@@ -174,21 +174,6 @@ class SpaceDAO:
         self.session.flush()
         return membership
 
-    def remove_membership(
-        self,
-        *,
-        space_id: int,
-        assistant_id: int,
-    ) -> bool:
-        """Remove a live assistant membership if present."""
-
-        membership = self.get_membership(space_id=space_id, assistant_id=assistant_id)
-        if membership is None:
-            return False
-        self.session.delete(membership)
-        self.session.flush()
-        return True
-
     def list_members(
         self,
         space_id: int,

@@ -18,6 +18,9 @@ from orchestra.services.space_cleanup_service import (
     SpaceCleanupNotFoundError,
 )
 from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
+from orchestra.services.space_cleanup_service import (
+    purge_assistant_overlay as purge_space_member_overlay,
+)
 from orchestra.settings import settings
 from orchestra.web.api.space.schema import (
     SpaceCreate,
@@ -381,7 +384,7 @@ def add_space_member(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["Spaces"],
 )
-def remove_space_member(
+async def remove_space_member(
     request: Request,
     space_id: int,
     assistant_id: int,
@@ -393,14 +396,25 @@ def remove_space_member(
     space = _get_space_or_404(space_dao, space_id)
     _require_space_mutation(space_dao, request.state.user_id, space)
     _require_active_space(space)
-    removed = space_dao.remove_membership(
+    membership = space_dao.get_membership(
         space_id=space_id,
         assistant_id=assistant_id,
     )
-    if not removed:
+    if membership is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Membership not found.",
+        )
+    try:
+        await purge_space_member_overlay(
+            session,
+            assistant_id=assistant_id,
+            space_id=space_id,
+        )
+    except SpaceCleanupFailure as exc:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"phase": exc.phase, "reason": exc.reason},
         )
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

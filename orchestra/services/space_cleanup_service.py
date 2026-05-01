@@ -14,8 +14,10 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SPACE_STATUS_DELETING
 from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_SCOPE_SPACE,
     Assistant,
     AssistantSpaceMembership,
+    ContactMembership,
     Context,
     LogEvent,
     LogEventContext,
@@ -250,6 +252,24 @@ def _drop_space_rows(session: Session, *, space_id: int) -> None:
     session.flush()
 
 
+def _drop_contact_memberships_for_space(
+    session: Session,
+    *,
+    assistant_id: int,
+    space_id: int,
+) -> None:
+    """Delete assistant-owned contact metadata scoped to one space."""
+
+    session.execute(
+        delete(ContactMembership).where(
+            ContactMembership.assistant_id == assistant_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id == space_id,
+        ),
+    )
+    session.flush()
+
+
 async def delete_space(session: Session, *, space_id: int, user_id: str) -> None:
     """Delete a space through the ordered shared-space cascade."""
 
@@ -312,6 +332,12 @@ async def purge_assistant_overlay(
             )
         except Exception as exc:
             raise SpaceCleanupFailure(phase=2, reason=str(exc)) from exc
+
+    _drop_contact_memberships_for_space(
+        session,
+        assistant_id=assistant_id,
+        space_id=space_id,
+    )
 
     if remove_membership:
         session.execute(
