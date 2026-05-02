@@ -6,7 +6,7 @@ import math
 import time
 import urllib.request
 from decimal import Decimal
-from typing import Any, List, NamedTuple, Optional
+from typing import Any, List, Literal, NamedTuple, Optional
 
 import mutagen
 from fastapi import (
@@ -23,7 +23,8 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -47,9 +48,11 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    CONTACT_MEMBERSHIP_SCOPE_SPACE,
     Assistant,
     AssistantCleanupTask,
     AssistantConsoleConfig,
+    AssistantSpaceMembership,
     ContactMembership,
     Context,
     DemoAssistantMeta,
@@ -58,6 +61,7 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
+    Space,
     User,
 )
 from orchestra.lib.billing import get_billing_entity
@@ -100,6 +104,10 @@ from orchestra.web.api.assistant.schema import (
     ConnectResponse,
     ConsoleConfigRead,
     Contact,
+    ContactMembershipCreate,
+    ContactMembershipDeleteResponse,
+    ContactMembershipRead,
+    ContactMembershipUpsertResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
@@ -5070,6 +5078,195 @@ async def admin_get_assistant_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get assistant status: {str(e)}",
         )
+
+
+def _contact_membership_read(row: ContactMembership) -> ContactMembershipRead:
+    """Serialize a contact-membership ORM row for admin responses."""
+
+    return ContactMembershipRead(
+        id=int(row.id),
+        assistant_id=int(row.assistant_id),
+        contact_id=int(row.contact_id),
+        target_scope=str(row.target_scope),
+        target_space_id=(
+            int(row.target_space_id) if row.target_space_id is not None else None
+        ),
+        relationship=str(row.relationship),
+        should_respond=bool(row.should_respond),
+        response_policy=str(row.response_policy),
+        can_edit=bool(row.can_edit),
+        created_at=row.created_at,
+    )
+
+
+def _select_contact_membership(
+    session: Session,
+    *,
+    assistant_id: int,
+    contact_id: int,
+    target_scope: str,
+    target_space_id: int | None,
+) -> ContactMembership | None:
+    query = session.query(ContactMembership).filter(
+        ContactMembership.assistant_id == assistant_id,
+        ContactMembership.contact_id == contact_id,
+        ContactMembership.target_scope == target_scope,
+    )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        query = query.filter(ContactMembership.target_space_id.is_(None))
+    else:
+        query = query.filter(ContactMembership.target_space_id == target_space_id)
+    return query.order_by(ContactMembership.id).first()
+
+
+@admin_router.post(
+    "/assistant/{assistant_id}/contact-memberships",
+    response_model=InfoResponse[ContactMembershipUpsertResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: create contact membership",
+    tags=["Assistants", "Admin"],
+)
+def admin_create_contact_membership(
+    assistant_id: int,
+    request_body: ContactMembershipCreate,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ContactMembershipUpsertResponse]:
+    """Create an assistant-owned contact relationship overlay idempotently."""
+
+    assistant = session.get(Assistant, assistant_id)
+    if assistant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE:
+        membership = (
+            session.query(AssistantSpaceMembership)
+            .join(Space, Space.space_id == AssistantSpaceMembership.space_id)
+            .filter(
+                AssistantSpaceMembership.assistant_id == assistant_id,
+                AssistantSpaceMembership.space_id == request_body.target_space_id,
+                Space.status == "active",
+            )
+            .first()
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant is not a live member of the target space.",
+            )
+
+    values = {
+        "assistant_id": assistant_id,
+        "contact_id": request_body.contact_id,
+        "target_scope": request_body.target_scope,
+        "target_space_id": request_body.target_space_id,
+        "relationship": request_body.relationship,
+        "should_respond": request_body.should_respond,
+        "response_policy": request_body.response_policy,
+        "can_edit": request_body.can_edit,
+    }
+    insert_stmt = postgres_insert(ContactMembership).values(**values)
+    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=[
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+            ],
+            index_where=(
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
+            ),
+        )
+    else:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=[
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+                ContactMembership.target_space_id,
+            ],
+            index_where=(
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE
+            ),
+        )
+    inserted_id = session.execute(
+        insert_stmt.returning(ContactMembership.id),
+    ).scalar_one_or_none()
+    session.flush()
+
+    row = None
+    created = inserted_id is not None
+    if inserted_id is not None:
+        row = session.get(ContactMembership, inserted_id)
+    if row is None:
+        row = _select_contact_membership(
+            session,
+            assistant_id=assistant_id,
+            contact_id=request_body.contact_id,
+            target_scope=request_body.target_scope,
+            target_space_id=request_body.target_space_id,
+        )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Contact membership could not be resolved after insert.",
+        )
+    session.commit()
+    return InfoResponse(
+        info=ContactMembershipUpsertResponse(
+            membership=_contact_membership_read(row),
+            created=created,
+        ),
+    )
+
+
+@admin_router.delete(
+    "/assistant/{assistant_id}/contact-memberships/{contact_id}",
+    response_model=InfoResponse[ContactMembershipDeleteResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: delete contact memberships",
+    tags=["Assistants", "Admin"],
+)
+def admin_delete_contact_memberships(
+    assistant_id: int,
+    contact_id: int,
+    target_scope: Literal["personal", "space"] = Query(...),
+    target_space_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ContactMembershipDeleteResponse]:
+    """Delete the relationship overlay for one assistant/contact target."""
+
+    if (
+        target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
+        and target_space_id is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="personal contact memberships cannot include target_space_id",
+        )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE and target_space_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="space contact memberships require target_space_id",
+        )
+
+    stmt = delete(ContactMembership).where(
+        ContactMembership.assistant_id == assistant_id,
+        ContactMembership.contact_id == contact_id,
+        ContactMembership.target_scope == target_scope,
+    )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        stmt = stmt.where(ContactMembership.target_space_id.is_(None))
+    else:
+        stmt = stmt.where(ContactMembership.target_space_id == target_space_id)
+
+    result = session.execute(
+        stmt,
+    )
+    session.commit()
+    return InfoResponse(
+        info=ContactMembershipDeleteResponse(deleted=int(result.rowcount or 0)),
+    )
 
 
 @admin_router.post(

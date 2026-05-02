@@ -1681,6 +1681,74 @@ class AdminUpdateUserByAssistantResponse(BaseModel):
     )
 
 
+class ContactMembershipCreate(BaseModel):
+    """Admin request for an assistant contact relationship overlay."""
+
+    contact_id: int = Field(..., description="Contact row id within the target root.")
+    target_scope: Literal["personal", "space"] = Field(
+        ...,
+        description="Whether the contact id points at personal contacts or a space root.",
+    )
+    target_space_id: Optional[int] = Field(
+        None,
+        description="Space id when target_scope is 'space'.",
+    )
+    relationship: Literal["self", "boss", "coworker", "other"] = Field(
+        ...,
+        description="Assistant-specific relationship to the contact.",
+    )
+    should_respond: bool = Field(
+        True,
+        description="Whether the assistant should respond to this contact.",
+    )
+    response_policy: str = Field(
+        "standard",
+        description="Policy text or slug used by the runtime when responding.",
+    )
+    can_edit: bool = Field(
+        False,
+        description="Whether the assistant can edit the contact's shared facts.",
+    )
+
+    @model_validator(mode="after")
+    def validate_target_polarity(self) -> "ContactMembershipCreate":
+        if self.target_scope == "personal" and self.target_space_id is not None:
+            raise ValueError(
+                "personal contact memberships cannot include target_space_id",
+            )
+        if self.target_scope == "space" and self.target_space_id is None:
+            raise ValueError("space contact memberships require target_space_id")
+        return self
+
+
+class ContactMembershipRead(BaseModel):
+    """Admin response shape for an assistant contact relationship overlay."""
+
+    id: int
+    assistant_id: int
+    contact_id: int
+    target_scope: str
+    target_space_id: Optional[int]
+    relationship: str
+    should_respond: bool
+    response_policy: str
+    can_edit: bool
+    created_at: datetime
+
+
+class ContactMembershipUpsertResponse(BaseModel):
+    """Admin response for idempotent contact-membership creation."""
+
+    membership: ContactMembershipRead
+    created: bool
+
+
+class ContactMembershipDeleteResponse(BaseModel):
+    """Admin response for deleting contact relationship overlays."""
+
+    deleted: int
+
+
 class AdminUpdateAssistant(BaseModel):
     """
     Admin schema for updating assistant details directly.
