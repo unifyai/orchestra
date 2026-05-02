@@ -72,6 +72,7 @@ def _make_space(
 ) -> Space:
     space = Space(
         name=f"Shared Memory {suffix}",
+        description=f"Shared memory workspace for {suffix} tests.",
         owner_user_id=owner.id,
         organization_id=organization.id if organization else None,
     )
@@ -159,10 +160,32 @@ def test_space_name_check_constraint_rejects_invalid_lengths(
 ) -> None:
     """Space names must be present and short enough for display surfaces."""
     owner = _make_user(dbsession, f"space-name-{len(name)}")
-    space = Space(name=name, owner_user_id=owner.id)
+    space = Space(
+        name=name,
+        description="Valid description for invalid name constraint tests.",
+        owner_user_id=owner.id,
+    )
     dbsession.add(space)
 
     with pytest.raises(IntegrityError, match="ck_spaces_name_length"):
+        dbsession.flush()
+
+
+@pytest.mark.parametrize("description", ["short", "x" * 1001])
+def test_space_description_check_constraint_rejects_invalid_lengths(
+    dbsession: Session,
+    description: str,
+) -> None:
+    """Space descriptions stay within the prompt context budget."""
+    owner = _make_user(dbsession, f"space-description-{len(description)}")
+    space = Space(
+        name="Description constraint",
+        description=description,
+        owner_user_id=owner.id,
+    )
+    dbsession.add(space)
+
+    with pytest.raises(IntegrityError, match="ck_spaces_description_length"):
         dbsession.flush()
 
 
@@ -171,7 +194,12 @@ def test_space_status_check_constraint_rejects_unknown_status(
 ) -> None:
     """Unknown space lifecycle states are rejected at the database boundary."""
     owner = _make_user(dbsession, "space-status-invalid")
-    space = Space(name="Invalid status", owner_user_id=owner.id, status="archived")
+    space = Space(
+        name="Invalid status",
+        description="Valid description for invalid status constraint tests.",
+        owner_user_id=owner.id,
+        status="archived",
+    )
     dbsession.add(space)
 
     with pytest.raises(IntegrityError, match="ck_spaces_status"):
