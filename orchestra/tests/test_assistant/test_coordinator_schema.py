@@ -63,6 +63,7 @@ def _make_space(
 ) -> Space:
     space = Space(
         name=f"Coordinator Space {suffix}",
+        description=f"Coordinator space workspace for {suffix} tests.",
         owner_user_id=owner.id,
         organization_id=organization.id if organization else None,
     )
@@ -117,6 +118,7 @@ def test_space_kind_defaults_to_team_and_limits_org_default_to_one_per_org(
 
     duplicate_default = Space(
         name="Duplicate default",
+        description="Duplicate default workspace for constraint tests.",
         owner_user_id=owner.id,
         organization_id=organization.id,
         kind="org_default",
@@ -131,6 +133,7 @@ def test_space_kind_rejects_unknown_values(dbsession: Session) -> None:
     owner = _make_user(dbsession, "invalid-kind")
     space = Space(
         name="Archived Space",
+        description="Archived space workspace for invalid kind tests.",
         owner_user_id=owner.id,
         kind="archived",
     )

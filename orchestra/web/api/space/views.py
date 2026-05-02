@@ -21,6 +21,10 @@ from orchestra.services.space_cleanup_service import delete_space as run_space_c
 from orchestra.services.space_cleanup_service import (
     purge_assistant_overlay as purge_space_member_overlay,
 )
+from orchestra.services.space_membership_refresh_service import (
+    membership_refresh_payloads,
+    publish_membership_refreshes_best_effort,
+)
 from orchestra.settings import settings
 from orchestra.web.api.space.schema import (
     SpaceCreate,
@@ -263,7 +267,7 @@ def get_space(
     status_code=status.HTTP_200_OK,
     tags=["Spaces"],
 )
-def update_space(
+async def update_space(
     request: Request,
     space_id: int,
     body: SpaceUpdate,
@@ -280,7 +284,14 @@ def update_space(
         name=body.name,
         description=body.description,
     )
+    refresh_payloads = []
+    if body.name is not None or body.description is not None:
+        refresh_payloads = membership_refresh_payloads(
+            session,
+            [assistant for _, assistant in space_dao.list_members(space_id)],
+        )
     session.commit()
+    await publish_membership_refreshes_best_effort(refresh_payloads)
     return _space_read(updated_space)
 
 
@@ -331,7 +342,7 @@ async def delete_space(
     status_code=status.HTTP_201_CREATED,
     tags=["Spaces"],
 )
-def add_space_member(
+async def add_space_member(
     request: Request,
     space_id: int,
     body: SpaceMemberCreate,
@@ -357,7 +368,9 @@ def add_space_member(
 
     if space_dao.should_add_directly(user_id=user_id, space=space, assistant=assistant):
         space_dao.add_membership(space=space, assistant=assistant, added_by=user_id)
+        refresh_payloads = membership_refresh_payloads(session, [assistant])
         session.commit()
+        await publish_membership_refreshes_best_effort(refresh_payloads)
         return _membership_response(
             membership_status=SpaceMembershipStatus.active,
             assistant_id=assistant.agent_id,
@@ -416,7 +429,10 @@ async def remove_space_member(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"phase": exc.phase, "reason": exc.reason},
         )
+    assistant = _get_assistant_or_404(space_dao, assistant_id)
+    refresh_payloads = membership_refresh_payloads(session, [assistant])
     session.commit()
+    await publish_membership_refreshes_best_effort(refresh_payloads)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -554,7 +570,7 @@ def list_pending_space_invites(
     status_code=status.HTTP_200_OK,
     tags=["Spaces"],
 )
-def accept_space_invite(
+async def accept_space_invite(
     request: Request,
     invite_id: int,
     session: Session = Depends(get_db_session),
@@ -576,7 +592,10 @@ def accept_space_invite(
     _require_pending_invite(invite)
     _require_unexpired_invite(invite)
     space_dao.accept_invite(invite)
+    assistant = _get_assistant_or_404(space_dao, invite.assistant_id)
+    refresh_payloads = membership_refresh_payloads(session, [assistant])
     session.commit()
+    await publish_membership_refreshes_best_effort(refresh_payloads)
     return SpaceInviteDecision(status="accepted")
 
 

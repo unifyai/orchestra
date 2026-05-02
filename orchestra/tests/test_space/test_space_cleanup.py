@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 from fastapi import status
@@ -17,7 +20,11 @@ from orchestra.db.models.orchestra_models import (
     Project,
     Space,
 )
-from orchestra.services import space_cleanup_service, task_machine_state_service
+from orchestra.services import (
+    space_cleanup_service,
+    space_membership_refresh_service,
+    task_machine_state_service,
+)
 from orchestra.tests.utils import create_test_user
 
 
@@ -78,7 +85,10 @@ async def _create_space(client: AsyncClient, headers: dict, name: str) -> dict:
     response = await client.post(
         "/v0/spaces",
         headers=headers,
-        json={"name": name, "description": f"{name} workspace"},
+        json={
+            "name": name,
+            "description": f"{name} shared workspace for cleanup tests",
+        },
     )
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     return response.json()
@@ -163,11 +173,25 @@ def comms_client(monkeypatch):
     return client
 
 
+@pytest.fixture(autouse=True)
+def reawaken_assistant_mock(monkeypatch) -> AsyncMock:
+    """Prevent cleanup tests from calling live assistant-update webhooks."""
+
+    mock = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(
+        space_membership_refresh_service,
+        "reawaken_assistant",
+        mock,
+    )
+    return mock
+
+
 @pytest.mark.anyio
 async def test_delete_space_cascades_shared_contexts_and_space_rows(
     client: AsyncClient,
     dbsession: Session,
     comms_client: _CommsClient,
+    reawaken_assistant_mock: AsyncMock,
 ) -> None:
     """Deleting a space cancels deliveries and removes only shared roots."""
 
@@ -186,6 +210,7 @@ async def test_delete_space_cascades_shared_contexts_and_space_rows(
             json={"assistant_id": assistant.agent_id},
         )
         assert add_member.status_code == status.HTTP_201_CREATED, add_member.json()
+    reawaken_assistant_mock.reset_mock()
 
     project = _ensure_assistants_project(dbsession, owner_id=owner["id"])
     _add_context_log(
@@ -221,6 +246,22 @@ async def test_delete_space_cascades_shared_contexts_and_space_rows(
     assert [request["json"]["task_id"] for request in comms_client.requests] == [
         101,
         202,
+    ]
+    assert [
+        call.kwargs["data"] for call in reawaken_assistant_mock.await_args_list
+    ] == [
+        {
+            "assistant_id": str(first_assistant.agent_id),
+            "space_ids": json.dumps([]),
+            "space_summaries": json.dumps([]),
+            "update_kind": "membership",
+        },
+        {
+            "assistant_id": str(second_assistant.agent_id),
+            "space_ids": json.dumps([]),
+            "space_summaries": json.dumps([]),
+            "update_kind": "membership",
+        },
     ]
     assert (
         dbsession.query(Context)
