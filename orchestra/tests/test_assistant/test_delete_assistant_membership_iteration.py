@@ -17,7 +17,11 @@ from orchestra.db.models.orchestra_models import (
     Project,
     Space,
 )
-from orchestra.services import space_cleanup_service, task_machine_state_service
+from orchestra.services import (
+    space_cleanup_service,
+    space_membership_refresh_service,
+    task_machine_state_service,
+)
 from orchestra.tests.utils import create_test_user
 
 
@@ -77,7 +81,11 @@ def _make_space_membership(
     assistant: Assistant,
     name: str,
 ) -> Space:
-    space = Space(name=name, owner_user_id=owner_id)
+    space = Space(
+        name=name,
+        description=f"{name} assistant deletion membership workspace.",
+        owner_user_id=owner_id,
+    )
     dbsession.add(space)
     dbsession.flush()
     dbsession.add(
@@ -158,7 +166,11 @@ def membership_update(monkeypatch):
         )
         return {"success": True}
 
-    monkeypatch.setattr(space_cleanup_service, "reawaken_assistant", _publish)
+    monkeypatch.setattr(
+        space_membership_refresh_service,
+        "reawaken_assistant",
+        _publish,
+    )
     return calls
 
 
@@ -243,6 +255,7 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
             "data": {
                 "assistant_id": str(assistant_id),
                 "space_ids": "[]",
+                "space_summaries": "[]",
                 "update_kind": "membership",
             },
         },

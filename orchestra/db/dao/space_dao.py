@@ -39,7 +39,7 @@ class SpaceDAO:
         *,
         name: str,
         owner_user_id: str,
-        description: Optional[str] = None,
+        description: str,
         organization_id: Optional[int] = None,
     ) -> Space:
         """Create a space owned by ``owner_user_id``."""
@@ -256,6 +256,58 @@ class SpaceDAO:
         memberships: dict[int, list[int]] = {assistant_id: [] for assistant_id in ids}
         for assistant_id, space_id in rows:
             memberships.setdefault(int(assistant_id), []).append(int(space_id))
+        return memberships
+
+    def space_summaries_for_assistant(
+        self,
+        assistant_id: int,
+    ) -> list[dict[str, int | str]]:
+        """Return sorted live space summaries for an assistant."""
+
+        return self.space_summaries_for_assistants([assistant_id]).get(
+            assistant_id,
+            [],
+        )
+
+    def space_summaries_for_assistants(
+        self,
+        assistant_ids: Iterable[int],
+    ) -> dict[int, list[dict[str, int | str]]]:
+        """Return sorted live space summaries keyed by assistant id."""
+
+        ids = list(assistant_ids)
+        if not ids:
+            return {}
+        rows = (
+            self.session.query(
+                AssistantSpaceMembership.assistant_id,
+                Space.space_id,
+                Space.name,
+                Space.description,
+            )
+            .join(
+                Space,
+                Space.space_id == AssistantSpaceMembership.space_id,
+            )
+            .filter(AssistantSpaceMembership.assistant_id.in_(ids))
+            .filter(Space.status == SPACE_STATUS_ACTIVE)
+            .order_by(
+                AssistantSpaceMembership.assistant_id.asc(),
+                Space.space_id.asc(),
+            )
+            .all()
+        )
+        memberships: dict[int, list[dict[str, int | str]]] = {
+            assistant_id: [] for assistant_id in ids
+        }
+        for assistant_id, space_id, name, description in rows:
+            memberships.setdefault(int(assistant_id), []).append(
+                {
+                    "space_id": int(space_id),
+                    "name": str(name),
+                    "description": str(description),
+                },
+            )
         return memberships
 
     def should_add_directly(

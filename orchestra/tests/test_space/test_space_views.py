@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient
@@ -57,6 +60,18 @@ async def _create_space(
     return response.json()
 
 
+@pytest.fixture(autouse=True)
+def reawaken_assistant_mock(monkeypatch) -> AsyncMock:
+    """Prevent space membership tests from calling live Communication services."""
+
+    mock = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(
+        "orchestra.services.space_membership_refresh_service.reawaken_assistant",
+        mock,
+    )
+    return mock
+
+
 @pytest.mark.anyio
 async def test_space_crud_returns_space_shape_without_membership_status(
     client: AsyncClient,
@@ -90,11 +105,17 @@ async def test_space_crud_returns_space_shape_without_membership_status(
     patched = await client.patch(
         f"/v0/spaces/{created['space_id']}",
         headers=owner["headers"],
-        json={"name": "Personal Dispatch", "description": "Updated"},
+        json={
+            "name": "Personal Dispatch",
+            "description": "Personal dispatch workstream for customer operations.",
+        },
     )
     assert patched.status_code == status.HTTP_200_OK, patched.json()
     assert patched.json()["name"] == "Personal Dispatch"
-    assert patched.json()["description"] == "Updated"
+    assert (
+        patched.json()["description"]
+        == "Personal dispatch workstream for customer operations."
+    )
 
     deleted = await client.delete(
         f"/v0/spaces/{created['space_id']}",
@@ -104,9 +125,95 @@ async def test_space_crud_returns_space_shape_without_membership_status(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "description",
+    [
+        "too short",
+        "x" * 1001,
+        "." * 20,
+        "a" * 20,
+        "Placeholder description for space Example",
+    ],
+)
+async def test_create_rejects_unhelpful_space_descriptions(
+    client: AsyncClient,
+    description: str,
+) -> None:
+    """Space creation requires descriptions that help assistants route memory."""
+
+    owner = await create_test_user(client, "space-description-invalid@test.com")
+
+    response = await client.post(
+        "/v0/spaces",
+        headers=owner["headers"],
+        json={
+            "name": "Description Guard",
+            "description": description,
+            "organization_id": None,
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_update_accepts_meaningful_space_description(
+    client: AsyncClient,
+    dbsession: Session,
+    reawaken_assistant_mock: AsyncMock,
+) -> None:
+    """Patch validation uses the same meaningful-description contract."""
+
+    owner = await create_test_user(client, "space-description-valid@test.com")
+    assistant = _make_assistant(dbsession, owner_id=owner["id"])
+    created = await _create_space(
+        client,
+        owner["headers"],
+        name="Description Valid",
+    )
+    add_member = await client.post(
+        f"/v0/spaces/{created['space_id']}/members",
+        headers=owner["headers"],
+        json={"assistant_id": assistant.agent_id},
+    )
+    assert add_member.status_code == status.HTTP_201_CREATED, add_member.json()
+    reawaken_assistant_mock.reset_mock()
+
+    response = await client.patch(
+        f"/v0/spaces/{created['space_id']}",
+        headers=owner["headers"],
+        json={
+            "description": "Meaningful project workspace for support operations.",
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert (
+        response.json()["description"]
+        == "Meaningful project workspace for support operations."
+    )
+    reawaken_assistant_mock.assert_awaited_once()
+    assert reawaken_assistant_mock.await_args.kwargs["data"] == {
+        "assistant_id": str(assistant.agent_id),
+        "space_ids": json.dumps([created["space_id"]]),
+        "space_summaries": json.dumps(
+            [
+                {
+                    "space_id": created["space_id"],
+                    "name": "Description Valid",
+                    "description": "Meaningful project workspace for support operations.",
+                },
+            ],
+        ),
+        "update_kind": "membership",
+    }
+
+
+@pytest.mark.anyio
 async def test_same_owner_member_add_projects_sorted_space_ids(
     client: AsyncClient,
     dbsession: Session,
+    reawaken_assistant_mock: AsyncMock,
 ) -> None:
     """Live memberships immediately appear as sorted assistant space ids."""
 
@@ -130,6 +237,26 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
     )
     assert add_first.status_code == status.HTTP_201_CREATED, add_first.json()
     assert add_first.json()["membership_status"] == "active"
+    assert reawaken_assistant_mock.await_count == 2
+    assert reawaken_assistant_mock.await_args.kwargs["data"] == {
+        "assistant_id": str(assistant.agent_id),
+        "space_ids": json.dumps([first_space["space_id"], second_space["space_id"]]),
+        "space_summaries": json.dumps(
+            [
+                {
+                    "space_id": first_space["space_id"],
+                    "name": "Alpha",
+                    "description": "Alpha shared workspace",
+                },
+                {
+                    "space_id": second_space["space_id"],
+                    "name": "Beta",
+                    "description": "Beta shared workspace",
+                },
+            ],
+        ),
+        "update_kind": "membership",
+    }
 
     memberships = (
         dbsession.query(AssistantSpaceMembership)
@@ -150,9 +277,22 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
         first_space["space_id"],
         second_space["space_id"],
     ]
+    assert public_read.json()["info"][0]["space_summaries"] == [
+        {
+            "space_id": first_space["space_id"],
+            "name": "Alpha",
+            "description": "Alpha shared workspace",
+        },
+        {
+            "space_id": second_space["space_id"],
+            "name": "Beta",
+            "description": "Beta shared workspace",
+        },
+    ]
 
     admin_read = await client.get(
-        f"/v0/admin/assistant?agent_id={assistant.agent_id}&from_fields=agent_id,space_ids",
+        f"/v0/admin/assistant?agent_id={assistant.agent_id}"
+        "&from_fields=agent_id,space_ids,space_summaries",
         headers=ADMIN_HEADERS,
     )
     assert admin_read.status_code == status.HTTP_200_OK, admin_read.json()
@@ -160,6 +300,18 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
         {
             "agent_id": str(assistant.agent_id),
             "space_ids": [first_space["space_id"], second_space["space_id"]],
+            "space_summaries": [
+                {
+                    "space_id": first_space["space_id"],
+                    "name": "Alpha",
+                    "description": "Alpha shared workspace",
+                },
+                {
+                    "space_id": second_space["space_id"],
+                    "name": "Beta",
+                    "description": "Beta shared workspace",
+                },
+            ],
         },
     ]
 
@@ -182,9 +334,17 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
     )
     assert public_read.status_code == status.HTTP_200_OK, public_read.json()
     assert public_read.json()["info"][0]["space_ids"] == [first_space["space_id"]]
+    assert public_read.json()["info"][0]["space_summaries"] == [
+        {
+            "space_id": first_space["space_id"],
+            "name": "Alpha",
+            "description": "Alpha shared workspace",
+        },
+    ]
 
     admin_read = await client.get(
-        f"/v0/admin/assistant?agent_id={assistant.agent_id}&from_fields=agent_id,space_ids",
+        f"/v0/admin/assistant?agent_id={assistant.agent_id}"
+        "&from_fields=agent_id,space_ids,space_summaries",
         headers=ADMIN_HEADERS,
     )
     assert admin_read.status_code == status.HTTP_200_OK, admin_read.json()
@@ -192,6 +352,13 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
         {
             "agent_id": str(assistant.agent_id),
             "space_ids": [first_space["space_id"]],
+            "space_summaries": [
+                {
+                    "space_id": first_space["space_id"],
+                    "name": "Alpha",
+                    "description": "Alpha shared workspace",
+                },
+            ],
         },
     ]
 
@@ -209,6 +376,7 @@ async def test_same_owner_member_add_projects_sorted_space_ids(
 async def test_remove_space_member_cleans_space_contact_overlays(
     client: AsyncClient,
     dbsession: Session,
+    reawaken_assistant_mock: AsyncMock,
 ) -> None:
     """Direct member removal drops only overlays owned by that membership."""
     owner = await create_test_user(client, "space-member-remove@test.com")
@@ -222,6 +390,7 @@ async def test_remove_space_member_cleans_space_contact_overlays(
             json={"assistant_id": assistant.agent_id},
         )
         assert add_member.status_code == status.HTTP_201_CREATED, add_member.json()
+    reawaken_assistant_mock.reset_mock()
     dbsession.add_all(
         [
             ContactMembership(
@@ -254,6 +423,21 @@ async def test_remove_space_member_cleans_space_contact_overlays(
     )
 
     assert response.status_code == status.HTTP_204_NO_CONTENT, response.text
+    reawaken_assistant_mock.assert_awaited_once()
+    assert reawaken_assistant_mock.await_args.kwargs["data"] == {
+        "assistant_id": str(assistant.agent_id),
+        "space_ids": json.dumps([retained_space["space_id"]]),
+        "space_summaries": json.dumps(
+            [
+                {
+                    "space_id": retained_space["space_id"],
+                    "name": "Retained",
+                    "description": "Retained shared workspace",
+                },
+            ],
+        ),
+        "update_kind": "membership",
+    }
     remaining = (
         dbsession.query(ContactMembership.contact_id)
         .filter(ContactMembership.assistant_id == assistant.agent_id)
@@ -333,6 +517,7 @@ async def test_org_admin_adds_org_assistant_directly(
 async def test_cross_owner_member_add_creates_pending_invitation_until_accept(
     client: AsyncClient,
     dbsession: Session,
+    reawaken_assistant_mock: AsyncMock,
 ) -> None:
     """Cross-owner personal adds require the invited owner to accept."""
 
@@ -368,6 +553,7 @@ async def test_cross_owner_member_add_creates_pending_invitation_until_accept(
     )
     assert pending.status_code == status.HTTP_200_OK, pending.json()
     assert [invite["invite_id"] for invite in pending.json()] == [body["invite_id"]]
+    reawaken_assistant_mock.reset_mock()
 
     accepted = await client.post(
         f"/v0/space-invites/{body['invite_id']}/accept",
@@ -375,6 +561,21 @@ async def test_cross_owner_member_add_creates_pending_invitation_until_accept(
     )
     assert accepted.status_code == status.HTTP_200_OK, accepted.json()
     assert accepted.json() == {"status": "accepted"}
+    reawaken_assistant_mock.assert_awaited_once()
+    assert reawaken_assistant_mock.await_args.kwargs["data"] == {
+        "assistant_id": str(assistant.agent_id),
+        "space_ids": json.dumps([space["space_id"]]),
+        "space_summaries": json.dumps(
+            [
+                {
+                    "space_id": space["space_id"],
+                    "name": "Shared Home",
+                    "description": "Shared Home shared workspace",
+                },
+            ],
+        ),
+        "update_kind": "membership",
+    }
 
     invite = dbsession.get(SpaceInvite, body["invite_id"])
     assert invite.status == "accepted"

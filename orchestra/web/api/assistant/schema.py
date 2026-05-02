@@ -244,6 +244,17 @@ class ConsoleConfigRead(BaseModel):
     theme: Optional[Dict[str, Any]] = None
 
 
+class AssistantSpaceSummary(BaseModel):
+    """Shared-space metadata projected onto assistant runtime responses."""
+
+    space_id: int = Field(..., description="Shared space identifier.")
+    name: str = Field(..., description="Human-readable shared space name.")
+    description: str = Field(
+        ...,
+        description="Semantic description of the space's purpose and scope.",
+    )
+
+
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
@@ -397,6 +408,10 @@ class AssistantRead(AssistantCreate):
         default_factory=list,
         description="Sorted shared space IDs where the assistant is a live member.",
     )
+    space_summaries: List[AssistantSpaceSummary] = Field(
+        default_factory=list,
+        description="Sorted shared space names and descriptions for live memberships.",
+    )
     self_contact_id: int = Field(
         0,
         description="Resolved Contacts row ID representing the assistant itself.",
@@ -454,6 +469,13 @@ class AssistantRead(AssistantCreate):
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
                 "space_ids": [101, 205],
+                "space_summaries": [
+                    {
+                        "space_id": 101,
+                        "name": "Support Ops",
+                        "description": "Daily customer support operations and escalation notes.",
+                    },
+                ],
                 "self_contact_id": 42,
                 "boss_contact_id": 43,
                 "is_local": False,
