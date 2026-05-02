@@ -658,7 +658,7 @@ class Space(Base):
 
     space_id = Column(BigInteger, primary_key=True, autoincrement=True)
     name = Column(Text, nullable=False)
-    description = Column(Text, nullable=True)
+    description = Column(Text, nullable=False)
     organization_id = Column(
         Integer,
         ForeignKey("organization.id", ondelete="RESTRICT"),
@@ -716,6 +716,10 @@ class Space(Base):
         sa.CheckConstraint(
             "length(name) BETWEEN 1 AND 200",
             name="ck_spaces_name_length",
+        ),
+        sa.CheckConstraint(
+            "length(description) BETWEEN 20 AND 1000",
+            name="ck_spaces_description_length",
         ),
         sa.CheckConstraint(
             "status IN ('active', 'deleting')",
