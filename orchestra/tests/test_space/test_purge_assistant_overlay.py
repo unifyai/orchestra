@@ -42,6 +42,7 @@ def _make_assistant(dbsession: Session, owner: User, suffix: str) -> Assistant:
 def _make_space(dbsession: Session, owner: User, suffix: str) -> Space:
     space = Space(
         name=f"Purge Space {suffix}",
+        description=f"Purge space workspace for {suffix} overlay tests.",
         owner_user_id=owner.id,
     )
     dbsession.add(space)

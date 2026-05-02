@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -26,11 +25,11 @@ from orchestra.db.models.orchestra_models import (
     SpaceInvite,
 )
 from orchestra.services import task_machine_state_service
-from orchestra.web.api.utils.assistant_infra import (
-    ADMIN_KEY,
-    _comms_url_for,
-    reawaken_assistant,
+from orchestra.services.space_membership_refresh_service import (
+    membership_refresh_payloads,
+    publish_membership_refreshes_best_effort,
 )
+from orchestra.web.api.utils.assistant_infra import ADMIN_KEY, _comms_url_for
 from orchestra.web.api.utils.http_client import get_async_client
 
 TASK_ACTIVATION_DELETE_PATH = "/infra/task-activation/delete"
@@ -302,10 +301,19 @@ async def delete_space(session: Session, *, space_id: int, user_id: str) -> None
 
     try:
         _drop_space_rows(session, space_id=space_id)
+        refresh_payloads = membership_refresh_payloads(
+            session,
+            [
+                assistant
+                for assistant_id in member_assistant_ids
+                if (assistant := session.get(Assistant, assistant_id)) is not None
+            ],
+        )
         session.commit()
     except Exception as exc:
         session.rollback()
         raise SpaceCleanupFailure(phase=4, reason=str(exc)) from exc
+    await publish_membership_refreshes_best_effort(refresh_payloads)
 
 
 async def purge_assistant_overlay(
@@ -372,12 +380,6 @@ async def purge_assistant_memberships(
         )
 
     if membership_space_ids:
-        await reawaken_assistant(
-            str(assistant.agent_id),
-            deploy_env=assistant.deploy_env,
-            data={
-                "assistant_id": str(assistant.agent_id),
-                "space_ids": json.dumps([]),
-                "update_kind": "membership",
-            },
+        await publish_membership_refreshes_best_effort(
+            membership_refresh_payloads(session, [assistant]),
         )

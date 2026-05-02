@@ -63,7 +63,11 @@ def _make_space(
 ) -> Space:
     space = Space(
         name=f"Coordinator Space {suffix}",
+<<<<<<< HEAD
         description=f"Coordinator schema workspace for {suffix} tests.",
+=======
+        description=f"Coordinator space workspace for {suffix} tests.",
+>>>>>>> f08e15f4 (feat(spaces): project runtime space summaries)
         owner_user_id=owner.id,
         organization_id=organization.id if organization else None,
     )
@@ -147,9 +151,15 @@ def test_space_kind_defaults_to_team_and_rejects_org_default(
     assert default_space.kind == "team"
     _make_space(dbsession, owner, "team-sibling", organization=organization)
 
+<<<<<<< HEAD
     rejected_space = Space(
         name="Rejected org default",
         description="Rejected workspace kind for coordinator schema tests.",
+=======
+    duplicate_default = Space(
+        name="Duplicate default",
+        description="Duplicate default workspace for constraint tests.",
+>>>>>>> f08e15f4 (feat(spaces): project runtime space summaries)
         owner_user_id=owner.id,
         organization_id=organization.id,
         kind="org_default",
@@ -164,7 +174,11 @@ def test_space_kind_rejects_unknown_values(dbsession: Session) -> None:
     owner = _make_user(dbsession, "invalid-kind")
     space = Space(
         name="Archived Space",
+<<<<<<< HEAD
         description="Archived space kind row used to exercise the kind constraint.",
+=======
+        description="Archived space workspace for invalid kind tests.",
+>>>>>>> f08e15f4 (feat(spaces): project runtime space summaries)
         owner_user_id=owner.id,
         kind="archived",
     )

@@ -4,7 +4,30 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+SPACE_DESCRIPTION_MIN_LENGTH = 20
+SPACE_DESCRIPTION_MAX_LENGTH = 1000
+PLACEHOLDER_DESCRIPTION_PREFIX = "placeholder description for space"
+
+
+def validate_space_description(value: str) -> str:
+    """Validate and normalize text that explains a shared space's purpose."""
+
+    description = value.strip()
+    if not (
+        SPACE_DESCRIPTION_MIN_LENGTH <= len(description) <= SPACE_DESCRIPTION_MAX_LENGTH
+    ):
+        raise ValueError(
+            "description must be 20-1000 characters after trimming whitespace.",
+        )
+    if description.lower().startswith(PLACEHOLDER_DESCRIPTION_PREFIX):
+        raise ValueError("description must not be placeholder text.")
+    if len(set(description)) == 1:
+        raise ValueError("description must contain more than one repeated character.")
+    if not any(character.isalnum() for character in description):
+        raise ValueError("description must include letters or numbers.")
+    return description
 
 
 class SpaceMembershipStatus(str, Enum):
@@ -18,15 +41,35 @@ class SpaceCreate(BaseModel):
     """Request body for creating a space."""
 
     name: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = None
+    description: str = Field(
+        ...,
+        min_length=SPACE_DESCRIPTION_MIN_LENGTH,
+        max_length=SPACE_DESCRIPTION_MAX_LENGTH,
+    )
     organization_id: Optional[int] = None
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        return validate_space_description(value)
 
 
 class SpaceUpdate(BaseModel):
     """Request body for updating mutable space fields."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=200)
-    description: Optional[str] = None
+    description: Optional[str] = Field(
+        None,
+        min_length=SPACE_DESCRIPTION_MIN_LENGTH,
+        max_length=SPACE_DESCRIPTION_MAX_LENGTH,
+    )
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_space_description(value)
 
 
 class SpaceRead(BaseModel):
@@ -34,7 +77,7 @@ class SpaceRead(BaseModel):
 
     space_id: int
     name: str
-    description: Optional[str] = None
+    description: str
     organization_id: Optional[int] = None
     owner_user_id: str
     status: str
@@ -49,7 +92,7 @@ class SpaceSummary(BaseModel):
 
     space_id: int
     name: str
-    description: Optional[str] = None
+    description: str
     organization_id: Optional[int] = None
     status: str
 

@@ -115,6 +115,7 @@ def _make_space_member(
 
     space = Space(
         name="Project Room",
+        description="Project room workspace for task routing tests.",
         owner_user_id=owner_user_id,
         status="active",
     )
@@ -452,6 +453,7 @@ async def test_space_task_membership_mismatch_does_not_project_activation(
     assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
     space = Space(
         name="Restricted Room",
+        description="Restricted room workspace for revoked membership tests.",
         owner_user_id=PRIMARY_USER_ID,
         status="active",
     )

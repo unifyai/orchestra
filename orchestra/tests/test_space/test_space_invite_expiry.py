@@ -61,6 +61,7 @@ def _make_assistant(dbsession: Session, owner: User) -> Assistant:
 def _make_space(dbsession: Session, owner: User, name: str) -> Space:
     space = Space(
         name=f"Expiry Space {name}",
+        description=f"Expiry space workspace for {name} invite tests.",
         owner_user_id=owner.id,
     )
     dbsession.add(space)
