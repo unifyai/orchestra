@@ -1383,6 +1383,116 @@ async def test_admin_assistant_contact_ids_tolerates_duplicate_personal_relation
 
 
 @pytest.mark.anyio
+async def test_admin_create_contact_membership_is_idempotent(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "admin-contact-membership-create@test.com",
+    )
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Membership",
+            "surname": "Create",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    payload = {
+        "contact_id": 91,
+        "target_scope": CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+        "relationship": CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        "should_respond": True,
+        "response_policy": "",
+        "can_edit": True,
+    }
+    first = await client.post(
+        f"/v0/admin/assistant/{agent_id}/contact-memberships",
+        json=payload,
+        headers=ADMIN_HEADERS,
+    )
+    assert first.status_code == 200
+    assert first.json()["info"]["created"] is True
+    assert first.json()["info"]["membership"]["contact_id"] == 91
+
+    second = await client.post(
+        f"/v0/admin/assistant/{agent_id}/contact-memberships",
+        json=payload,
+        headers=ADMIN_HEADERS,
+    )
+    assert second.status_code == 200
+    assert second.json()["info"]["created"] is False
+    assert (
+        second.json()["info"]["membership"]["id"]
+        == first.json()["info"]["membership"]["id"]
+    )
+
+    rows = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.contact_id == 91,
+        )
+        .all()
+    )
+    assert len(rows) == 1
+
+
+@pytest.mark.anyio
+async def test_admin_delete_contact_memberships_removes_assistant_overlay_rows(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(
+        client,
+        "admin-contact-membership-delete@test.com",
+    )
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Membership",
+            "surname": "Delete",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    dbsession.add(
+        ContactMembership(
+            assistant_id=agent_id,
+            contact_id=92,
+            target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+        ),
+    )
+    dbsession.commit()
+
+    delete_resp = await client.delete(
+        f"/v0/admin/assistant/{agent_id}/contact-memberships/92",
+        params={"target_scope": CONTACT_MEMBERSHIP_SCOPE_PERSONAL},
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["info"]["deleted"] == 1
+    assert (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.contact_id == 92,
+        )
+        .count()
+        == 0
+    )
+
+
+@pytest.mark.anyio
 async def test_admin_list_assistants_no_fields_returns_full_objects(
     client: AsyncClient,
 ):
