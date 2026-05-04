@@ -4149,6 +4149,165 @@ class TestConnectEndpointEdgeCases:
         assert "offline_access" in oauth_url
 
 
+class TestConnectScopeReduction:
+    """Reduction detection on POST /assistant/{id}/connect.
+
+    Reduction is computed at the scope-set level (not feature-set), so that
+    shrinking a bundle's contents — e.g. removing ``drive.readonly`` from the
+    ``drive`` bundle — also triggers token revoke and drops
+    ``include_granted_scopes``. Without this, Google would resurface the
+    dropped scope on the consent screen via the user's prior grant.
+    """
+
+    @pytest.mark.anyio
+    async def test_revokes_when_bundle_shrinks_with_unchanged_features(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        import os as _os
+
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Shrink", "surname": "Bundle", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        # Simulate a prior grant under a wider bundle: drive.readonly used to
+        # be in the "drive" bundle but has since been removed.
+        stored_scopes = " ".join(
+            [
+                "https://www.googleapis.com/auth/userinfo.email",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/drive.readonly",
+            ],
+        )
+
+        http_calls: list[tuple[str, str, dict | None]] = []
+        mock_http = _build_mock_async_client(http_calls)
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings, patch.dict(
+            _os.environ,
+            {"UNITY_ADAPTERS_URL": "http://adapters.test"},
+        ), patch(
+            "httpx.AsyncClient",
+            return_value=mock_http,
+        ):
+            mock_settings.google_oauth_client_id = "test-google-client-id"
+            mock_settings.microsoft_byod_client_id = None
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            for name, value in [
+                ("GOOGLE_ACCESS_TOKEN", "access-tok"),
+                ("GOOGLE_GRANTED_SCOPES", stored_scopes),
+            ]:
+                await client.post(
+                    f"/v0/assistant/{agent_id}/secret",
+                    json={"secret_name": name, "secret_value": value},
+                    headers=HEADERS,
+                )
+
+            # Same features the user previously connected with — only the
+            # bundle contents have shrunk on the server side.
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email", "drive"]},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "include_granted_scopes" not in oauth_url, oauth_url
+        assert "drive.readonly" not in oauth_url, oauth_url
+
+        revoke_calls = [
+            c
+            for c in http_calls
+            if c[0] == "POST" and c[1] == "http://adapters.test/google/revoke"
+        ]
+        assert len(revoke_calls) == 1, http_calls
+        assert revoke_calls[0][2] == {
+            "assistant_id": agent_id,
+            "token": "access-tok",
+        }
+
+    @pytest.mark.anyio
+    async def test_preserves_include_granted_when_scope_set_unchanged(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Reconnecting with the exact same scope set must not trigger
+        revoke and must keep ``include_granted_scopes=true`` so that
+        unrelated prior grants on the OAuth client are preserved.
+        """
+        import os as _os
+
+        from orchestra.web.api.assistant.scopes import build_scope_string
+
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Same", "surname": "Scopes", "create_infra": False},
+            headers=HEADERS,
+        )
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        stored_scopes = build_scope_string("google", ["email", "drive"])
+
+        http_calls: list[tuple[str, str, dict | None]] = []
+        mock_http = _build_mock_async_client(http_calls)
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings, patch.dict(
+            _os.environ,
+            {"UNITY_ADAPTERS_URL": "http://adapters.test"},
+        ), patch(
+            "httpx.AsyncClient",
+            return_value=mock_http,
+        ):
+            mock_settings.google_oauth_client_id = "test-google-client-id"
+            mock_settings.microsoft_byod_client_id = None
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            for name, value in [
+                ("GOOGLE_ACCESS_TOKEN", "access-tok"),
+                ("GOOGLE_GRANTED_SCOPES", stored_scopes),
+            ]:
+                await client.post(
+                    f"/v0/assistant/{agent_id}/secret",
+                    json={"secret_name": name, "secret_value": value},
+                    headers=HEADERS,
+                )
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email", "drive"]},
+                headers=HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+        assert "include_granted_scopes=true" in oauth_url, oauth_url
+
+        revoke_calls = [
+            c
+            for c in http_calls
+            if c[0] == "POST" and c[1] == "http://adapters.test/google/revoke"
+        ]
+        assert revoke_calls == [], http_calls
+
+
 class TestCompulsoryFeatures:
     """Tests for required-features enforcement in ConnectRequest."""
 

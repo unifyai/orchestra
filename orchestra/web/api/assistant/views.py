@@ -1661,10 +1661,7 @@ async def connect_assistant_account(
     import os
     from urllib.parse import urlencode
 
-    from orchestra.web.api.assistant.scopes import (
-        build_scope_string,
-        map_scopes_to_features,
-    )
+    from orchestra.web.api.assistant.scopes import build_scope_string
 
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
@@ -1699,19 +1696,19 @@ async def connect_assistant_account(
     redirect_after = body.redirect_after
     adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
 
-    # Determine if this is scope reduction (requires revocation for Google)
+    # Detect scope reduction at the scope-set level (not feature-set), so that
+    # shrinking a bundle's contents also triggers revoke. Without this, Google's
+    # `include_granted_scopes=true` would resurface the dropped scopes from the
+    # user's prior grant on the consent screen.
+    scope_string = build_scope_string(provider, features)
     secret_dao = AssistantSecretDAO(session)
     scope_key = (
         "GOOGLE_GRANTED_SCOPES" if provider == "google" else "MICROSOFT_GRANTED_SCOPES"
     )
     current_scopes = secret_dao.get(assistant_id, scope_key)
-    current_features = (
-        set(map_scopes_to_features(provider, current_scopes))
-        if current_scopes
-        else set()
-    )
-    requested_features = set(features)
-    is_scope_reduction = bool(current_features - requested_features)
+    current_scope_set = set(current_scopes.split()) if current_scopes else set()
+    new_scope_set = set(scope_string.split())
+    is_scope_reduction = bool(current_scope_set - new_scope_set)
 
     # Google scope reduction: revoke the entire token first
     if provider == "google" and is_scope_reduction and adapters_url:
@@ -1729,8 +1726,6 @@ async def connect_assistant_account(
                     },
                     headers={"Authorization": f"Bearer {admin_key}"},
                 )
-
-    scope_string = build_scope_string(provider, features)
 
     state_dict: dict = {
         "assistant_id": assistant_id,
