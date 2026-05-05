@@ -5,6 +5,7 @@ import time
 from typing import Any, List
 
 import httpx
+from sqlalchemy.orm import Session
 
 from orchestra.web.api.utils.http_client import get_async_client
 
@@ -382,74 +383,24 @@ async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
     return response.json()
 
 
-async def create_email(
-    local: str,
-    first_name: str,
-    last_name: str,
-    deploy_env: str | None = None,
-):
-    """
-    Create an email for the user by making a POST request to the UNIFY_COMMS_URL endpoint.
-
-    Args:
-        local (str): The local part of the email address
-        first_name (str): User's first name
-        last_name (str): User's last name
-
-    Returns:
-        Response from the email creation endpoint
-    """
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    response = await client.post(
-        f"{comms_url}/gmail/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "local": local,
-            "first_name": first_name,
-            "last_name": last_name,
-        },
-        timeout=20,
-    )
-    return response.json()
-
-
-async def create_outlook_email(
-    local: str,
-    first_name: str,
-    last_name: str,
-    deploy_env: str | None = None,
-):
-    """
-    Create an MS365 mailbox by calling the Communication service.
-
-    Mirrors `create_email` (Gmail) but hits the ``/outlook/create`` endpoint,
-    which creates the Azure AD user and assigns an Exchange Online license.
-    """
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    response = await client.post(
-        f"{comms_url}/outlook/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "local": local,
-            "first_name": first_name,
-            "last_name": last_name,
-        },
-        timeout=30,
-    )
-    return response.json()
+# Platform-issued mailbox provisioning is retired. The corresponding
+# `create_email` / `create_outlook_email` and `watch_email` /
+# `watch_outlook_email` helpers have been removed.
+#
+# `delete_email` / `delete_outlook_email` are kept below because they
+# are still invoked by `orchestra.workers.teardown_platform_mailboxes`
+# to deprovision the lingering platform mailboxes that existed before
+# the feature was retired (and they remain idempotent for any future
+# stragglers).
 
 
 async def delete_email(email: str, deploy_env: str | None = None):
-    """
-    Delete an email by making a DELETE request to the comms endpoint.
+    """Delete a Google Workspace user via the Communication service.
 
-    Args:
-        email (str): The email address to delete
-
-    Returns:
-        JSON response from the email deletion endpoint
+    Used only by the one-shot platform-mailbox teardown worker
+    (``orchestra.workers.teardown_platform_mailboxes``).  Idempotent:
+    Communication returns ``{"already_absent": true}`` for users that
+    have already been removed.
     """
     comms_url = _comms_url_for(deploy_env)
     client = get_async_client()
@@ -465,7 +416,11 @@ async def delete_email(email: str, deploy_env: str | None = None):
 
 
 async def delete_outlook_email(email: str, deploy_env: str | None = None):
-    """Delete an MS365 user/mailbox via the Communication service."""
+    """Delete an MS365 user/mailbox via the Communication service.
+
+    Used only by the one-shot platform-mailbox teardown worker
+    (``orchestra.workers.teardown_platform_mailboxes``).  Idempotent.
+    """
     comms_url = _comms_url_for(deploy_env)
     client = get_async_client()
     response = await client.request(
@@ -476,47 +431,6 @@ async def delete_outlook_email(email: str, deploy_env: str | None = None):
         timeout=20,
     )
     response.raise_for_status()
-    return response.json()
-
-
-async def watch_email(email: str, deploy_env: str | None = None):
-    """
-    Watch an email by making a POST request to the comms endpoint.
-
-    Args:
-        email (str): The email to watch
-        deploy_env: Reserved for future use; currently ignored.
-
-    Returns:
-        JSON response from the email watch endpoint
-    """
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    response = await client.post(
-        f"{comms_url}/gmail/watch",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "primary_email": email,
-            "topic": f"gmail-notifications{_env_suffix(deploy_env)}",
-        },
-        timeout=20,
-    )
-    return response.json()
-
-
-async def watch_outlook_email(email: str, deploy_env: str | None = None):
-    """Set up Outlook change-notification subscription via the Communication service."""
-    comms_url = _comms_url_for(deploy_env)
-    client = get_async_client()
-    response = await client.post(
-        f"{comms_url}/outlook/watch",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "primary_email": email,
-            "topic": f"outlook-notifications{_env_suffix(deploy_env)}",
-        },
-        timeout=20,
-    )
     return response.json()
 
 
@@ -772,6 +686,28 @@ async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None
         deploy_env=deploy_env,
         method="DELETE",
         path=f"/infra/vm/pool/disk/{assistant_id}",
+    )
+
+
+async def delete_assistant_pool_archive(
+    assistant_id: str,
+    deploy_env: str | None = None,
+):
+    """Delete an assistant's GCS workspace archive (permanent unhire cleanup).
+
+    Pool VMs persist ``/Unity/Local`` to
+    ``gs://unity-assistant-archives/{assistant_id}.tar.gz`` between
+    sessions so a fresh PD can be rehydrated on the next assignment.
+    On permanent delete this archive is orphan state and must be
+    removed in the same teardown flow as the per-assistant PD; otherwise
+    the archive bucket accumulates state for assistants that no longer
+    exist.
+    """
+    return await _request_cleanup_step(
+        name="delete_assistant_pool_archive",
+        deploy_env=deploy_env,
+        method="DELETE",
+        path=f"/infra/vm/pool/archive/{assistant_id}",
     )
 
 
@@ -1453,9 +1389,19 @@ async def teardown_assistant_runtime(
         topic_step = await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
         if _requires_assistant_disk_cleanup(desktop_mode):
             disk_step = await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
+            archive_step = await delete_assistant_pool_archive(
+                assistant_id,
+                deploy_env=deploy_env,
+            )
         else:
             disk_step = _cleanup_step_result(
                 "delete_assistant_disk",
+                success=True,
+                skipped=True,
+                reason="desktop_mode_does_not_require_disk_cleanup",
+            )
+            archive_step = _cleanup_step_result(
+                "delete_assistant_pool_archive",
                 success=True,
                 skipped=True,
                 reason="desktop_mode_does_not_require_disk_cleanup",
@@ -1473,6 +1419,12 @@ async def teardown_assistant_runtime(
             skipped=True,
             reason="runtime_cleanup_incomplete",
         )
+        archive_step = _cleanup_step_result(
+            "delete_assistant_pool_archive",
+            success=True,
+            skipped=True,
+            reason="runtime_cleanup_incomplete",
+        )
 
     steps = {
         "stop_assistant_session_runtime": stop_session_step,
@@ -1481,6 +1433,7 @@ async def teardown_assistant_runtime(
         "wait_for_runtime_cleanup": wait_step,
         "delete_pubsub_topic": topic_step,
         "delete_assistant_disk": disk_step,
+        "delete_assistant_pool_archive": archive_step,
     }
     errors = _cleanup_errors_from_steps(steps)
     return {
@@ -1639,9 +1592,21 @@ def teardown_assistant_runtime_sync(
                 method="DELETE",
                 path=f"/infra/vm/pool/disk/{assistant_id}",
             )
+            steps["delete_assistant_pool_archive"] = _request_cleanup_step_sync(
+                name="delete_assistant_pool_archive",
+                deploy_env=deploy_env,
+                method="DELETE",
+                path=f"/infra/vm/pool/archive/{assistant_id}",
+            )
         else:
             steps["delete_assistant_disk"] = _cleanup_step_result(
                 "delete_assistant_disk",
+                success=True,
+                skipped=True,
+                reason="desktop_mode_does_not_require_disk_cleanup",
+            )
+            steps["delete_assistant_pool_archive"] = _cleanup_step_result(
+                "delete_assistant_pool_archive",
                 success=True,
                 skipped=True,
                 reason="desktop_mode_does_not_require_disk_cleanup",
@@ -1655,6 +1620,12 @@ def teardown_assistant_runtime_sync(
         )
         steps["delete_assistant_disk"] = _cleanup_step_result(
             "delete_assistant_disk",
+            success=True,
+            skipped=True,
+            reason="runtime_cleanup_incomplete",
+        )
+        steps["delete_assistant_pool_archive"] = _cleanup_step_result(
+            "delete_assistant_pool_archive",
             success=True,
             skipped=True,
             reason="runtime_cleanup_incomplete",
@@ -1741,18 +1712,16 @@ async def log_pre_hire_chat(
     return {"status": "success"}
 
 
-async def trigger_contact_sync(
+async def _trigger_contact_sync(
     assistant_id: int,
     deploy_env: str | None = None,
 ) -> dict:
-    """
-    Trigger contact sync for an assistant via the system-event webhook.
+    """Hit the Adapters ``sync_contacts`` system-event webhook.
 
-    Args:
-        assistant_id: The assistant ID to sync contacts for
-
-    Returns:
-        JSON response from the webhook
+    Internal helper for the public :func:`trigger_contact_sync_safe` and
+    :func:`fan_out_contact_sync_for_org` entry points: callers that hold
+    user-facing responses must always go through the safe wrappers so a
+    transient Adapters failure does not surface as a 500.
     """
     url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
     client = get_async_client()
@@ -1771,3 +1740,55 @@ async def trigger_contact_sync(
     )
     response.raise_for_status()
     return response.json()
+
+
+async def trigger_contact_sync_safe(
+    assistant_id: int,
+    deploy_env: str | None = None,
+) -> None:
+    """Kick a single-assistant Contacts re-derivation, swallowing failures.
+
+    Membership-mutating endpoints (invite accept, member add/remove,
+    assistant transfer) call this so a temporary Adapters outage cannot
+    fail the user-facing request. Unity's next session bootstrap
+    re-derives Contacts on its own, so a missed kick is a soft regression
+    at worst.
+    """
+    try:
+        await _trigger_contact_sync(assistant_id, deploy_env=deploy_env)
+        logging.info("Triggered contact sync for assistant %s", assistant_id)
+    except Exception as exc:
+        logging.warning(
+            "Failed to trigger contact sync for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+
+
+async def fan_out_contact_sync_for_org(
+    organization_id: int,
+    session: Session,
+) -> None:
+    """Refresh Contacts for every assistant in an organization.
+
+    Org membership changes (invite acceptance, direct add, removal)
+    reshape the contact set every org assistant should see. This helper
+    looks up every assistant in ``organization_id`` and asks the Adapters
+    runtime to re-derive each one's Contacts table via the
+    ``sync_contacts`` system event, in parallel. Per-assistant failures
+    are logged by :func:`trigger_contact_sync_safe` but do not interrupt
+    the rest — Unity's next session bootstrap will reconcile.
+    """
+    from orchestra.db.dao.assistant_dao import AssistantDAO
+
+    org_assistants = AssistantDAO(session).list_all_org_assistants(
+        organization_id=organization_id,
+    )
+    if not org_assistants:
+        return
+    await asyncio.gather(
+        *(
+            trigger_contact_sync_safe(a.agent_id, deploy_env=a.deploy_env)
+            for a in org_assistants
+        ),
+    )

@@ -1,10 +1,11 @@
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from zoneinfo import available_timezones
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, select
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
@@ -59,6 +60,7 @@ class AssistantDAO:
         organization_id: Optional[int] = None,
         is_local: bool = False,
         deploy_env: str | None = None,
+        job_title: Optional[str] = None,
     ) -> Assistant:
         """
         Create a new Assistant.
@@ -81,6 +83,7 @@ class AssistantDAO:
             organization_id=organization_id,
             first_name=first_name,
             surname=surname,
+            job_title=job_title,
             age=age,
             nationality=nationality,
             profile_photo=profile_photo,
@@ -783,55 +786,170 @@ class AssistantDAO:
         dao = CreditTransactionDAO(self.session)
         return dao.get_total_spend(ba_id, month_start, month_end, assistant_id=agent_id)
 
-    def generate_unique_email_local(
+    # ------------------------------------------------------------------
+    # Inactivity / re-engagement tracking
+    # ------------------------------------------------------------------
+
+    def touch_last_correspondence_at(
         self,
-        first_name: str,
-        surname: str,
-    ) -> str:
+        agent_id: int,
+        when: datetime,
+    ) -> int:
+        """Record fresh correspondence activity for an assistant.
+
+        Updates ``last_correspondence_at`` and clears
+        ``last_followup_sent_at`` so that a subsequent lapse can fire a
+        fresh follow-up. Deliberately does *not* clear
+        ``termination_initiated_at`` — cancelling an in-flight
+        termination requires an explicit brain decision, not mere
+        message traffic.
+
+        :param agent_id: Assistant agent ID.
+        :param when: Timestamp of the correspondence event (tz-aware).
+        :return: Number of rows updated (0 if agent_id does not exist).
         """
-        Generate a unique email local part for demo assistants.
-
-        Uses {first_name.lower()}.{surname.lower()} as base.
-        If a collision exists, appends .1, .2, etc. until unique.
-
-        :param first_name: Assistant's first name
-        :param surname: Assistant's surname
-        :return: Unique email local part (without @domain)
-        """
-        import re
-
-        # Normalize names: lowercase, remove non-alphanumeric, limit length
-        def normalize(s: str) -> str:
-            s = re.sub(r"[^a-z0-9]", "", s.lower())
-            return s[:30] if len(s) > 30 else s
-
-        base_local = f"{normalize(first_name)}.{normalize(surname)}"
-
-        # Query existing emails from AssistantContact to check for collisions
-        existing_emails = (
-            self.session.query(AssistantContact.contact_value)
-            .filter(
-                AssistantContact.contact_type == "email",
-                AssistantContact.status != "deleted",
-                AssistantContact.contact_value.isnot(None),
-            )
-            .all()
+        result = self.session.execute(
+            update(Assistant)
+            .where(Assistant.agent_id == agent_id)
+            .values(
+                last_correspondence_at=when,
+                last_followup_sent_at=None,
+            ),
         )
-        existing_locals = {
-            email[0].lower().split("@")[0] for email in existing_emails if email[0]
-        }
+        return result.rowcount
 
-        # Check if base is unique
-        if base_local not in existing_locals:
-            return base_local
+    def mark_followup_sent(
+        self,
+        agent_id: int,
+        when: datetime,
+    ) -> int:
+        """Record that the inactivity follow-up was dispatched.
 
-        # Find unique suffix
-        for i in range(1, 1000):
-            candidate = f"{base_local}.{i}"
-            if candidate not in existing_locals:
-                return candidate
+        :param agent_id: Assistant agent ID.
+        :param when: Dispatch timestamp (tz-aware).
+        :return: Number of rows updated.
+        """
+        result = self.session.execute(
+            update(Assistant)
+            .where(Assistant.agent_id == agent_id)
+            .values(last_followup_sent_at=when),
+        )
+        return result.rowcount
 
-        # Extremely unlikely fallback
-        import uuid
+    def mark_termination_initiated(
+        self,
+        agent_id: int,
+        when: datetime,
+    ) -> int:
+        """Mark an assistant as entering the pre-cleanup grace period.
 
-        return f"{base_local}.{uuid.uuid4().hex[:8]}"
+        :param agent_id: Assistant agent ID.
+        :param when: Timestamp of the termination decision (tz-aware).
+        :return: Number of rows updated.
+        """
+        result = self.session.execute(
+            update(Assistant)
+            .where(Assistant.agent_id == agent_id)
+            .values(termination_initiated_at=when),
+        )
+        return result.rowcount
+
+    def clear_termination_initiated(self, agent_id: int) -> int:
+        """Cancel an in-flight termination.
+
+        Called when the brain decides that fresh engagement should rescue
+        an assistant that had been marked for cleanup.
+
+        :param agent_id: Assistant agent ID.
+        :return: Number of rows updated.
+        """
+        result = self.session.execute(
+            update(Assistant)
+            .where(Assistant.agent_id == agent_id)
+            .values(termination_initiated_at=None),
+        )
+        return result.rowcount
+
+    def find_followup_candidates(
+        self,
+        followup_cutoff: datetime,
+        limit: Optional[int] = None,
+        include_demo: bool = False,
+        include_local: bool = False,
+    ) -> List[Assistant]:
+        """Return assistants whose next action is an inactivity follow-up.
+
+        An assistant qualifies when its most recent correspondence
+        pre-dates ``followup_cutoff`` and no follow-up is already in
+        flight and it has not been marked for termination.
+
+        :param followup_cutoff: Only consider assistants with
+            ``last_correspondence_at < followup_cutoff``.
+        :param limit: Optional cap on the returned batch.
+        :param include_demo: Include demo assistants (default: False).
+        :param include_local: Include ``is_local=True`` (local-runtime
+            test) assistants (default: False).
+        :return: Candidate assistants.
+        """
+        stmt = select(Assistant).where(
+            Assistant.last_correspondence_at.isnot(None),
+            Assistant.last_correspondence_at < followup_cutoff,
+            Assistant.last_followup_sent_at.is_(None),
+            Assistant.termination_initiated_at.is_(None),
+        )
+        if not include_demo:
+            stmt = stmt.where(Assistant.demo_id.is_(None))
+        if not include_local:
+            stmt = stmt.where(Assistant.is_local.is_(False))
+        stmt = stmt.order_by(Assistant.last_correspondence_at.asc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self.session.execute(stmt).scalars().all())
+
+    def find_auto_cleanup_candidates(
+        self,
+        cleanup_cutoff: datetime,
+        limit: Optional[int] = None,
+        include_demo: bool = False,
+        include_local: bool = False,
+    ) -> List[Assistant]:
+        """Return assistants eligible for deprovision + hard-delete.
+
+        Two paths feed this query:
+          * **Silent** — ``last_followup_sent_at < cleanup_cutoff`` with
+            no fresh inbound since. The inbound-clears-followup rule in
+            :meth:`touch_last_correspondence_at` makes the mere presence
+            of ``last_followup_sent_at`` a sufficient stand-in for "no
+            reply since the follow-up".
+          * **Explicit** — ``termination_initiated_at < cleanup_cutoff``,
+            set by the brain when the user declines to continue.
+
+        :param cleanup_cutoff: Only consider assistants whose relevant
+            timestamp pre-dates this value.
+        :param limit: Optional cap on the returned batch.
+        :param include_demo: Include demo assistants (default: False).
+        :param include_local: Include ``is_local=True`` (local-runtime
+            test) assistants (default: False).
+        :return: Candidate assistants.
+        """
+        stmt = select(Assistant).where(
+            or_(
+                and_(
+                    Assistant.termination_initiated_at.isnot(None),
+                    Assistant.termination_initiated_at < cleanup_cutoff,
+                ),
+                and_(
+                    Assistant.last_followup_sent_at.isnot(None),
+                    Assistant.last_followup_sent_at < cleanup_cutoff,
+                    Assistant.termination_initiated_at.is_(None),
+                ),
+            ),
+        )
+        if not include_demo:
+            stmt = stmt.where(Assistant.demo_id.is_(None))
+        if not include_local:
+            stmt = stmt.where(Assistant.is_local.is_(False))
+        stmt = stmt.order_by(Assistant.agent_id.asc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self.session.execute(stmt).scalars().all())

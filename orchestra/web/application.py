@@ -11,9 +11,6 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
-from orchestra.web.api.utils.production_traffic_middleware import (
-    ProductionTrafficMiddleware,
-)
 from orchestra.web.api.utils.prometheus_middleware import PrometheusMiddleware, metrics
 from orchestra.web.api.utils.request_trace_middleware import RequestTraceMiddleware
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
@@ -132,6 +129,59 @@ def get_app() -> FastAPI:
 
     app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
 
+    # Centralised gate that blocks non-Unify sign-ups on gated environments
+    # (currently staging). Authenticated traffic is gated inside the
+    # auth_api_key dependency; this middleware covers the unauthenticated
+    # registration paths whose body carries the email in plaintext, so the
+    # rule lives in a single place rather than per-endpoint.
+    import json as _json
+
+    from orchestra.web.api.dependencies import is_staging_allowed_email
+
+    class UnifyMembersOnlyMiddleware(BaseHTTPMiddleware):
+        GATED_PATHS = frozenset(
+            {
+                "/v0/admin/auth/register",
+                "/v0/admin/user",
+            },
+        )
+
+        async def dispatch(self, request, call_next):
+            if not settings.is_staging:
+                return await call_next(request)
+            if request.method != "POST" or request.url.path not in self.GATED_PATHS:
+                return await call_next(request)
+
+            # Buffer the body so the downstream handler can re-read it.
+            body = await request.body()
+
+            async def receive():
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            request._receive = receive  # type: ignore[attr-defined]
+
+            try:
+                payload = _json.loads(body) if body else {}
+            except (ValueError, TypeError):
+                # Let the endpoint produce its own validation error.
+                return await call_next(request)
+
+            email = (payload.get("email") or "").strip().lower()
+            if not is_staging_allowed_email(email):
+                from starlette.responses import JSONResponse
+
+                return JSONResponse(
+                    {
+                        "detail": (
+                            "This environment is restricted to Unify AI members only."
+                        ),
+                    },
+                    status_code=403,
+                )
+            return await call_next(request)
+
+    app.add_middleware(UnifyMembersOnlyMiddleware)
+
     # Security headers middleware
 
     class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -162,10 +212,6 @@ def get_app() -> FastAPI:
     app.add_middleware(
         PrometheusMiddleware,
         app_name="orchestra",
-    )
-    # Add Production Traffic middleware
-    app.add_middleware(
-        ProductionTrafficMiddleware,
     )
     # Add request tracing middleware (captures body/params for debugging)
     app.add_middleware(

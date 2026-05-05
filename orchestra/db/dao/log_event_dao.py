@@ -1,5 +1,6 @@
 import base64
 import copy
+import hashlib
 import json
 import logging
 from collections import defaultdict
@@ -546,8 +547,39 @@ class LogEventDAO:
         ) -> int:
             counter_key = (col_name, tuple(sorted(parent_values.items())))
             if col_name in unique_key_columns:
+                parent_values_json = json.dumps(parent_values, sort_keys=True)
+                parent_values_hash = hashlib.md5(
+                    parent_values_json.encode("utf-8"),
+                    usedforsecurity=False,
+                ).hexdigest()
+
+                counter_params = {
+                    "context_id": context_id,
+                    "column_name": col_name,
+                    "parent_values_hash": parent_values_hash,
+                }
+
                 if counter_key not in reserved_counters:
                     _lock_counter(col_name, parent_values)
+                    reserved_value = self.session.execute(
+                        text(
+                            """
+                            UPDATE context_counter
+                            SET next_value = next_value + 1,
+                                updated_at = now()
+                            WHERE context_id = :context_id
+                              AND column_name = :column_name
+                              AND parent_values_hash = :parent_values_hash
+                            RETURNING next_value - 1 AS reserved_value
+                            """,
+                        ),
+                        counter_params,
+                    ).scalar_one_or_none()
+
+                    if reserved_value is not None:
+                        reserved_counters[counter_key] = int(reserved_value)
+                        return reserved_counters[counter_key]
+
                     query = (
                         self.session.query(
                             func.max(
@@ -571,11 +603,73 @@ class LogEventDAO:
                             LogEvent.data.op("->>")(parent_key) == str(parent_value),
                         )
                     max_val = query.scalar()
-                    reserved_counters[counter_key] = (
-                        max_val if max_val is not None else -1
-                    ) + 1
+                    first_value = (max_val if max_val is not None else -1) + 1
+                    reserved_value = self.session.execute(
+                        text(
+                            """
+                            INSERT INTO context_counter (
+                                context_id,
+                                column_name,
+                                parent_values_hash,
+                                parent_values,
+                                next_value,
+                                updated_at
+                            )
+                            VALUES (
+                                :context_id,
+                                :column_name,
+                                :parent_values_hash,
+                                CAST(:parent_values AS jsonb),
+                                :next_value,
+                                now()
+                            )
+                            ON CONFLICT (
+                                context_id,
+                                column_name,
+                                parent_values_hash
+                            ) DO NOTHING
+                            RETURNING next_value - 1 AS reserved_value
+                            """,
+                        ),
+                        {
+                            **counter_params,
+                            "parent_values": parent_values_json,
+                            "next_value": first_value + 1,
+                        },
+                    ).scalar_one_or_none()
+
+                    if reserved_value is None:
+                        reserved_value = self.session.execute(
+                            text(
+                                """
+                                UPDATE context_counter
+                                SET next_value = next_value + 1,
+                                    updated_at = now()
+                                WHERE context_id = :context_id
+                                  AND column_name = :column_name
+                                  AND parent_values_hash = :parent_values_hash
+                                RETURNING next_value - 1 AS reserved_value
+                                """,
+                            ),
+                            counter_params,
+                        ).scalar_one()
+
+                    reserved_counters[counter_key] = int(reserved_value)
                 else:
                     reserved_counters[counter_key] += 1
+                    self.session.execute(
+                        text(
+                            """
+                            UPDATE context_counter
+                            SET next_value = next_value + 1,
+                                updated_at = now()
+                            WHERE context_id = :context_id
+                              AND column_name = :column_name
+                              AND parent_values_hash = :parent_values_hash
+                            """,
+                        ),
+                        counter_params,
+                    )
                 return reserved_counters[counter_key]
 
             if counter_key not in reserved_values:
@@ -608,6 +702,7 @@ class LogEventDAO:
             return next_value
 
         completed = []
+        provided_key_sets: List[set] = []
         existing_parent_cache: Dict[tuple, bool] = {}
 
         def _parent_values_exist(
@@ -645,6 +740,7 @@ class LogEventDAO:
         for provided_value in provided_values:
             row_values = dict(provided_value or {})
             provided_keys = set(row_values.keys())
+            provided_key_sets.append(provided_keys)
 
             for key in unique_keys.keys():
                 if key not in auto_counting and key not in row_values:
@@ -747,7 +843,34 @@ class LogEventDAO:
                 # returns a fresh ID on the next call, then recompute the
                 # affected row(s).
                 _, conflicting_kv = duplicate
-                for col in unique_key_columns:
+                conflict_row_index = next(
+                    (
+                        i
+                        for i, row in enumerate(completed)
+                        if all(
+                            row.get(c) == conflicting_kv.get(c)
+                            for c in unique_key_columns
+                        )
+                    ),
+                    None,
+                )
+                if conflict_row_index is None:
+                    raise ValueError(
+                        f"Duplicate composite key already exists for this context: {conflicting_kv}",
+                    )
+
+                retry_columns = [
+                    col
+                    for col in unique_key_columns
+                    if col in auto_counting
+                    and col not in provided_key_sets[conflict_row_index]
+                ]
+                if not retry_columns:
+                    raise ValueError(
+                        f"Duplicate composite key already exists for this context: {conflicting_kv}",
+                    )
+
+                for col in retry_columns:
                     if col not in auto_counting:
                         continue
                     cval = conflicting_kv.get(col)
@@ -765,11 +888,13 @@ class LogEventDAO:
                         cval,
                     )
 
-                for row in completed:
+                for row_index, row in enumerate(completed):
                     if all(
                         row.get(c) == conflicting_kv.get(c) for c in unique_key_columns
                     ):
-                        for col in unique_key_columns:
+                        for col in retry_columns:
+                            if col in provided_key_sets[row_index]:
+                                continue
                             if col not in auto_counting:
                                 continue
                             parent_col = auto_counting.get(col)

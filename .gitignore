@@ -173,3 +173,6 @@ api-reference/
 # Ignore log contents but keep the README
 logs/*
 !logs/README.md
+
+# macOS
+.DS_Store

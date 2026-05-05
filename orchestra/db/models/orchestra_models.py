@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -25,6 +26,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import backref, relationship
 
 from orchestra.db.base import Base
+
+# ContactMembership has a `relationship` column, so keep a callable alias for
+# relationship() inside that class body.
+orm_relationship = relationship
 
 # Python 3.11 ships enum.StrEnum. – Provide a fallback for older versions
 try:
@@ -569,6 +574,11 @@ class Organization(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    spaces = relationship(
+        "Space",
+        back_populates="organization",
+        passive_deletes=True,
+    )
 
 
 class OrganizationMember(Base):
@@ -634,6 +644,303 @@ class OrganizationInvite(Base):
     )  # Role to assign when invite is accepted
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class Space(Base):
+    """A named shared memory pool owned by a user.
+
+    Spaces may be associated with an organization, but ownership always
+    resolves to a user so personal-user and organization-backed spaces share
+    one lifecycle model.
+    """
+
+    __tablename__ = "spaces"
+
+    space_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(Text, nullable=False)
+    description = Column(Text, nullable=False)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    owner_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(
+        Text,
+        nullable=False,
+        default="active",
+        server_default="active",
+    )
+    kind = Column(Text, nullable=False, default="team", server_default="team")
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    organization = relationship("Organization", back_populates="spaces")
+    owner = relationship(
+        "User",
+        backref=backref("owned_spaces", passive_deletes=True),
+        foreign_keys=[owner_user_id],
+    )
+    memberships = relationship(
+        "AssistantSpaceMembership",
+        back_populates="space",
+        passive_deletes=True,
+    )
+    invites = relationship(
+        "SpaceInvite",
+        back_populates="space",
+        passive_deletes=True,
+    )
+    contact_memberships = relationship(
+        "ContactMembership",
+        back_populates="target_space",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("ix_spaces_organization_id", "organization_id"),
+        Index("ix_spaces_owner_user_id", "owner_user_id"),
+        sa.CheckConstraint(
+            "length(name) BETWEEN 1 AND 200",
+            name="ck_spaces_name_length",
+        ),
+        sa.CheckConstraint(
+            "length(description) BETWEEN 20 AND 1000",
+            name="ck_spaces_description_length",
+        ),
+        sa.CheckConstraint(
+            "status IN ('active', 'deleting')",
+            name="ck_spaces_status",
+        ),
+        sa.CheckConstraint(
+            "kind IN ('team', 'org_default')",
+            name="ck_spaces_kind",
+        ),
+        Index(
+            "ux_spaces_one_org_default_per_org",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("kind = 'org_default'"),
+        ),
+    )
+
+
+class AssistantSpaceMembership(Base):
+    """Live membership connecting an assistant to a shared space."""
+
+    __tablename__ = "assistant_space_memberships"
+
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    space_id = Column(
+        BigInteger,
+        ForeignKey("spaces.space_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    added_by = Column(String, nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    assistant = relationship("Assistant", back_populates="space_memberships")
+    space = relationship("Space", back_populates="memberships")
+
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("assistant_id", "space_id"),
+        Index("ix_asm_space_id", "space_id"),
+    )
+
+
+class SpaceInvite(Base):
+    """User-anchored invitation for adding an assistant to a space."""
+
+    __tablename__ = "space_invites"
+
+    invite_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    space_id = Column(
+        BigInteger,
+        ForeignKey("spaces.space_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    invited_by = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    invited_owner_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(
+        Text,
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    decided_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    space = relationship("Space", back_populates="invites")
+    assistant = relationship("Assistant")
+    inviter = relationship("User", foreign_keys=[invited_by])
+    invited_owner = relationship("User", foreign_keys=[invited_owner_id])
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('pending', 'accepted', 'declined', 'cancelled', 'expired')",
+            name="ck_space_invites_status",
+        ),
+        Index(
+            "ix_space_invites_pending",
+            "space_id",
+            "assistant_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_space_invites_invited_owner", "invited_owner_id"),
+    )
+
+
+CONTACT_MEMBERSHIP_SCOPE_PERSONAL = "personal"
+CONTACT_MEMBERSHIP_SCOPE_SPACE = "space"
+CONTACT_MEMBERSHIP_RELATIONSHIP_SELF = "self"
+CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS = "boss"
+CONTACT_MEMBERSHIP_RELATIONSHIP_COWORKER = "coworker"
+CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER = "other"
+
+
+class ContactMembership(Base):
+    """Assistant-specific relationship and policy metadata for a contact.
+
+    Contact rows live in personal or shared log-backed contexts. This table
+    stores the assistant-owned overlay that points at one contact id and names
+    the root where that contact id is meaningful.
+    """
+
+    __tablename__ = "contact_memberships"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    contact_id = Column(Integer, nullable=False)
+    target_scope = Column(Text, nullable=False)
+    target_space_id = Column(
+        BigInteger,
+        ForeignKey("spaces.space_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    relationship = Column(Text, nullable=False)
+    should_respond = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
+    response_policy = Column(
+        Text,
+        nullable=False,
+        default="standard",
+        server_default="standard",
+    )
+    can_edit = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    assistant = orm_relationship("Assistant", back_populates="contact_memberships")
+    target_space = orm_relationship("Space", back_populates="contact_memberships")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "target_scope IN ('personal', 'space')",
+            name="ck_contact_memberships_target_scope",
+        ),
+        sa.CheckConstraint(
+            "target_scope NOT IN ('personal', 'space') OR ("
+            "target_scope = 'space' AND target_space_id IS NOT NULL"
+            ") OR ("
+            "target_scope = 'personal' AND target_space_id IS NULL"
+            ")",
+            name="ck_contact_memberships_scope_space_consistency",
+        ),
+        sa.CheckConstraint(
+            "relationship IN ('self', 'boss', 'coworker', 'other')",
+            name="ck_contact_memberships_relationship",
+        ),
+        Index("ix_contact_memberships_assistant_id", "assistant_id"),
+        Index(
+            "ix_contact_memberships_target_space_id",
+            "target_space_id",
+            postgresql_where=text("target_space_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_contact_memberships_assistant_space_target",
+            "assistant_id",
+            "target_space_id",
+            postgresql_where=text("target_scope = 'space'"),
+        ),
+        Index(
+            "ix_contact_memberships_assistant_personal_self",
+            "assistant_id",
+            postgresql_where=text(
+                "target_scope = 'personal' AND relationship = 'self'",
+            ),
+        ),
+        Index(
+            "ux_contact_memberships_personal_pair",
+            "assistant_id",
+            "contact_id",
+            unique=True,
+            postgresql_where=text("target_scope = 'personal'"),
+        ),
+        Index(
+            "ux_contact_memberships_space_pair",
+            "assistant_id",
+            "contact_id",
+            "target_space_id",
+            unique=True,
+            postgresql_where=text("target_scope = 'space'"),
+        ),
+    )
 
 
 class Permission(Base):
@@ -927,6 +1234,28 @@ class Context(Base):
     )
 
 
+class ContextCounter(Base):
+    """Materialized auto-counter state for context-scoped log IDs."""
+
+    __tablename__ = "context_counter"
+
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    column_name = Column(Text, primary_key=True)
+    parent_values_hash = Column(Text, primary_key=True)
+    parent_values = Column(JSONB, nullable=False)
+    next_value = Column(BigInteger, nullable=False)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class ContextVersion(Base):
     """Model class for storing historical versions of contexts."""
 
@@ -1175,6 +1504,14 @@ class FieldType(Base):
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")
     description = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    # NULL = field has never been null-merged into every existing log_event
+    # row of its context (initial state for both create_fields inserts and
+    # bulk_create_field_types inserts done as a side effect of log creation).
+    # Non-NULL = a POST /v0/logs/fields call with backfill_logs=True has
+    # already null-merged this field across the whole context, so idempotent
+    # re-POSTs may skip the expensive log_event UPDATE. Kept nullable so
+    # ON CONFLICT DO UPDATE can leave pre-existing stamp values intact.
+    backfilled_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
@@ -1184,6 +1521,12 @@ class FieldType(Base):
             name="uq_project_field_name_context_id",
         ),
         Index("idx_field_type_context_id", "context_id"),
+        Index(
+            "idx_field_type_needs_backfill",
+            "project_id",
+            "context_id",
+            postgresql_where=text("backfilled_at IS NULL"),
+        ),
         sa.CheckConstraint(
             "char_length(description) <= 256",
             name="ck_field_type_description_len",
@@ -1330,6 +1673,7 @@ class Assistant(Base):
     )
     first_name = Column(String, nullable=True)
     surname = Column(String, nullable=True)
+    job_title = Column(String, nullable=True)
     age = Column(Integer, nullable=True)
     nationality = Column(String, nullable=True)
     profile_photo = Column(String, nullable=True)
@@ -1355,6 +1699,23 @@ class Assistant(Base):
     deploy_env = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    # Re-engagement tracking. last_correspondence_at is touched on any
+    # inbound/outbound message across all contacts; last_followup_sent_at
+    # records when the inactivity follow-up fired and is cleared when fresh
+    # activity resumes; termination_initiated_at marks entry into the
+    # pre-cleanup grace period.
+    last_correspondence_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        server_default=func.now(),
+        index=True,
+    )
+    last_followup_sent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    termination_initiated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        index=True,
+    )
     voice_id = sa.Column(
         sa.String,
         nullable=True,
@@ -1362,6 +1723,12 @@ class Assistant(Base):
     )
     voice_provider = Column(String, nullable=True)
     is_local = Column(Boolean, nullable=False, default=False, server_default="false")
+    is_coordinator = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Demo assistant metadata FK (NULL for regular assistants)
     demo_id = Column(
@@ -1377,6 +1744,22 @@ class Assistant(Base):
         backref=backref("assistant", uselist=False),
         foreign_keys=[demo_id],
     )
+    console_config = relationship(
+        "AssistantConsoleConfig",
+        uselist=False,
+        back_populates="assistant",
+        cascade="all, delete-orphan",
+    )
+    space_memberships = relationship(
+        "AssistantSpaceMembership",
+        back_populates="assistant",
+        passive_deletes=True,
+    )
+    contact_memberships = relationship(
+        "ContactMembership",
+        back_populates="assistant",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -1388,7 +1771,47 @@ class Assistant(Base):
             "desktop_mode IN ('ubuntu', 'windows', 'macos')",
             name="ck_assistant_desktop_mode",
         ),
+        Index(
+            "ux_assistants_one_personal_coordinator_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_coordinator AND organization_id IS NULL"),
+        ),
     )
+
+
+class AssistantConsoleConfig(Base):
+    """Per-assistant UI/UX configuration for forward-deployed Console views.
+
+    One-to-one with ``Assistant``.  Stores typed layout, tab-visibility,
+    and theme override fields so the Console can render client-specific
+    dashboard-centric (or other) layouts without a JSONB grab-bag.
+
+    Created / updated by unity-deploy's startup hook via
+    ``PATCH /admin/assistant/{id}``.
+    """
+
+    __tablename__ = "assistant_console_config"
+
+    id = Column(Integer, primary_key=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    version = Column(String, nullable=False, server_default="1")
+    layout_mode = Column(String, nullable=False, server_default="standard")
+    layout_default_tab = Column(String, nullable=True)
+    tabs_hidden = Column(JSONB, nullable=True)
+    tabs_order = Column(JSONB, nullable=True)
+    theme_brand_name = Column(String, nullable=True)
+    theme_accent_color = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    assistant = relationship("Assistant", back_populates="console_config")
 
 
 class AssistantContact(Base):
@@ -1579,7 +2002,7 @@ class AssistantSecret(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (sa.PrimaryKeyConstraint("user_id", "agent_id", "secret_name"),)
+    __table_args__ = (sa.PrimaryKeyConstraint("agent_id", "secret_name"),)
 
 
 class OneTimeCreditGrantLink(Base):

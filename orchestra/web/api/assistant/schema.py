@@ -16,6 +16,18 @@ def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
     return None
 
 
+def _normalize_job_title(v: Optional[str]) -> Optional[str]:
+    """Trim whitespace and treat empty strings as ``None``.
+
+    Avoids storing whitespace-only values that would render as a blank
+    subtitle in the console without actually conveying anything.
+    """
+    if v is None:
+        return None
+    trimmed = v.strip()
+    return trimmed or None
+
+
 class InfoResponse(GenericModel, Generic[T]):
     """
     Generic wrapper for API responses.
@@ -67,6 +79,15 @@ class AssistantCreate(BaseModel):
         None,
         description="Surname of the assistant",
         example="Lovelace",
+    )
+    job_title: Optional[str] = Field(
+        None,
+        description=(
+            "Free-text job title or specialization for the assistant "
+            "(e.g. 'Growth marketing', 'QA engineer')."
+        ),
+        example="Senior Mathematician",
+        max_length=120,
     )
     age: Optional[int] = Field(
         None,
@@ -170,6 +191,11 @@ class AssistantCreate(BaseModel):
     def validate_deploy_env(cls, v: Optional[str]) -> Optional[str]:
         return _validate_deploy_env(v)
 
+    @field_validator("job_title")
+    @classmethod
+    def normalize_job_title(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_job_title(v)
+
     @model_validator(mode="after")
     def check_voice_fields(cls, self):
         voice_id, voice_provider = (
@@ -191,6 +217,7 @@ class AssistantCreate(BaseModel):
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
+                "job_title": "Senior Mathematician",
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
@@ -206,6 +233,15 @@ class AssistantCreate(BaseModel):
                 "voice_provider": "cartesia",
             },
         }
+
+
+class ConsoleConfigRead(BaseModel):
+    """Nested representation of ``AssistantConsoleConfig`` for API responses."""
+
+    version: str = "1"
+    layout: Dict[str, Any]
+    tabs: Optional[Dict[str, Any]] = None
+    theme: Optional[Dict[str, Any]] = None
 
 
 class AssistantRead(AssistantCreate):
@@ -344,6 +380,10 @@ class AssistantRead(AssistantCreate):
         None,
         description="Whether this is a local assistant (runs unity locally instead of on GKE).",
     )
+    is_coordinator: bool = Field(
+        False,
+        description="Whether this assistant configures and coordinates its workspace.",
+    )
     desktop_filesync_sshkey: Optional[str] = Field(
         None,
         description="SSH private key for desktop filesystem sync. Only returned via admin endpoints.",
@@ -358,6 +398,11 @@ class AssistantRead(AssistantCreate):
         description="External service credentials (OAuth tokens, etc.). "
         "Only populated in admin responses.",
     )
+    console_config: Optional[ConsoleConfigRead] = Field(
+        None,
+        description="Per-assistant UI/UX configuration for forward-deployed Console views. "
+        "Null means the assistant uses default console behavior.",
+    )
 
     class Config:
         orm_mode = True
@@ -365,6 +410,7 @@ class AssistantRead(AssistantCreate):
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
+                "job_title": "Senior Mathematician",
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
@@ -396,6 +442,7 @@ class AssistantRead(AssistantCreate):
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
                 "is_local": False,
+                "is_coordinator": False,
             },
         }
 
@@ -446,12 +493,6 @@ class DemoAssistantCreate(BaseModel):
         description="Country code for phone number provisioning (e.g., US, GB). If not provided, uses source assistant's country or defaults to US.",
         example="US",
     )
-    # Optional email provisioning
-    provision_email: bool = Field(
-        default=False,
-        description="Whether to provision an email address for the demo assistant (default: false)",
-        example=False,
-    )
     # Optional prospect details - if provided, Unity will pre-populate the boss contact
     prospect_first_name: Optional[str] = Field(
         None,
@@ -483,7 +524,6 @@ class DemoAssistantCreate(BaseModel):
                 "surname": "Branson-Demo",
                 "demoer_phone": "+14155559999",
                 "monthly_spending_cap": 10.0,
-                "provision_email": False,
                 "prospect_first_name": "Richard",
                 "prospect_surname": "Branson",
                 "prospect_email": "richard@virgin.com",
@@ -576,6 +616,16 @@ class AssistantUpdate(BaseModel):
         None,
         description="Surname of the assistant",
         example="Lovelace",
+    )
+    job_title: Optional[str] = Field(
+        None,
+        description=(
+            "Free-text job title or specialization for the assistant "
+            "(e.g. 'Growth marketing', 'QA engineer'). Send an empty string or "
+            "null to clear."
+        ),
+        example="Senior Mathematician",
+        max_length=120,
     )
     age: Optional[int] = Field(
         None,
@@ -708,6 +758,11 @@ class AssistantUpdate(BaseModel):
     def validate_update_deploy_env(cls, v: Optional[str]) -> Optional[str]:
         return _validate_deploy_env(v)
 
+    @field_validator("job_title")
+    @classmethod
+    def normalize_update_job_title(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_job_title(v)
+
     @model_validator(mode="after")
     def check_voice_fields_on_update(cls, self):
         """Validate voice fields for PATCH operations."""
@@ -745,6 +800,7 @@ class AssistantUpdate(BaseModel):
         orm_mode = True
         schema_extra = {
             "example": {
+                "job_title": "Senior Mathematician",
                 "weekly_limit": 20.5,
                 "max_parallel": 3,
                 "profile_photo": "https://example.com/photos/ada.jpg",
@@ -1227,11 +1283,14 @@ class AssistantContactCreate(BaseModel):
     Schema for creating a new contact detail for an assistant.
 
     For ``provisioned_by="platform"`` (default) the endpoint provisions
-    external infrastructure (Twilio phone, Google Workspace / MS365 email,
-    WhatsApp sender) and creates the corresponding AssistantContact row.
+    external infrastructure (Twilio phone, WhatsApp sender, Discord bot)
+    and creates the corresponding AssistantContact row.
 
-    For ``provisioned_by="user"`` (BYOD) the caller supplies the full
-    ``contact_value`` directly — no external provisioning or billing occurs.
+    Email contacts are **BYOD-only**: ``provisioned_by="user"`` plus a
+    ``contact_value`` that the user connected via the OAuth flow.
+    Platform-issued mailboxes (``provisioned_by="platform"`` with
+    ``contact_type="email"``) are no longer offered and the endpoint
+    returns HTTP 410 GONE for that combination.
     """
 
     contact_type: Literal["phone", "email", "whatsapp", "discord"] = Field(
@@ -1242,8 +1301,9 @@ class AssistantContactCreate(BaseModel):
     provisioned_by: Literal["platform", "user"] = Field(
         "platform",
         description=(
-            "Who owns the resource. 'platform' = we provision and bill; "
-            "'user' = BYOD, the user connected their own account via OAuth."
+            "Who owns the resource. 'platform' = we provision and bill "
+            "(phone / whatsapp / discord only); 'user' = BYOD, the user "
+            "connected their own account via OAuth (required for email)."
         ),
     )
     # BYOD field — the full contact value (email address, phone number, etc.)
@@ -1261,26 +1321,15 @@ class AssistantContactCreate(BaseModel):
         description="Country code for phone number provisioning (e.g., 'US', 'GB'). Only used for phone contacts.",
         example="US",
     )
-    # Email-specific fields
+    # Email-specific fields (BYOD only — platform email is retired)
     email_provider: Optional[Literal["google_workspace", "microsoft_365"]] = Field(
-        "google_workspace",
-        description="Email provider to use for provisioning. Only used for email contacts.",
+        None,
+        description=(
+            "Provider of the user's connected mailbox. Required for BYOD "
+            "email contacts; must be set explicitly to avoid mislabelling "
+            "Microsoft mailboxes as Google Workspace."
+        ),
         example="google_workspace",
-    )
-    email_local: Optional[str] = Field(
-        None,
-        description="Local part of the email address (before @). Only used for platform-provisioned email contacts.",
-        example="ada.lovelace",
-    )
-    first_name: Optional[str] = Field(
-        None,
-        description="First name for the email account. Only used for platform-provisioned email contacts.",
-        example="Ada",
-    )
-    last_name: Optional[str] = Field(
-        None,
-        description="Last name for the email account. Only used for platform-provisioned email contacts.",
-        example="Lovelace",
     )
 
     @model_validator(mode="after")
@@ -1387,12 +1436,75 @@ class AssistantContactUpdate(BaseModel):
         }
 
 
-class EmailConnectResponse(BaseModel):
-    """Response from the email-connect endpoint with the OAuth authorization URL."""
+class ConnectRequest(BaseModel):
+    """Request body for ``POST /assistant/{id}/connect``."""
+
+    provider: Literal["google", "microsoft"] = Field(
+        ...,
+        description="OAuth provider to connect.",
+    )
+    features: List[str] = Field(
+        ["email", "teams"],
+        description=(
+            "Suite features to request access for (e.g. 'email', 'calendar', "
+            "'drive').  Defaults to email+teams.  Features unavailable for "
+            "the chosen provider are silently dropped (e.g. 'teams' on Google)."
+        ),
+    )
+    redirect_after: Optional[str] = Field(
+        None,
+        description="URL to redirect the user to after OAuth completes.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_and_filter_features(self) -> "ConnectRequest":
+        from orchestra.web.api.assistant.scopes import (
+            REQUIRED_FEATURES,
+            available_features,
+        )
+
+        valid_for_provider = set(available_features(self.provider))
+        all_known = set(available_features("google")) | set(
+            available_features("microsoft"),
+        )
+        truly_unknown = set(self.features) - all_known
+        if truly_unknown:
+            raise ValueError(
+                f"Unknown features: {sorted(truly_unknown)}. "
+                f"Valid: {sorted(all_known)}",
+            )
+        self.features = [f for f in self.features if f in valid_for_provider]
+
+        for feat in REQUIRED_FEATURES.get(self.provider, []):
+            if feat not in self.features:
+                self.features.append(feat)
+
+        return self
+
+
+class ConnectResponse(BaseModel):
+    """Response from the connect endpoint with the OAuth authorization URL."""
 
     oauth_url: str = Field(
         ...,
-        description="OAuth authorization URL the user should visit to grant email access.",
+        description="OAuth authorization URL the user should visit to grant access.",
+    )
+
+
+class GrantedFeaturesResponse(BaseModel):
+    """Response from the granted-features endpoint."""
+
+    provider: Optional[str] = Field(
+        None,
+        description="The connected OAuth provider ('google' or 'microsoft'), or null if none.",
+    )
+    features: List[str] = Field(
+        [],
+        description="Feature names whose scopes are fully granted.",
+    )
+    required_features: List[str] = Field(
+        [],
+        description="Features that cannot be removed (Console should grey these out).",
     )
 
 
@@ -1548,6 +1660,16 @@ class AdminUpdateAssistant(BaseModel):
         description="About/description to set for the assistant.",
         example="AI assistant specializing in customer support.",
     )
+    job_title: Optional[str] = Field(
+        None,
+        description=(
+            "Free-text job title / specialization for the assistant "
+            "(e.g. 'Growth marketing'). Whitespace is trimmed; pass an "
+            "empty string to clear."
+        ),
+        example="Growth marketing",
+        max_length=120,
+    )
     desktop_filesync_sshkey: Optional[str] = Field(
         None,
         description="SSH private key for desktop filesystem sync.",
@@ -1555,6 +1677,11 @@ class AdminUpdateAssistant(BaseModel):
     deploy_env: Optional[str] = Field(
         None,
         description="Deprecated. Must be null.",
+    )
+    console_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Per-assistant UI/UX configuration (layout, tabs, theme). "
+        "Pass the full nested object to upsert; pass null to clear; omit to leave unchanged.",
     )
 
     @field_validator("timezone")
@@ -1568,6 +1695,11 @@ class AdminUpdateAssistant(BaseModel):
     @classmethod
     def validate_admin_deploy_env(cls, v: Optional[str]) -> Optional[str]:
         return _validate_deploy_env(v)
+
+    @field_validator("job_title")
+    @classmethod
+    def normalize_admin_job_title(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_job_title(v)
 
 
 class AdminUpdateAssistantResponse(BaseModel):

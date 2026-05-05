@@ -93,13 +93,6 @@ def seed_contact_type_costs(dbsession: Session):
                 one_time_cost=Decimal("5.00"),
             ),
             AssistantContactCost(
-                contact_type="email",
-                provider="google_workspace",
-                country_code=None,
-                monthly_cost=Decimal("14.00"),
-                one_time_cost=Decimal("5.00"),
-            ),
-            AssistantContactCost(
                 contact_type="whatsapp",
                 provider="twilio",
                 country_code=None,
@@ -112,13 +105,6 @@ def seed_contact_type_costs(dbsession: Session):
                 country_code=None,
                 monthly_cost=Decimal("1"),
                 one_time_cost=Decimal("1"),
-            ),
-            AssistantContactCost(
-                contact_type="email",
-                provider="microsoft_365",
-                country_code=None,
-                monthly_cost=Decimal("12.50"),
-                one_time_cost=Decimal("5.00"),
             ),
         ]
         dbsession.add_all(rows)
@@ -1365,8 +1351,10 @@ class TestLevyToSuspensionLifecycle:
         """
         from orchestra.routines.assistant_contact_levy import levy_provisioned_resources
 
-        # Setup: user with $5 credits and a $14/month email
-        ba = _make_ba(dbsession, credits=5, account_status="ACTIVE")
+        # Setup: user with $2 credits and a $5/month WhatsApp sender.
+        # (Email is BYOD-only and never billed by the levy, so we exercise
+        # the levy → grace → suspension lifecycle against a billable type.)
+        ba = _make_ba(dbsession, credits=2, account_status="ACTIVE")
         user = _make_user(dbsession, "e2e_u1", ba)
         asst = _make_assistant(
             dbsession,
@@ -1376,9 +1364,9 @@ class TestLevyToSuspensionLifecycle:
         )
         c = AssistantContact(
             assistant_id=asst.agent_id,
-            contact_type="email",
-            contact_value="e2e@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553020001",
+            provider="twilio",
             provisioned_by="platform",
             status="active",
         )
@@ -1417,14 +1405,14 @@ class TestLevyToSuspensionLifecycle:
         """
         from orchestra.routines.assistant_contact_levy import levy_provisioned_resources
 
-        ba = _make_ba(dbsession, credits=5, account_status="ACTIVE")
+        ba = _make_ba(dbsession, credits=2, account_status="ACTIVE")
         user = _make_user(dbsession, "e2e_u2", ba)
         asst = _make_assistant(dbsession, user.id, first_name="E2eBot2")
         c = AssistantContact(
             assistant_id=asst.agent_id,
-            contact_type="email",
-            contact_value="e2e2@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553020002",
+            provider="twilio",
             provisioned_by="platform",
             status="active",
         )

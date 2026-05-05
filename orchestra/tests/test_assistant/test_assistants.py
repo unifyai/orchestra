@@ -67,6 +67,7 @@ async def test_create_assistant_success(client: AsyncClient):
     payload = {
         "first_name": "Alice",
         "surname": "Smith",
+        "job_title": "Senior NLP Researcher",
         "age": 28,
         "weekly_limit": 15.5,
         "max_parallel": 3,
@@ -84,6 +85,7 @@ async def test_create_assistant_success(client: AsyncClient):
     assert isinstance(data.get("agent_id"), str)
     assert data["first_name"] == payload["first_name"]
     assert data["surname"] == payload["surname"]
+    assert data["job_title"] == payload["job_title"]
     assert data["age"] == payload["age"]
     assert data["timezone"] == payload["timezone"]
     assert isinstance(data["weekly_limit"], float)
@@ -387,6 +389,104 @@ async def test_update_about_only(client: AsyncClient, mock_assistant_infra_calls
     assert updated["phone"] is None
     assert updated["email"] is None
     mock_reawaken.assert_called_once_with(str(aid), deploy_env=None)
+
+
+@pytest.mark.anyio
+async def test_create_assistant_without_job_title_defaults_to_null(
+    client: AsyncClient,
+):
+    # Omitting job_title on create should result in a null value on read.
+    payload = {
+        "first_name": "NoTitle",
+        "surname": "Bot",
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    data = resp.json()["info"]
+    assert data["job_title"] is None
+
+
+@pytest.mark.anyio
+async def test_update_job_title_only(client: AsyncClient):
+    # PATCH /config with job_title only -> persists and round-trips.
+    payload = {
+        "first_name": "Job",
+        "surname": "Title",
+        "job_title": "Junior Designer",
+        "create_infra": False,
+    }
+    create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create.status_code == 200
+    aid = create.json()["info"]["agent_id"]
+
+    new_job_title = "Lead Product Designer"
+    patch = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json={"job_title": new_job_title, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch.status_code == 200
+    updated = patch.json()["info"]
+    assert updated["job_title"] == new_job_title
+    assert updated["first_name"] == payload["first_name"]
+
+
+@pytest.mark.anyio
+async def test_job_title_is_trimmed_and_empty_clears(client: AsyncClient):
+    # Whitespace-only / empty values should normalize to null so the console
+    # never renders a blank subtitle.
+    create = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Trim",
+            "surname": "Me",
+            "job_title": "  Growth Marketer  ",
+            "create_infra": False,
+        },
+        headers=HEADERS,
+    )
+    assert create.status_code == 200
+    data = create.json()["info"]
+    assert data["job_title"] == "Growth Marketer"
+    aid = data["agent_id"]
+
+    # Sending an empty string clears the job title.
+    patch = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json={"job_title": "   ", "create_infra": False},
+        headers=HEADERS,
+    )
+    assert patch.status_code == 200
+    assert patch.json()["info"]["job_title"] is None
+
+    # Explicit null also clears.
+    seed = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json={"job_title": "QA", "create_infra": False},
+        headers=HEADERS,
+    )
+    assert seed.json()["info"]["job_title"] == "QA"
+    cleared = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json={"job_title": None, "create_infra": False},
+        headers=HEADERS,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["info"]["job_title"] is None
+
+
+@pytest.mark.anyio
+async def test_job_title_rejects_overlong_value(client: AsyncClient):
+    # Schema caps job_title at 120 chars to keep list/hover-card layout sane.
+    payload = {
+        "first_name": "Long",
+        "surname": "Title",
+        "job_title": "x" * 121,
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 422
 
 
 @pytest.mark.anyio
@@ -1252,13 +1352,13 @@ async def test_delete_assistant_deletes_contexts(
 @pytest.mark.anyio
 async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session):
     # Mock the infrastructure deletion calls to avoid external API calls during testing
+    # NOTE: email contacts are BYOD-only since the platform mailbox feature
+    # was retired, so the DELETE endpoint never calls the (removed)
+    # ``delete_email`` infra helper for them — it just soft-deletes the row.
     with patch(
         "orchestra.web.api.assistant.views.delete_phone_number",
         new_callable=AsyncMock,
-    ) as mock_delete_phone, patch(
-        "orchestra.web.api.assistant.views.delete_email",
-        new_callable=AsyncMock,
-    ) as mock_delete_email:
+    ) as mock_delete_phone:
 
         # 1. Create a base assistant
         base_payload = {
@@ -1311,10 +1411,7 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         email_deleted_info = delete_email_resp.json()["info"]
         assert email_deleted_info["email"] is None
         assert email_deleted_info["phone"] == "+15558675309"  # Should be unchanged
-        mock_delete_email.assert_called_once_with(
-            "contact.remover@example.com",
-            deploy_env=None,
-        )
+        # No external mailbox call — email is BYOD-only.
 
         # 5. Delete Phone contact
         delete_phone_payload = {"contact_type": "phone"}

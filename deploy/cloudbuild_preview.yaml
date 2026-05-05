@@ -1,0 +1,172 @@
+# Cloud Build pipeline for preview-environment Orchestra revisions.
+#
+# Triggered on push to ``feature/*`` branches.  Builds the orchestra
+# image and deploys it as a tagged Cloud Run revision against the
+# existing ``orchestra-staging`` service with ``--no-traffic``, so the
+# canonical staging URL keeps serving the un-tagged revision.
+#
+# Cloud Run Jobs (``orchestra-staging-migrator``,
+# ``orchestra-staging-index-maintenance-reindex``) are intentionally
+# left alone.  Preview revisions assume schema migrations have already
+# been applied to the shared staging Cloud SQL instance via the regular
+# staging deploy.
+steps:
+- name: gcr.io/cloud-builders/docker
+  id: compute-slug
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -euo pipefail
+    SLUG=$(echo "${BRANCH_NAME}" \
+      | sed -E 's|^feature/||; s|[^a-z0-9-]+|-|g; s|^-+||; s|-+$||' \
+      | tr '[:upper:]' '[:lower:]' \
+      | cut -c1-30 \
+      | sed -E 's|-+$||')
+    if [ -z "$$SLUG" ]; then
+      echo "ERROR: empty preview slug from branch name '${BRANCH_NAME}'" >&2
+      exit 1
+    fi
+    echo "$$SLUG" > /workspace/slug.txt
+    echo "preview slug: $$SLUG"
+  waitFor: ['-']
+
+- name: gcr.io/cloud-builders/docker
+  id: pull-cache
+  entrypoint: bash
+  args:
+  - -c
+  - 'docker pull $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest || true'
+  waitFor: ['-']
+
+- name: gcr.io/cloud-builders/docker
+  id: build-image
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -euo pipefail
+    SLUG=$(cat /workspace/slug.txt)
+    DOCKER_BUILDKIT=1 docker build \
+      --cache-from $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      -t $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:preview-$${SLUG}-$COMMIT_SHA \
+      -f deploy/Dockerfile --target prod .
+  waitFor: ['compute-slug', 'pull-cache']
+
+- name: gcr.io/cloud-builders/docker
+  id: push-image
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -euo pipefail
+    SLUG=$(cat /workspace/slug.txt)
+    docker push $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:preview-$${SLUG}-$COMMIT_SHA
+  waitFor: ['build-image']
+
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+  id: deploy-tagged
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -euo pipefail
+    SLUG=$(cat /workspace/slug.txt)
+    COMMS_URL="https://$${SLUG}---$_PEER_COMMS_HOST"
+    ADAPTERS_URL="https://$${SLUG}---$_PEER_ADAPTERS_HOST"
+    gcloud run deploy $_SERVICE_NAME \
+      --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:preview-$${SLUG}-$COMMIT_SHA \
+      --region=$_DEPLOY_REGION \
+      --platform=managed \
+      --tag=$${SLUG} \
+      --no-traffic \
+      --vpc-connector=orchestra-connector-v2 \
+      --vpc-egress=all-traffic \
+      --no-cpu-throttling \
+      --cpu-boost \
+      --update-env-vars=ORCHESTRA_CLOUD_SQL_INSTANCE=$_CLOUDSQL_INSTANCE,BRANCH_TAG=$${SLUG},UNITY_COMMS_URL=$${COMMS_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
+      --quiet
+    echo "preview revision URL: https://$${SLUG}---$_SERVICE_HOST"
+  waitFor: ['push-image']
+
+# Reset the shared service template back to the canonical staging image
+# and canonical peer URLs, undoing the env-var mutation that
+# ``gcloud run deploy --update-env-vars=...`` applied to the template
+# in ``deploy-tagged``.  The canonical image is referenced by the
+# ``:latest`` tag, which the canonical staging cloudbuild publishes on
+# every push and the Artifact Registry cleanup policy protects from
+# garbage collection.  The slug-tagged revision keeps its own immutable
+# env snapshot and remains reachable via its tag URL.
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+  id: restore-canonical-template
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -euo pipefail
+    CANONICAL_IMAGE=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
+    gcloud run services update $_SERVICE_NAME \
+      --region=$_DEPLOY_REGION --platform=managed \
+      --image="$$CANONICAL_IMAGE" \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=$BUILD_ID,preview-restore=true \
+      --remove-env-vars=BRANCH_TAG \
+      --update-env-vars=UNITY_COMMS_URL=https://$_PEER_COMMS_HOST,UNITY_ADAPTERS_URL=https://$_PEER_ADAPTERS_HOST \
+      --quiet
+    echo "canonical service template restored to image $$CANONICAL_IMAGE"
+  waitFor: ['deploy-tagged']
+
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+  id: restore-canonical-traffic
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    set -euo pipefail
+    REVISION=$$(gcloud run services describe $_SERVICE_NAME \
+      --region=$_DEPLOY_REGION \
+      --platform=managed \
+      --format="value(status.latestCreatedRevisionName)")
+    if [ -z "$$REVISION" ]; then
+      echo "No canonical restore revision found for build $BUILD_ID" >&2
+      exit 1
+    fi
+    REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
+      --region=$_DEPLOY_REGION \
+      --format="value(metadata.labels.gcb-build-id)")
+    REVISION_PREVIEW_RESTORE=$$(gcloud run revisions describe "$$REVISION" \
+      --region=$_DEPLOY_REGION \
+      --format="value(metadata.labels.preview-restore)")
+    if [ "$$REVISION_BUILD_ID" != "$BUILD_ID" ] || [ "$$REVISION_PREVIEW_RESTORE" != "true" ]; then
+      echo "Skipping traffic restore for $$REVISION because it is not this build's restore revision"
+      exit 0
+    fi
+    gcloud run services update-traffic $_SERVICE_NAME \
+      --region=$_DEPLOY_REGION \
+      --platform=managed \
+      --to-revisions="$$REVISION=100" \
+      --quiet
+    echo "canonical traffic restored to revision $$REVISION"
+  waitFor: ['restore-canonical-template']
+
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
+substitutions:
+  _SERVICE_NAME: orchestra-staging
+  REPO_NAME: orchestra
+  _DEPLOY_REGION: europe-west1
+  _AR_HOSTNAME: europe-west3-docker.pkg.dev
+  _CLOUDSQL_INSTANCE: saas-368716:europe-west3:staging-ssd
+  _SERVICE_HOST: orchestra-staging-lz5fmz6i7q-ew.a.run.app
+  _PEER_COMMS_HOST: unity-comms-app-staging-ky4ja5fxna-uc.a.run.app
+  _PEER_ADAPTERS_HOST: unity-adapters-staging-ky4ja5fxna-uc.a.run.app
+
+tags:
+- gcp-cloud-build-deploy-cloud-run
+- gcp-cloud-build-deploy-cloud-run-managed
+- orchestra
+- preview
+
+timeout: '1200s'

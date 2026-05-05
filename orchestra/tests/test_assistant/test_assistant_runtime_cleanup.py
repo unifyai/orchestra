@@ -5,7 +5,10 @@ import pytest
 
 from orchestra.db.models.orchestra_models import AssistantCleanupTask
 from orchestra.services.assistant_cleanup_service import (
+    AssistantCleanupSpec,
     CleanupSource,
+    ContactCleanupSpec,
+    deprovision_assistant_contacts,
     process_assistant_cleanup_tasks,
 )
 from orchestra.web.api.utils import assistant_infra
@@ -683,3 +686,117 @@ async def test_process_assistant_cleanup_tasks_defers_gcs_until_runtime_is_clean
     assert refreshed.status == "pending"
     assert refreshed.last_result["storage"]["skipped"] is True
     mock_bucket_cls.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_deprovision_assistant_contacts_skips_external_calls_for_byod(
+    dbsession,
+):
+    """BYOD (user-provisioned) phone contacts must not trigger external
+    deprovision calls — we don't own the user's phone number.
+
+    Platform-provisioned phone contacts in the same spec must still be
+    deprovisioned.
+    """
+    spec = AssistantCleanupSpec(
+        assistant_id=4242,
+        deploy_env=None,
+        desktop_mode="ubuntu",
+        contacts=[
+            ContactCleanupSpec(
+                contact_type="phone",
+                contact_value="+15555550101",
+                provisioned_by="user",
+            ),
+            ContactCleanupSpec(
+                contact_type="phone",
+                contact_value="+15555550202",
+                provisioned_by="platform",
+            ),
+        ],
+    )
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.delete_phone_number",
+        new_callable=AsyncMock,
+    ) as mock_del_phone, patch(
+        "orchestra.db.dao.assistant_secret_dao.AssistantSecretDAO.delete_all",
+    ):
+        result = await deprovision_assistant_contacts(
+            dbsession,
+            [spec],
+            soft_delete_successes=False,
+        )
+
+    assert result["success"] is True
+    assert result["attempted"] == 2
+    # BYOD phone is skipped, platform phone is deprovisioned exactly once.
+    mock_del_phone.assert_called_once_with("+15555550202", deploy_env=None)
+
+
+@pytest.mark.anyio
+async def test_deprovision_assistant_contacts_never_calls_email_helpers(
+    dbsession,
+):
+    """Email contacts no longer trigger external deprovision calls from
+    this cleanup path: BYOD mailboxes belong to the user, and platform
+    mailboxes are removed via the dedicated
+    ``orchestra.workers.teardown_platform_mailboxes`` worker.
+
+    The cleanup service must succeed without importing or invoking any
+    Communication-service email helpers, regardless of ``provisioned_by``.
+    """
+    spec = AssistantCleanupSpec(
+        assistant_id=4243,
+        deploy_env=None,
+        desktop_mode="ubuntu",
+        contacts=[
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="user@gmail.com",
+                provider="google_workspace",
+                provisioned_by="user",
+            ),
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="user@outlook.com",
+                provider="microsoft_365",
+                provisioned_by="user",
+            ),
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="legacy@unify.ai",
+                provider="google_workspace",
+                provisioned_by=None,
+            ),
+            ContactCleanupSpec(
+                contact_type="email",
+                contact_value="bot@unify.ai",
+                provider="google_workspace",
+                provisioned_by="platform",
+            ),
+        ],
+    )
+
+    # The module-level import would fail if the cleanup service still
+    # depended on ``delete_email`` / ``delete_outlook_email``. We only
+    # patch the secret-cleanup hop so the run stays in-process.
+    with patch(
+        "orchestra.db.dao.assistant_secret_dao.AssistantSecretDAO.delete_all",
+    ):
+        result = await deprovision_assistant_contacts(
+            dbsession,
+            [spec],
+            soft_delete_successes=False,
+        )
+
+    assert result["success"] is True
+    assert result["attempted"] == 4
+
+    # Sanity: ``assistant_cleanup_service`` no longer imports the email
+    # deprovision helpers at all, so attempting to access them as
+    # attributes of the module raises ``AttributeError``.
+    import orchestra.services.assistant_cleanup_service as svc
+
+    assert not hasattr(svc, "delete_email")
+    assert not hasattr(svc, "delete_outlook_email")

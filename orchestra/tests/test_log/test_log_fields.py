@@ -1158,7 +1158,10 @@ async def test_create_fields_with_backfill_default(client: AsyncClient):
     )
     assert fields_response.status_code == 200, fields_response.json()
     assert "backfilled_count" in fields_response.json()
-    assert fields_response.json()["backfilled_count"] == 4  # 2 logs × 2 new fields
+    # backfilled_count is the number of log_event ROWS updated by the single
+    # server-side UPDATE (not the pair count). Both logs are missing both
+    # new fields, so both rows are updated.
+    assert fields_response.json()["backfilled_count"] == 2
 
     # Verify logs now have the new fields with None values
     logs_response = await client.get(
@@ -1306,8 +1309,10 @@ async def test_create_fields_backfill_with_existing_values(
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
-    # Only 3 entries should be backfilled (not 4) because log1 already has new_field1
-    assert fields_response.json()["backfilled_count"] == 3
+    # backfilled_count is the number of rows updated. Log1 is missing new_field2
+    # (so the ?& guard matches and the row is updated, new_field1 preserved by
+    # right-biased merge). Log2 is missing both → also updated. Total: 2 rows.
+    assert fields_response.json()["backfilled_count"] == 2
 
     # Verify the existing value was not overwritten
     logs_response = await client.get(
