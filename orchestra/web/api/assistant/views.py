@@ -136,8 +136,13 @@ from orchestra.web.api.utils.assistant_infra import (
     wake_up_assistant,
 )
 
-SELF_CONTACT_ID_FALLBACK = 0
-BOSS_CONTACT_ID_FALLBACK = 1
+PERSONAL_SELF_CONTACT_ID = 0
+PERSONAL_BOSS_CONTACT_ID = 1
+BOSS_CONTACT_RESPONSE_POLICY = (
+    "Your immediate manager, please do whatever they ask you to do within reason, "
+    "and do *not* withhold any "
+    "information from them."
+)
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
 ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
 
@@ -239,15 +244,8 @@ def _resolved_contact_ids_for_assistants(
 ) -> dict[int, ResolvedContactIds]:
     """Resolve assistant-self and boss contact ids for AssistantRead payloads."""
 
-    resolved = {
-        assistant_id: ResolvedContactIds(
-            self_contact_id=SELF_CONTACT_ID_FALLBACK,
-            boss_contact_id=BOSS_CONTACT_ID_FALLBACK,
-        )
-        for assistant_id in assistant_ids
-    }
     if not assistant_ids:
-        return resolved
+        return {}
 
     relationship_values = {
         CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
@@ -273,6 +271,9 @@ def _resolved_contact_ids_for_assistants(
         .all()
     )
 
+    resolved: dict[int, dict[str, int]] = {
+        assistant_id: {} for assistant_id in assistant_ids
+    }
     seen: set[tuple[int, str]] = set()
     for _, assistant_id, contact_id, relationship_name in rows:
         key = (assistant_id, relationship_name)
@@ -280,34 +281,184 @@ def _resolved_contact_ids_for_assistants(
             continue
         seen.add(key)
 
-        contact_ids = resolved[assistant_id]
-        self_contact_id = contact_ids.self_contact_id
-        boss_contact_id = contact_ids.boss_contact_id
         if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
-            self_contact_id = contact_id
+            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_SELF] = contact_id
         elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
-            boss_contact_id = contact_id
-        resolved[assistant_id] = ResolvedContactIds(
-            self_contact_id=self_contact_id,
-            boss_contact_id=boss_contact_id,
+            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS] = contact_id
+
+    missing_assistant_ids = [
+        assistant_id
+        for assistant_id, contact_ids in resolved.items()
+        if CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
+        or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
+    ]
+    if missing_assistant_ids:
+        logging.error(
+            "Missing personal contact overlays for assistants: %s",
+            missing_assistant_ids,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="missing_contact_overlay",
         )
 
-    return resolved
+    return {
+        assistant_id: ResolvedContactIds(
+            self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
+            boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
+        )
+        for assistant_id, contact_ids in resolved.items()
+    }
 
 
 def _contact_id_pair(
     contact_ids_by_assistant: dict[int, ResolvedContactIds],
     assistant_id: int,
 ) -> ResolvedContactIds:
-    """Return resolved contact ids for an assistant, using bootstrap defaults."""
+    """Return resolved contact ids for an assistant."""
 
-    return contact_ids_by_assistant.get(
-        assistant_id,
-        ResolvedContactIds(
-            self_contact_id=SELF_CONTACT_ID_FALLBACK,
-            boss_contact_id=BOSS_CONTACT_ID_FALLBACK,
-        ),
+    try:
+        return contact_ids_by_assistant[assistant_id]
+    except KeyError:
+        logging.error(
+            "Missing personal contact overlays for assistant %s",
+            assistant_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="missing_contact_overlay",
+        )
+
+
+def _ensure_personal_contact_memberships(
+    session: Session,
+    assistant_ids: list[int],
+) -> None:
+    """Ensure assistants have personal self and boss contact overlays."""
+
+    if not assistant_ids:
+        return
+
+    existing_rows = (
+        session.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id.in_(assistant_ids),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            or_(
+                ContactMembership.contact_id.in_(
+                    [PERSONAL_SELF_CONTACT_ID, PERSONAL_BOSS_CONTACT_ID],
+                ),
+                ContactMembership.relationship.in_(
+                    [
+                        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                    ],
+                ),
+            ),
+        )
+        .all()
     )
+    rows_by_assistant: dict[int, list[ContactMembership]] = {}
+    for row in existing_rows:
+        rows_by_assistant.setdefault(row.assistant_id, []).append(row)
+
+    def _row_with_contact(
+        rows: list[ContactMembership],
+        contact_id: int,
+    ) -> ContactMembership | None:
+        return next((row for row in rows if row.contact_id == contact_id), None)
+
+    def _has_relationship(rows: list[ContactMembership], relationship: str) -> bool:
+        return any(row.relationship == relationship for row in rows)
+
+    def _has_relationship_outside_contact(
+        rows: list[ContactMembership],
+        relationship: str,
+        contact_id: int,
+    ) -> bool:
+        return any(
+            row.relationship == relationship and row.contact_id != contact_id
+            for row in rows
+        )
+
+    def _apply_membership_defaults(
+        row: ContactMembership,
+        *,
+        relationship: str,
+        response_policy: str,
+    ) -> None:
+        row.relationship = relationship
+        row.should_respond = True
+        row.response_policy = response_policy
+        row.can_edit = True
+
+    def _membership_value(
+        *,
+        assistant_id: int,
+        contact_id: int,
+        relationship: str,
+        response_policy: str,
+    ) -> dict[str, object]:
+        return {
+            "assistant_id": assistant_id,
+            "contact_id": contact_id,
+            "target_scope": CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            "target_space_id": None,
+            "relationship": relationship,
+            "should_respond": True,
+            "response_policy": response_policy,
+            "can_edit": True,
+        }
+
+    membership_values = []
+    for assistant_id in assistant_ids:
+        rows = rows_by_assistant.get(assistant_id, [])
+        default_self = _row_with_contact(rows, PERSONAL_SELF_CONTACT_ID)
+        if default_self is not None and not _has_relationship_outside_contact(
+            rows,
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            PERSONAL_SELF_CONTACT_ID,
+        ):
+            _apply_membership_defaults(
+                default_self,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                response_policy="",
+            )
+
+        default_boss = _row_with_contact(rows, PERSONAL_BOSS_CONTACT_ID)
+        if default_boss is not None and not _has_relationship_outside_contact(
+            rows,
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            PERSONAL_BOSS_CONTACT_ID,
+        ):
+            _apply_membership_defaults(
+                default_boss,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                response_policy=BOSS_CONTACT_RESPONSE_POLICY,
+            )
+
+        if not _has_relationship(rows, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF):
+            membership_values.append(
+                _membership_value(
+                    assistant_id=assistant_id,
+                    contact_id=PERSONAL_SELF_CONTACT_ID,
+                    relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                    response_policy="",
+                ),
+            )
+        if not _has_relationship(rows, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS):
+            membership_values.append(
+                _membership_value(
+                    assistant_id=assistant_id,
+                    contact_id=PERSONAL_BOSS_CONTACT_ID,
+                    relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                    response_policy=BOSS_CONTACT_RESPONSE_POLICY,
+                ),
+            )
+
+    if membership_values:
+        session.bulk_insert_mappings(ContactMembership, membership_values)
+    session.flush()
 
 
 def _build_assistant_read(
@@ -618,6 +769,7 @@ async def create_assistant(
             deploy_env=assistant_in.deploy_env,
             job_title=assistant_in.job_title,
         )
+        _ensure_personal_contact_memberships(session, [assistant.agent_id])
 
         # Org assistants retain the creator in `user_id`; org access is granted
         # separately through resource access so other members can collaborate.
@@ -5726,7 +5878,7 @@ def admin_list_all_assistants(
                     else space_summaries_by_assistant.get(a.agent_id, [])
                 ),
                 self_contact_id=(
-                    SELF_CONTACT_ID_FALLBACK
+                    PERSONAL_SELF_CONTACT_ID
                     if skip_contact_ids
                     else _contact_id_pair(
                         contact_ids_by_assistant,
@@ -5734,7 +5886,7 @@ def admin_list_all_assistants(
                     ).self_contact_id
                 ),
                 boss_contact_id=(
-                    BOSS_CONTACT_ID_FALLBACK
+                    PERSONAL_BOSS_CONTACT_ID
                     if skip_contact_ids
                     else _contact_id_pair(
                         contact_ids_by_assistant,
@@ -5760,6 +5912,8 @@ def admin_list_all_assistants(
         # No from_fields parameter - return full AssistantRead objects
         return InfoResponse(info=assistant_reads)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=400,
@@ -5988,6 +6142,8 @@ def admin_list_assistants_for_user(
                 for i, a in enumerate(assistants)
             ],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=400,
