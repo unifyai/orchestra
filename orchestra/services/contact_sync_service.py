@@ -14,7 +14,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.models.orchestra_models import Context, Project
+from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    ContactMembership,
+    Context,
+    Project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +32,10 @@ class ContactSyncService:
     Handles:
     - User timezone → Contact logs (first_name + surname, is_system=True)
     - User bio → Contact logs (first_name + surname, is_system=True)
-    - Assistant timezone → Contact logs (_assistant=str(agent_id), contact_id=0)
-    - Assistant about → Contact logs (_assistant=str(agent_id), contact_id=0)
-    - Assistant first_name → Contact logs (_assistant=str(agent_id), contact_id=0)
-    - Assistant surname → Contact logs (_assistant=str(agent_id), contact_id=0)
+    - Assistant timezone → Contact logs for the resolved self contact
+    - Assistant about → Contact logs for the resolved self contact
+    - Assistant first_name → Contact logs for the resolved self contact
+    - Assistant surname → Contact logs for the resolved self contact
     """
 
     ASSISTANTS_PROJECT_NAME = "Assistants"
@@ -37,6 +43,7 @@ class ContactSyncService:
 
     def __init__(self, session: Session):
         self.session = session
+        self._self_contact_id_cache: dict[int, Optional[int]] = {}
 
     def _get_all_assistants_projects_for_user(self, user_id: str) -> List[Project]:
         """
@@ -123,6 +130,33 @@ class ContactSyncService:
             .first()
         )
 
+    def _resolve_assistant_self_contact_id(self, agent_id: int) -> Optional[int]:
+        """Return the assistant's personal self contact id from membership overlays."""
+        if agent_id in self._self_contact_id_cache:
+            return self._self_contact_id_cache[agent_id]
+
+        membership = (
+            self.session.query(ContactMembership)
+            .filter(
+                ContactMembership.assistant_id == agent_id,
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            )
+            .order_by(ContactMembership.id)
+            .first()
+        )
+        if membership is None:
+            logger.error(
+                "Skipping assistant contact sync: missing self contact overlay "
+                "for assistant %s",
+                agent_id,
+            )
+            self._self_contact_id_cache[agent_id] = None
+            return None
+        self_contact_id = membership.contact_id
+        self._self_contact_id_cache[agent_id] = self_contact_id
+        return self_contact_id
+
     def _update_contact_logs_user(
         self,
         context_id: int,
@@ -173,15 +207,17 @@ class ContactSyncService:
         self,
         context_id: int,
         assistant_context_id: str,
+        self_contact_id: int,
         update_field: str,
         new_value: Optional[str],
     ) -> int:
         """
-        Update Contact logs for an assistant (where _assistant matches and contact_id=0).
+        Update Contact logs for an assistant's resolved self contact.
 
         Args:
             context_id: The context ID to search within
             assistant_context_id: The _assistant value to filter by (str(agent_id))
+            self_contact_id: Resolved self contact ID for this assistant
             update_field: The field name to update (e.g., "timezone", "bio")
             new_value: The new value to set
 
@@ -199,7 +235,7 @@ class ContactSyncService:
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
                   AND le.data->>'_assistant' = :assistant_context_id
-                  AND (le.data->>'contact_id')::int = 0
+                  AND (le.data->>'contact_id')::int = :self_contact_id
             )
         """,
         )
@@ -209,6 +245,7 @@ class ContactSyncService:
             {
                 "context_id": context_id,
                 "assistant_context_id": assistant_context_id,
+                "self_contact_id": self_contact_id,
                 "update_field": update_field,
                 "new_value": new_value,
             },
@@ -336,7 +373,7 @@ class ContactSyncService:
 
         Updates logs where:
         - _assistant = str(agent_id)
-        - contact_id = 0
+        - contact_id matches the assistant's self contact overlay
 
         Args:
             user_id: The user ID (owner for personal, creator for org)
@@ -357,9 +394,14 @@ class ContactSyncService:
             logger.debug("Skipping assistant timezone sync: no All/Contacts context")
             return 0
 
+        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
+        if self_contact_id is None:
+            return 0
+
         updated = self._update_contact_logs_assistant(
             context_id=context.id,
             assistant_context_id=str(agent_id),
+            self_contact_id=self_contact_id,
             update_field="timezone",
             new_value=new_timezone,
         )
@@ -381,7 +423,7 @@ class ContactSyncService:
 
         Updates logs where:
         - _assistant = str(agent_id)
-        - contact_id = 0
+        - contact_id matches the assistant's self contact overlay
 
         Args:
             user_id: The user ID (owner for personal, creator for org)
@@ -402,9 +444,14 @@ class ContactSyncService:
             logger.debug("Skipping assistant bio sync: no All/Contacts context")
             return 0
 
+        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
+        if self_contact_id is None:
+            return 0
+
         updated = self._update_contact_logs_assistant(
             context_id=context.id,
             assistant_context_id=str(agent_id),
+            self_contact_id=self_contact_id,
             update_field="bio",
             new_value=new_bio,
         )
@@ -426,7 +473,7 @@ class ContactSyncService:
 
         Updates logs where:
         - _assistant = str(agent_id)
-        - contact_id = 0
+        - contact_id matches the assistant's self contact overlay
 
         Args:
             user_id: The user ID (owner for personal, creator for org)
@@ -447,9 +494,14 @@ class ContactSyncService:
             logger.debug("Skipping assistant first_name sync: no All/Contacts context")
             return 0
 
+        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
+        if self_contact_id is None:
+            return 0
+
         updated = self._update_contact_logs_assistant(
             context_id=context.id,
             assistant_context_id=str(agent_id),
+            self_contact_id=self_contact_id,
             update_field="first_name",
             new_value=new_first_name,
         )
@@ -471,7 +523,7 @@ class ContactSyncService:
 
         Updates logs where:
         - _assistant = str(agent_id)
-        - contact_id = 0
+        - contact_id matches the assistant's self contact overlay
 
         Args:
             user_id: The user ID (owner for personal, creator for org)
@@ -492,9 +544,14 @@ class ContactSyncService:
             logger.debug("Skipping assistant surname sync: no All/Contacts context")
             return 0
 
+        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
+        if self_contact_id is None:
+            return 0
+
         updated = self._update_contact_logs_assistant(
             context_id=context.id,
             assistant_context_id=str(agent_id),
+            self_contact_id=self_contact_id,
             update_field="surname",
             new_value=new_surname,
         )
