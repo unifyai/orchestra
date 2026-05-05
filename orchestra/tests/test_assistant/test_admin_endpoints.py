@@ -22,8 +22,11 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    CONTACT_MEMBERSHIP_SCOPE_SPACE,
     AssistantConsoleConfig,
+    AssistantSpaceMembership,
     ContactMembership,
+    Space,
     User,
 )
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
@@ -1301,6 +1304,106 @@ async def test_admin_assistant_projects_contact_ids_from_personal_memberships(
             "agent_id": str(agent_id),
             "self_contact_id": 42,
             "boss_contact_id": 43,
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_projects_contact_identity_roots(
+    client: AsyncClient,
+    dbsession,
+):
+    """Assistant reads expose contact ids in the root where they are meaningful."""
+
+    owner = await create_test_user(
+        client,
+        "contact-identity-roots@test.com",
+    )
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "ContactIdentity",
+            "surname": "Roots",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    complete_space = Space(
+        name="Contact Identity Complete",
+        description="Complete identity root used by assistant read tests.",
+        owner_user_id=owner["id"],
+    )
+    incomplete_space = Space(
+        name="Contact Identity Incomplete",
+        description="Incomplete identity root used by assistant read tests.",
+        owner_user_id=owner["id"],
+    )
+    dbsession.add_all([complete_space, incomplete_space])
+    dbsession.flush()
+    dbsession.add_all(
+        [
+            AssistantSpaceMembership(
+                assistant_id=agent_id,
+                space_id=complete_space.space_id,
+                added_by=owner["id"],
+            ),
+            AssistantSpaceMembership(
+                assistant_id=agent_id,
+                space_id=incomplete_space.space_id,
+                added_by=owner["id"],
+            ),
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=77,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                target_space_id=complete_space.space_id,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            ),
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=78,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                target_space_id=complete_space.space_id,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            ),
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=88,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                target_space_id=incomplete_space.space_id,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant?"
+        f"agent_id={agent_id}&from_fields=agent_id,contact_identity_roots",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == 200
+    assert admin_resp.json()["info"] == [
+        {
+            "agent_id": str(agent_id),
+            "contact_identity_roots": [
+                {
+                    "target_scope": CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                    "target_space_id": None,
+                    "self_contact_id": 0,
+                    "boss_contact_id": 1,
+                },
+                {
+                    "target_scope": CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                    "target_space_id": complete_space.space_id,
+                    "self_contact_id": 77,
+                    "boss_contact_id": 78,
+                },
+            ],
         },
     ]
 

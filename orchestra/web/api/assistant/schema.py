@@ -255,6 +255,27 @@ class AssistantSpaceSummary(BaseModel):
     )
 
 
+class AssistantContactIdentityRoot(BaseModel):
+    """Root-local contact ids used by clients that read across assistant roots."""
+
+    target_scope: Literal["personal", "space"] = Field(
+        ...,
+        description="Root kind where the contact ids are meaningful.",
+    )
+    target_space_id: Optional[int] = Field(
+        None,
+        description="Shared space identifier when the target scope is a space.",
+    )
+    self_contact_id: int = Field(
+        ...,
+        description="Contact id representing the assistant inside this root.",
+    )
+    boss_contact_id: int = Field(
+        ...,
+        description="Contact id representing the assistant owner inside this root.",
+    )
+
+
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
@@ -419,6 +440,14 @@ class AssistantRead(AssistantCreate):
     boss_contact_id: int = Field(
         1,
         description="Resolved Contacts row ID representing the assistant owner.",
+    )
+    contact_identity_roots: List[AssistantContactIdentityRoot] = Field(
+        default_factory=list,
+        description=(
+            "Resolved self and boss contact ids for each readable root. "
+            "Contact ids are root-local, so clients must use the entry matching "
+            "the context they query."
+        ),
     )
     secrets: Optional[Dict[str, str]] = Field(
         None,
