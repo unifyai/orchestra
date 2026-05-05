@@ -101,6 +101,36 @@ steps:
   entrypoint: gcloud
   waitFor:
   - 'Migrate'
+  - 'Push Orchestra Latest'
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    REVISION=$$(gcloud run services describe $_SERVICE_NAME \
+      --region=$_DEPLOY_REGION \
+      --platform=managed \
+      --format="value(status.latestCreatedRevisionName)")
+    if [ -z "$$REVISION" ]; then
+      echo "No deployed revision found for build $BUILD_ID" >&2
+      exit 1
+    fi
+    REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
+      --region=$_DEPLOY_REGION \
+      --format="value(metadata.labels.gcb-build-id)")
+    if [ "$$REVISION_BUILD_ID" != "$BUILD_ID" ]; then
+      echo "Skipping traffic route for $$REVISION because it belongs to build $$REVISION_BUILD_ID"
+      exit 0
+    fi
+    gcloud run services update-traffic $_SERVICE_NAME \
+      --platform=managed \
+      --region=$_DEPLOY_REGION \
+      --to-revisions="$$REVISION=100" \
+      --quiet
+  id: Route Orchestra Traffic
+  entrypoint: bash
+  waitFor:
+  - 'Deploy Orchestra'
 images:
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest

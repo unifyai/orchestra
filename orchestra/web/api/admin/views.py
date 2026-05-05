@@ -797,6 +797,59 @@ async def trigger_assistant_contact_suspension(
         )
 
 
+@router.post("/assistants/inactivity-followup")
+async def trigger_inactivity_followup(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger the re-engagement follow-up + auto-cleanup routine.
+
+    Two stages:
+      1. Dispatch an inactivity follow-up for assistants whose most
+         recent correspondence pre-dates ``inactivity_followup_days``
+         and who do not yet have a follow-up in flight. Assistants
+         with a provisioned email channel wake the Unity brain via
+         the communication adapter so the brain composes and sends
+         from the assistant's own mailbox; assistants without an
+         email instead receive an orchestra-sent first-person email
+         from ``hello@unify.ai`` redirecting the boss to the Unify
+         console. Orchestra records ``last_followup_sent_at`` after
+         a successful send on either path.
+      2. Notify the assistant's lifecycle owner, then deprovision +
+         hard-delete assistants whose silent/explicit termination
+         grace period has elapsed (``inactivity_auto_cleanup_days``).
+
+    Called by Cloud Scheduler at 01:15 and 13:15 UTC
+    (``15 1,13 * * *``) — twice daily, staggered 15 min after the
+    billing suspension routine at 01:00 UTC.
+    """
+    try:
+        from orchestra.routines.inactivity_followup import run_inactivity_followup
+
+        result = await run_inactivity_followup(session=session)
+
+        return {
+            "status": "success",
+            "message": "Inactivity follow-up routine completed",
+            "followup_candidates_found": result.followup_candidates_found,
+            "followups_dispatched": result.followups_dispatched,
+            "followups_failed": result.followups_failed,
+            "cleanup_candidates_found": result.cleanup_candidates_found,
+            "cleanups_completed": result.cleanups_completed,
+            "cleanups_failed": result.cleanups_failed,
+        }
+
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("Inactivity follow-up routine failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Inactivity follow-up failed: {str(e)}",
+        )
+
+
 @router.post("/billing/reconcile")
 def trigger_billing_reconciliation(
     auto_fix: str = "none",

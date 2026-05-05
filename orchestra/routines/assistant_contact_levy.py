@@ -1,7 +1,8 @@
 """Monthly resource levy for provisioned assistant contact details.
 
 Charges each billing account for its active platform-provisioned
-contact details (phone numbers, email addresses, WhatsApp senders).
+contact details (phone numbers, WhatsApp senders, Discord bots).
+Email contacts are BYOD-only and never billed by this routine.
 
 Runs on the 1st of each month via Cloud Scheduler.
 
@@ -71,8 +72,6 @@ class LevyAccountResult:
     total_amount: Decimal = field(default_factory=lambda: Decimal("0"))
     phone_count: int = 0
     phone_cost: Decimal = field(default_factory=lambda: Decimal("0"))
-    email_count: int = 0
-    email_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     whatsapp_count: int = 0
     whatsapp_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     discord_count: int = 0
@@ -407,9 +406,6 @@ def _process_billing_account(
         if contact.contact_type == "phone":
             ar.phone_count += 1
             ar.phone_cost += cost
-        elif contact.contact_type == "email":
-            ar.email_count += 1
-            ar.email_cost += cost
         elif contact.contact_type == "whatsapp":
             ar.whatsapp_count += 1
             ar.whatsapp_cost += cost
@@ -438,8 +434,6 @@ def _process_billing_account(
             "billing_month": billing_month,
             "phone_count": ar.phone_count,
             "phone_cost": float(ar.phone_cost),
-            "email_count": ar.email_count,
-            "email_cost": float(ar.email_cost),
             "whatsapp_count": ar.whatsapp_count,
             "whatsapp_cost": float(ar.whatsapp_cost),
             "discord_count": ar.discord_count,

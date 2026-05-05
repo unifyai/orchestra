@@ -32,7 +32,12 @@ from orchestra.db.models.orchestra_models import (
     BillingAccount,
     User,
 )
-from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
+from orchestra.tests.utils import (
+    ADMIN_HEADERS,
+    HEADERS,
+    create_test_org,
+    create_test_user,
+)
 
 # ============================================================================
 # Helpers
@@ -168,7 +173,8 @@ class TestAssistantSecretModel:
         assert row.secret_value == "abc123"
         assert row.created_at is not None
 
-    def test_composite_primary_key_rejects_duplicate(self, dbsession: Session):
+    def test_primary_key_rejects_duplicate(self, dbsession: Session):
+        """PK is (agent_id, secret_name) — same combo must be rejected."""
         user, _ba = _make_user_ba(dbsession, "sec-model-2")
         a = _make_assistant(dbsession, user.id)
         dbsession.add(
@@ -185,6 +191,33 @@ class TestAssistantSecretModel:
                 user_id=user.id,
                 agent_id=a.agent_id,
                 secret_name="DUP",
+                secret_value="v2",
+            ),
+        )
+        with pytest.raises(IntegrityError):
+            dbsession.flush()
+        dbsession.rollback()
+
+    def test_different_users_same_assistant_secret_collides(self, dbsession: Session):
+        """user_id is no longer part of the PK — same (agent_id, name) from
+        different users should raise IntegrityError."""
+        user1, _ = _make_user_ba(dbsession, "sec-model-2b-u1")
+        user2, _ = _make_user_ba(dbsession, "sec-model-2b-u2")
+        a = _make_assistant(dbsession, user1.id)
+        dbsession.add(
+            AssistantSecret(
+                user_id=user1.id,
+                agent_id=a.agent_id,
+                secret_name="TOKEN",
+                secret_value="v1",
+            ),
+        )
+        dbsession.flush()
+        dbsession.add(
+            AssistantSecret(
+                user_id=user2.id,
+                agent_id=a.agent_id,
+                secret_name="TOKEN",
                 secret_value="v2",
             ),
         )
@@ -885,3 +918,230 @@ class TestSecretEndToEnd:
         assert target["secrets"]["MICROSOFT_ACCESS_TOKEN"] == "at-refreshed"
         assert target["secrets"]["MICROSOFT_REFRESH_TOKEN"] == "rt-initial"
         assert target["secrets"]["MICROSOFT_TOKEN_EXPIRES_AT"] == "2099-01-01"
+
+
+# ============================================================================
+# 10. Org assistant secret CRUD
+# ============================================================================
+
+
+class TestOrgAssistantSecrets:
+    """Secret CRUD using an org-scoped API key on an org assistant."""
+
+    async def _setup_org_assistant(self, client: AsyncClient):
+        """Create owner, org, and org assistant.  Returns (owner, org, agent_id)."""
+        owner = await create_test_user(client, "sec-org-owner@test.com")
+        org = await create_test_org(client, owner, "SecretOrgTest")
+        resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Org", "surname": "Secret", "create_infra": False},
+            headers=org["headers"],
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        agent_id = int(resp.json()["info"]["agent_id"])
+        return owner, org, agent_id
+
+    @pytest.mark.anyio
+    async def test_create_secret_via_org_key(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        owner, org, agent_id = await self._setup_org_assistant(client)
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={"secret_name": "ORG_TOKEN", "secret_value": "org-val"},
+            headers=org["headers"],
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        assert resp.json()["info"]["status"] == "created"
+
+        dao = AssistantSecretDAO(dbsession)
+        assert dao.get(agent_id, "ORG_TOKEN") == "org-val"
+
+    @pytest.mark.anyio
+    async def test_update_secret_via_org_key(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        owner, org, agent_id = await self._setup_org_assistant(client)
+        await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={"secret_name": "UPD", "secret_value": "v1"},
+            headers=org["headers"],
+        )
+        resp = await client.put(
+            f"/v0/assistant/{agent_id}/secret/UPD",
+            json={"secret_value": "v2"},
+            headers=org["headers"],
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        dao = AssistantSecretDAO(dbsession)
+        assert dao.get(agent_id, "UPD") == "v2"
+
+    @pytest.mark.anyio
+    async def test_delete_secret_via_org_key(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        owner, org, agent_id = await self._setup_org_assistant(client)
+        await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={"secret_name": "DEL", "secret_value": "gone"},
+            headers=org["headers"],
+        )
+        resp = await client.delete(
+            f"/v0/assistant/{agent_id}/secret/DEL",
+            headers=org["headers"],
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        dao = AssistantSecretDAO(dbsession)
+        assert dao.get(agent_id, "DEL") is None
+
+    @pytest.mark.anyio
+    async def test_secret_stores_creator_user_id(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        """When an org member writes a secret, the stored user_id is the
+        assistant creator's, not the requesting member's."""
+        from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+        from orchestra.db.dao.role_dao import RoleDAO
+
+        owner, org, agent_id = await self._setup_org_assistant(client)
+
+        member = await create_test_user(client, "sec-org-member@test.com")
+        add_resp = await client.post(
+            f"/v0/organizations/{org['id']}/members",
+            json={"user_id": member["id"]},
+            headers=owner["headers"],
+        )
+        assert add_resp.status_code == status.HTTP_201_CREATED
+        member_org_headers = {
+            "Authorization": f"Bearer {add_resp.json()['api_key']}",
+        }
+
+        role_dao = RoleDAO(dbsession)
+        ra_dao = ResourceAccessDAO(dbsession)
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        ra_dao.grant_access(
+            resource_type="assistant",
+            resource_id=agent_id,
+            role_id=member_role.id,
+            grantee_type="user",
+            grantee_id=member["id"],
+        )
+        dbsession.commit()
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={"secret_name": "MEMBER_WRITE", "secret_value": "mv"},
+            headers=member_org_headers,
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+
+        row = (
+            dbsession.query(AssistantSecret)
+            .filter(
+                AssistantSecret.agent_id == agent_id,
+                AssistantSecret.secret_name == "MEMBER_WRITE",
+            )
+            .one()
+        )
+        assert (
+            row.user_id == owner["id"]
+        ), "Secret user_id should be the assistant creator, not the requesting member"
+
+    @pytest.mark.anyio
+    async def test_org_member_without_permission_403(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        """Org member without assistant:write cannot create/update/delete secrets."""
+        from orchestra.db.dao.permission_dao import PermissionDAO
+        from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+        from orchestra.db.dao.role_dao import RoleDAO
+
+        owner = await create_test_user(client, "sec-perm-owner@test.com")
+        org = await create_test_org(client, owner, "SecretPermOrg")
+
+        role_dao = RoleDAO(dbsession)
+        perm_dao = PermissionDAO(dbsession)
+        ra_dao = ResourceAccessDAO(dbsession)
+
+        viewer_role = role_dao.create(
+            name="ReadOnlyViewer",
+            organization_id=org["id"],
+        )
+        read_perm = perm_dao.get_by_name("assistant:read")
+        role_dao.add_permission(viewer_role.id, read_perm.id)
+        dbsession.flush()
+
+        viewer = await create_test_user(client, "sec-perm-viewer@test.com")
+        add_resp = await client.post(
+            f"/v0/organizations/{org['id']}/members",
+            json={"user_id": viewer["id"], "role_id": viewer_role.id},
+            headers=owner["headers"],
+        )
+        assert add_resp.status_code == status.HTTP_201_CREATED
+        viewer_org_headers = {
+            "Authorization": f"Bearer {add_resp.json()['api_key']}",
+        }
+
+        asst_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "Perm", "surname": "Check", "create_infra": False},
+            headers=org["headers"],
+        )
+        assert asst_resp.status_code == status.HTTP_200_OK
+        agent_id = int(asst_resp.json()["info"]["agent_id"])
+
+        ra_dao.grant_access(
+            resource_type="assistant",
+            resource_id=agent_id,
+            role_id=viewer_role.id,
+            grantee_type="user",
+            grantee_id=viewer["id"],
+        )
+        dbsession.commit()
+
+        # Viewer tries to create secret → 403 (has assistant:read, not assistant:write)
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={"secret_name": "NOPE", "secret_value": "x"},
+            headers=viewer_org_headers,
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+        # Owner creates a secret so we can test update/delete
+        await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={"secret_name": "EXISTS", "secret_value": "v"},
+            headers=org["headers"],
+        )
+
+        # Viewer tries to update → 403
+        resp = await client.put(
+            f"/v0/assistant/{agent_id}/secret/EXISTS",
+            json={"secret_value": "new"},
+            headers=viewer_org_headers,
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+        # Viewer tries to delete → 403
+        resp = await client.delete(
+            f"/v0/assistant/{agent_id}/secret/EXISTS",
+            headers=viewer_org_headers,
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN

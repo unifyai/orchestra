@@ -81,13 +81,6 @@ def seed_contact_type_costs(dbsession: Session):
                 one_time_cost=Decimal("5.00"),
             ),
             AssistantContactCost(
-                contact_type="email",
-                provider="google_workspace",
-                country_code=None,
-                monthly_cost=Decimal("14.00"),
-                one_time_cost=Decimal("5.00"),
-            ),
-            AssistantContactCost(
                 contact_type="whatsapp",
                 provider="twilio",
                 country_code=None,
@@ -189,8 +182,8 @@ class TestLevyCoreLogic:
         dbsession.refresh(ba)
         assert ba.credits == Decimal("50") - Decimal("1.50")
 
-    def test_bills_org_email(self, dbsession: Session):
-        """An org with an email contact is billed $14.00."""
+    def test_bills_org_whatsapp(self, dbsession: Session):
+        """An org with a WhatsApp contact is billed $5.00 against the org BA."""
         user_ba = make_billing_account(dbsession, credits=10)
         user = make_user(dbsession, "lev_u2", user_ba)
         org_ba = make_billing_account(dbsession, credits=100)
@@ -198,15 +191,15 @@ class TestLevyCoreLogic:
         asst = make_assistant(
             dbsession,
             user.id,
-            first_name="LevEmail",
+            first_name="LevWhats",
             organization_id=org.id,
         )
-        c = make_contact(
+        make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="lev@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15551200002",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -215,14 +208,19 @@ class TestLevyCoreLogic:
 
         ar = [r for r in result.account_results if r.billing_account_id == org_ba.id]
         assert len(ar) == 1
-        assert ar[0].email_count == 1
-        assert ar[0].email_cost == Decimal("14.00")
+        assert ar[0].whatsapp_count == 1
+        assert ar[0].whatsapp_cost == Decimal("5.00")
 
         dbsession.refresh(org_ba)
-        assert org_ba.credits == Decimal("100") - Decimal("14.00")
+        assert org_ba.credits == Decimal("100") - Decimal("5.00")
 
     def test_bills_multiple_contact_types(self, dbsession: Session):
-        """A user with phone + email + whatsapp is billed the sum."""
+        """A user with phone + whatsapp + discord is billed the sum.
+
+        Note: ``email`` is intentionally not exercised here. Email contacts
+        are BYOD-only (``provisioned_by='user'``) and are excluded from the
+        levy by the ``provisioned_by == 'platform'`` filter.
+        """
         ba = make_billing_account(dbsession, credits=100)
         user = make_user(dbsession, "lev_u3", ba)
         asst = make_assistant(dbsession, user.id, first_name="LevMulti")
@@ -238,30 +236,30 @@ class TestLevyCoreLogic:
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="levmulti@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15551200011",
+            provider="twilio",
             country_code=None,
         )
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="whatsapp",
-            contact_value="+15551200011",
-            provider="twilio",
+            contact_type="discord",
+            contact_value="discord_bot_lev3",
+            provider="discord",
             country_code=None,
         )
         dbsession.flush()
 
         result = levy_provisioned_resources(2026, 3, session=dbsession)
 
-        expected = Decimal("1.50") + Decimal("14.00") + Decimal("5.00")
+        expected = Decimal("1.50") + Decimal("5.00") + Decimal("1")
         ar = [r for r in result.account_results if r.billing_account_id == ba.id]
         assert len(ar) == 1
         assert ar[0].total_amount == expected
         assert ar[0].phone_count == 1
-        assert ar[0].email_count == 1
         assert ar[0].whatsapp_count == 1
+        assert ar[0].discord_count == 1
 
         dbsession.refresh(ba)
         assert ba.credits == Decimal("100") - expected
@@ -401,10 +399,10 @@ class TestLevyCoreLogic:
         make_contact(
             dbsession,
             asst1.agent_id,
-            contact_type="email",
-            contact_value="lev9a@test.ai",
-            provider="google_workspace",
-            country_code=None,
+            contact_type="phone",
+            contact_value="+15551200060",
+            provider="twilio",
+            country_code="US",
         )
 
         ba2 = make_billing_account(dbsession, credits=200)
@@ -426,7 +424,7 @@ class TestLevyCoreLogic:
         ar2 = [r for r in result.account_results if r.billing_account_id == ba2.id]
         assert len(ar1) == 1
         assert len(ar2) == 1
-        assert ar1[0].email_cost == Decimal("14.00")
+        assert ar1[0].phone_cost == Decimal("1.50")
         assert ar2[0].whatsapp_cost == Decimal("5.00")
 
 
@@ -538,9 +536,9 @@ class TestLevyCreditManagement:
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="cred1@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010001",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -548,7 +546,7 @@ class TestLevyCreditManagement:
         levy_provisioned_resources(2026, 3, session=dbsession)
 
         dbsession.refresh(ba)
-        assert ba.credits == Decimal("100") - Decimal("14.00")
+        assert ba.credits == Decimal("100") - Decimal("5.00")
 
     @patch(
         "orchestra.routines.assistant_contact_levy.queue_auto_recharge",
@@ -558,7 +556,7 @@ class TestLevyCreditManagement:
         """Auto-recharge is triggered when credits drop below threshold."""
         ba = make_billing_account(
             dbsession,
-            credits=20,
+            credits=12,
             autorecharge=True,
             autorecharge_threshold=10,
             autorecharge_qty=50,
@@ -569,16 +567,16 @@ class TestLevyCreditManagement:
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="credar@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010002",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
 
         result = levy_provisioned_resources(2026, 3, session=dbsession)
 
-        # Credits: 20 - 14 = 6, which is below threshold of 10
+        # Credits: 12 - 5 = 7, which is below threshold of 10
         ar = [r for r in result.account_results if r.billing_account_id == ba.id]
         assert len(ar) == 1
         assert ar[0].auto_recharge_triggered is True
@@ -593,7 +591,7 @@ class TestLevyCreditManagement:
         """Auto-recharge is NOT triggered if no stripe_customer_id."""
         ba = make_billing_account(
             dbsession,
-            credits=20,
+            credits=12,
             autorecharge=True,
             autorecharge_threshold=10,
             autorecharge_qty=50,
@@ -604,9 +602,9 @@ class TestLevyCreditManagement:
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="credns@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010003",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -622,16 +620,16 @@ class TestLevyCreditManagement:
         """Account stays ACTIVE when credits go negative (no status change)."""
         ba = make_billing_account(
             dbsession,
-            credits=5,
-        )  # Will go negative with $14 email
+            credits=2,
+        )  # Will go negative with $5 WhatsApp
         user = make_user(dbsession, "cred_u4", ba)
         asst = make_assistant(dbsession, user.id, first_name="CredPD")
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="credpd@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010004",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -643,19 +641,19 @@ class TestLevyCreditManagement:
 
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
-        assert ba.credits == Decimal("5") - Decimal("14.00")
+        assert ba.credits == Decimal("2") - Decimal("5.00")
 
     def test_grace_period_started_on_negative_credits(self, dbsession: Session):
         """Contacts enter grace_period when credits go negative."""
-        ba = make_billing_account(dbsession, credits=5)
+        ba = make_billing_account(dbsession, credits=2)
         user = make_user(dbsession, "cred_u5", ba)
         asst = make_assistant(dbsession, user.id, first_name="CredGP")
         c = make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="credgp@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010005",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -671,15 +669,15 @@ class TestLevyCreditManagement:
 
     def test_active_account_stays_active_after_levy(self, dbsession: Session):
         """An ACTIVE account stays ACTIVE even when credits go negative."""
-        ba = make_billing_account(dbsession, credits=5, account_status="ACTIVE")
+        ba = make_billing_account(dbsession, credits=2, account_status="ACTIVE")
         user = make_user(dbsession, "cred_u6", ba)
         asst = make_assistant(dbsession, user.id, first_name="CredAPD")
         c = make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="credapd@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010006",
+            provider="twilio",
             country_code=None,
             status="grace_period",
         )
@@ -729,15 +727,15 @@ class TestLevyDay1Notification:
 
     def test_notification_sent_on_negative_credits(self, dbsession: Session):
         """Notification sent when credits go negative and contacts enter grace."""
-        ba = make_billing_account(dbsession, credits=5)
+        ba = make_billing_account(dbsession, credits=2)
         user = make_user(dbsession, "notif_u1", ba)
         asst = make_assistant(dbsession, user.id, first_name="NotifBot")
         c = make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="notif1@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010007",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -781,15 +779,15 @@ class TestLevyDay1Notification:
 
     def test_notification_tracking_set_on_grace_contacts(self, dbsession: Session):
         """Notification tracking is set on contacts entering grace period."""
-        ba = make_billing_account(dbsession, credits=5)
+        ba = make_billing_account(dbsession, credits=2)
         user = make_user(dbsession, "notif_u3", ba)
         asst = make_assistant(dbsession, user.id, first_name="NotifTrack")
         c = make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="notiftrack@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010008",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -807,15 +805,15 @@ class TestLevyDay1Notification:
 
     def test_active_account_no_notification(self, dbsession: Session):
         """No Day-1 notification for ACTIVE accounts."""
-        ba = make_billing_account(dbsession, credits=5, account_status="ACTIVE")
+        ba = make_billing_account(dbsession, credits=2, account_status="ACTIVE")
         user = make_user(dbsession, "notif_u4", ba)
         asst = make_assistant(dbsession, user.id, first_name="NotifAPD")
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="notifapd@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15553010009",
+            provider="twilio",
             country_code=None,
             status="grace_period",
         )
@@ -876,9 +874,9 @@ class TestLevyEdgeCases:
         make_contact(
             dbsession,
             asst2.agent_id,
-            contact_type="email",
-            contact_value="edgea2@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15551400011",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -889,7 +887,7 @@ class TestLevyEdgeCases:
         assert len(ar) == 1
         # Both contacts aggregated under the same BA
         assert ar[0].contacts_billed == 2
-        assert ar[0].total_amount == Decimal("1.50") + Decimal("14.00")
+        assert ar[0].total_amount == Decimal("1.50") + Decimal("5.00")
 
     def test_org_and_personal_assistant_billed_separately(
         self,
@@ -924,9 +922,9 @@ class TestLevyEdgeCases:
         make_contact(
             dbsession,
             org_asst.agent_id,
-            contact_type="email",
-            contact_value="edgeorg@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15551400021",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -945,8 +943,8 @@ class TestLevyEdgeCases:
         assert user_ar[0].total_amount == Decimal("1.50")
 
         assert len(org_ar) == 1
-        assert org_ar[0].email_count == 1
-        assert org_ar[0].total_amount == Decimal("14.00")
+        assert org_ar[0].whatsapp_count == 1
+        assert org_ar[0].total_amount == Decimal("5.00")
 
     def test_gb_country_code_uses_specific_price(self, dbsession: Session):
         """A GB phone uses the country-specific price ($1.50)."""
@@ -1044,7 +1042,11 @@ class TestLevyResultStructure:
         assert result.billing_month == "2026-06"
 
     def test_account_result_per_type_breakdown(self, dbsession: Session):
-        """Account result breaks down costs by contact type."""
+        """Account result breaks down costs by contact type.
+
+        Email is BYOD-only and never billed by the levy, so the breakdown
+        no longer surfaces an ``email_*`` field.
+        """
         ba = make_billing_account(dbsession, credits=200)
         user = make_user(dbsession, "res_u10", ba)
         asst = make_assistant(dbsession, user.id, first_name="ResBreak")
@@ -1059,9 +1061,9 @@ class TestLevyResultStructure:
         make_contact(
             dbsession,
             asst.agent_id,
-            contact_type="email",
-            contact_value="resbreak@test.ai",
-            provider="google_workspace",
+            contact_type="whatsapp",
+            contact_value="+15551600002",
+            provider="twilio",
             country_code=None,
         )
         dbsession.flush()
@@ -1072,12 +1074,14 @@ class TestLevyResultStructure:
         assert len(ar) == 1
         assert ar[0].phone_count == 1
         assert ar[0].phone_cost == Decimal("1.50")
-        assert ar[0].email_count == 1
-        assert ar[0].email_cost == Decimal("14.00")
-        assert ar[0].whatsapp_count == 0
-        assert ar[0].whatsapp_cost == Decimal("0")
+        assert ar[0].whatsapp_count == 1
+        assert ar[0].whatsapp_cost == Decimal("5.00")
+        assert ar[0].discord_count == 0
+        assert ar[0].discord_cost == Decimal("0")
         assert ar[0].credits_before == Decimal("200")
-        assert ar[0].credits_after == Decimal("200") - Decimal("15.50")
+        assert ar[0].credits_after == Decimal("200") - Decimal("6.50")
+        assert not hasattr(ar[0], "email_count")
+        assert not hasattr(ar[0], "email_cost")
 
 
 # ============================================================================

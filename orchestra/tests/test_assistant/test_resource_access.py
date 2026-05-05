@@ -41,7 +41,10 @@ def mock_assistant_infra_calls(request):
         0.0,
     ), patch(
         "orchestra.web.api.assistant.views.BucketService",
-    ) as mock_bucket_cls:
+    ) as mock_bucket_cls, patch(
+        "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
+        new_callable=AsyncMock,
+    ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_cleanup_tasks.return_value = {

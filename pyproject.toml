@@ -1,14 +1,23 @@
 [tool.poetry]
 name = "orchestra"
 version = "0.1.0"
-description = ""
+description = "Backend API and persistence layer for Unity and the wider Unify stack"
 authors = [
-
+    "Unify <hello@unify.ai>",
 ]
 maintainers = [
-
+    "Unify <hello@unify.ai>",
 ]
 readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/unifyai/orchestra"
+repository = "https://github.com/unifyai/orchestra"
+documentation = "https://github.com/unifyai/orchestra"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
 
 [tool.poetry.dependencies]
 python = "^3.12"

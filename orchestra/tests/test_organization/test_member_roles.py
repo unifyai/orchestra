@@ -198,7 +198,10 @@ async def test_add_member_propagates_deploy_env_for_pool_conflicts(
     ) as mock_notify, patch(
         "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
         new_callable=AsyncMock,
-    ) as mock_reawaken:
+    ) as mock_reawaken, patch(
+        "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
+        new_callable=AsyncMock,
+    ):
         add_response = await client.post(
             f"/v0/organizations/{org_id}/members",
             json={"user_id": joiner["id"]},

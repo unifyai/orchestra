@@ -22,7 +22,6 @@ from opentelemetry.trace import get_tracer_provider, set_tracer_provider
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import register_db_listeners
 from orchestra.settings import settings
 from orchestra.web.api.utils.inactivity_shutdown import (
@@ -403,85 +402,6 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
     logger.info("Observability stack setup completed")
 
 
-def ensure_production_traffic_project_exists(app: FastAPI):
-    """Ensures a special admin organization and the 'Production Traffic' project exist, and assigns all AdminUser records as admin members."""
-    from orchestra.db.dao.organization_dao import OrganizationDAO
-    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-    from orchestra.db.dao.project_dao import ProjectDAO
-    from orchestra.db.models.orchestra_models import AdminUser
-
-    session = app.state.db_session_factory()
-
-    try:
-        # 1. Find or create 'Admin Organization'
-        org_dao = OrganizationDAO(session=session)
-        ORGANIZATION_NAME = settings.orchestra_organization_name
-        OWNER_ID = settings.orchestra_owner_id
-        PROJ_NAME = settings.orchestra_prod_traffic_name
-        logging.info(
-            f"Ensuring {ORGANIZATION_NAME} with owner {OWNER_ID} and {PROJ_NAME} exist",
-        )
-        orgs = org_dao.filter(name=ORGANIZATION_NAME)
-        if orgs:
-            admin_org = orgs[0][0]
-        else:
-            org_dao.create(name=ORGANIZATION_NAME, owner_id=OWNER_ID)
-            session.commit()
-            admin_org = org_dao.filter(name=ORGANIZATION_NAME)[0][0]
-
-        # 2. Ensure all AdminUser records are added as admin members
-        org_member_dao = OrganizationMemberDAO(session=session)
-        admin_users = session.query(AdminUser).all()
-        for admin_user in admin_users:
-            logging.info(
-                f"Ensuring {admin_user.user_id} is added to {ORGANIZATION_NAME}",
-            )
-            existing_memberships = org_member_dao.filter(
-                user_id=admin_user.user_id,
-                organization_id=admin_org.id,
-            )
-            if not existing_memberships:
-                logging.info(f"Adding {admin_user.user_id} to {ORGANIZATION_NAME}")
-                org_member_dao.create(
-                    user_id=admin_user.user_id,
-                    organization_id=admin_org.id,
-                    level="admin",
-                )
-
-        # 3. Create the 'Production Traffic' project if it doesn't already exist
-        organization_member_dao = OrganizationMemberDAO(session=session)
-        context_dao = ContextDAO(session=session)
-        project_dao = ProjectDAO(
-            session=session,
-            organization_member_dao=organization_member_dao,
-            context_dao=context_dao,
-        )
-        existing_project = project_dao.filter(
-            organization_id=admin_org.id,
-            name=PROJ_NAME,
-        )
-        if not existing_project:
-            logging.info(f"Creating {PROJ_NAME} in {ORGANIZATION_NAME}")
-            project_dao.create(
-                name=PROJ_NAME,
-                organization_id=admin_org.id,
-            )
-            session.commit()
-            existing_project = project_dao.filter(
-                organization_id=admin_org.id,
-                name=PROJ_NAME,
-            )
-
-        logging.info(
-            f"Production Traffic project {PROJ_NAME} created in {ORGANIZATION_NAME}",
-        )
-    except Exception as e:
-        logging.error(f"Error creating Production Traffic project: {e}")
-        session.rollback()
-    finally:
-        session.close()
-
-
 def register_startup_event(
     app: FastAPI,
 ) -> Callable[[], None]:  # pragma: no cover
@@ -505,7 +425,6 @@ def register_startup_event(
             location=settings.gcp_location,
         )
         app.middleware_stack = app.build_middleware_stack()
-        # ensure_production_traffic_project_exists(app)
         start_inactivity_monitor()
 
     return _startup

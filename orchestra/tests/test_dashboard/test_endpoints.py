@@ -433,6 +433,208 @@ async def test_admin_resolve_non_admin_key_rejected(
 
 
 # ===========================================================================
+# GET /admin/dashboards/actions/{tile_token} – Dashboard Action Metadata
+# ===========================================================================
+
+
+async def _seed_dashboard_action(
+    client: AsyncClient,
+    user: dict,
+    *,
+    project_name: str,
+    tile_token: str,
+    action_name: str,
+    function_id: int = 123,
+    request: str = "Send this dashboard as a report",
+    label: str = "Send Report",
+    icon: str = "mail",
+):
+    resp = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": f"{project_name}/Dashboards/Actions",
+            "entries": {
+                "tile_token": tile_token,
+                "action_name": action_name,
+                "function_id": function_id,
+                "request": request,
+                "label": label,
+                "icon": icon,
+                "scope": "dashboard",
+            },
+        },
+        headers=user["headers"],
+    )
+    assert resp.status_code == 200, resp.json()
+
+
+@pytest.mark.anyio
+async def test_admin_list_dashboard_actions_success(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    user = await create_test_user(client, "dash_action_list@test.com")
+    project_name = "dash-action-list-proj"
+
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "act_lst_001",
+            "tile",
+            f"{project_name}/Dashboards/Tiles",
+            project_name,
+        ),
+        headers=user["headers"],
+    )
+
+    await _seed_dashboard_action(
+        client,
+        user,
+        project_name=project_name,
+        tile_token="act_lst_001",
+        action_name="send_report",
+        function_id=987,
+    )
+    await _seed_dashboard_action(
+        client,
+        user,
+        project_name=project_name,
+        tile_token="act_lst_001",
+        action_name="send_alert",
+        function_id=988,
+        request="Send an alert",
+        label="Send Alert",
+        icon="zap",
+    )
+
+    resp = await client.get(
+        "/v0/admin/dashboards/actions/act_lst_001",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
+    data = resp.json()
+    assert data["total_count"] == 2
+    actions = {a["action_name"]: a for a in data["actions"]}
+    assert actions["send_report"]["tile_token"] == "act_lst_001"
+    assert actions["send_report"]["function_id"] == 987
+    assert actions["send_report"]["request"] == "Send this dashboard as a report"
+    assert actions["send_report"]["label"] == "Send Report"
+    assert actions["send_report"]["icon"] == "mail"
+    assert actions["send_report"]["scope"] == "dashboard"
+    assert actions["send_alert"]["function_id"] == 988
+
+
+@pytest.mark.anyio
+async def test_admin_get_dashboard_action_success(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    user = await create_test_user(client, "dash_action_get@test.com")
+    project_name = "dash-action-get-proj"
+
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "act_get_001",
+            "tile",
+            f"{project_name}/Dashboards/Tiles",
+            project_name,
+        ),
+        headers=user["headers"],
+    )
+
+    await _seed_dashboard_action(
+        client,
+        user,
+        project_name=project_name,
+        tile_token="act_get_001",
+        action_name="send_report",
+        function_id=654,
+    )
+
+    resp = await client.get(
+        "/v0/admin/dashboards/actions/act_get_001/send_report",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
+    assert resp.json() == {
+        "tile_token": "act_get_001",
+        "action_name": "send_report",
+        "function_id": 654,
+        "request": "Send this dashboard as a report",
+        "label": "Send Report",
+        "icon": "mail",
+        "scope": "dashboard",
+    }
+
+
+@pytest.mark.anyio
+async def test_admin_get_dashboard_action_missing_action_returns_404(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    user = await create_test_user(client, "dash_action_missing@test.com")
+    project_name = "dash-action-missing-proj"
+
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/dashboards/tokens",
+        json=token_body(
+            "act_miss_001",
+            "tile",
+            f"{project_name}/Dashboards/Tiles",
+            project_name,
+        ),
+        headers=user["headers"],
+    )
+
+    resp = await client.get(
+        "/v0/admin/dashboards/actions/act_miss_001/send_report",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_admin_dashboard_actions_missing_token_returns_404(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    list_resp = await client.get(
+        "/v0/admin/dashboards/actions/no_such_tile",
+        headers=ADMIN_HEADERS,
+    )
+    assert list_resp.status_code == status.HTTP_404_NOT_FOUND
+
+    get_resp = await client.get(
+        "/v0/admin/dashboards/actions/no_such_tile/send_report",
+        headers=ADMIN_HEADERS,
+    )
+    assert get_resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ===========================================================================
 # POST /admin/dashboards/tiles/{token}/filter – Filter Bridge (error cases)
 # ===========================================================================
 

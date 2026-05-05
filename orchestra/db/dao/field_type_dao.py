@@ -606,16 +606,31 @@ class FieldTypeDAO:
         context_id: int,
         fields: Dict[str, Union[Dict[str, Any], str, None]],
         description: Optional[str] = None,
-    ) -> None:
+    ) -> List[str]:
         """Create field definitions for a context without creating logs.
 
         Args:
             project_id: The project ID
             context_id: The context ID
             fields: Dictionary mapping fields names to their definitions.
+
+        Returns:
+            The subset of ``fields.keys()`` whose ``field_type.backfilled_at``
+            is ``NULL`` *after* the upsert, i.e. the fields that still need a
+            log_event null-merge pass. This includes:
+
+            - newly inserted rows (backfilled_at defaults to NULL),
+            - rows pre-existing with NULL (e.g. created as a side effect of
+              log insertion via ``bulk_create_field_types``, or a prior call
+              made with ``backfill_logs=False``).
+
+            Rows whose ``backfilled_at`` is already set are excluded -- the
+            caller may safely skip the expensive ``UPDATE log_event`` pass
+            for them. The ``ON CONFLICT DO UPDATE`` clause deliberately does
+            NOT touch ``backfilled_at`` so existing stamps are preserved.
         """
         if not fields:
-            return
+            return []
 
         # Prepare values for bulk insertion
         # Import field definition types for isinstance checks
@@ -708,7 +723,17 @@ class FieldTypeDAO:
                 },
             )
 
-        # Execute bulk insert with on_conflict_do_update
+        # Execute bulk insert with on_conflict_do_update.
+        #
+        # We RETURNING field_name, backfilled_at so the caller can decide
+        # whether the expensive log_event backfill UPDATE needs to run. The
+        # set_ clause intentionally omits backfilled_at: on conflict we want
+        # to preserve the existing stamp (or lack thereof) -- flipping a
+        # stamped field back to NULL would cause the caller to re-scan the
+        # whole context for nothing. Upserted rows that were just inserted
+        # get backfilled_at=NULL via the column default, which is what we
+        # want for the caller's pending list.
+        pending_backfill_fields: List[str] = []
         if values_to_insert:
             stmt = pg_insert(FieldType).values(values_to_insert)
             stmt = stmt.on_conflict_do_update(
@@ -721,9 +746,58 @@ class FieldTypeDAO:
                     "enum_restrict": stmt.excluded.enum_restrict,
                     "description": stmt.excluded.description,
                 },
-            )
-            self.session.execute(stmt)
+            ).returning(FieldType.field_name, FieldType.backfilled_at)
+            result = self.session.execute(stmt)
+            for field_name, backfilled_at in result.all():
+                if backfilled_at is None:
+                    pending_backfill_fields.append(field_name)
             self.session.commit()
+
+        return pending_backfill_fields
+
+    def mark_backfilled(
+        self,
+        project_id: int,
+        context_id: int,
+        field_names: List[str],
+    ) -> int:
+        """Stamp ``field_type.backfilled_at = now()`` for the given fields.
+
+        Called after a successful log_event null-merge pass in
+        ``POST /v0/logs/fields`` so that subsequent idempotent re-POSTs of
+        the same field set can short-circuit without re-scanning the whole
+        context. The ``backfilled_at IS NULL`` filter makes this a cheap
+        indexed update (partial index ``idx_field_type_needs_backfill``)
+        and also guarantees that a concurrently-stamped row is not
+        needlessly rewritten. Caller is responsible for committing the
+        surrounding transaction.
+
+        Returns the number of rows actually stamped (mostly for logging /
+        tests).
+        """
+        if not field_names:
+            return 0
+
+        from sqlalchemy import text
+
+        result = self.session.execute(
+            text(
+                """
+                UPDATE field_type
+                SET backfilled_at = now()
+                WHERE project_id = :project_id
+                  AND context_id = :context_id
+                  AND field_name = ANY(CAST(:field_names AS text[]))
+                  AND backfilled_at IS NULL
+                """,
+            ),
+            {
+                "project_id": project_id,
+                "context_id": context_id,
+                "field_names": field_names,
+            },
+        )
+        return result.rowcount or 0
 
     # Valid field categories for validation
     VALID_FIELD_CATEGORIES = {"entry", "derived_entry"}

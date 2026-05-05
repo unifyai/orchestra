@@ -5,14 +5,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Project
 from orchestra.services.task_machine_state_service import (
+    create_task_outbound_operation_if_absent,
     create_task_run_if_absent,
     get_task_activation,
+    update_task_outbound_operation,
     update_task_run,
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
     TaskActivationLookupRequest,
     TaskActivationLookupResponse,
+    TaskOutboundOperationCreateOrAdoptRequest,
+    TaskOutboundOperationMutationResponse,
+    TaskOutboundOperationUpdateRequest,
     TaskRunCreateOrAdoptRequest,
     TaskRunMutationResponse,
     TaskRunUpdateRequest,
@@ -191,3 +196,61 @@ def patch_task_run(
         updates=request.updates,
     )
     return {"run": dict(run.data or {})}
+
+
+@router.post(
+    "/task-outbound-operation/create-or-adopt",
+    response_model=TaskOutboundOperationMutationResponse,
+)
+def create_or_adopt_task_outbound_operation(
+    request: TaskOutboundOperationCreateOrAdoptRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Create an outbound operation by operation_key if absent, otherwise adopt it."""
+
+    project = _get_internal_project_or_404(
+        session,
+        project_name=request.project_name,
+        assistant_id=request.assistant_id,
+    )
+    payload = request.model_dump(
+        exclude={"project_name"},
+        exclude_none=True,
+        mode="json",
+    )
+    operation, created = create_task_outbound_operation_if_absent(
+        session=session,
+        project_id=project.id,
+        payload=payload,
+    )
+    return {"operation": dict(operation.data or {}), "created": created}
+
+
+@router.post(
+    "/task-outbound-operation/update",
+    response_model=TaskOutboundOperationMutationResponse,
+)
+def patch_task_outbound_operation(
+    request: TaskOutboundOperationUpdateRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Apply a partial payload update to an existing outbound operation row."""
+
+    project = _get_internal_project_or_404(
+        session,
+        project_name=request.project_name,
+        assistant_id=request.assistant_id,
+    )
+    try:
+        operation = update_task_outbound_operation(
+            session=session,
+            project_id=project.id,
+            assistant_id=request.assistant_id,
+            operation_key=request.operation_key,
+            updates=request.updates,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"operation": dict(operation.data or {})}

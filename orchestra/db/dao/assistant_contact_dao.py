@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _CONTACT_TYPE_PROVIDER: dict[str, str] = {
     "phone": "twilio",
-    "email": "google_workspace",
     "whatsapp": "twilio",
 }
 
