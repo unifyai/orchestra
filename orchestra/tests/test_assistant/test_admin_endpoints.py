@@ -4,9 +4,13 @@ Tests for admin assistant endpoints:
 2. admin_update_assistant - Update assistant details directly (admin bypass)
 """
 
+import importlib.util
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from fastapi import status
 from httpx import AsyncClient
 
@@ -14,10 +18,13 @@ from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_COWORKER,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     AssistantConsoleConfig,
     ContactMembership,
+    User,
 )
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
@@ -53,6 +60,25 @@ def mock_assistant_infra_calls(request):
         mock_settings.is_staging = True
 
         yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
+
+
+def _load_seed_memberships_migration():
+    migration_path = (
+        Path(__file__).parents[2]
+        / "db"
+        / "migrations"
+        / "versions"
+        / "2026-05-05-12-00_seed_personal_contact_memberships.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "seed_personal_contact_memberships",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # =============================================================================
@@ -1241,22 +1267,26 @@ async def test_admin_assistant_projects_contact_ids_from_personal_memberships(
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
-    dbsession.add_all(
-        [
-            ContactMembership(
-                assistant_id=agent_id,
-                contact_id=42,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
-            ),
-            ContactMembership(
-                assistant_id=agent_id,
-                contact_id=43,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-            ),
-        ],
+    self_membership = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        )
+        .one()
     )
+    boss_membership = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+        )
+        .one()
+    )
+    self_membership.contact_id = 42
+    boss_membership.contact_id = 43
     dbsession.commit()
 
     admin_resp = await client.get(
@@ -1276,26 +1306,27 @@ async def test_admin_assistant_projects_contact_ids_from_personal_memberships(
 
 
 @pytest.mark.anyio
-async def test_admin_assistant_contact_ids_fallback_without_memberships(
+async def test_create_assistant_provisions_personal_contact_memberships(
     client: AsyncClient,
+    dbsession,
 ):
-    """Assistant reads use contact-id defaults when no overlay exists."""
+    """Fresh assistants get personal self and boss contact overlays."""
 
     owner = await create_test_user(
         client,
-        "contact-ids-fallback@test.com",
+        "contact-ids-provisioning@test.com",
     )
     create_resp = await client.post(
         "/v0/assistant",
         json={
             "first_name": "ContactIds",
-            "surname": "Fallback",
+            "surname": "Provisioned",
             "create_infra": False,
         },
         headers=owner["headers"],
     )
     assert create_resp.status_code == 200
-    agent_id = create_resp.json()["info"]["agent_id"]
+    agent_id = int(create_resp.json()["info"]["agent_id"])
 
     admin_resp = await client.get(
         "/v0/admin/assistant?"
@@ -1306,11 +1337,215 @@ async def test_admin_assistant_contact_ids_fallback_without_memberships(
     assert admin_resp.status_code == 200
     assert admin_resp.json()["info"] == [
         {
-            "agent_id": agent_id,
+            "agent_id": str(agent_id),
             "self_contact_id": 0,
             "boss_contact_id": 1,
         },
     ]
+    rows = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+        )
+        .all()
+    )
+    assert len(rows) == 2
+    memberships = {row.relationship: row for row in rows}
+    assert {
+        relationship: row.contact_id for relationship, row in memberships.items()
+    } == {
+        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF: 0,
+        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: 1,
+    }
+    for row in rows:
+        assert row.target_space_id is None
+        assert row.should_respond is True
+        assert row.can_edit is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "relationship_to_delete",
+    [
+        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    ],
+)
+async def test_admin_assistant_contact_ids_fail_without_memberships(
+    client: AsyncClient,
+    dbsession,
+    relationship_to_delete,
+):
+    """Assistant reads fail loudly when required personal overlays are absent."""
+
+    owner = await create_test_user(
+        client,
+        "contact-ids-missing@test.com",
+    )
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "ContactIds",
+            "surname": "Missing",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.relationship == relationship_to_delete,
+        )
+        .delete(synchronize_session=False)
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant?"
+        f"agent_id={agent_id}&from_fields=agent_id,self_contact_id,boss_contact_id",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert admin_resp.json()["detail"] == "missing_contact_overlay"
+
+
+def test_seed_personal_contact_memberships_backfills_missing_relationships(
+    dbsession,
+    monkeypatch,
+):
+    """The data repair fills missing overlays without changing existing ids."""
+
+    user = User(
+        id="contact-membership-backfill-user",
+        email="contact-membership-backfill-user@test.com",
+    )
+    dbsession.add(user)
+    dbsession.flush()
+    assistant_dao = AssistantDAO(dbsession)
+
+    def create_assistant(first_name: str):
+        return assistant_dao.create_assistant(
+            user_id=user.id,
+            first_name=first_name,
+            surname="Backfill",
+            age=None,
+            nationality=None,
+            about=None,
+            weekly_limit=None,
+            max_parallel=None,
+        )
+
+    missing = create_assistant("MissingBoth")
+    only_self = create_assistant("OnlySelf")
+    only_boss = create_assistant("OnlyBoss")
+    complete = create_assistant("Complete")
+    wrong_default_self = create_assistant("WrongDefaultSelf")
+    wrong_default_boss = create_assistant("WrongDefaultBoss")
+    dbsession.add_all(
+        [
+            ContactMembership(
+                assistant_id=only_self.agent_id,
+                contact_id=20,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            ),
+            ContactMembership(
+                assistant_id=only_boss.agent_id,
+                contact_id=31,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            ),
+            ContactMembership(
+                assistant_id=complete.agent_id,
+                contact_id=42,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            ),
+            ContactMembership(
+                assistant_id=complete.agent_id,
+                contact_id=43,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            ),
+            ContactMembership(
+                assistant_id=wrong_default_self.agent_id,
+                contact_id=0,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER,
+            ),
+            ContactMembership(
+                assistant_id=wrong_default_boss.agent_id,
+                contact_id=1,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_COWORKER,
+            ),
+        ],
+    )
+    dbsession.flush()
+
+    migration = _load_seed_memberships_migration()
+    operations = Operations(MigrationContext.configure(dbsession.connection()))
+    monkeypatch.setattr(migration, "op", operations)
+    migration.upgrade()
+    migration.upgrade()
+
+    relationships_by_assistant: dict[int, dict[str, list[int]]] = {}
+    rows = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id.in_(
+                [
+                    missing.agent_id,
+                    only_self.agent_id,
+                    only_boss.agent_id,
+                    complete.agent_id,
+                    wrong_default_self.agent_id,
+                    wrong_default_boss.agent_id,
+                ],
+            ),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+        )
+        .order_by(ContactMembership.assistant_id, ContactMembership.relationship)
+        .all()
+    )
+    for row in rows:
+        relationships_by_assistant.setdefault(row.assistant_id, {}).setdefault(
+            row.relationship,
+            [],
+        ).append(row.contact_id)
+
+    assert relationships_by_assistant == {
+        missing.agent_id: {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF: [0],
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: [1],
+        },
+        only_self.agent_id: {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF: [20],
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: [1],
+        },
+        only_boss.agent_id: {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF: [0],
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: [31],
+        },
+        complete.agent_id: {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF: [42],
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: [43],
+        },
+        wrong_default_self.agent_id: {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF: [0],
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: [1],
+        },
+        wrong_default_boss.agent_id: {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF: [0],
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: [1],
+        },
+    }
 
 
 @pytest.mark.anyio
@@ -1336,6 +1571,12 @@ async def test_admin_assistant_contact_ids_tolerates_duplicate_personal_relation
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
+    (
+        dbsession.query(ContactMembership)
+        .filter(ContactMembership.assistant_id == agent_id)
+        .delete(synchronize_session=False)
+    )
+    dbsession.commit()
     dbsession.add_all(
         [
             ContactMembership(
