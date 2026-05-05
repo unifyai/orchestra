@@ -516,7 +516,7 @@ def get_context(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Cannot delete built-in Tasks context.",
+                        "detail": "Cannot delete protected task machine contexts.",
                     },
                 },
             },
