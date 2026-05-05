@@ -73,6 +73,32 @@ steps:
   - -c
   - |
     set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    repair_traffic_state() {
     SERVICE_JSON=/tmp/service.json
     gcloud run services describe $_SERVICE_NAME \
       --region=$_DEPLOY_REGION \
@@ -123,11 +149,13 @@ steps:
         print("--remove-tags=" + ",".join(remove_tags))
     PY
     mapfile -t TRAFFIC_ARGS < /tmp/traffic-args.txt
-    gcloud run services update-traffic $_SERVICE_NAME \
+    run_cloud_run_with_retry gcloud run services update-traffic $_SERVICE_NAME \
       --region=$_DEPLOY_REGION \
       --platform=managed \
       "$${TRAFFIC_ARGS[@]}" \
       --quiet
+    }
+    run_cloud_run_with_retry repair_traffic_state
   waitFor: ['push-image']
 
 - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
@@ -137,6 +165,31 @@ steps:
   - -c
   - |
     set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
     SLUG=$(cat /workspace/slug.txt)
     SERVICE_NAME=$_SERVICE_NAME
     BUILD_PART=$(printf '%s' "$BUILD_ID" | cut -c1-8)
@@ -153,7 +206,7 @@ steps:
     COMMS_URL="https://$${SLUG}---$_PEER_COMMS_HOST"
     ADAPTERS_URL="https://$${SLUG}---$_PEER_ADAPTERS_HOST"
     CANONICAL_IMAGE=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
-    if ! gcloud run deploy $_SERVICE_NAME \
+    if ! run_cloud_run_with_retry gcloud run deploy $_SERVICE_NAME \
       --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:preview-$${SLUG}-$COMMIT_SHA \
       --region=$_DEPLOY_REGION \
       --platform=managed \
@@ -167,7 +220,7 @@ steps:
       --update-env-vars=ORCHESTRA_CLOUD_SQL_INSTANCE=$_CLOUDSQL_INSTANCE,BRANCH_TAG=$${SLUG},UNITY_COMMS_URL=$${COMMS_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
       --quiet; then
       echo "preview deploy failed; restoring canonical service template"
-      gcloud run services update $_SERVICE_NAME \
+      run_cloud_run_with_retry gcloud run services update $_SERVICE_NAME \
         --region=$_DEPLOY_REGION --platform=managed \
         --image="$$CANONICAL_IMAGE" \
         --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=$BUILD_ID,preview-restore=true \
@@ -186,16 +239,41 @@ steps:
   - -c
   - |
     set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
     SLUG=$(cat /workspace/slug.txt)
     REVISION=$(cat /workspace/preview-revision.txt)
     CANONICAL_IMAGE=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
-    if ! gcloud run services update-traffic $_SERVICE_NAME \
+    if ! run_cloud_run_with_retry gcloud run services update-traffic $_SERVICE_NAME \
       --region=$_DEPLOY_REGION \
       --platform=managed \
       --update-tags="$${SLUG}=$${REVISION}" \
       --quiet; then
       echo "preview tag assignment failed; restoring canonical service template"
-      gcloud run services update $_SERVICE_NAME \
+      run_cloud_run_with_retry gcloud run services update $_SERVICE_NAME \
         --region=$_DEPLOY_REGION --platform=managed \
         --image="$$CANONICAL_IMAGE" \
         --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=$BUILD_ID,preview-restore=true \
@@ -221,8 +299,33 @@ steps:
   - -c
   - |
     set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
     CANONICAL_IMAGE=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
-    gcloud run services update $_SERVICE_NAME \
+    run_cloud_run_with_retry gcloud run services update $_SERVICE_NAME \
       --region=$_DEPLOY_REGION --platform=managed \
       --image="$$CANONICAL_IMAGE" \
       --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=$BUILD_ID,preview-restore=true \
@@ -239,30 +342,58 @@ steps:
   - -c
   - |
     set -euo pipefail
-    REVISION=$$(gcloud run services describe $_SERVICE_NAME \
-      --region=$_DEPLOY_REGION \
-      --platform=managed \
-      --format="value(status.latestCreatedRevisionName)")
-    if [ -z "$$REVISION" ]; then
-      echo "No canonical restore revision found for build $BUILD_ID" >&2
-      exit 1
-    fi
-    REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
-      --region=$_DEPLOY_REGION \
-      --format="value(metadata.labels.gcb-build-id)")
-    REVISION_PREVIEW_RESTORE=$$(gcloud run revisions describe "$$REVISION" \
-      --region=$_DEPLOY_REGION \
-      --format="value(metadata.labels.preview-restore)")
-    if [ "$$REVISION_BUILD_ID" != "$BUILD_ID" ] || [ "$$REVISION_PREVIEW_RESTORE" != "true" ]; then
-      echo "Skipping traffic restore for $$REVISION because it is not this build's restore revision"
-      exit 0
-    fi
-    gcloud run services update-traffic $_SERVICE_NAME \
-      --region=$_DEPLOY_REGION \
-      --platform=managed \
-      --to-revisions="$$REVISION=100" \
-      --quiet
-    echo "canonical traffic restored to revision $$REVISION"
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    route_canonical_traffic() {
+      REVISION=$$(gcloud run services describe $_SERVICE_NAME \
+        --region=$_DEPLOY_REGION \
+        --platform=managed \
+        --format="value(status.latestCreatedRevisionName)")
+      if [ -z "$$REVISION" ]; then
+        echo "No canonical restore revision found for build $BUILD_ID" >&2
+        return 1
+      fi
+      REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
+        --region=$_DEPLOY_REGION \
+        --format="value(metadata.labels.gcb-build-id)")
+      REVISION_PREVIEW_RESTORE=$$(gcloud run revisions describe "$$REVISION" \
+        --region=$_DEPLOY_REGION \
+        --format="value(metadata.labels.preview-restore)")
+      if [ "$$REVISION_BUILD_ID" != "$BUILD_ID" ] || [ "$$REVISION_PREVIEW_RESTORE" != "true" ]; then
+        echo "Skipping traffic restore for $$REVISION because it is not this build's restore revision"
+        return 0
+      fi
+      gcloud run services update-traffic $_SERVICE_NAME \
+        --region=$_DEPLOY_REGION \
+        --platform=managed \
+        --to-revisions="$$REVISION=100" \
+        --quiet
+      echo "canonical traffic restored to revision $$REVISION"
+    }
+    run_cloud_run_with_retry route_canonical_traffic
   waitFor: ['restore-canonical-template']
 
 options:
