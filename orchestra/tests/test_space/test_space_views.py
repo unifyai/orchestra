@@ -11,6 +11,8 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     CONTACT_MEMBERSHIP_SCOPE_SPACE,
     Assistant,
@@ -36,6 +38,25 @@ def _make_assistant(
         surname="Bot",
     )
     dbsession.add(assistant)
+    dbsession.flush()
+    dbsession.add_all(
+        [
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                contact_id=0,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                can_edit=True,
+            ),
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                contact_id=1,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                can_edit=True,
+            ),
+        ],
+    )
     dbsession.flush()
     return assistant
 
@@ -444,7 +465,7 @@ async def test_remove_space_member_cleans_space_contact_overlays(
         .order_by(ContactMembership.contact_id)
         .all()
     )
-    assert [contact_id for (contact_id,) in remaining] == [2, 3]
+    assert [contact_id for (contact_id,) in remaining] == [0, 1, 2, 3]
     assert (
         dbsession.query(AssistantSpaceMembership)
         .filter(
