@@ -1290,6 +1290,8 @@ async def test_admin_assistant_projects_contact_ids_from_personal_memberships(
     )
     self_membership.contact_id = 42
     boss_membership.contact_id = 43
+    assert self_membership.authoring_assistant_id == agent_id
+    assert boss_membership.authoring_assistant_id == agent_id
     dbsession.commit()
 
     admin_resp = await client.get(
@@ -1763,6 +1765,7 @@ async def test_admin_create_contact_membership_is_idempotent(
     assert first.status_code == 200
     assert first.json()["info"]["created"] is True
     assert first.json()["info"]["membership"]["contact_id"] == 91
+    assert first.json()["info"]["membership"]["authoring_assistant_id"] == agent_id
 
     second = await client.post(
         f"/v0/admin/assistant/{agent_id}/contact-memberships",
@@ -1785,6 +1788,7 @@ async def test_admin_create_contact_membership_is_idempotent(
         .all()
     )
     assert len(rows) == 1
+    assert rows[0].authoring_assistant_id == agent_id
 
 
 @pytest.mark.anyio

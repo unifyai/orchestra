@@ -517,6 +517,7 @@ def _ensure_personal_contact_memberships(
     ) -> dict[str, object]:
         return {
             "assistant_id": assistant_id,
+            "authoring_assistant_id": assistant_id,
             "contact_id": contact_id,
             "target_scope": CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
             "target_space_id": None,
@@ -5380,6 +5381,11 @@ def _contact_membership_read(row: ContactMembership) -> ContactMembershipRead:
     return ContactMembershipRead(
         id=int(row.id),
         assistant_id=int(row.assistant_id),
+        authoring_assistant_id=(
+            int(row.authoring_assistant_id)
+            if row.authoring_assistant_id is not None
+            else None
+        ),
         contact_id=int(row.contact_id),
         target_scope=str(row.target_scope),
         target_space_id=(
@@ -5453,6 +5459,7 @@ def admin_create_contact_membership(
 
     values = {
         "assistant_id": assistant_id,
+        "authoring_assistant_id": assistant_id,
         "contact_id": request_body.contact_id,
         "target_scope": request_body.target_scope,
         "target_space_id": request_body.target_space_id,
