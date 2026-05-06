@@ -1,7 +1,7 @@
 """Add contact membership authoring assistant.
 
 Revision ID: contact_cm_authoring
-Revises: seed_personal_cm
+Revises: tighten_space_description
 Create Date: 2026-05-06 12:05:00.000000
 """
 
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "contact_cm_authoring"
-down_revision = "seed_personal_cm"
+down_revision = "tighten_space_description"
 branch_labels = None
 depends_on = None
 
