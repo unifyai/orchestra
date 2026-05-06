@@ -75,7 +75,9 @@ from orchestra.services.assistant_cleanup_service import (
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.coordinator_service import (
+    preseed_colleague_contexts,
     require_authorized_coordinator,
+    require_authorized_preseed_target,
     reset_coordinator_state,
     seed_coordinator_transcript,
     update_coordinator_mode,
@@ -115,6 +117,9 @@ from orchestra.web.api.assistant.schema import (
     ContactMembershipDeleteResponse,
     ContactMembershipRead,
     ContactMembershipUpsertResponse,
+    CoordinatorPreseedRequest,
+    CoordinatorPreseedResponse,
+    CoordinatorPreseedWriteResponse,
     CoordinatorResetResponse,
     CoordinatorStateResponse,
     CoordinatorStateUpdate,
@@ -1323,6 +1328,44 @@ async def update_coordinator_state_endpoint(
     )
     session.commit()
     return InfoResponse(info=CoordinatorStateResponse(mode=mode))
+
+
+@router.post(
+    "/assistant/{target_assistant_id}/preseed",
+    response_model=InfoResponse[CoordinatorPreseedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Seed a colleague assistant's own contexts",
+    tags=["Assistant Management"],
+)
+async def preseed_colleague_endpoint(
+    target_assistant_id: int,
+    request_body: CoordinatorPreseedRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorPreseedResponse]:
+    """Write Coordinator-authored rows into the target colleague's root."""
+    coordinator, target = require_authorized_preseed_target(
+        session,
+        target_assistant_id=target_assistant_id,
+        user_id=request.state.user_id,
+    )
+    writes = preseed_colleague_contexts(
+        session,
+        coordinator=coordinator,
+        target=target,
+        writes=request_body.writes,
+    )
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorPreseedResponse(
+            coordinator_id=coordinator.agent_id,
+            target_assistant_id=target.agent_id,
+            writes=[
+                CoordinatorPreseedWriteResponse(**write_result)
+                for write_result in writes
+            ],
+        ),
+    )
 
 
 @router.get(

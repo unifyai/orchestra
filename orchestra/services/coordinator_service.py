@@ -1,6 +1,6 @@
 """Coordinator provisioning and lifecycle helpers."""
 
-from typing import Literal
+from typing import Any, Literal, Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy import select, text
@@ -23,6 +23,12 @@ from orchestra.db.models.orchestra_models import (
     Project,
     Space,
 )
+from orchestra.services.task_machine_state_service import (
+    TASK_MACHINE_PROJECT_NAME,
+    get_task_ids_for_log_ids,
+    is_task_surface_context_name,
+    sync_task_activations_for_task_ids,
+)
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 
@@ -37,6 +43,11 @@ COORDINATOR_RESET_CONTEXTS = (
 COORDINATOR_STATE_CONTEXT = "Coordinator/State"
 COORDINATOR_TRANSCRIPTS_CONTEXT = "Transcripts"
 COORDINATOR_ADMIN_ROLES = {"Owner", "Admin"}
+PRESEED_SHARED_CONTEXT_PREFIX = "Spaces"
+PRESEED_SERVER_FIELDS = frozenset(
+    {"_user_id", "_assistant_id", "authoring_assistant_id"},
+)
+PRESEED_TASK_SERVER_FIELDS = frozenset({"assistant_id"})
 CoordinatorMode = Literal["active", "skipped", "ready_to_go"]
 
 
@@ -392,6 +403,55 @@ def require_authorized_coordinator(
     return coordinator
 
 
+def require_authorized_preseed_target(
+    session: Session,
+    *,
+    target_assistant_id: int,
+    user_id: str,
+) -> tuple[Assistant, Assistant]:
+    """Resolve the Coordinator allowed to seed rows for one colleague."""
+    target = AssistantDAO(session).get_assistant_by_agent_id(
+        agent_id=target_assistant_id,
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if target.is_coordinator:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="cannot_preseed_coordinator",
+        )
+
+    if target.organization_id is None:
+        if target.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to seed this assistant.",
+            )
+        coordinator = get_personal_coordinator(session, user_id)
+    else:
+        coordinator = get_org_coordinator(session, target.organization_id)
+
+    if coordinator is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Coordinator not found.",
+        )
+    authorized = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator.agent_id,
+        user_id=user_id,
+    )
+    if authorized.organization_id != target.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Coordinator cannot seed this assistant.",
+        )
+    return authorized, target
+
+
 def _project_for_coordinator(session: Session, coordinator: Assistant) -> Project:
     return ensure_assistants_project(
         session,
@@ -462,6 +522,190 @@ def _build_project_dao(session: Session) -> ProjectDAO:
         organization_member_dao=OrganizationMemberDAO(session),
         context_dao=context_dao,
     )
+
+
+def _normalize_preseed_context(context_name: str) -> str:
+    """Return a relative context suffix that remains under a target assistant root."""
+    normalized = (context_name or "").strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Preseed context must be a non-empty relative path.",
+        )
+    if normalized.startswith("/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Preseed context must be relative.",
+        )
+    segments = normalized.strip("/").split("/")
+    if (
+        not segments
+        or any(segment in {"", ".", ".."} for segment in segments)
+        or segments[0] == PRESEED_SHARED_CONTEXT_PREFIX
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Preseed context must stay inside the target assistant root.",
+        )
+    return "/".join(segments)
+
+
+def _preseed_context_name(*, target: Assistant, context_suffix: str) -> str:
+    return f"{target.user_id}/{target.agent_id}/{context_suffix}"
+
+
+def _preseed_protected_fields(*, is_task_context: bool) -> set[str]:
+    protected_fields = set(PRESEED_SERVER_FIELDS)
+    if is_task_context:
+        protected_fields.update(PRESEED_TASK_SERVER_FIELDS)
+    return protected_fields
+
+
+def _ensure_preseed_entry_is_client_owned(
+    entry: dict[str, Any],
+    *,
+    is_task_context: bool,
+) -> None:
+    blocked = sorted(
+        _preseed_protected_fields(is_task_context=is_task_context) & set(entry),
+    )
+    if blocked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Preseed entries cannot set server-owned fields: {blocked}.",
+        )
+
+
+def _preseed_entry(
+    entry: dict[str, Any],
+    *,
+    target: Assistant,
+    coordinator: Assistant,
+    is_task_context: bool,
+) -> dict[str, Any]:
+    seeded = dict(entry)
+    seeded["authoring_assistant_id"] = coordinator.agent_id
+    if is_task_context:
+        seeded["_user_id"] = target.user_id
+        seeded["_assistant_id"] = str(target.agent_id)
+    return seeded
+
+
+def _validate_preseed_writes(
+    writes: Sequence[Any],
+) -> list[tuple[str, bool, list[dict[str, Any]]]]:
+    """Validate requested writes before any row is persisted."""
+    planned_writes: list[tuple[str, bool, list[dict[str, Any]]]] = []
+    for write in writes:
+        context_suffix = _normalize_preseed_context(write.context)
+        entries = list(write.entries)
+        if not entries:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Preseed writes must include at least one entry.",
+            )
+        is_task_context = is_task_surface_context_name(context_suffix)
+        for entry in entries:
+            _ensure_preseed_entry_is_client_owned(
+                entry,
+                is_task_context=is_task_context,
+            )
+        planned_writes.append((context_suffix, is_task_context, entries))
+    return planned_writes
+
+
+def preseed_colleague_contexts(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    target: Assistant,
+    writes: Sequence[Any],
+) -> list[dict[str, Any]]:
+    """Write Coordinator-authored rows into one colleague's own contexts."""
+    planned_writes = _validate_preseed_writes(writes)
+    project = ensure_assistants_project(
+        session,
+        owner_user_id=target.user_id,
+        organization_id=target.organization_id,
+    )
+    if project.name != TASK_MACHINE_PROJECT_NAME:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Unsupported assistant project.",
+        )
+
+    context_dao = ContextDAO(session)
+    project_dao = _build_project_dao(session)
+    field_type_dao = FieldTypeDAO(session)
+    log_event_dao = LogEventDAO(session)
+
+    results: list[dict[str, Any]] = []
+    for context_suffix, is_task_context, entries in planned_writes:
+        context_name = _preseed_context_name(
+            target=target,
+            context_suffix=context_suffix,
+        )
+        seeded_entries = [
+            _preseed_entry(
+                entry,
+                target=target,
+                coordinator=coordinator,
+                is_task_context=is_task_context,
+            )
+            for entry in entries
+        ]
+        context = _ensure_context(
+            session,
+            project_id=project.id,
+            context_name=context_name,
+        )
+        result = create_logs_internal(
+            request=CreateLogConfig(
+                project_name=project.name,
+                context=context_name,
+                entries=seeded_entries,
+            ),
+            project_id=project.id,
+            context_id=context.id,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            log_event_dao=log_event_dao,
+            context_dao=context_dao,
+            context_obj=context,
+        )
+        if result.get("failed"):
+            first_error = result["failed"][0].get("error", "Log creation failed")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=first_error,
+            )
+
+        log_event_ids = result["log_event_ids"]
+        if is_task_context and log_event_ids:
+            task_ids = get_task_ids_for_log_ids(
+                session=session,
+                project_id=project.id,
+                context_name=context_name,
+                log_event_ids=log_event_ids,
+            )
+            sync_task_activations_for_task_ids(
+                session=session,
+                project_id=project.id,
+                task_ids=task_ids,
+                tasks_context_name=context_name,
+            )
+
+        results.append(
+            {
+                "context": context_name,
+                "log_event_ids": log_event_ids,
+                "row_ids": result["row_ids"],
+                "auto_counting": result["auto_counting"],
+            },
+        )
+
+    session.flush()
+    return results
 
 
 def seed_coordinator_transcript(

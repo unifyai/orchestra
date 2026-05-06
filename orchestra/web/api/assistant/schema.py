@@ -539,6 +539,40 @@ class CoordinatorTranscriptSeedResponse(BaseModel):
     log_event_id: int
 
 
+class CoordinatorPreseedWrite(BaseModel):
+    """One batch of rows to write into a colleague-owned context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: str = Field(..., min_length=1)
+    entries: List[Dict[str, Any]] = Field(..., min_length=1)
+
+
+class CoordinatorPreseedRequest(BaseModel):
+    """Request body for seeding a colleague's own working memory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    writes: List[CoordinatorPreseedWrite] = Field(..., min_length=1)
+
+
+class CoordinatorPreseedWriteResponse(BaseModel):
+    """Result for one seeded colleague context."""
+
+    context: str
+    log_event_ids: List[int]
+    row_ids: Dict[str, Any]
+    auto_counting: Dict[str, List[Any]]
+
+
+class CoordinatorPreseedResponse(BaseModel):
+    """Response returned after colleague context rows are written."""
+
+    coordinator_id: int
+    target_assistant_id: int
+    writes: List[CoordinatorPreseedWriteResponse]
+
+
 class CoordinatorResetResponse(BaseModel):
     """Response returned after Coordinator-owned conversation state is reset."""
 
