@@ -23,6 +23,9 @@ from orchestra.db.models.orchestra_models import (
     Project,
     Space,
 )
+from orchestra.services.task_machine_state_service import (
+    build_task_activation_context_name,
+)
 from orchestra.tests.utils import HEADERS, create_test_user
 
 
@@ -116,6 +119,19 @@ def _insert_log(
         LogEventContext(log_event_id=log_event.id, context_id=context.id),
     )
     dbsession.flush()
+
+
+def _context_logs(
+    dbsession: Session,
+    *,
+    context: Context,
+) -> list[LogEvent]:
+    return dbsession.scalars(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(LogEventContext.context_id == context.id)
+        .order_by(LogEvent.id.asc()),
+    ).all()
 
 
 @pytest.mark.anyio
@@ -405,3 +421,170 @@ async def test_coordinator_admin_gate_and_direct_delete_guard(
     assert delete.status_code == status.HTTP_409_CONFLICT, delete.json()
     assert delete.json()["detail"] == "cannot_delete_coordinator"
     assert dbsession.get(Assistant, coordinator_id) is not None
+
+
+@pytest.mark.anyio
+async def test_preseed_colleague_writes_target_owned_rows_and_task_activation(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Coordinator preseed writes rows under the target colleague root."""
+    owner = await _create_user(client, "preseed-owner")
+    org_data = await _create_org(client, owner, "preseed")
+    coordinator_id = int(org_data["coordinator_id"])
+    target = Assistant(
+        user_id=owner["id"],
+        organization_id=org_data["id"],
+        first_name="Revenue",
+        surname="Ops",
+    )
+    dbsession.add(target)
+    dbsession.flush()
+    tasks_context_name = _assistant_context_name(target, "Tasks")
+    knowledge_context_name = _assistant_context_name(target, "Knowledge")
+
+    response = await client.post(
+        f"/v0/assistant/{target.agent_id}/preseed",
+        json={
+            "writes": [
+                {
+                    "context": "Tasks",
+                    "entries": [
+                        {
+                            "task_id": 701,
+                            "instance_id": 0,
+                            "status": "scheduled",
+                            "name": "Morning renewal risk summary",
+                            "schedule": {"start_at": "2026-05-07T08:00:00+00:00"},
+                            "repeat": [{"unit": "day", "count": 1}],
+                        },
+                    ],
+                },
+                {
+                    "context": "Knowledge",
+                    "entries": [
+                        {"topic": "Renewals", "content": "Check blockers first."},
+                    ],
+                },
+            ],
+        },
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    payload = response.json()["info"]
+    assert payload["coordinator_id"] == coordinator_id
+    assert payload["target_assistant_id"] == target.agent_id
+    assert [write["context"] for write in payload["writes"]] == [
+        tasks_context_name,
+        knowledge_context_name,
+    ]
+
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    tasks_context = _context(dbsession, project=project, name=tasks_context_name)
+    knowledge_context = _context(
+        dbsession,
+        project=project,
+        name=knowledge_context_name,
+    )
+    assert tasks_context is not None
+    assert knowledge_context is not None
+
+    task_rows = _context_logs(dbsession, context=tasks_context)
+    assert len(task_rows) == 1
+    task_data = task_rows[0].data
+    assert task_data["authoring_assistant_id"] == coordinator_id
+    assert task_data["_user_id"] == owner["id"]
+    assert task_data["_assistant_id"] == str(target.agent_id)
+
+    knowledge_rows = _context_logs(dbsession, context=knowledge_context)
+    assert len(knowledge_rows) == 1
+    assert knowledge_rows[0].data == {
+        "topic": "Renewals",
+        "content": "Check blockers first.",
+        "authoring_assistant_id": coordinator_id,
+    }
+
+    activation_context = _context(
+        dbsession,
+        project=project,
+        name=build_task_activation_context_name(tasks_context_name),
+    )
+    assert activation_context is not None
+    activation_rows = _context_logs(dbsession, context=activation_context)
+    assert len(activation_rows) == 1
+    assert activation_rows[0].data["assistant_id"] == str(target.agent_id)
+    assert activation_rows[0].data["task_id"] == 701
+    assert activation_rows[0].data["source_task_log_id"] == task_rows[0].id
+
+
+@pytest.mark.anyio
+async def test_preseed_rejects_shared_paths_without_partial_writes(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Preseed is only for target colleague roots and rejects partial batches."""
+    owner = await _create_user(client, "preseed-atomic")
+    org_data = await _create_org(client, owner, "preseed-atomic")
+    target = Assistant(
+        user_id=owner["id"],
+        organization_id=org_data["id"],
+        first_name="Support",
+        surname="Ops",
+    )
+    dbsession.add(target)
+    dbsession.flush()
+
+    response = await client.post(
+        f"/v0/assistant/{target.agent_id}/preseed",
+        json={
+            "writes": [
+                {"context": "Knowledge", "entries": [{"content": "safe"}]},
+                {"context": "Spaces/999/Knowledge", "entries": [{"content": "shared"}]},
+            ],
+        },
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
+    coordinator = dbsession.get(Assistant, int(org_data["coordinator_id"]))
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    assert (
+        _context(
+            dbsession,
+            project=project,
+            name=_assistant_context_name(target, "Knowledge"),
+        )
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_preseed_requires_the_target_scope_coordinator(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Personal Coordinators cannot preseed another user's colleague."""
+    owner = await _create_user(client, "preseed-personal-owner")
+    other = await _create_user(client, "preseed-personal-other")
+    coordinator_response = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert coordinator_response.status_code == status.HTTP_201_CREATED
+    target = Assistant(
+        user_id=other["id"],
+        first_name="Private",
+        surname="Assistant",
+    )
+    dbsession.add(target)
+    dbsession.flush()
+
+    response = await client.post(
+        f"/v0/assistant/{target.agent_id}/preseed",
+        json={"writes": [{"context": "Knowledge", "entries": [{"content": "nope"}]}]},
+        headers=owner["headers"],
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.json()
