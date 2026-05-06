@@ -1767,6 +1767,7 @@ class ContactMembershipRead(BaseModel):
 
     id: int
     assistant_id: int
+    authoring_assistant_id: Optional[int]
     contact_id: int
     target_scope: str
     target_space_id: Optional[int]
