@@ -45,6 +45,7 @@ def _make_assistant(dbsession: Session, owner: User, suffix: str) -> Assistant:
 def _make_space(dbsession: Session, owner: User, suffix: str) -> Space:
     space = Space(
         name=f"Overlay Space {suffix}",
+        description=f"Shared contact overlay workspace for {suffix} tests.",
         owner_user_id=owner.id,
     )
     dbsession.add(space)
@@ -59,9 +60,11 @@ def _make_membership(
     target_scope: str,
     relationship: str = CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER,
     target_space_id: int | None = None,
+    authoring_assistant_id: int | None = None,
 ) -> ContactMembership:
     return ContactMembership(
         assistant_id=assistant.agent_id,
+        authoring_assistant_id=authoring_assistant_id,
         contact_id=contact_id,
         target_scope=target_scope,
         target_space_id=target_space_id,
@@ -190,6 +193,34 @@ def test_target_scope_constraint_rejects_unknown_values(dbsession: Session) -> N
 
     with pytest.raises(IntegrityError, match="ck_contact_memberships_target_scope"):
         dbsession.flush()
+
+
+def test_authoring_assistant_delete_preserves_membership_row(
+    dbsession: Session,
+) -> None:
+    """Authorship is retained when possible and nulled if the author is deleted."""
+
+    owner = _make_user(dbsession, "authoring-set-null")
+    assistant = _make_assistant(dbsession, owner, "authored-overlay-owner")
+    author = _make_assistant(dbsession, owner, "authored-overlay-author")
+    membership = _make_membership(
+        assistant=assistant,
+        authoring_assistant_id=author.agent_id,
+        contact_id=7,
+        target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    )
+    dbsession.add(membership)
+    dbsession.flush()
+
+    membership_id = membership.id
+    dbsession.delete(author)
+    dbsession.flush()
+    dbsession.expire_all()
+
+    persisted = dbsession.get(ContactMembership, membership_id)
+    assert persisted is not None
+    assert persisted.assistant_id == assistant.agent_id
+    assert persisted.authoring_assistant_id is None
 
 
 def test_personal_contact_memberships_are_unique_per_contact(

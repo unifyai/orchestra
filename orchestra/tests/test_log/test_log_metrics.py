@@ -393,6 +393,78 @@ async def test_get_logs_metric_batch(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_metric_bulk_context_numeric_metrics(client: AsyncClient):
+    project_name = f"metric-bulk-context-{uuid.uuid4().hex}"
+    context_name = "numeric-metrics"
+    await _create_project(client, project_name)
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries=[
+            {
+                "metric_a": 1,
+                "metric_b": 10,
+                "explicit_types": {
+                    "metric_a": {"type": "int"},
+                    "metric_b": {"type": "int"},
+                },
+            },
+            {
+                "metric_a": 2,
+                "metric_b": 10,
+                "explicit_types": {
+                    "metric_a": {"type": "int"},
+                    "metric_b": {"type": "int"},
+                },
+            },
+            {
+                "metric_a": 2,
+                "metric_b": 20,
+                "explicit_types": {
+                    "metric_a": {"type": "int"},
+                    "metric_b": {"type": "int"},
+                },
+            },
+            {
+                "metric_a": 3,
+                "explicit_types": {"metric_a": {"type": "int"}},
+            },
+        ],
+        context={"name": context_name, "description": "Numeric metrics context"},
+    )
+    assert response.status_code == 200, response.json()
+
+    expected_results = {
+        "count": {"metric_a": 4, "metric_b": 3},
+        "sum": {"metric_a": 8, "metric_b": 40},
+        "mean": {"metric_a": 2, "metric_b": 40 / 3},
+        "var": {"metric_a": 0.5, "metric_b": 200 / 9},
+        "std": {"metric_a": 0.5**0.5, "metric_b": (200 / 9) ** 0.5},
+        "min": {"metric_a": 1, "metric_b": 10},
+        "max": {"metric_a": 3, "metric_b": 20},
+        "median": {"metric_a": 2, "metric_b": 10},
+        "mode": {"metric_a": 2, "metric_b": 10},
+    }
+
+    for metric, expected in expected_results.items():
+        response = await client.get(
+            f"/v0/logs/metric/{metric}",
+            params={
+                "project_name": project_name,
+                "context": context_name,
+                "key": json.dumps(["metric_a", "metric_b"]),
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert set(result) == {"metric_a", "metric_b"}
+        for key, expected_value in expected.items():
+            assert result[key] == pytest.approx(expected_value)
+
+
+@pytest.mark.anyio
 async def test_get_logs_metric_grouped(client: AsyncClient):
     """Test the get_logs_metric endpoint with group_by parameter."""
     project_name = "test-metric-grouping"

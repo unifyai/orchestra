@@ -854,6 +854,11 @@ class ContactMembership(Base):
         ForeignKey("assistants.agent_id", ondelete="CASCADE"),
         nullable=False,
     )
+    authoring_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
     contact_id = Column(Integer, nullable=False)
     target_scope = Column(Text, nullable=False)
     target_space_id = Column(
@@ -886,7 +891,15 @@ class ContactMembership(Base):
         server_default=func.now(),
     )
 
-    assistant = orm_relationship("Assistant", back_populates="contact_memberships")
+    assistant = orm_relationship(
+        "Assistant",
+        back_populates="contact_memberships",
+        foreign_keys=[assistant_id],
+    )
+    authoring_assistant = orm_relationship(
+        "Assistant",
+        foreign_keys=[authoring_assistant_id],
+    )
     target_space = orm_relationship("Space", back_populates="contact_memberships")
 
     __table_args__ = (
@@ -907,6 +920,11 @@ class ContactMembership(Base):
             name="ck_contact_memberships_relationship",
         ),
         Index("ix_contact_memberships_assistant_id", "assistant_id"),
+        Index(
+            "ix_contact_memberships_authoring_assistant_id",
+            "authoring_assistant_id",
+            postgresql_where=text("authoring_assistant_id IS NOT NULL"),
+        ),
         Index(
             "ix_contact_memberships_target_space_id",
             "target_space_id",
@@ -1758,6 +1776,7 @@ class Assistant(Base):
     contact_memberships = relationship(
         "ContactMembership",
         back_populates="assistant",
+        foreign_keys="[ContactMembership.assistant_id]",
         passive_deletes=True,
     )
 

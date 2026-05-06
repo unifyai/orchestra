@@ -3182,19 +3182,35 @@ def _delete_logs(
     # Field type cleanup (check if fields exist in any LogEvent.data)
     # =========================================================================
     if deleted_fields and body.delete_empty_fields:
-        # Get distinct keys from all LogEvent.data using jsonb_object_keys()
-        from sqlalchemy import func as sa_func
-
-        # Query all distinct keys present in any LogEvent.data for this project
-        existing_keys_query = (
-            session.query(sa_func.jsonb_object_keys(LogEvent.data))
-            .filter(LogEvent.project_id == project_id)
-            .distinct()
+        # Preserve project-wide shared-log semantics without expanding every
+        # JSONB key in the project. We only need to know which deleted fields no
+        # longer exist anywhere in the project.
+        fields_to_delete_result = session.execute(
+            text(
+                """
+                WITH candidate_fields(field_name) AS (
+                    SELECT unnest(CAST(:deleted_fields AS text[]))
+                )
+                SELECT cf.field_name
+                FROM candidate_fields cf
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM log_event le
+                    WHERE le.project_id = :project_id
+                      AND le.data ? cf.field_name
+                    LIMIT 1
+                )
+                """,
+            ),
+            {
+                "project_id": project_id,
+                "deleted_fields": sorted(deleted_fields),
+            },
         )
-        existing_keys = set(row[0] for row in existing_keys_query.all())
 
-        # Find fields that no longer exist in any LogEvent.data
-        fields_to_delete = deleted_fields - existing_keys
+        # Fields returned here no longer exist in any LogEvent.data row for the
+        # project, so their context-specific field metadata can be removed.
+        fields_to_delete = {row[0] for row in fields_to_delete_result.fetchall()}
 
         # Delete orphaned field types
         if fields_to_delete:
