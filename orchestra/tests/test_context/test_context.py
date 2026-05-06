@@ -3225,7 +3225,7 @@ async def test_delete_context_protected_context_in_children(client: AsyncClient)
         headers=HEADERS,
     )
     assert response.status_code == 403
-    assert "Cannot delete built-in Tasks context" in response.json()["detail"]
+    assert "Cannot delete protected task machine contexts." in response.json()["detail"]
 
 
 @pytest.mark.anyio

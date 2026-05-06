@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -997,6 +999,133 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
         assert (
             field not in ctx1_fields
         ), f"Field '{field}' should have been deleted but still exists"
+
+
+@pytest.mark.anyio
+async def test_delete_empty_fields_preserves_shared_log_field_metadata(
+    client: AsyncClient,
+):
+    project_name = f"shared-log-field-cleanup-{uuid.uuid4().hex}"
+    await _create_project(client, project_name)
+
+    context1 = "cleanup/context1"
+    context2 = "cleanup/context2"
+    shared_field = "cleanup/shared_field"
+    context_only_field = "cleanup/context_only"
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            shared_field: "shared value",
+            context_only_field: "context value",
+            "explicit_types": {
+                shared_field: {"mutable": True},
+                context_only_field: {"mutable": True},
+            },
+        },
+        context=context1,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": context2, "log_ids": [log_id]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    response = await _delete_logs(
+        client,
+        [(log_id, None)],
+        project_name=project_name,
+        context=context1,
+        delete_empty_fields=True,
+    )
+    assert response.status_code == 200, response.json()
+
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        params={"context": context2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["id"] == log_id
+    assert shared_field in logs[0]["entries"]
+    assert context_only_field in logs[0]["entries"]
+
+    response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context1}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    context1_fields = response.json()
+    assert shared_field in context1_fields
+    assert context_only_field in context1_fields
+
+
+@pytest.mark.anyio
+async def test_delete_empty_fields_removes_only_project_absent_fields(
+    client: AsyncClient,
+):
+    project_name = f"candidate-field-cleanup-{uuid.uuid4().hex}"
+    await _create_project(client, project_name)
+
+    context1 = "cleanup/source"
+    context2 = "cleanup/other"
+    shared_field = "cleanup/shared_candidate"
+    removed_field = "cleanup/removed_candidate"
+    untouched_field = "cleanup/untouched"
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            shared_field: "source shared",
+            removed_field: "remove me",
+            untouched_field: "keep me",
+            "explicit_types": {
+                shared_field: {"mutable": True},
+                removed_field: {"mutable": True},
+                untouched_field: {"mutable": True},
+            },
+        },
+        context=context1,
+    )
+    assert response.status_code == 200, response.json()
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            shared_field: "other shared",
+            "explicit_types": {shared_field: {"mutable": True}},
+        },
+        context=context2,
+    )
+    assert response.status_code == 200, response.json()
+
+    response = await _delete_logs(
+        client,
+        [(None, [shared_field, removed_field])],
+        project_name=project_name,
+        context=context1,
+        delete_empty_fields=True,
+    )
+    assert response.status_code == 200, response.json()
+
+    response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context1}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    context1_fields = response.json()
+    assert shared_field in context1_fields
+    assert removed_field not in context1_fields
+    assert untouched_field in context1_fields
 
 
 # =============================================================================

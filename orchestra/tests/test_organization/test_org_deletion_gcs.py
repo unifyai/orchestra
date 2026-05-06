@@ -165,6 +165,7 @@ async def test_org_deletion_deprovisions_contacts_and_persists_cleanup_tasks(
                 assistant_id=agent_id,
                 contact_type="email",
                 contact_value="org-cleanup@assistant.unify.ai",
+                provisioned_by="user",
             ),
             AssistantContact(
                 assistant_id=agent_id,
@@ -179,9 +180,6 @@ async def test_org_deletion_deprovisions_contacts_and_persists_cleanup_tasks(
         "orchestra.services.assistant_cleanup_service.delete_phone_number",
         new_callable=AsyncMock,
     ) as mock_delete_phone, patch(
-        "orchestra.services.assistant_cleanup_service.delete_email",
-        new_callable=AsyncMock,
-    ) as mock_delete_email, patch(
         "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.delete_routes_for_assistant",
         return_value=1,
     ) as mock_delete_routes:
@@ -192,10 +190,6 @@ async def test_org_deletion_deprovisions_contacts_and_persists_cleanup_tasks(
 
     assert del_resp.status_code == status.HTTP_204_NO_CONTENT
     mock_delete_phone.assert_awaited_once_with("+15553334444", deploy_env=None)
-    mock_delete_email.assert_awaited_once_with(
-        "org-cleanup@assistant.unify.ai",
-        deploy_env=None,
-    )
     mock_delete_routes.assert_called_once_with(agent_id)
 
     dbsession.expire_all()
