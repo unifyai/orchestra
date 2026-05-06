@@ -127,7 +127,11 @@ async def _create_org_space(
     response = await client.post(
         "/v0/spaces",
         headers=owner["headers"],
-        json={"name": name, "organization_id": organization_id},
+        json={
+            "name": name,
+            "description": f"{name} organization workspace for cascade cleanup.",
+            "organization_id": organization_id,
+        },
     )
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     return response.json()

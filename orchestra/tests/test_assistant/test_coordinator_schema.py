@@ -6,7 +6,16 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, Organization, Space, User
+from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    Assistant,
+    ContactMembership,
+    Organization,
+    Space,
+    User,
+)
 from orchestra.web.api.assistant.views import _build_assistant_read
 
 
@@ -51,6 +60,37 @@ def _make_assistant(
     dbsession.add(assistant)
     dbsession.flush()
     return assistant
+
+
+def _make_personal_contact_memberships(
+    dbsession: Session,
+    assistant: Assistant,
+) -> None:
+    dbsession.add_all(
+        [
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                authoring_assistant_id=assistant.agent_id,
+                contact_id=0,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                should_respond=True,
+                response_policy="",
+                can_edit=True,
+            ),
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                authoring_assistant_id=assistant.agent_id,
+                contact_id=1,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                should_respond=True,
+                response_policy="",
+                can_edit=True,
+            ),
+        ],
+    )
+    dbsession.flush()
 
 
 def _make_space(
@@ -233,6 +273,7 @@ def test_assistant_read_projects_coordinator_flag(dbsession: Session) -> None:
     """Assistant reads carry the Coordinator role flag as a concrete boolean."""
     owner = _make_user(dbsession, "read-projection")
     assistant = _make_assistant(dbsession, owner, is_coordinator=True)
+    _make_personal_contact_memberships(dbsession, assistant)
 
     assistant_read = _build_assistant_read(assistant, dbsession)
 
