@@ -1,6 +1,6 @@
 """Coordinator provisioning and lifecycle helpers."""
 
-from typing import Any, Literal, Sequence
+from typing import Any, Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy import select, text
@@ -40,7 +40,6 @@ COORDINATOR_RESET_CONTEXTS = (
     "Transcripts",
     "Exchanges",
 )
-COORDINATOR_STATE_CONTEXT = "Coordinator/State"
 COORDINATOR_TRANSCRIPTS_CONTEXT = "Transcripts"
 COORDINATOR_ADMIN_ROLES = {"Owner", "Admin"}
 PRESEED_SHARED_CONTEXT_PREFIX = "Spaces"
@@ -48,7 +47,6 @@ PRESEED_SERVER_FIELDS = frozenset(
     {"_user_id", "_assistant_id", "authoring_assistant_id"},
 )
 PRESEED_TASK_SERVER_FIELDS = frozenset({"assistant_id"})
-CoordinatorMode = Literal["active", "skipped", "ready_to_go"]
 
 
 def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None:
@@ -781,56 +779,3 @@ def reset_coordinator_state(session: Session, *, coordinator: Assistant) -> None
         )
         if context is not None:
             context_dao.delete(context.id, skip_embedding_cleanup=True)
-
-
-def update_coordinator_mode(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    mode: CoordinatorMode,
-) -> CoordinatorMode:
-    """Read-modify-write the single Coordinator onboarding mode row."""
-    _lock_coordinator_context(
-        session,
-        coordinator=coordinator,
-        suffix=COORDINATOR_STATE_CONTEXT,
-    )
-    project = _project_for_coordinator(session, coordinator)
-    context = _ensure_context(
-        session,
-        project_id=project.id,
-        context_name=_coordinator_context_name(coordinator, COORDINATOR_STATE_CONTEXT),
-    )
-    log_event = session.scalar(
-        select(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(LogEventContext.context_id == context.id)
-        .order_by(LogEvent.id.asc())
-        .limit(1),
-    )
-    if log_event is None:
-        result = create_logs_internal(
-            request=CreateLogConfig(
-                project_name=ASSISTANTS_PROJECT_NAME,
-                context=_coordinator_context_name(
-                    coordinator,
-                    COORDINATOR_STATE_CONTEXT,
-                ),
-                entries={"mode": mode},
-            ),
-            project_id=project.id,
-            context_id=context.id,
-            project_dao=_build_project_dao(session),
-            field_type_dao=FieldTypeDAO(session),
-            log_event_dao=LogEventDAO(session),
-            context_dao=ContextDAO(session),
-            context_obj=context,
-        )
-        log_event = session.get(LogEvent, result["log_event_ids"][0])
-    else:
-        data = dict(log_event.data or {})
-        data["mode"] = mode
-        log_event.data = data
-
-    session.flush()
-    return mode

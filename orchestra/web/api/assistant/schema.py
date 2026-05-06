@@ -579,20 +579,6 @@ class CoordinatorResetResponse(BaseModel):
     coordinator_id: str
 
 
-class CoordinatorStateUpdate(BaseModel):
-    """Request body for updating the Coordinator onboarding mode."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["active", "skipped", "ready_to_go"]
-
-
-class CoordinatorStateResponse(BaseModel):
-    """Current Coordinator onboarding mode."""
-
-    mode: Literal["active", "skipped", "ready_to_go"]
-
-
 class DemoAssistantCreate(BaseModel):
     """
     Schema for creating a demo assistant.

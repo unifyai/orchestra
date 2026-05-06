@@ -80,7 +80,6 @@ from orchestra.services.coordinator_service import (
     require_authorized_preseed_target,
     reset_coordinator_state,
     seed_coordinator_transcript,
-    update_coordinator_mode,
 )
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
@@ -121,8 +120,6 @@ from orchestra.web.api.assistant.schema import (
     CoordinatorPreseedResponse,
     CoordinatorPreseedWriteResponse,
     CoordinatorResetResponse,
-    CoordinatorStateResponse,
-    CoordinatorStateUpdate,
     CoordinatorTranscriptSeed,
     CoordinatorTranscriptSeedResponse,
     DemoAssistantCreate,
@@ -1300,34 +1297,6 @@ async def reset_coordinator_endpoint(
     return InfoResponse(
         info=CoordinatorResetResponse(coordinator_id=str(coordinator.agent_id)),
     )
-
-
-@router.patch(
-    "/assistant/{coordinator_id}/coordinator-state",
-    response_model=InfoResponse[CoordinatorStateResponse],
-    status_code=status.HTTP_200_OK,
-    summary="Update Coordinator onboarding state",
-    tags=["Assistant Management"],
-)
-async def update_coordinator_state_endpoint(
-    coordinator_id: int,
-    state_update: CoordinatorStateUpdate,
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[CoordinatorStateResponse]:
-    """Set the Coordinator onboarding mode."""
-    coordinator = require_authorized_coordinator(
-        session,
-        coordinator_id=coordinator_id,
-        user_id=request.state.user_id,
-    )
-    mode = update_coordinator_mode(
-        session,
-        coordinator=coordinator,
-        mode=state_update.mode,
-    )
-    session.commit()
-    return InfoResponse(info=CoordinatorStateResponse(mode=mode))
 
 
 @router.post(

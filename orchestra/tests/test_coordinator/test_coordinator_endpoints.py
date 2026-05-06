@@ -220,53 +220,29 @@ async def test_transcript_seed_is_idempotent_by_assistant_row(
 
 
 @pytest.mark.anyio
-async def test_state_patch_and_reset_touch_only_coordinator_contexts(
+async def test_reset_clears_only_coordinator_contexts(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """State updates share one row, and reset clears only named contexts."""
+    """Reset clears the Coordinator's private state without touching credentials."""
     owner = await _create_user(client, "state-reset")
     org_data = await _create_org(client, owner, "state-reset")
     coordinator_id = int(org_data["coordinator_id"])
     headers = {"Authorization": f"Bearer {org_data['api_key']}"}
 
-    for mode in ("skipped", "active", "ready_to_go"):
-        response = await client.patch(
-            f"/v0/assistant/{coordinator_id}/coordinator-state",
-            json={"mode": mode},
-            headers=headers,
-        )
-        assert response.status_code == status.HTTP_200_OK, response.json()
-        assert response.json()["info"]["mode"] == mode
-
-    invalid = await client.patch(
-        f"/v0/assistant/{coordinator_id}/coordinator-state",
-        json={"mode": "active", "extra": True},
-        headers=headers,
-    )
-    assert invalid.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
     coordinator = dbsession.get(Assistant, coordinator_id)
     project = _assistants_project(dbsession, coordinator=coordinator)
-    state = _context(
-        dbsession,
-        project=project,
-        name=_assistant_context_name(coordinator, "Coordinator/State"),
-    )
-    state_logs = dbsession.scalars(
-        select(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(LogEventContext.context_id == state.id),
-    ).all()
-    assert len(state_logs) == 1
-    assert state_logs[0].data["mode"] == "ready_to_go"
-
-    for suffix in ("Coordinator/Checklist", "Transcripts", "Exchanges"):
+    for suffix, data in (
+        ("Coordinator/State", {"mode": "ready_to_go"}),
+        ("Coordinator/Checklist", {"title": "Connect HubSpot"}),
+        ("Transcripts", {"role": "assistant", "content": "Welcome."}),
+        ("Exchanges", {"value": "exchange"}),
+    ):
         _insert_log(
             dbsession,
             project=project,
             context_name=_assistant_context_name(coordinator, suffix),
-            data={"value": suffix},
+            data=data,
         )
     dbsession.add(
         AssistantSecret(
@@ -387,32 +363,49 @@ async def test_coordinator_admin_gate_and_direct_delete_guard(
     )
     dbsession.flush()
 
-    forbidden = await client.patch(
-        f"/v0/assistant/{coordinator_id}/coordinator-state",
-        json={"mode": "skipped"},
+    forbidden_seed = await client.post(
+        f"/v0/assistant/{coordinator_id}/transcript-seed",
+        json={"content": "Member should not seed."},
         headers=member["headers"],
     )
-    assert forbidden.status_code == status.HTTP_403_FORBIDDEN, forbidden.json()
-    assert forbidden.json()["detail"] == "admin_required"
+    assert (
+        forbidden_seed.status_code == status.HTTP_403_FORBIDDEN
+    ), forbidden_seed.json()
+    assert forbidden_seed.json()["detail"] == "admin_required"
 
-    admin_allowed = await client.patch(
-        f"/v0/assistant/{coordinator_id}/coordinator-state",
-        json={"mode": "active"},
+    forbidden_reset = await client.post(
+        f"/v0/assistant/{coordinator_id}/reset",
+        headers=member["headers"],
+    )
+    assert (
+        forbidden_reset.status_code == status.HTTP_403_FORBIDDEN
+    ), forbidden_reset.json()
+    assert forbidden_reset.json()["detail"] == "admin_required"
+
+    admin_seed = await client.post(
+        f"/v0/assistant/{coordinator_id}/transcript-seed",
+        json={"content": "Admin can seed."},
         headers=admin["headers"],
     )
-    assert admin_allowed.status_code == status.HTTP_200_OK, admin_allowed.json()
+    assert admin_seed.status_code == status.HTTP_200_OK, admin_seed.json()
+
+    admin_reset = await client.post(
+        f"/v0/assistant/{coordinator_id}/reset",
+        headers=admin["headers"],
+    )
+    assert admin_reset.status_code == status.HTTP_200_OK, admin_reset.json()
 
     org_member_dao.update_member_role(
         user_id=member["id"],
         organization_id=org_data["id"],
         role_id=admin_role.id,
     )
-    allowed = await client.patch(
-        f"/v0/assistant/{coordinator_id}/coordinator-state",
-        json={"mode": "skipped"},
+    promoted_seed = await client.post(
+        f"/v0/assistant/{coordinator_id}/transcript-seed",
+        json={"content": "Promoted admin can seed."},
         headers=member["headers"],
     )
-    assert allowed.status_code == status.HTTP_200_OK, allowed.json()
+    assert promoted_seed.status_code == status.HTTP_200_OK, promoted_seed.json()
 
     delete = await client.delete(
         f"/v0/assistant/{coordinator_id}",
