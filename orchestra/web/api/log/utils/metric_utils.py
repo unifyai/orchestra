@@ -1223,6 +1223,7 @@ def compute_metric_bulk(
             LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
         )
 
+    use_filtered_id_fallback = False
     if filter_expr:
         filter_dict = str_filter_exp_to_dict(
             filter_expr,
@@ -1239,6 +1240,7 @@ def compute_metric_bulk(
                 context_id=context_id,
             )
             if isinstance(condition, Subquery):
+                use_filtered_id_fallback = True
                 query = query.filter(
                     exists(
                         select(1)
@@ -1253,9 +1255,6 @@ def compute_metric_bulk(
                 )
             else:
                 query = query.filter(condition)
-
-    # Subquery of filtered LogEvents
-    filtered_events_subq = query.subquery()
 
     # 2) Build reduction methods dictionary
     reduction_methods = {
@@ -1291,12 +1290,22 @@ def compute_metric_bulk(
 
         aggregate_columns.append(agg_col)
 
-    # 5) Construct the single batched query
-    metric_query = (
-        session.query(*aggregate_columns)
-        .select_from(LogEvent)
-        .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
-    )
+    # 5) Construct the single batched query.
+    #
+    # Normal context-scoped metrics should aggregate directly over the scoped
+    # LogEvent query. The older filtered-ID wrapper was introduced to batch
+    # multiple metric columns safely, but on large contexts Postgres can choose
+    # a much worse plan for `log_event.id IN (SELECT ...)` than for the direct
+    # `log_event JOIN log_event_context` aggregate.
+    if use_filtered_id_fallback:
+        filtered_events_subq = query.subquery()
+        metric_query = (
+            session.query(*aggregate_columns)
+            .select_from(LogEvent)
+            .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        )
+    else:
+        metric_query = query.with_entities(*aggregate_columns)
 
     # Capture SQL for test analysis (if enabled) - ONCE for the batched query
     try:
