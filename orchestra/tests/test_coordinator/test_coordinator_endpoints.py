@@ -7,16 +7,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import status
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     Assistant,
     AssistantSecret,
     AssistantSpaceMembership,
+    ContactMembership,
     Context,
     LogEvent,
     LogEventContext,
@@ -134,6 +138,21 @@ def _context_logs(
     ).all()
 
 
+def _personal_memberships(
+    dbsession: Session,
+    *,
+    assistant_id: int,
+) -> list[ContactMembership]:
+    return dbsession.scalars(
+        select(ContactMembership)
+        .where(
+            ContactMembership.assistant_id == assistant_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+        )
+        .order_by(ContactMembership.contact_id.asc()),
+    ).all()
+
+
 @pytest.mark.anyio
 async def test_create_organization_provisions_coordinator_and_org_default_space(
     client: AsyncClient,
@@ -150,6 +169,16 @@ async def test_create_organization_provisions_coordinator_and_org_default_space(
     assert coordinator.is_coordinator is True
     assert coordinator.organization_id == org_data["id"]
     assert coordinator.user_id == owner["id"]
+    assert {
+        (membership.contact_id, membership.relationship)
+        for membership in _personal_memberships(
+            dbsession,
+            assistant_id=coordinator.agent_id,
+        )
+    } == {
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+    }
 
     space = dbsession.scalar(
         select(Space).where(
@@ -287,6 +316,7 @@ async def test_reset_clears_only_coordinator_contexts(
 @pytest.mark.anyio
 async def test_personal_opt_in_is_idempotent_and_generic_surfaces_reject_flag(
     client: AsyncClient,
+    dbsession: Session,
 ) -> None:
     """Personal Coordinator opt-in is self-scoped; generic assistant writes stay closed."""
     owner = await _create_user(client, "personal")
@@ -305,6 +335,32 @@ async def test_personal_opt_in_is_idempotent_and_generic_surfaces_reject_flag(
     )
     assert second.status_code == status.HTTP_200_OK, second.json()
     assert second.json()["coordinator_id"] == coordinator_id
+
+    dbsession.execute(
+        delete(ContactMembership).where(
+            ContactMembership.assistant_id == int(coordinator_id),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        ),
+    )
+    dbsession.commit()
+
+    repaired = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert repaired.status_code == status.HTTP_200_OK, repaired.json()
+    assert repaired.json()["coordinator_id"] == coordinator_id
+    assert {
+        (membership.contact_id, membership.relationship)
+        for membership in _personal_memberships(
+            dbsession,
+            assistant_id=int(coordinator_id),
+        )
+    } == {
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+    }
 
     mismatch = await client.post(
         f"/v0/user/{other['id']}/coordinator",

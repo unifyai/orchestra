@@ -23,6 +23,9 @@ from orchestra.db.models.orchestra_models import (
     Project,
     Space,
 )
+from orchestra.services.contact_membership_service import (
+    ensure_personal_contact_memberships,
+)
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     get_task_ids_for_log_ids,
@@ -271,12 +274,18 @@ def create_personal_coordinator(session: Session, user_id: str) -> Assistant:
     """Create or return the user's personal Coordinator."""
     existing = get_personal_coordinator(session, user_id)
     if existing is not None:
+        ensure_personal_contact_memberships(session, [existing.agent_id])
         return existing
 
     assistant = create_coordinator_assistant(
         session,
         owner_user_id=user_id,
         organization_id=None,
+    )
+    ensure_personal_contact_memberships(
+        session,
+        [assistant.agent_id],
+        repair_existing=False,
     )
     ensure_assistants_project(
         session,
@@ -297,6 +306,7 @@ def create_organization_coordinator(
     """Create or return the organization's Coordinator and default space."""
     existing = get_org_coordinator(session, organization_id)
     if existing is not None:
+        ensure_personal_contact_memberships(session, [existing.agent_id])
         ensure_org_default_space(
             session,
             organization_id=organization_id,
@@ -316,6 +326,11 @@ def create_organization_coordinator(
         session,
         assistant=assistant,
         owner_user_id=owner_user_id,
+    )
+    ensure_personal_contact_memberships(
+        session,
+        [assistant.agent_id],
+        repair_existing=False,
     )
     ensure_assistants_project(
         session,
