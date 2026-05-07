@@ -1784,7 +1784,7 @@ async def connect_assistant_account(
             "redirect_uri": f"{adapters_url}/microsoft/auth/callback",
             "scope": scope_string,
             "response_mode": "query",
-            "prompt": "consent",
+            "prompt": "select_account",
             "state": encoded_state,
         }
         oauth_url = (
