@@ -74,6 +74,11 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.contact_membership_service import (
+    PERSONAL_BOSS_CONTACT_ID,
+    PERSONAL_SELF_CONTACT_ID,
+    ensure_personal_contact_memberships,
+)
 from orchestra.services.coordinator_service import (
     preseed_colleague_contexts,
     require_authorized_coordinator,
@@ -150,13 +155,6 @@ from orchestra.web.api.utils.assistant_infra import (
     wake_up_assistant,
 )
 
-PERSONAL_SELF_CONTACT_ID = 0
-PERSONAL_BOSS_CONTACT_ID = 1
-BOSS_CONTACT_RESPONSE_POLICY = (
-    "Your immediate manager, please do whatever they ask you to do within reason, "
-    "and do *not* withhold any "
-    "information from them."
-)
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
 ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
 
@@ -457,138 +455,6 @@ def _contact_id_pair(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="missing_contact_overlay",
         )
-
-
-def _ensure_personal_contact_memberships(
-    session: Session,
-    assistant_ids: list[int],
-) -> None:
-    """Ensure assistants have personal self and boss contact overlays."""
-
-    if not assistant_ids:
-        return
-
-    existing_rows = (
-        session.query(ContactMembership)
-        .filter(
-            ContactMembership.assistant_id.in_(assistant_ids),
-            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-            or_(
-                ContactMembership.contact_id.in_(
-                    [PERSONAL_SELF_CONTACT_ID, PERSONAL_BOSS_CONTACT_ID],
-                ),
-                ContactMembership.relationship.in_(
-                    [
-                        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
-                        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-                    ],
-                ),
-            ),
-        )
-        .all()
-    )
-    rows_by_assistant: dict[int, list[ContactMembership]] = {}
-    for row in existing_rows:
-        rows_by_assistant.setdefault(row.assistant_id, []).append(row)
-
-    def _row_with_contact(
-        rows: list[ContactMembership],
-        contact_id: int,
-    ) -> ContactMembership | None:
-        return next((row for row in rows if row.contact_id == contact_id), None)
-
-    def _has_relationship(rows: list[ContactMembership], relationship: str) -> bool:
-        return any(row.relationship == relationship for row in rows)
-
-    def _has_relationship_outside_contact(
-        rows: list[ContactMembership],
-        relationship: str,
-        contact_id: int,
-    ) -> bool:
-        return any(
-            row.relationship == relationship and row.contact_id != contact_id
-            for row in rows
-        )
-
-    def _apply_membership_defaults(
-        row: ContactMembership,
-        *,
-        relationship: str,
-        response_policy: str,
-    ) -> None:
-        row.relationship = relationship
-        row.should_respond = True
-        row.response_policy = response_policy
-        row.can_edit = True
-
-    def _membership_value(
-        *,
-        assistant_id: int,
-        contact_id: int,
-        relationship: str,
-        response_policy: str,
-    ) -> dict[str, object]:
-        return {
-            "assistant_id": assistant_id,
-            "authoring_assistant_id": assistant_id,
-            "contact_id": contact_id,
-            "target_scope": CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-            "target_space_id": None,
-            "relationship": relationship,
-            "should_respond": True,
-            "response_policy": response_policy,
-            "can_edit": True,
-        }
-
-    membership_values = []
-    for assistant_id in assistant_ids:
-        rows = rows_by_assistant.get(assistant_id, [])
-        default_self = _row_with_contact(rows, PERSONAL_SELF_CONTACT_ID)
-        if default_self is not None and not _has_relationship_outside_contact(
-            rows,
-            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
-            PERSONAL_SELF_CONTACT_ID,
-        ):
-            _apply_membership_defaults(
-                default_self,
-                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
-                response_policy="",
-            )
-
-        default_boss = _row_with_contact(rows, PERSONAL_BOSS_CONTACT_ID)
-        if default_boss is not None and not _has_relationship_outside_contact(
-            rows,
-            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-            PERSONAL_BOSS_CONTACT_ID,
-        ):
-            _apply_membership_defaults(
-                default_boss,
-                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-                response_policy=BOSS_CONTACT_RESPONSE_POLICY,
-            )
-
-        if not _has_relationship(rows, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF):
-            membership_values.append(
-                _membership_value(
-                    assistant_id=assistant_id,
-                    contact_id=PERSONAL_SELF_CONTACT_ID,
-                    relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
-                    response_policy="",
-                ),
-            )
-        if not _has_relationship(rows, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS):
-            membership_values.append(
-                _membership_value(
-                    assistant_id=assistant_id,
-                    contact_id=PERSONAL_BOSS_CONTACT_ID,
-                    relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-                    response_policy=BOSS_CONTACT_RESPONSE_POLICY,
-                ),
-            )
-
-    if membership_values:
-        session.bulk_insert_mappings(ContactMembership, membership_values)
-    session.flush()
 
 
 def _build_assistant_read(
@@ -914,7 +780,11 @@ async def create_assistant(
             deploy_env=assistant_in.deploy_env,
             job_title=assistant_in.job_title,
         )
-        _ensure_personal_contact_memberships(session, [assistant.agent_id])
+        ensure_personal_contact_memberships(
+            session,
+            [assistant.agent_id],
+            repair_existing=False,
+        )
 
         # Org assistants retain the creator in `user_id`; org access is granted
         # separately through resource access so other members can collaborate.

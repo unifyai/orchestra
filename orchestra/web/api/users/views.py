@@ -1186,8 +1186,10 @@ async def create_personal_coordinator_endpoint(
 
     existing = get_personal_coordinator(session, user_id)
     if existing is not None:
+        coordinator = create_personal_coordinator(session, user_id)
+        session.commit()
         response.status_code = status.HTTP_200_OK
-        return {"coordinator_id": str(existing.agent_id)}
+        return {"coordinator_id": str(coordinator.agent_id)}
 
     created_pubsub_topic = False
     coordinator_id: int | None = None
