@@ -203,6 +203,14 @@ def process_checkout_session_event(
                         organization_id=organization_id,
                     )
 
+                # ``BillingAccountDAO.add_credits`` dispatches on
+                # billing-mode: CREDITS mutates the wallet (legacy
+                # behaviour), METERED writes a ledger-only audit row.
+                # METERED accounts can't reach this path via the in-app
+                # Buy Credits flow (it's blocked in the checkout
+                # endpoint), but a stale Checkout Session could still
+                # fire this webhook — the mode dispatch keeps the
+                # behaviour correct either way.
                 ba_dao.add_credits(
                     ba.id,
                     credits,
@@ -285,6 +293,9 @@ def process_checkout_session_event(
                         user_id=user_id,
                     )
 
+                # See organization branch above — DAO is mode-aware so a
+                # stray METERED webhook writes a ledger row without
+                # touching the wallet.
                 ba_dao.add_credits(
                     ba.id,
                     credits,
@@ -547,6 +558,12 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             #  • The recharges record exactly how many credits were loaned.
             #  • Deducting them may push the balance negative, which is
             #    the desired signal for balance-based enforcement.
+            #
+            # ``deduct_credits`` is mode-aware: in practice this path
+            # only fires for CREDITS accounts (auto-recharge invoices
+            # don't exist on METERED), but a stray METERED entry would
+            # produce a ledger-only audit row rather than corrupting
+            # the wallet.
             ba_dao = BillingAccountDAO(session)
 
             for ba_id in billing_account_ids:
@@ -759,6 +776,9 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
             ba = _resolve_billing_account_from_metadata(session, pi_metadata)
             if ba:
+                # ``deduct_credits`` is mode-aware: CREDITS debits the
+                # wallet (legacy behaviour); METERED writes a ledger-only
+                # audit row.
                 billing_account_dao.deduct_credits(
                     ba.id,
                     credits_to_remove,
@@ -850,6 +870,10 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
             ba = _resolve_billing_account_from_metadata(session, pi_metadata)
             if ba:
+                # ``deduct_credits`` dispatches on billing-mode: CREDITS
+                # accounts get the wallet debited (legacy behaviour);
+                # METERED accounts get the wallet untouched. Both
+                # produce the same audit trail in CreditTransaction.
                 billing_account_dao.deduct_credits(
                     ba.id,
                     credits_original,
@@ -894,6 +918,9 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     synchronize_session=False,
                 )
 
+                # Same mode-aware branch as the metadata path above:
+                # CREDITS gets a wallet debit; METERED gets an audit
+                # ledger row only.
                 billing_account_dao.deduct_credits(
                     ba_id,
                     total_credits,
@@ -979,8 +1006,13 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     )
 
             if ba and credits_original > 0:
-                ba_dao = BillingAccountDAO(session)
-                ba_dao.add_credits(
+                # ``add_credits`` is mode-aware: CREDITS restores the
+                # wallet balance; METERED writes a ledger-only audit
+                # credit. We don't expect this branch to fire on METERED
+                # in practice (no cardholder disputes on invoiced
+                # contracts) but the uniform path keeps the audit trail
+                # consistent.
+                billing_account_dao.add_credits(
                     ba.id,
                     credits_original,
                     category="dispute",
@@ -1329,6 +1361,75 @@ def process_customer_updated_event(event: Dict, session: Session) -> Response:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+def process_cash_balance_transaction_event(
+    event: Dict,
+    session: Session,
+) -> Response:
+    """Observability-only handler for ``customer_cash_balance_transaction.*``.
+
+    Fires when a wire transfer from a customer using ``customer_balance``
+    lands in their Stripe-issued virtual account. We deliberately do
+    NOT reconcile the recharge here — Stripe will (assuming
+    *Settings → Billing → Customer Balance → Apply unapplied funds*
+    is on) auto-apply the new balance to the open invoice and emit
+    ``invoice.payment_succeeded``, which the existing handler picks
+    up and marks the recharge ``PAID``.
+
+    What we do is log:
+
+    * **funded**: a wire arrived. Useful breadcrumb for "did it land?"
+      questions from the customer; correlatable by Stripe customer id.
+    * **applied_to_payment**: the auto-apply happened. If we don't
+      see ``invoice.payment_succeeded`` shortly after, that's the
+      signal the auto-apply setting is off.
+    * **unapplied_from_payment** / **adjusted_for_overdraft**: edge
+      cases (overpayment, refund). Surface to ops via WARNING so they
+      can decide whether to refund the surplus or leave it as a credit
+      on the next invoice.
+
+    All branches return 200 to keep Stripe from retrying — this event
+    is informational and never a failure.
+    """
+    data = event.get("data", {}).get("object", {})
+    customer_id = data.get("customer")
+    txn_type = data.get("type")
+    net_amount = data.get("net_amount")
+    currency = data.get("currency")
+    ending_balance = data.get("ending_balance")
+
+    ba = (
+        session.query(BillingAccount)
+        .filter_by(stripe_customer_id=customer_id)
+        .first()
+        if customer_id
+        else None
+    )
+    ba_id = ba.id if ba else None
+
+    payload = {
+        "message": "Stripe cash_balance_transaction received",
+        "event_type": event.get("type"),
+        "stripe_customer_id": customer_id,
+        "billing_account_id": ba_id,
+        "txn_type": txn_type,
+        "net_amount": net_amount,
+        "currency": currency,
+        "ending_balance": ending_balance,
+    }
+
+    if txn_type in ("unapplied_from_payment", "adjusted_for_overdraft"):
+        # Customer overpaid or Stripe applied a balance correction —
+        # leaves an unapplied balance that won't auto-clear without
+        # an open invoice in the matching currency. Ops decision:
+        # refund or carry forward.
+        logger.warning(payload)
+    else:
+        logger.info(payload)
+
+    return Response(status_code=200)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
     """Main dispatcher for all Stripe webhook events."""
     event_type = event.get("type", "")
@@ -1344,6 +1445,18 @@ def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
         return process_customer_tax_id_event(event, session)
     elif event_type == "customer.updated":
         return process_customer_updated_event(event, session)
+    elif event_type.startswith("customer_cash_balance_transaction."):
+        # Wire-transfer (customer_balance) lifecycle events. Info-only —
+        # the recharge → PAID transition still flows through
+        # invoice.payment_succeeded once Stripe auto-applies the
+        # received balance to the open invoice.
+        # Note: Stripe names this event with underscores
+        # (``customer_cash_balance_transaction``) rather than the dotted
+        # ``customer.*`` pattern used by adjacent customer events. The
+        # ``cash_balance.funds_available`` event is *separate* (sibling
+        # event, fires on positive remaining balance) and is not
+        # currently subscribed.
+        return process_cash_balance_transaction_event(event, session)
     else:
         # Log unhandled events for idempotency
         webhook_log_dao = WebhookLogDAO(session)

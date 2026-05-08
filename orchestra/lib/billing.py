@@ -1,8 +1,24 @@
 """Shared billing utilities for Orchestra.
 
-All billing operations now operate through BillingAccount.
+This module is the home for cross-DAO billing orchestration:
+
+* :class:`BillingEntity` and :func:`get_billing_entity` — uniform handle on
+  the billing account behind a user or organization. Useful when feature
+  code has a request-context (user_id / organization_id) but needs to
+  resolve the billing account, autorecharge settings, etc.
+* :func:`queue_auto_recharge` — Stripe-side autorecharge mechanics.
+  No-ops for METERED accounts so the same low-balance trigger code
+  works on both modes.
+* Stripe helpers (:func:`configure_stripe`, :func:`sync_billing_profile_to_stripe`,
+  :func:`ensure_stripe_customer`, etc.).
+
+The billable-action primitives (``add_credits`` / ``deduct_credits``)
+live on :class:`BillingAccountDAO` directly and dispatch on the account's
+billing mode (CREDITS mutates the wallet, METERED writes a ledger-only
+audit row). Feature code calls those DAO methods directly.
 """
 
+import decimal
 import logging
 import re
 from dataclasses import dataclass
@@ -18,6 +34,7 @@ from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
     BillingAccount,
+    BillingMode,
     Recharge,
     RechargeStatus,
 )
@@ -51,6 +68,7 @@ class BillingEntity:
     autorecharge: bool
     autorecharge_threshold: Decimal
     autorecharge_qty: Decimal
+    billing_mode: BillingMode = BillingMode.CREDITS
 
     @property
     def is_user(self) -> bool:
@@ -63,9 +81,31 @@ class BillingEntity:
         return self.entity_type == BillingEntityType.ORGANIZATION
 
     @property
+    def is_metered(self) -> bool:
+        """METERED accounts settle usage at month-end via the metered invoicer."""
+        return self.billing_mode == BillingMode.METERED
+
+    @property
     def has_billing(self) -> bool:
         """Check if entity has Stripe customer ID for direct billing."""
         return self.stripe_customer_id is not None
+
+    def has_sufficient_credits(self, cost: Decimal) -> bool:
+        """Pre-flight check for whether a billable action can be allowed.
+
+        METERED accounts always pass: their usage is recorded to the
+        ``CreditTransaction`` ledger and settled at month-end by
+        :mod:`orchestra.routines.monthly_metered_invoicer`. The wallet
+        on a METERED account is frozen (no automatic writes from
+        ``deduct_credits``) and may carry any leftover balance from a
+        prior CREDITS phase — neither a positive nor a negative balance
+        should gate billable actions.
+
+        CREDITS accounts must have ``credits >= cost``.
+        """
+        if self.is_metered:
+            return True
+        return self.credits >= cost
 
     def should_trigger_autorecharge(self, new_balance: Decimal) -> bool:
         """
@@ -80,6 +120,8 @@ class BillingEntity:
         if not self.autorecharge:
             return False
         if not self.has_billing:
+            return False
+        if self.is_metered:
             return False
         return new_balance <= self.autorecharge_threshold
 
@@ -126,6 +168,7 @@ def get_billing_entity(
             autorecharge=ba.autorecharge,
             autorecharge_threshold=ba.autorecharge_threshold,
             autorecharge_qty=ba.autorecharge_qty,
+            billing_mode=ba_dao.resolve_billing_mode(ba),
         )
 
     # Organization context
@@ -151,57 +194,8 @@ def get_billing_entity(
         autorecharge=ba.autorecharge,
         autorecharge_threshold=ba.autorecharge_threshold,
         autorecharge_qty=ba.autorecharge_qty,
+        billing_mode=ba_dao.resolve_billing_mode(ba),
     )
-
-
-def deduct_credits(
-    session: Session,
-    billing_entity: BillingEntity,
-    amount: Decimal,
-    *,
-    category: str = "other",
-    assistant_id: Optional[int] = None,
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    description: Optional[str] = None,
-    detail: Optional[dict] = None,
-) -> Decimal:
-    """
-    Deduct credits from a billing entity (via BillingAccount).
-
-    Args:
-        session: Database session.
-        billing_entity: The entity to deduct from.
-        amount: Amount of credits to deduct.
-        category: Ledger category (``'llm'``, ``'hire'``, ``'media'``, etc.).
-        assistant_id: Optional assistant context.
-        user_id: Optional acting user.
-        organization_id: Optional organization context.
-        description: Human-readable description.
-        detail: Category-specific JSONB metadata.
-
-    Returns:
-        The new credit balance after deduction.
-
-    Raises:
-        ValueError: If billing account not found.
-    """
-    ba_dao = BillingAccountDAO(session)
-    new_balance = ba_dao.deduct_credits(
-        billing_entity.billing_account_id,
-        float(amount),
-        category=category,
-        assistant_id=assistant_id,
-        user_id=user_id,
-        organization_id=organization_id,
-        description=description,
-        detail=detail,
-    )
-    if new_balance is None:
-        raise ValueError(
-            f"BillingAccount {billing_entity.billing_account_id} not found.",
-        )
-    return new_balance
 
 
 def queue_auto_recharge(
@@ -219,7 +213,29 @@ def queue_auto_recharge(
     and no recharge record is written — preventing revenue leakage.
 
     Returns True if the recharge was queued, False if skipped or failed.
+
+    METERED-mode accounts are short-circuited at the top: they pay by
+    monthly invoice (handled by ``monthly_metered_invoicer``), not by
+    topping up a credits wallet. Routing this guard through the central
+    ``queue_auto_recharge`` rather than every call site means the
+    contact levy, low-balance triggers, and any future caller all
+    benefit without per-site changes.
     """
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.models.orchestra_models import BillingMode
+
+    if (
+        BillingAccountDAO(session).resolve_billing_mode(billing_account)
+        == BillingMode.METERED
+    ):
+        logger.debug(
+            "Auto-recharge skipped for billing_account %s (%s): "
+            "account is METERED — invoiced via monthly_metered_invoicer",
+            billing_account.id,
+            entity_label,
+        )
+        return False
+
     if not billing_account.stripe_customer_id:
         logger.warning(
             "Auto-recharge skipped for billing_account %s (%s): "
@@ -696,6 +712,165 @@ TAX_TYPE_MAP: Dict[str, Dict[str, str]] = {
     "ru.inn": {"name": "INN", "format": "XXXXXXXXXX"},
     "cn.uscc": {"name": "USCC", "format": "XXXXXXXXXXXXXXXXX"},
 }
+
+
+# =========================================================================
+# Stripe Customer provisioning
+# =========================================================================
+#
+# METERED-mode invoicing requires ``BillingAccount.stripe_customer_id`` to
+# be populated so the metered invoicer can attach a ``stripe.Invoice`` and
+# (for SEND_INVOICE_NET_30) email the hosted invoice page. Today's CREDITS
+# accounts get a Stripe Customer automatically when the user first goes
+# through Checkout (``customer_creation=always``); enterprise accounts that
+# were funded via admin-granted credits and never hit Checkout never had one
+# created. ``ensure_stripe_customer`` plugs that hole — it's safe to call
+# from the admin plan-assignment endpoint and as a defensive backstop in
+# the metered invoicer itself.
+
+
+def ensure_stripe_customer(
+    session: Session,
+    billing_account: BillingAccount,
+    *,
+    is_business: Optional[bool] = None,
+    fallback_name: Optional[str] = None,
+    fallback_email: Optional[str] = None,
+) -> str:
+    """Return ``stripe_customer_id``, creating the Stripe Customer if absent.
+
+    Idempotent. If ``billing_account.stripe_customer_id`` is already set,
+    returns it without touching Stripe. Otherwise creates a Stripe
+    Customer using whatever profile fields are populated on the
+    ``BillingAccount`` (billing email/address/tax_id) and falling back to
+    the ``fallback_*`` parameters for fields that are missing.
+
+    Args:
+        session: Database session — used to persist the new
+            ``stripe_customer_id`` back onto the account.
+        billing_account: The account that needs a Stripe Customer.
+        is_business: Hint for ``build_stripe_customer_name`` so that org
+            accounts get ``name=`` set to the business name (and personal
+            accounts to the user's display name). Inferred from
+            ``billing_account.business_name`` if omitted.
+        fallback_name: Display/business name to use when neither
+            ``billing_account.name`` nor ``business_name`` is set. Useful
+            for orgs whose name lives on the ``Organization`` row, not on
+            ``BillingAccount``.
+        fallback_email: Email to use when ``billing_account.billing_email``
+            is unset (commonly the user's account email).
+
+    Returns:
+        The ``stripe_customer_id`` (existing or freshly created).
+
+    Raises:
+        stripe.error.StripeError: If the API call fails.
+        RuntimeError: If neither billing_email nor fallback_email is
+            available — Stripe requires an email to send invoices.
+    """
+    from orchestra.web.api.utils.business_validation import build_stripe_customer_name
+
+    if billing_account.stripe_customer_id:
+        return billing_account.stripe_customer_id
+
+    configure_stripe()
+
+    email = billing_account.billing_email or fallback_email
+    if not email:
+        raise RuntimeError(
+            f"Cannot create Stripe Customer for billing_account "
+            f"{billing_account.id}: no billing_email on file and no "
+            "fallback_email provided. Ask the customer to set their "
+            "billing email on the Billing Profile, or pass "
+            "fallback_email when calling.",
+        )
+
+    # Default to personal-account treatment unless the caller hints otherwise
+    # (the admin endpoint passes is_business=True for org-backed accounts).
+    if is_business is None:
+        is_business = False
+
+    create_params: Dict[str, Any] = {"email": email}
+
+    name_value = billing_account.name or fallback_name
+    if name_value:
+        create_params.update(
+            build_stripe_customer_name(is_business=is_business, name=name_value),
+        )
+
+    address = billing_account.billing_address or {}
+    if address.get("line1"):
+        create_params["address"] = {
+            "line1": address.get("line1", ""),
+            "line2": address.get("line2", ""),
+            "city": address.get("city", ""),
+            "state": address.get("state", ""),
+            "postal_code": address.get("postal_code", ""),
+            "country": address.get("country", ""),
+        }
+
+    # Stamp our internal id into Stripe metadata so the customer is
+    # reverse-traceable from the Stripe dashboard.
+    create_params["metadata"] = {
+        "orchestra_billing_account_id": str(billing_account.id),
+    }
+
+    customer = stripe.Customer.create(**create_params)
+    customer_id = customer["id"]
+
+    billing_account.stripe_customer_id = customer_id
+    session.flush()
+
+    # Attach tax id if we already have one (best-effort; failure here
+    # shouldn't block customer creation). ``sync_tax_id_to_stripe``
+    # already swallows Stripe-side errors internally, so anything we
+    # see here is either a config lookup miss
+    # (``get_stripe_tax_id_type`` raising on an unknown country) or a
+    # genuinely unexpected import/runtime error — log loudly and
+    # carry on rather than masking it with bare ``Exception``.
+    if billing_account.tax_id:
+        try:
+            from orchestra.web.api.utils.business_validation import (
+                sync_tax_id_to_stripe,
+            )
+
+            country_code = (
+                address.get("country") if address else None
+            )
+            sync_tax_id_to_stripe(
+                customer_id,
+                billing_account.tax_id,
+                country_code,
+                logger=logger,
+            )
+        except stripe.error.StripeError as exc:
+            logger.warning(
+                "Created Stripe Customer %s but Stripe rejected tax_id "
+                "attach (customer is usable, tax_id is not synced): %s",
+                customer_id,
+                exc,
+            )
+        except (KeyError, ValueError) as exc:
+            # Unknown country code or unmapped tax_id_type — surfaces
+            # the mismatch loudly so we can extend the lookup tables
+            # rather than silently shipping customers without a tax id.
+            logger.error(
+                "Created Stripe Customer %s but tax_id mapping is "
+                "incomplete (country=%r, tax_id=%r): %s — extend "
+                "TAX_TYPE_MAP / get_stripe_tax_id_type",
+                customer_id,
+                address.get("country") if address else None,
+                billing_account.tax_id,
+                exc,
+                exc_info=True,
+            )
+
+    logger.info(
+        "Created Stripe Customer %s for billing_account %s",
+        customer_id,
+        billing_account.id,
+    )
+    return customer_id
 
 
 def extract_tax_id_info(description: str) -> Dict[str, str]:

@@ -272,6 +272,14 @@ class UserSpendResponse(BaseModel):
         None,
         description="Current credit balance of the billing account.",
     )
+    billing_mode: str = Field(
+        "CREDITS",
+        description=(
+            "Billing mode of the user's account: CREDITS (pre-paid wallet) "
+            "or METERED (invoiced monthly). Frontends use this to hide "
+            "credit-balance UI on METERED accounts."
+        ),
+    )
 
 
 # ============================================================================

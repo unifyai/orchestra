@@ -47,8 +47,17 @@ def make_billing_account(
     autorecharge_threshold: float | Decimal = 0,
     autorecharge_qty: float | Decimal = 25,
 ) -> BillingAccount:
-    """Create a standalone :class:`BillingAccount`."""
-    ba = BillingAccount(
+    """Create a standalone :class:`BillingAccount`.
+
+    Routes through :class:`BillingAccountDAO.create` so the v2 invariant
+    (every BA has an active default plan assignment + NOT NULL
+    ``plan_assignment_id`` from creation time) is established
+    automatically — tests that need a non-default plan should follow up
+    with ``BillingPlanAssignmentDAO(dbsession).set_plan(...)``.
+    """
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+    ba = BillingAccountDAO(dbsession).create(
         credits=Decimal(str(credits)),
         account_status=account_status,
         stripe_customer_id=stripe_customer_id,
@@ -56,8 +65,6 @@ def make_billing_account(
         autorecharge_threshold=Decimal(str(autorecharge_threshold)),
         autorecharge_qty=Decimal(str(autorecharge_qty)),
     )
-    dbsession.add(ba)
-    dbsession.flush()
     return ba
 
 
@@ -392,21 +399,56 @@ def create_stripe_customer(email: str, metadata: Optional[dict] = None) -> str:
     return customer.id
 
 
+def attach_default_test_card(customer_id: str) -> str:
+    """Attach Stripe's always-succeed test PM to a sandbox customer.
+
+    Required by any flow that exercises ``queue_auto_recharge`` /
+    ``invoice_metered_month`` with ``collection_method=AUTO_CARD``:
+    the Stripe-side guard in ``orchestra.lib.billing.queue_auto_recharge``
+    refuses to enqueue when the customer has no
+    ``invoice_settings.default_payment_method`` (and no legacy
+    ``default_source``). ``pm_card_visa`` is Stripe's documented
+    always-successful test PaymentMethod token, safe to share across
+    tests; the customer cleanup fixture deletes the customer at
+    teardown which transitively detaches the PM.
+
+    Returns the attached PaymentMethod id so tests can reference it.
+    """
+    import stripe
+
+    stripe.api_key = STRIPE_SECRET_KEY
+    pm = stripe.PaymentMethod.attach("pm_card_visa", customer=customer_id)
+    stripe.Customer.modify(
+        customer_id,
+        invoice_settings={"default_payment_method": pm.id},
+    )
+    return pm.id
+
+
 def create_test_user_with_stripe(session: Session, email: str) -> tuple[User, str]:
-    """Create a test user in DB with a linked BillingAccount and Stripe customer."""
+    """Create a test user in DB with a linked BillingAccount and Stripe customer.
+
+    Routes through ``BillingAccountDAO.create`` so the new
+    ``plan_assignment_id NOT NULL`` invariant is established (every
+    account must have an active default plan assignment from signup).
+    Direct ``BillingAccount(...)`` construction skipped that step and
+    left these test accounts as
+    ``reconciliation:plan_assignment_null_pointer`` candidates — fine
+    for the older schema, latent bug under the v2 invariant.
+    """
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
     user_id = str(uuid.uuid4())
     stripe_customer_id = create_stripe_customer(
         email=email,
         metadata={"user_id": user_id},
     )
 
-    ba = BillingAccount(
+    ba = BillingAccountDAO(session).create(
         credits=Decimal("0"),
         stripe_customer_id=stripe_customer_id,
         account_status="ACTIVE",
     )
-    session.add(ba)
-    session.flush()
 
     user = User(
         id=user_id,
@@ -424,22 +466,28 @@ def create_test_org_with_stripe(
     name: str,
     owner_email: str,
 ) -> tuple[Organization, str]:
-    """Create a test org with owner, linked BillingAccount, and Stripe customer."""
+    """Create a test org with owner, linked BillingAccount, and Stripe customer.
+
+    Both BillingAccount rows (owner-personal + org) go through
+    ``BillingAccountDAO.create`` so each ends up with a default
+    ``BillingPlanAssignment`` and a synced ``plan_assignment_id`` —
+    matching the production signup flow's invariant. See
+    :func:`create_test_user_with_stripe` for the rationale.
+    """
     from sqlalchemy import text
 
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
     from orchestra.db.models.orchestra_models import OrganizationMember
 
-    # Create owner (with their own BillingAccount)
+    ba_dao = BillingAccountDAO(session)
+
     owner_id = str(uuid.uuid4())
-    owner_ba = BillingAccount(credits=Decimal("0"), account_status="ACTIVE")
-    session.add(owner_ba)
-    session.flush()
+    owner_ba = ba_dao.create(credits=Decimal("0"), account_status="ACTIVE")
 
     owner = User(id=owner_id, email=owner_email, billing_account_id=owner_ba.id)
     session.add(owner)
     session.flush()
 
-    # Create org with Stripe customer
     org_id = session.execute(text("SELECT nextval('organization_id_seq')")).scalar()
 
     stripe_customer_id = create_stripe_customer(
@@ -447,13 +495,11 @@ def create_test_org_with_stripe(
         metadata={"organization_id": str(org_id)},
     )
 
-    org_ba = BillingAccount(
+    org_ba = ba_dao.create(
         credits=Decimal("0"),
         stripe_customer_id=stripe_customer_id,
         account_status="ACTIVE",
     )
-    session.add(org_ba)
-    session.flush()
 
     org = Organization(
         id=org_id,

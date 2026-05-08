@@ -1,17 +1,55 @@
 """Aggregate all "PENDING_INVOICE" recharges into a single Stripe invoice.
 
-The job is meant to run once a month (e.g. 00:05 on the 1st) and:
+The job runs once a month (on the 1st) and:
 
 1. picks every `Recharge` row whose
       • status        == PENDING_INVOICE
       • invoice_group == last day of the target month (UTC)
-2. creates a single Stripe invoice + invoice-item for the total using the Stripe product
+2. creates a single Stripe invoice + invoice-item for the total using
+   the Stripe product
 3. updates all rows to INVOICE_CREATED and stores the invoice-id
 
-Recharges are grouped by billing_account_id (shared by User and Organization).
+Recharges are grouped by billing_account_id (shared by User and
+Organization). Each billing account is processed in its own savepoint
+so that a Stripe failure for one account does not prevent the others
+from being invoiced.
 
-Each billing account is processed in its own savepoint so that a Stripe
-failure for one account does not prevent the others from being invoiced.
+----------------------------------------------------------------------
+Scheduling
+----------------------------------------------------------------------
+
+Production runs on **Google Cloud Scheduler**:
+
+  * Job ``orchestra-production-monthly-invoicer`` in project
+    ``saas-368716`` / location ``us-central1``.
+  * Schedule ``0 2 1 * *`` UTC (02:00 on the 1st of each month).
+  * POSTs to ``https://api.unify.ai/v0/admin/billing/invoice-month``
+    with a static admin Bearer token in the ``Authorization`` header.
+  * Cloud Scheduler is preferred over GHA cron for prod billing
+    because it gives stronger on-time delivery guarantees, automatic
+    retries with exponential backoff (``maxBackoff=3600s``,
+    ``maxDoublings=5``, ``attemptDeadline=180s``), and a managed-SLA
+    that GHA cron explicitly does NOT promise (GHA cron is best-
+    effort and can drift 15-30 min under platform load).
+
+Staging has no scheduled trigger — invoke on demand via
+``POST {staging-base}/v0/admin/billing/invoice-month`` (or via the
+``trigger_monthly_invoicing`` admin endpoint) when verifying changes
+before they hit production a month later.
+
+To re-provision the production scheduler job from scratch (e.g. after
+a project recreation), use:
+
+    gcloud scheduler jobs create http orchestra-production-monthly-invoicer \\
+        --project=saas-368716 \\
+        --location=us-central1 \\
+        --schedule='0 2 1 * *' \\
+        --time-zone=Etc/UTC \\
+        --uri=https://api.unify.ai/v0/admin/billing/invoice-month \\
+        --http-method=POST \\
+        --headers='Authorization=Bearer $ORCHESTRA_ADMIN_KEY' \\
+        --attempt-deadline=180s \\
+        --min-backoff=5s --max-backoff=3600s --max-doublings=5
 """
 
 from __future__ import annotations
@@ -105,6 +143,69 @@ def _invoice_month_with_session(
         .scalars()
         .all()
     )
+
+    if not rows:
+        return result
+
+    # Filter rule: keep rows that belong to the CREDITS world.
+    #
+    # We key off the recharge's *own* plan attribution
+    # (``Recharge.plan_id`` → ``BillingPlanAssignment.template.billing_mode``)
+    # rather than the account's *live* billing mode. The two diverge
+    # any time an account changes plans mid-month (CREDITS → METERED
+    # or vice versa), and the live mode is the wrong basis: a CREDITS
+    # auto-recharge that fired before the switch is still a CREDITS
+    # liability that has to invoice, even after the account goes
+    # METERED.
+    #
+    # By invariant (see ``Recharge.plan_id`` docstring):
+    #   - ``plan_id IS NULL``                → CREDITS row (auto-recharge,
+    #                                          payment, promo) — invoice it.
+    #   - ``plan_id`` → CREDITS template      → CREDITS row — invoice it.
+    #   - ``plan_id`` → METERED template      → METERED row — skip; the
+    #                                          metered invoicer owns it.
+    #
+    # ``set_plan`` also refuses outright when PENDING_INVOICE rows are
+    # in flight (see ``PendingRechargesError``), so the
+    # post-switch-stranded-row case is doubly defended; this filter
+    # remains the second line of defence for data-corruption
+    # scenarios that bypass the DAO.
+    from orchestra.db.models.orchestra_models import (
+        BillingMode,
+        BillingPlanAssignment,
+        BillingPlanTemplate,
+    )
+
+    plan_ids = {r.plan_id for r in rows if r.plan_id is not None}
+    plan_modes: Dict[int, str] = {}
+    if plan_ids:
+        plan_modes = dict(
+            session.execute(
+                select(BillingPlanAssignment.id, BillingPlanTemplate.billing_mode)
+                .join(
+                    BillingPlanTemplate,
+                    BillingPlanTemplate.id == BillingPlanAssignment.template_id,
+                )
+                .where(BillingPlanAssignment.id.in_(plan_ids)),
+            ).all(),
+        )
+
+    filtered: List[Recharge] = []
+    for row in rows:
+        if row.plan_id is None:
+            filtered.append(row)
+            continue
+        plan_mode = plan_modes.get(row.plan_id)
+        if plan_mode == BillingMode.METERED:
+            logger.info(
+                "Skipping PENDING_INVOICE recharge %s — plan_id=%s resolves to "
+                "a METERED template; row belongs to monthly_metered_invoicer.",
+                row.id,
+                row.plan_id,
+            )
+            continue
+        filtered.append(row)
+    rows = filtered
 
     if not rows:
         return result

@@ -263,6 +263,13 @@ class OrgSpendResponse(BaseModel):
         None,
         description="Current credit balance of the billing account.",
     )
+    billing_mode: str = Field(
+        "CREDITS",
+        description=(
+            "Billing mode of the org's account: CREDITS (pre-paid wallet) "
+            "or METERED (invoiced monthly)."
+        ),
+    )
 
 
 # ============================================================================

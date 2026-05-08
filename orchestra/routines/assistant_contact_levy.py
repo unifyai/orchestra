@@ -38,10 +38,12 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
     BillingAccount,
+    BillingMode,
     Organization,
     User,
 )
@@ -420,11 +422,15 @@ def _process_billing_account(
         ar.credits_after = ar.credits_before
         return ar
 
-    # Deduct credits via DAO (acquires FOR UPDATE lock, tracks balance events)
+    # ``BillingAccountDAO.deduct_credits`` is mode-aware. For CREDITS
+    # accounts it mutates ``ba.credits`` and returns the new balance;
+    # for METERED accounts it writes a ledger-only audit row so
+    # ``monthly_metered_invoicer`` picks the usage up at month end —
+    # the wallet stays at zero and the grace-period block below
+    # remains naturally inactive.
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
-    ba_dao = BillingAccountDAO(session)
-    new_balance = ba_dao.deduct_credits(
+    new_balance = BillingAccountDAO(session).deduct_credits(
         ba.id,
         float(total_levy),
         category="resources",
@@ -443,6 +449,8 @@ def _process_billing_account(
     if new_balance is not None:
         ar.credits_after = Decimal(str(new_balance))
     else:
+        # METERED: wallet untouched, ledger row written. Surface the
+        # pre-levy balance so the result still reads sensibly.
         ar.credits_after = ar.credits_before
 
     logger.info(
@@ -455,10 +463,20 @@ def _process_billing_account(
         ar.credits_after,
     )
 
+    # METERED accounts settle usage at month-end via the metered invoicer;
+    # the wallet is frozen and may carry any leftover balance from a prior
+    # CREDITS phase. Suspension on non-payment is webhook-driven
+    # (`invoice.payment_failed`), so neither the autorecharge gate nor the
+    # wallet-based grace-period trigger should fire for METERED.
+    is_metered = (
+        BillingAccountDAO(session).resolve_billing_mode(ba) == BillingMode.METERED
+    )
+
     # Auto-recharge check (isolated so a Stripe error doesn't prevent
     # the levy deduction from being committed)
     if (
-        ba.autorecharge
+        not is_metered
+        and ba.autorecharge
         and ba.stripe_customer_id
         and ba.credits <= ba.autorecharge_threshold
     ):
@@ -478,7 +496,7 @@ def _process_billing_account(
             )
 
     # Start grace period on active contacts if credits went negative
-    if ba.credits < 0:
+    if not is_metered and ba.credits < 0:
         now = _dt.datetime.now(_dt.timezone.utc)
         for contact in contacts:
             if contact.status == "active":
