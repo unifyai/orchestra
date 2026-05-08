@@ -32,6 +32,8 @@ from orchestra.services.task_machine_state_service import (
 )
 from orchestra.tests.utils import HEADERS, create_test_user
 
+EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
+
 
 @pytest.fixture(autouse=True)
 def coordinator_pubsub_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,6 +171,7 @@ async def test_create_organization_provisions_coordinator_and_org_default_space(
     assert coordinator.is_coordinator is True
     assert coordinator.organization_id == org_data["id"]
     assert coordinator.user_id == owner["id"]
+    assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert {
         (membership.contact_id, membership.relationship)
         for membership in _personal_memberships(
@@ -314,11 +317,11 @@ async def test_reset_clears_only_coordinator_contexts(
 
 
 @pytest.mark.anyio
-async def test_personal_opt_in_is_idempotent_and_generic_surfaces_reject_flag(
+async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Personal Coordinator opt-in is self-scoped; generic assistant writes stay closed."""
+    """Personal Coordinator opt-in repairs defaults and keeps generic writes closed."""
     owner = await _create_user(client, "personal")
     other = await _create_user(client, "personal-other")
 
@@ -328,6 +331,11 @@ async def test_personal_opt_in_is_idempotent_and_generic_surfaces_reject_flag(
     )
     assert first.status_code == status.HTTP_201_CREATED, first.json()
     coordinator_id = first.json()["coordinator_id"]
+    coordinator = dbsession.get(Assistant, int(coordinator_id))
+    assert coordinator is not None
+    assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
+    coordinator.nationality = None
+    dbsession.commit()
 
     second = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
@@ -335,6 +343,8 @@ async def test_personal_opt_in_is_idempotent_and_generic_surfaces_reject_flag(
     )
     assert second.status_code == status.HTTP_200_OK, second.json()
     assert second.json()["coordinator_id"] == coordinator_id
+    dbsession.refresh(coordinator)
+    assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
 
     dbsession.execute(
         delete(ContactMembership).where(

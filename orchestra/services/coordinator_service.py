@@ -37,6 +37,7 @@ from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 
 ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
+COORDINATOR_DEFAULT_NATIONALITY = "United States"
 COORDINATOR_RESET_CONTEXTS = (
     "Coordinator/State",
     "Coordinator/Checklist",
@@ -50,6 +51,12 @@ PRESEED_SERVER_FIELDS = frozenset(
     {"_user_id", "_assistant_id", "authoring_assistant_id"},
 )
 PRESEED_TASK_SERVER_FIELDS = frozenset({"assistant_id"})
+
+
+def _ensure_coordinator_default_nationality(assistant: Assistant) -> None:
+    """Ensure Coordinator rows carry the nationality required for runtime startup."""
+    if assistant.nationality is None:
+        assistant.nationality = COORDINATOR_DEFAULT_NATIONALITY
 
 
 def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None:
@@ -95,7 +102,7 @@ def create_coordinator_assistant(
         first_name="Coordinator",
         surname=None,
         age=None,
-        nationality=None,
+        nationality=COORDINATOR_DEFAULT_NATIONALITY,
         profile_photo=None,
         profile_video=None,
         desktop_mode=None,
@@ -274,6 +281,7 @@ def create_personal_coordinator(session: Session, user_id: str) -> Assistant:
     """Create or return the user's personal Coordinator."""
     existing = get_personal_coordinator(session, user_id)
     if existing is not None:
+        _ensure_coordinator_default_nationality(existing)
         ensure_personal_contact_memberships(session, [existing.agent_id])
         return existing
 
@@ -306,6 +314,7 @@ def create_organization_coordinator(
     """Create or return the organization's Coordinator and default space."""
     existing = get_org_coordinator(session, organization_id)
     if existing is not None:
+        _ensure_coordinator_default_nationality(existing)
         ensure_personal_contact_memberships(session, [existing.agent_id])
         ensure_org_default_space(
             session,
