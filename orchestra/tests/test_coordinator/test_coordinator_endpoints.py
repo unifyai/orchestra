@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +27,7 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
     Space,
+    User,
 )
 from orchestra.services.task_machine_state_service import (
     build_task_activation_context_name,
@@ -87,11 +89,22 @@ def _assistants_project(
     *,
     coordinator: Assistant,
 ) -> Project:
-    return dbsession.scalar(
-        select(Project).where(
+    criteria = [
+        Project.name == "Assistants",
+    ]
+    if coordinator.organization_id is None:
+        criteria.extend(
+            [
+                Project.user_id == coordinator.user_id,
+                Project.organization_id.is_(None),
+            ],
+        )
+    else:
+        criteria.append(
             Project.organization_id == coordinator.organization_id,
-            Project.name == "Assistants",
-        ),
+        )
+    return dbsession.scalar(
+        select(Project).where(*criteria),
     )
 
 
@@ -155,6 +168,37 @@ def _personal_memberships(
     ).all()
 
 
+def _assert_owner_contact_row(
+    dbsession: Session,
+    *,
+    coordinator: Assistant,
+    owner_user_id: str,
+) -> LogEvent:
+    owner = dbsession.get(User, owner_user_id)
+    assert owner is not None
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    contacts = _context(
+        dbsession,
+        project=project,
+        name=_assistant_context_name(coordinator, "Contacts"),
+    )
+    assert contacts is not None
+    contact_logs = [
+        log
+        for log in _context_logs(dbsession, context=contacts)
+        if log.data.get("contact_id") == 1
+    ]
+    assert len(contact_logs) == 1
+    contact_data = contact_logs[0].data
+    assert contact_data["first_name"] == owner.name
+    assert contact_data["surname"] == owner.last_name
+    assert contact_data["email_address"] == owner.email
+    assert contact_data["is_system"] is True
+    assert contact_data["should_respond"] is True
+    assert contact_data["response_policy"]
+    return contact_logs[0]
+
+
 def _assert_coordinator_workspace_provisioned(
     dbsession: Session,
     *,
@@ -204,6 +248,11 @@ def _assert_coordinator_workspace_provisioned(
         "assistant",
         coordinator.agent_id,
         "assistant:write",
+    )
+    _assert_owner_contact_row(
+        dbsession,
+        coordinator=coordinator,
+        owner_user_id=owner_user_id,
     )
 
 
@@ -260,6 +309,21 @@ async def test_transcript_seed_is_idempotent_by_assistant_row(
     owner = await _create_user(client, "seed")
     org_data = await _create_org(client, owner, "seed")
     coordinator_id = int(org_data["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    _insert_log(
+        dbsession,
+        project=project,
+        context_name=_assistant_context_name(coordinator, "Transcripts"),
+        data={
+            "medium": "unify_message",
+            "sender_id": 0,
+            "receiver_ids": [1],
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "content": "A normal assistant-authored chat row is not the opener.",
+        },
+    )
+    dbsession.commit()
 
     first = await client.post(
         f"/v0/assistant/{coordinator_id}/transcript-seed",
@@ -277,19 +341,84 @@ async def test_transcript_seed_is_idempotent_by_assistant_row(
     assert second.status_code == status.HTTP_200_OK, second.json()
     assert second.json()["info"]["log_event_id"] == first_id
 
-    coordinator = dbsession.get(Assistant, coordinator_id)
-    project = _assistants_project(dbsession, coordinator=coordinator)
     transcripts = _context(
         dbsession,
         project=project,
         name=_assistant_context_name(coordinator, "Transcripts"),
     )
-    logs = dbsession.scalars(
-        select(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(LogEventContext.context_id == transcripts.id),
-    ).all()
-    assert [log.data["role"] for log in logs] == ["assistant"]
+    logs = _context_logs(dbsession, context=transcripts)
+    opener_logs = [
+        log
+        for log in logs
+        if log.data.get("metadata", {}).get("source") == "coordinator_opener"
+    ]
+    assert len(opener_logs) == 1
+    assert opener_logs[0].id == first_id
+    transcript = opener_logs[0].data
+    assert transcript["medium"] == "unify_message"
+    assert transcript["sender_id"] == 0
+    assert transcript["receiver_ids"] == [1]
+    assert transcript["content"] == "Welcome to your Coordinator."
+    assert isinstance(transcript["message_id"], int)
+    assert isinstance(transcript["exchange_id"], int)
+    assert transcript["images"] == []
+    assert transcript["attachments"] == []
+    assert transcript["metadata"]["source"] == "coordinator_opener"
+    assert transcript["metadata"]["source_assistant_id"] == str(coordinator_id)
+    assert datetime.fromisoformat(transcript["timestamp"]).tzinfo is not None
+
+    exchanges = _context(
+        dbsession,
+        project=project,
+        name=_assistant_context_name(coordinator, "Exchanges"),
+    )
+    exchange_logs = [
+        log
+        for log in _context_logs(dbsession, context=exchanges)
+        if log.data.get("exchange_id") == transcript["exchange_id"]
+    ]
+    assert len(exchange_logs) == 1
+    assert exchange_logs[0].data["medium"] == "unify_message"
+    _assert_owner_contact_row(
+        dbsession,
+        coordinator=coordinator,
+        owner_user_id=owner["id"],
+    )
+
+
+@pytest.mark.anyio
+async def test_assistant_list_repairs_missing_coordinator_owner_contact_row(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Assistant reads repair historical Coordinators missing chat contact rows."""
+    owner = await _create_user(client, "contact-repair")
+    org_data = await _create_org(client, owner, "contact-repair")
+    coordinator_id = int(org_data["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    contacts = _context(
+        dbsession,
+        project=project,
+        name=_assistant_context_name(coordinator, "Contacts"),
+    )
+    assert contacts is not None
+    dbsession.delete(contacts)
+    dbsession.commit()
+
+    response = await client.get(
+        f"/v0/assistant?agent_id={coordinator_id}",
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert response.json()["info"][0]["self_contact_id"] == 0
+    assert response.json()["info"][0]["boss_contact_id"] == 1
+    _assert_owner_contact_row(
+        dbsession,
+        coordinator=coordinator,
+        owner_user_id=owner["id"],
+    )
 
 
 @pytest.mark.anyio

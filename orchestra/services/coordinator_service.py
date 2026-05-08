@@ -1,10 +1,12 @@
 """Coordinator provisioning and lifecycle helpers."""
 
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -22,8 +24,12 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
     Space,
+    User,
 )
 from orchestra.services.contact_membership_service import (
+    BOSS_CONTACT_RESPONSE_POLICY,
+    PERSONAL_BOSS_CONTACT_ID,
+    PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
 )
 from orchestra.services.task_machine_state_service import (
@@ -44,13 +50,23 @@ COORDINATOR_RESET_CONTEXTS = (
     "Transcripts",
     "Exchanges",
 )
+COORDINATOR_CONTACTS_CONTEXT = "Contacts"
 COORDINATOR_TRANSCRIPTS_CONTEXT = "Transcripts"
+COORDINATOR_EXCHANGES_CONTEXT = "Exchanges"
+COORDINATOR_CHAT_MEDIUM = "unify_message"
+COORDINATOR_OPENER_SOURCE = "coordinator_opener"
 COORDINATOR_ADMIN_ROLES = {"Owner", "Admin"}
 PRESEED_SHARED_CONTEXT_PREFIX = "Spaces"
 PRESEED_SERVER_FIELDS = frozenset(
     {"_user_id", "_assistant_id", "authoring_assistant_id"},
 )
 PRESEED_TASK_SERVER_FIELDS = frozenset({"assistant_id"})
+CONTACTS_UNIQUE_KEYS = {"contact_id": "int"}
+TRANSCRIPTS_UNIQUE_KEYS = {"message_id": "int"}
+EXCHANGES_UNIQUE_KEYS = {"exchange_id": "int"}
+CONTACTS_AUTO_COUNTING = {"contact_id": None}
+TRANSCRIPTS_AUTO_COUNTING = {"message_id": None}
+EXCHANGES_AUTO_COUNTING = {"exchange_id": None}
 
 
 def _ensure_coordinator_default_nationality(assistant: Assistant) -> None:
@@ -283,6 +299,7 @@ def create_personal_coordinator(session: Session, user_id: str) -> Assistant:
     if existing is not None:
         _ensure_coordinator_default_nationality(existing)
         ensure_personal_contact_memberships(session, [existing.agent_id])
+        _ensure_coordinator_owner_contact_row(session, coordinator=existing)
         return existing
 
     assistant = create_coordinator_assistant(
@@ -300,6 +317,7 @@ def create_personal_coordinator(session: Session, user_id: str) -> Assistant:
         owner_user_id=user_id,
         organization_id=None,
     )
+    _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
     return assistant
 
 
@@ -316,6 +334,7 @@ def create_organization_coordinator(
     if existing is not None:
         _ensure_coordinator_default_nationality(existing)
         ensure_personal_contact_memberships(session, [existing.agent_id])
+        _ensure_coordinator_owner_contact_row(session, coordinator=existing)
         ensure_org_default_space(
             session,
             organization_id=organization_id,
@@ -353,6 +372,7 @@ def create_organization_coordinator(
         assistant=assistant,
         name=space_name,
     )
+    _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
     return assistant
 
 
@@ -519,6 +539,9 @@ def _ensure_context(
     *,
     project_id: int,
     context_name: str,
+    unique_keys: dict[str, str] | None = None,
+    auto_counting: dict[str, str | None] | None = None,
+    allow_duplicates: bool | None = None,
 ) -> Context:
     context = _get_context(
         session,
@@ -526,15 +549,231 @@ def _ensure_context(
         context_name=context_name,
     )
     if context is None:
+        unique_keys = unique_keys or {}
         context = Context(
             project_id=project_id,
             name=context_name,
             is_versioned=False,
-            allow_duplicates=True,
+            allow_duplicates=True if allow_duplicates is None else allow_duplicates,
+            unique_key_names=list(unique_keys.keys()),
+            unique_key_types=list(unique_keys.values()),
+            auto_counting=auto_counting or {},
         )
         session.add(context)
         session.flush()
+    else:
+        if unique_keys and not context.unique_keys:
+            context.unique_key_names = list(unique_keys.keys())
+            context.unique_key_types = list(unique_keys.values())
+        if auto_counting and not context.auto_counting:
+            context.auto_counting = auto_counting
+        if (
+            allow_duplicates is not None
+            and context.allow_duplicates != allow_duplicates
+        ):
+            context.allow_duplicates = allow_duplicates
     return context
+
+
+def _owner_contact_entries(user: User) -> dict[str, Any]:
+    """Build the root-local contact row for the Coordinator owner."""
+    return {
+        "contact_id": PERSONAL_BOSS_CONTACT_ID,
+        "first_name": user.name,
+        "surname": user.last_name,
+        "email_address": user.email,
+        "job_title": user.job_title,
+        "bio": user.bio,
+        "timezone": user.timezone,
+        "is_system": True,
+        "should_respond": True,
+        "response_policy": BOSS_CONTACT_RESPONSE_POLICY,
+    }
+
+
+def _find_contact_log_by_contact_id(
+    session: Session,
+    *,
+    context: Context,
+    contact_id: int,
+) -> LogEvent | None:
+    return session.scalar(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(
+            LogEventContext.context_id == context.id,
+            LogEvent.data["contact_id"].astext == str(contact_id),
+        )
+        .order_by(LogEvent.id.asc())
+        .limit(1),
+    )
+
+
+def _log_data_contains(log_data: dict[str, Any], entries: dict[str, Any]) -> bool:
+    return all(log_data.get(key) == value for key, value in entries.items())
+
+
+def _create_coordinator_log_entry(
+    session: Session,
+    *,
+    project: Project,
+    context: Context,
+    context_name: str,
+    entries: dict[str, Any],
+) -> dict[str, Any]:
+    context_dao = ContextDAO(session)
+    result = create_logs_internal(
+        request=CreateLogConfig(
+            project_name=ASSISTANTS_PROJECT_NAME,
+            context=context_name,
+            entries=entries,
+        ),
+        project_id=project.id,
+        context_id=context.id,
+        project_dao=_build_project_dao(session),
+        field_type_dao=FieldTypeDAO(session),
+        log_event_dao=LogEventDAO(session),
+        context_dao=context_dao,
+        context_obj=context,
+    )
+    if result.get("failed"):
+        first_error = result["failed"][0].get("error", "Log creation failed")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=first_error,
+        )
+    return result
+
+
+def _context_has_exchange(
+    session: Session,
+    *,
+    project_id: int,
+    context_name: str,
+    exchange_id: int,
+) -> bool:
+    context = _get_context(
+        session,
+        project_id=project_id,
+        context_name=context_name,
+    )
+    if context is None:
+        return False
+    return (
+        session.scalar(
+            select(LogEvent.id)
+            .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+            .where(
+                LogEventContext.context_id == context.id,
+                LogEvent.data["exchange_id"].astext == str(exchange_id),
+            )
+            .limit(1),
+        )
+        is not None
+    )
+
+
+def _existing_coordinator_opener_log_id(
+    session: Session,
+    *,
+    project_id: int,
+    transcript_context: Context,
+    exchange_context_name: str,
+) -> int | None:
+    candidates = session.scalars(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(
+            LogEventContext.context_id == transcript_context.id,
+            LogEvent.data["medium"].astext == COORDINATOR_CHAT_MEDIUM,
+            LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
+            LogEvent.data["metadata"]["source"].astext == COORDINATOR_OPENER_SOURCE,
+        )
+        .order_by(LogEvent.id.asc()),
+    ).all()
+    for candidate in candidates:
+        exchange_id = candidate.data.get("exchange_id")
+        if (
+            candidate.data.get("receiver_ids") == [PERSONAL_BOSS_CONTACT_ID]
+            and isinstance(exchange_id, int)
+            and _context_has_exchange(
+                session,
+                project_id=project_id,
+                context_name=exchange_context_name,
+                exchange_id=exchange_id,
+            )
+        ):
+            return candidate.id
+    return None
+
+
+def _ensure_coordinator_owner_contact_row(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> int:
+    """Ensure the owner can be resolved as the Coordinator's chat contact."""
+    _lock_coordinator_context(
+        session,
+        coordinator=coordinator,
+        suffix=COORDINATOR_CONTACTS_CONTEXT,
+    )
+    owner = session.get(User, coordinator.user_id)
+    if owner is None:
+        raise ValueError(
+            f"Coordinator owner user {coordinator.user_id!r} was not found",
+        )
+
+    project = _project_for_coordinator(session, coordinator)
+    context_name = _coordinator_context_name(coordinator, COORDINATOR_CONTACTS_CONTEXT)
+    context = _ensure_context(
+        session,
+        project_id=project.id,
+        context_name=context_name,
+        unique_keys=CONTACTS_UNIQUE_KEYS,
+        auto_counting=CONTACTS_AUTO_COUNTING,
+    )
+    entries = _owner_contact_entries(owner)
+    existing = _find_contact_log_by_contact_id(
+        session,
+        context=context,
+        contact_id=PERSONAL_BOSS_CONTACT_ID,
+    )
+    if existing is not None:
+        if _log_data_contains(existing.data, entries):
+            return existing.id
+        existing.data = {**existing.data, **entries}
+        flag_modified(existing, "data")
+        session.flush()
+        return existing.id
+
+    result = _create_coordinator_log_entry(
+        session,
+        project=project,
+        context=context,
+        context_name=context_name,
+        entries=entries,
+    )
+    session.flush()
+    return result["log_event_ids"][0]
+
+
+def ensure_coordinator_owner_contact_rows(
+    session: Session,
+    assistant_ids: Sequence[int],
+) -> None:
+    """Ensure listed Coordinator assistants have owner contact rows for chat."""
+    if not assistant_ids:
+        return
+    coordinators = session.scalars(
+        select(Assistant).where(
+            Assistant.agent_id.in_(assistant_ids),
+            Assistant.is_coordinator.is_(True),
+        ),
+    ).all()
+    for coordinator in coordinators:
+        _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
+    session.flush()
 
 
 def _build_project_dao(session: Session) -> ProjectDAO:
@@ -737,58 +976,78 @@ def seed_coordinator_transcript(
     content: str,
     source_assistant_id: str | None,
 ) -> int:
-    """Ensure the opener transcript contains one assistant row."""
+    """Ensure the opener transcript contains one visible chat row."""
     _lock_coordinator_context(
         session,
         coordinator=coordinator,
         suffix=COORDINATOR_TRANSCRIPTS_CONTEXT,
     )
+    _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
     project = _project_for_coordinator(session, coordinator)
-    context = _ensure_context(
+    transcript_context_name = _coordinator_context_name(
+        coordinator,
+        COORDINATOR_TRANSCRIPTS_CONTEXT,
+    )
+    transcript_context = _ensure_context(
         session,
         project_id=project.id,
-        context_name=_coordinator_context_name(
-            coordinator,
-            COORDINATOR_TRANSCRIPTS_CONTEXT,
-        ),
+        context_name=transcript_context_name,
+        unique_keys=TRANSCRIPTS_UNIQUE_KEYS,
+        auto_counting=TRANSCRIPTS_AUTO_COUNTING,
     )
-    existing_id = session.scalar(
-        select(LogEvent.id)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(
-            LogEventContext.context_id == context.id,
-            LogEvent.data["role"].astext == "assistant",
-        )
-        .order_by(LogEvent.id.desc())
-        .limit(1),
+    exchange_context_name = _coordinator_context_name(
+        coordinator,
+        COORDINATOR_EXCHANGES_CONTEXT,
+    )
+    existing_id = _existing_coordinator_opener_log_id(
+        session,
+        project_id=project.id,
+        transcript_context=transcript_context,
+        exchange_context_name=exchange_context_name,
     )
     if existing_id is not None:
         return existing_id
 
-    context_dao = ContextDAO(session)
-    result = create_logs_internal(
-        request=CreateLogConfig(
-            project_name=ASSISTANTS_PROJECT_NAME,
-            context=_coordinator_context_name(
-                coordinator,
-                COORDINATOR_TRANSCRIPTS_CONTEXT,
-            ),
-            entries={
-                "role": "assistant",
-                "content": content,
-                "assistant_id": source_assistant_id or str(coordinator.agent_id),
-            },
-        ),
+    exchange_context = _ensure_context(
+        session,
         project_id=project.id,
-        context_id=context.id,
-        project_dao=_build_project_dao(session),
-        field_type_dao=FieldTypeDAO(session),
-        log_event_dao=LogEventDAO(session),
-        context_dao=context_dao,
-        context_obj=context,
+        context_name=exchange_context_name,
+        unique_keys=EXCHANGES_UNIQUE_KEYS,
+        auto_counting=EXCHANGES_AUTO_COUNTING,
+    )
+    exchange_result = _create_coordinator_log_entry(
+        session,
+        project=project,
+        context=exchange_context,
+        context_name=exchange_context_name,
+        entries={
+            "medium": COORDINATOR_CHAT_MEDIUM,
+            "metadata": {"source": COORDINATOR_OPENER_SOURCE},
+        },
+    )
+    exchange_id = exchange_result["auto_counting"]["exchange_id"][0]
+    transcript_result = _create_coordinator_log_entry(
+        session,
+        project=project,
+        context=transcript_context,
+        context_name=transcript_context_name,
+        entries={
+            "medium": COORDINATOR_CHAT_MEDIUM,
+            "sender_id": PERSONAL_SELF_CONTACT_ID,
+            "receiver_ids": [PERSONAL_BOSS_CONTACT_ID],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "content": content,
+            "exchange_id": exchange_id,
+            "images": [],
+            "attachments": [],
+            "metadata": {
+                "source": COORDINATOR_OPENER_SOURCE,
+                "source_assistant_id": source_assistant_id or str(coordinator.agent_id),
+            },
+        },
     )
     session.flush()
-    return result["log_event_ids"][0]
+    return transcript_result["log_event_ids"][0]
 
 
 def reset_coordinator_state(session: Session, *, coordinator: Assistant) -> None:
