@@ -141,9 +141,9 @@ re-runs are deterministic without a snapshot table.
 Scheduling
 ----------------------------------------------------------------------
 
-Production runs on **Google Cloud Scheduler** firing a Cloud Run
-job that calls :func:`invoice_metered_month` directly (no admin HTTP
-endpoint):
+Production runs on **Google Cloud Scheduler** firing the admin HTTP
+endpoint ``POST /v0/admin/billing/invoice-metered-month``, which is a
+thin FastAPI wrapper that calls :func:`invoice_metered_month`:
 
   * Job ``orchestra-production-monthly-metered-invoicer`` in project
     ``saas-368716`` / location ``us-central1``.
@@ -151,25 +151,32 @@ endpoint):
     the credits-mode invoicer's prod scheduler so the older,
     well-understood credits pipeline can't be starved by this newer
     one if it misbehaves).
-  * The scheduler triggers a Cloud Run job whose entrypoint is a
-    short Python wrapper that calls ``invoice_metered_month()`` with
-    the previous-month period and exits. There is intentionally no
-    admin-facing HTTP endpoint to fire the bulk routine — the surface
-    area for "accidentally double-billing every customer" is too
-    large to live behind a Bearer token.
+  * Cloud Scheduler hits ``https://api.unify.ai/v0/admin/billing/invoice-metered-month``
+    with a static admin Bearer token (mirroring the credits-mode
+    scheduler's auth pattern). Bulk routine safety relies on layered
+    idempotency: a unique key on ``(billing_account_id,
+    invoice_group)`` short-circuits at the DB-row insert, and Stripe
+    idempotency keys at the line- and invoice-create call sites
+    prevent double-create on Stripe's side. The endpoint additionally
+    soft-rejects current/future-month requests so a misconfigured
+    body can't invoice an in-progress period.
+  * ``attemptDeadline`` is set to ``1800s`` (30 minutes) — comfortably
+    above the worst-case bulk-run latency so a slow run isn't
+    misdiagnosed as failed and retried in parallel. Retry config
+    mirrors the credits scheduler (``maxBackoff=3600s``,
+    ``maxDoublings=5``, ``minBackoff=5s``).
   * Cloud Scheduler is preferred over GHA cron for prod billing
     because it gives stronger on-time delivery guarantees, automatic
-    retries with exponential backoff (``maxBackoff=3600s``,
-    ``maxDoublings=5``, ``attemptDeadline=180s``), and a managed-SLA
-    that GHA cron explicitly does NOT promise.
+    retries with exponential backoff, and a managed-SLA that GHA
+    cron explicitly does NOT promise.
 
 Staging has no scheduled trigger — invoke on demand by importing
 ``invoice_metered_month`` from a one-off Python shell on the staging
 worker pod when verifying changes before they hit production a month
 later. For per-account spot-checks the single-account re-run admin
 endpoint ``POST {staging-base}/v0/admin/billing/invoice-metered-month/account``
-remains available (it's narrow-blast-radius enough to keep behind an
-admin token).
+remains available (it's narrow-blast-radius and supports ``force=true``
+for "I voided the prior Stripe invoice, please regenerate" recovery).
 """
 
 from __future__ import annotations

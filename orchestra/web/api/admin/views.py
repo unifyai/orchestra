@@ -698,6 +698,93 @@ def trigger_monthly_invoicing(
         )
 
 
+@router.post(
+    "/billing/invoice-metered-month",
+    summary="Admin: Run the metered-mode invoicer for a period",
+    description=(
+        "Run the monthly metered-mode invoicer routine for the given "
+        "period. Defaults to the previous month. Production runs on "
+        "Cloud Scheduler "
+        "(``orchestra-production-monthly-metered-invoicer``, "
+        "``5 2 1 * *`` UTC — five minutes after the credits-mode "
+        "scheduler so the older, well-understood credits pipeline "
+        "can't be starved by this newer one if it misbehaves); "
+        "staging is on-demand only — invoke ``invoice_metered_month`` "
+        "from a Python shell to verify changes. "
+        "\n\n"
+        "Idempotent: a unique key on ``(billing_account_id, "
+        "invoice_group)`` plus Stripe idempotency keys at the line- "
+        "and invoice-create call sites mean re-running for the same "
+        "period is a no-op for already-invoiced accounts. "
+        "\n\n"
+        "Soft guard: rejects with 400 if ``year``/``month`` resolves "
+        "to the current or any future month — invoicing an in-progress "
+        "period is always a misconfiguration (the routine bills closed "
+        "periods only). Past-month replays remain allowed for "
+        "operator-initiated catch-up runs. See "
+        "``monthly_metered_invoicer`` module docstring for the full "
+        "scheduling rationale."
+    ),
+)
+def trigger_monthly_metered_invoicing(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """Trigger the metered-mode invoicing routine for a period."""
+    try:
+        from orchestra.routines.monthly_metered_invoicer import (
+            invoice_metered_month,
+        )
+
+        # Resolve the requested period for the soft current/future-month
+        # guard. Mirrors the routine's own default-resolution logic
+        # (previous month if year/month are None) so the guard message
+        # accurately reflects what would actually be invoiced.
+        today_utc = datetime.now(timezone.utc).date()
+        if year is None or month is None:
+            first_this_month = today_utc.replace(day=1)
+            last_month_end = first_this_month - timedelta(days=1)
+            resolved_year, resolved_month = (
+                last_month_end.year,
+                last_month_end.month,
+            )
+        else:
+            resolved_year, resolved_month = year, month
+
+        first_of_current_month = today_utc.replace(day=1)
+        period_start = _dt.date(resolved_year, resolved_month, 1)
+        if period_start >= first_of_current_month:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Refusing to invoice {resolved_year}-{resolved_month:02d}: "
+                    "period is current or future. The metered invoicer only "
+                    "bills closed periods."
+                ),
+            )
+
+        result = invoice_metered_month(
+            resolved_year, resolved_month, session=session
+        )
+        return {
+            "status": "success",
+            "period": result.period,
+            "accounts_invoiced": result.accounts_invoiced,
+            "accounts_skipped": result.accounts_skipped,
+            "accounts_failed": result.accounts_failed,
+            "errors": result.errors,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Monthly metered invoicing failed: {str(e)}",
+        )
+
+
 @router.post("/billing/suspend-past-due")
 def trigger_billing_guard() -> dict:
     """Deprecated — billing guard removed.
@@ -2518,15 +2605,15 @@ def admin_list_plan_history(
         "run is owned by Cloud Scheduler "
         "(``orchestra-production-monthly-metered-invoicer``, "
         "``5 2 1 * *`` UTC — five minutes after the credits-mode "
-        "scheduler), so there is intentionally no admin-facing "
-        "endpoint to fire it manually; staging dry-runs invoke the "
-        "``invoice_metered_month`` routine directly via the Python "
-        "shell. See ``monthly_metered_invoicer`` module docstring "
-        "for the full scheduling rationale."
+        "scheduler) which fires the bulk endpoint "
+        "``POST /admin/billing/invoice-metered-month``; this "
+        "single-account endpoint is the narrow-blast-radius "
+        "alternative for ops cases like \"we voided this customer's "
+        "invoice in the Stripe dashboard, please regenerate it\". "
+        "Staging dry-runs invoke ``invoice_metered_month`` directly "
+        "via the Python shell. See ``monthly_metered_invoicer`` "
+        "module docstring for the full scheduling rationale."
         "\n\n"
-        "This single-account variant exists for the legitimate ops "
-        "case of \"we voided this customer's invoice in the Stripe "
-        "dashboard, please regenerate it\". "
         "``force=true`` deletes the existing ``Recharge`` row for the "
         "(account, period) before running so the routine doesn't "
         "short-circuit on the idempotency check — use only after voiding "
