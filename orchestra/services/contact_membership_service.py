@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 
 from sqlalchemy import or_
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
@@ -150,5 +151,15 @@ def ensure_personal_contact_memberships(
             )
 
     if membership_values:
-        session.bulk_insert_mappings(ContactMembership, membership_values)
+        stmt = postgres_insert(ContactMembership).values(membership_values)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+            ],
+            index_where=(
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
+            ),
+        )
+        session.execute(stmt)
     session.flush()

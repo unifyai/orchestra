@@ -1477,12 +1477,12 @@ async def test_create_assistant_provisions_personal_contact_memberships(
         CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     ],
 )
-async def test_admin_assistant_contact_ids_fail_without_memberships(
+async def test_admin_assistant_contact_ids_repair_missing_memberships(
     client: AsyncClient,
     dbsession,
     relationship_to_delete,
 ):
-    """Assistant reads fail loudly when required personal overlays are absent."""
+    """Assistant reads repair required personal overlays before projecting ids."""
 
     owner = await create_test_user(
         client,
@@ -1516,8 +1516,27 @@ async def test_admin_assistant_contact_ids_fail_without_memberships(
         headers=ADMIN_HEADERS,
     )
 
-    assert admin_resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert admin_resp.json()["detail"] == "missing_contact_overlay"
+    assert admin_resp.status_code == status.HTTP_200_OK
+    assert admin_resp.json()["info"] == [
+        {
+            "agent_id": str(agent_id),
+            "self_contact_id": 0,
+            "boss_contact_id": 1,
+        },
+    ]
+
+    rows = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+        )
+        .all()
+    )
+    assert {(row.contact_id, row.relationship) for row in rows} == {
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+    }
 
 
 def test_seed_personal_contact_memberships_backfills_missing_relationships(
