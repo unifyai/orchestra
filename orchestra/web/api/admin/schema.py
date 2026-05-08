@@ -705,19 +705,25 @@ class AdminInvoiceListItem(BaseModel):
 
     Two flavours, discriminated by ``kind``:
 
-    * ``HISTORICAL`` — backed by a real :class:`Recharge` row. ``id``
-      is the recharge id; ``status`` follows
-      :class:`RechargeStatus` (``PENDING_INVOICE`` / ``INVOICE_CREATED``
-      / ``PAID`` / ``FAILED`` / ``DISPUTED``); ``at`` is the recharge
+    * ``HISTORICAL`` — backed by a real :class:`Recharge` row that has
+      a non-NULL ``stripe_invoice_id``. ``id`` is the recharge id;
+      ``status`` follows :class:`RechargeStatus` (``INVOICE_CREATED``
+      / ``PAID`` / ``FAILED`` / ``DISPUTED`` — also ``PENDING_INVOICE``
+      in the rare transitional case where Stripe assigned an id before
+      the orchestra-side status flipped); ``at`` is the recharge
       timestamp (the ``invoice_group`` end-of-period date is exposed
-      separately for grouping).
+      separately for grouping). Wallet-only admin recharges
+      (``payment``/``promo``) and stub PENDING rows with no Stripe
+      artefact are filtered out at the SQL layer — this surface is
+      strictly "rows with a corresponding Stripe invoice".
     * ``UPCOMING`` — synthesised from
       :func:`monthly_metered_invoicer.estimate_in_progress_invoice`
       for an active METERED assignment that hasn't been invoiced for
       the current period yet. ``id`` is ``None`` (no recharge row
       exists), ``status`` is the literal ``"UPCOMING"``, and ``at`` is
       the projected month-end invoice date. ``amount`` is the
-      mid-period projection; ``stripe_invoice_id`` is always ``None``.
+      mid-period projection; ``stripe_invoice_id`` is always ``None``
+      (the projection becomes a real Stripe invoice at period close).
 
     Amount semantics
     ----------------
@@ -729,7 +735,7 @@ class AdminInvoiceListItem(BaseModel):
     customer is actually billed for the period — the historical path
     reads it from ``Recharge.detail.invoiced_local`` (METERED) and
     falls back to ``Recharge.amount_usd`` labelled ``USD`` for every
-    other row type (auto-recharge, manual top-up, CREDITS commit fee,
+    other Stripe-backed row type (auto-recharge, CREDITS commit fee,
     …). UPCOMING rows take it from the in-progress estimate, which
     uses the same decomposition.
 

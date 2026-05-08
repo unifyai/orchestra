@@ -1038,7 +1038,13 @@ def update_billing_profile(
 # Customer-facing invoice list. Independent of Stripe portal access so a
 # workspace member with billing:read can see what was billed even if they
 # don't have access to the Stripe Dashboard. Returns INVOICE_CREATED /
-# PAID / FAILED rows; PENDING_INVOICE is internal plumbing and excluded.
+# PAID / FAILED / DISPUTED rows that have an associated Stripe invoice;
+# PENDING_INVOICE is internal plumbing and excluded, and rows without a
+# ``stripe_invoice_id`` (manual top-ups via the admin ``payment``/``promo``
+# recharge types, which credit the wallet without issuing an invoice) are
+# also excluded — there's no PDF / hosted-URL to surface so they'd render
+# as actionless "—" rows. Wallet credits from those flows are visible
+# in the credits-balance card and any future transaction-history surface.
 # ===========================================================================
 
 
@@ -1100,6 +1106,11 @@ def list_billing_invoices(
         RechargeStatus.DISPUTED,
     ]
 
+    # ``stripe_invoice_id IS NOT NULL`` filters out admin-driven wallet
+    # credits (``payment``/``promo`` recharges) that never produce a
+    # Stripe invoice. Including them yields rows we have no PDF / hosted
+    # URL for — confusing in a list framed as "Invoices". Forward-
+    # compatible with any future no-invoice recharge type.
     rows = list(
         session.execute(
             select(Recharge, BillingPlanAssignment, BillingPlanTemplate)
@@ -1114,6 +1125,7 @@ def list_billing_invoices(
             .where(
                 Recharge.billing_account_id == ba.id,
                 Recharge.status.in_(visible),
+                Recharge.stripe_invoice_id.is_not(None),
             )
             .order_by(Recharge.at.desc())
             .offset(offset)
