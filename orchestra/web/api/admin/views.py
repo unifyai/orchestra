@@ -2678,6 +2678,14 @@ def admin_rerun_metered_invoicing_for_account(
 # ``billing.views`` — that one is keyed off the API-key billing
 # account; this one is unscoped admin tooling.
 #
+# Every historical row has a non-NULL ``stripe_invoice_id`` — this is
+# strictly the "rows with a Stripe-side artefact" view. Wallet-only
+# credits (admin ``payment``/``promo`` recharges) and stub
+# ``PENDING_INVOICE`` rows whose Stripe invoice hasn't been created
+# yet are excluded server-side: there's nothing to deep-link to and
+# they aren't "invoices" in any operator-meaningful sense. UPCOMING
+# rows are projections that will become Stripe invoices at period close.
+#
 # Currency is *not* converted: each row carries its literal contract
 # currency (the template's ``currency`` field, falling back to
 # ``USD`` for legacy rows where ``plan_id`` is NULL). Mixing
@@ -2692,11 +2700,14 @@ def admin_rerun_metered_invoicing_for_account(
     response_model=AdminInvoiceListResponse,
     summary="Admin: cross-account invoice list (historical + upcoming)",
     description=(
-        "Returns historical invoice rows (``Recharge`` rows in any "
-        "non-internal status — ``PENDING_INVOICE`` is internal "
-        "plumbing and excluded) joined to recipient identity (org "
-        "name when org-owned, user email otherwise) and plan "
-        "metadata.\n\n"
+        "Returns historical invoice rows (``Recharge`` rows that have "
+        "an associated Stripe invoice — every status from "
+        "``INVOICE_CREATED`` through ``DISPUTED``) joined to recipient "
+        "identity (org name when org-owned, user email otherwise) and "
+        "plan metadata. Wallet-only admin recharges "
+        "(``payment``/``promo``) and stub ``PENDING_INVOICE`` rows "
+        "with no ``stripe_invoice_id`` yet are excluded — they have "
+        "no Stripe-side artefact to deep-link to.\n\n"
         "When ``include_upcoming=true`` (default) and ``offset==0``, "
         "the response is prefixed with one synthesised ``UPCOMING`` "
         "row per active METERED assignment that hasn't been "
@@ -2822,6 +2833,18 @@ def admin_list_invoices(
     else:
         base_q = base_q.where(Recharge.status.in_(default_visible))
 
+    # Hard requirement for HISTORICAL rows: must have a Stripe invoice
+    # behind them. Admin-driven wallet credits (``payment``/``promo``
+    # types — manual top-ups and promos) never call Stripe.Invoice.create
+    # so they have ``stripe_invoice_id IS NULL`` for life; ditto stub
+    # ``PENDING_INVOICE`` rows that mark "we owe this customer money
+    # at period close" before the invoicer has finalised anything. The
+    # admin invoices view is strictly the "rows with a Stripe-side
+    # artefact" surface — wallet-only adjustments live in their
+    # respective transaction histories, not here. Forward-compatible
+    # with any future no-invoice recharge type.
+    base_q = base_q.where(Recharge.stripe_invoice_id.is_not(None))
+
     if currency:
         base_q = base_q.where(BillingPlanTemplate.currency == currency.upper())
     if plan_template_id is not None:
@@ -2874,12 +2897,14 @@ def admin_list_invoices(
             #   the customer was actually invoiced (see
             #   ``InvoicesTable.formatInvoiceAmount`` for the matching
             #   customer-side logic).
-            # * Every other row type (auto_recharge, manual top-up,
+            # * Every other Stripe-backed row type (auto_recharge,
             #   commit_topup for CREDITS COMMITMENT, …) is intrinsically
             #   USD-denominated — the plan template's ``currency`` is
             #   only meaningful for the METERED path, so we deliberately
             #   ignore it on the fallback and label the row USD to match
-            #   ``Recharge.amount_usd``.
+            #   ``Recharge.amount_usd``. (Manual top-ups / promos can't
+            #   reach this code path — the stripe_invoice_id filter
+            #   excludes them.)
             detail = recharge.detail or {}
             inv_local_raw = detail.get("invoiced_local") if isinstance(detail, dict) else None
             detail_ccy = detail.get("currency") if isinstance(detail, dict) else None
