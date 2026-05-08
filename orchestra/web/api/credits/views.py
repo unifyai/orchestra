@@ -73,11 +73,13 @@ def get_credits(
     try:
         billing_entity = get_billing_entity(session, user_id, organization_id)
         credits = float(billing_entity.credits)
+        billing_mode = billing_entity.billing_mode.value
     except ValueError:
         credits = 0.0
+        billing_mode = "CREDITS"
 
     entity_id = str(organization_id) if organization_id else user_id
-    return {"id": entity_id, "credits": credits}
+    return {"id": entity_id, "credits": credits, "billing_mode": billing_mode}
 
 
 @router.post(
@@ -126,7 +128,7 @@ def deduct_credits(
     :param session: Database session.
     :return: Response with previous, deducted, and current credit amounts.
     """
-    from orchestra.lib.billing import deduct_credits as billing_deduct_credits
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -140,10 +142,15 @@ def deduct_credits(
 
     current_credits = float(billing_entity.credits)
 
-    new_balance = billing_deduct_credits(
-        session,
-        billing_entity,
-        Decimal(str(request.amount)),
+    # ``BillingAccountDAO.deduct_credits`` is mode-aware: CREDITS mutates
+    # the wallet and returns the new balance; METERED writes a
+    # ledger-only audit row and returns ``None``. For METERED accounts
+    # the response surfaces the wallet balance unchanged (it stays at 0
+    # for true enterprise contracts) — the ledger row is the audit
+    # source of truth.
+    new_balance = BillingAccountDAO(session).deduct_credits(
+        billing_entity.billing_account_id,
+        float(request.amount),
         category=request.category,
         assistant_id=request.assistant_id,
         user_id=request.user_id or user_id,
@@ -152,8 +159,10 @@ def deduct_credits(
         detail=request.detail,
     )
 
-    # Trigger auto-recharge if credits fell below threshold
-    if billing_entity.should_trigger_autorecharge(new_balance):
+    if new_balance is None:
+        # METERED: ledger row written, wallet untouched.
+        new_balance = billing_entity.credits
+    elif billing_entity.should_trigger_autorecharge(new_balance):
         ba = (
             session.query(BillingAccount)
             .filter(BillingAccount.id == billing_entity.billing_account_id)
@@ -281,9 +290,6 @@ def get_transaction_history(
                 id=r.id,
                 at=r.at,
                 amount=float(r.amount),
-                balance_after=(
-                    float(r.balance_after) if r.balance_after is not None else None
-                ),
                 category=r.category,
                 assistant_id=r.assistant_id,
                 user_id=r.user_id,

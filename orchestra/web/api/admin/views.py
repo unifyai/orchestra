@@ -1,3 +1,4 @@
+import datetime as _dt
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Optional
@@ -35,14 +36,37 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
+    AdminInvoiceListItem,
+    AdminInvoiceListResponse,
+    AssignPlanGroupRequest,
+    AssignPlanGroupResponse,
     AssistantContactCostRead,
     AssistantContactCostWrite,
+    BillingPlanAssignmentResponse,
+    BillingPlanTemplateCreate,
+    BillingPlanTemplateResponse,
+    BillingProfileResponse,
+    BillingProfileUpdateRequest,
+    EnsureStripeCustomerRequest,
+    EnsureStripeCustomerResponse,
     OrganizationListItem,
     OrganizationListResponse,
+    PaymentPreferencesRequest,
+    PaymentPreferencesResponse,
+    PlanGroupAddMemberRequest,
+    PlanGroupCreateRequest,
+    PlanGroupListResponse,
+    PlanGroupMemberItem,
+    PlanGroupResponse,
+    PlanGroupSetPositionsRequest,
+    PlanGroupSummaryItem,
+    PlanGroupUpdateRequest,
+    PlanHistoryResponse,
     RechargeModelRequest,
     RechargeModelResponse,
     RechargeTypeModelRequest,
     RechargeTypeModelResponse,
+    SetPlanRequest,
     SuspensionReason,
     UsersModelResponse,
 )
@@ -634,31 +658,37 @@ def get_user_prompt_telemetry(
     return user_dao.is_telemetry_activated(user_id)
 
 
-@router.post("/billing/invoice-month")
+@router.post(
+    "/billing/invoice-month",
+    summary="Admin: Run the credits-mode invoicer for a period",
+    description=(
+        "Run the monthly credits-mode invoicer routine for the given "
+        "period. Defaults to the previous month. Production runs on "
+        "Cloud Scheduler (``orchestra-production-monthly-invoicer``, "
+        "``0 2 1 * *`` UTC); staging is on-demand only — call this "
+        "endpoint manually to verify changes. Idempotent: re-running "
+        "for the same period skips already-finalised PENDING_INVOICE "
+        "recharges. See ``monthly_credits_invoicer`` module docstring "
+        "for the full scheduling rationale."
+    ),
+)
 def trigger_monthly_invoicing(
     year: Optional[int] = None,
     month: Optional[int] = None,
     session=Depends(get_db_session),
 ) -> dict:
-    """
-    Trigger monthly invoicing for the specified period.
-    Defaults to previous month if not specified.
-
-    This endpoint is designed to be called by Cloud Scheduler.
-    """
+    """Trigger the credits-mode invoicing routine for a period."""
     try:
-        # Import here to avoid circular imports
-        from orchestra.routines.monthly_invoicer import invoice_month
+        from orchestra.routines.monthly_credits_invoicer import invoice_month
 
-        # Pass the session to avoid creating a new one
-        invoice_month(year, month, session=session)
-
-        period = f"{year}-{month:02d}" if year and month else "previous month"
+        result = invoice_month(year, month, session=session)
         return {
             "status": "success",
-            "message": f"Monthly invoicing completed for {period}",
-            "year": year,
-            "month": month,
+            "period": result.period,
+            "accounts_invoiced": result.accounts_invoiced,
+            "accounts_skipped": result.accounts_skipped,
+            "accounts_failed": result.accounts_failed,
+            "errors": result.errors,
         }
 
     except Exception as e:
@@ -940,63 +970,14 @@ def trigger_billing_reconciliation(
         )
 
 
-@router.post("/billing/health")
-def trigger_billing_health(
-    lookback_hours: int = 24,
-    notify: bool = True,
-    session=Depends(get_db_session),
-) -> dict:
-    """
-    Run billing health snapshot.
-
-    Computes aggregate billing metrics from the database — account
-    status distribution, recharge activity, at-risk accounts, and
-    operational health indicators.  DB-only, no Stripe API calls.
-
-    Args:
-        lookback_hours: Time window for recharge activity (default 24).
-        notify: If True, send a Discord notification with the results.
-    """
-    try:
-        from orchestra.routines.billing_health import check_health
-
-        report = check_health(
-            session=session,
-            lookback_hours=lookback_hours,
-        )
-
-        if notify:
-            try:
-                from orchestra.routines.billing_notifications import notify_health
-
-                notify_health(report)
-            except Exception:
-                logger.warning(
-                    "Failed to send health Discord notification",
-                    exc_info=True,
-                )
-
-        return {
-            "status": "success",
-            **report.to_dict(),
-        }
-
-    except Exception as e:
-        if notify:
-            try:
-                from orchestra.routines.billing_notifications import notify_failure
-
-                notify_failure("Health Check", str(e))
-            except Exception:
-                import logging
-
-                logger = logging.getLogger(__name__)
-
-                logger.warning("Failed to send failure notification", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Billing health check failed: {str(e)}",
-        )
+# NOTE: ``POST /admin/billing/health`` was retired alongside the
+# ``orchestra.routines.billing_health`` routine when the v2 billing
+# refactor folded health-snapshot KPIs into Grafana. The reconciliation
+# routine (``POST /admin/billing/reconcile``) still surfaces critical
+# discrepancies via Discord; aggregate counts live in the Grafana
+# billing dashboard. There is no caller of the old endpoint anywhere
+# in this repo, the console, or any Cloud Scheduler entry — removed
+# rather than stubbed for that reason.
 
 
 # ============================================================================
@@ -1211,6 +1192,27 @@ def get_billing_account_info(
         ),
         "autorecharge_qty": float(ba.autorecharge_qty) if ba.autorecharge_qty else 0,
         "account_status": ba.account_status,
+        # NULL = invoicer falls back to the per-CollectionMethod default
+        # (``['card']`` for AUTO_CARD, ``['card', 'customer_balance']``
+        # for SEND_INVOICE_NET_30).
+        "preferred_payment_method_types": ba.preferred_payment_method_types,
+        # Business profile snapshot — same shape as
+        # ``BillingAccountDAO.get_billing_profile`` so the admin UI can
+        # display / edit the profile that drives Stripe Customer
+        # creation and invoice addressee fields.
+        "billing_profile": {
+            "billing_email": ba.billing_email,
+            "name": ba.name,
+            "tax_id": ba.tax_id,
+            "tax_id_type": ba.tax_id_type,
+            "billing_address": ba.billing_address or {},
+        },
+        # Self-serve switch catalog assignment. NULL = self-serve
+        # switching disabled for this account; admins can still call
+        # ``POST /v0/admin/billing/plan`` to change the active
+        # template directly. The admin org page renders this as a
+        # searchable dropdown driven by ``GET /v0/admin/billing/plans/groups``.
+        "plan_group_id": ba.plan_group_id,
     }
     if user_id:
         result["user_id"] = user_id
@@ -1890,3 +1892,1552 @@ def admin_temp_file_cleanup(
         "status": "success",
         "deleted_count": deleted_count,
     }
+
+
+# ===========================================================================
+# Managed-billing admin endpoints
+#
+# Templates + plan assignments are admin-managed: contracts are
+# negotiated, not self-served. The customer-facing surface (in
+# ``orchestra/web/api/billing/views.py``) only reads the result via
+# ``GET /v0/billing/account-info`` and ``GET /v0/billing/invoices``.
+# ===========================================================================
+
+
+def _enforce_at_boundary(effective_at: Optional[datetime]) -> datetime:
+    """HTTP wrapper around the AT_BOUNDARY rule.
+
+    Defaults ``None`` to the next-month boundary and converts a
+    non-boundary value into HTTP 400. The calendar math itself lives
+    in ``billing_plan_assignment_dao`` so the DAO and other routines
+    can share it.
+    """
+    from orchestra.db.dao.billing_plan_assignment_dao import (
+        is_month_boundary_utc,
+        next_month_boundary_utc,
+    )
+
+    if effective_at is None:
+        return next_month_boundary_utc()
+    if not is_month_boundary_utc(effective_at):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "effective_at must be midnight UTC on the 1st of a month "
+                "(AT_BOUNDARY policy). Mid-period plan changes are not "
+                "yet supported."
+            ),
+        )
+    moment = effective_at
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+@router.post(
+    "/billing/plans/templates",
+    response_model=BillingPlanTemplateResponse,
+    summary="Admin: Create a billing plan template",
+    description=(
+        "Create an immutable, named billing plan template. Templates are the "
+        "catalog of contracts that can be assigned to billing accounts. To "
+        "'edit' a template, create a new one with `supersedes_template_id` "
+        "pointing at the old one and (optionally) deprecate the old one."
+    ),
+)
+def admin_create_billing_template(
+    body: BillingPlanTemplateCreate,
+    session=Depends(get_db_session),
+) -> BillingPlanTemplateResponse:
+    """Create a new billing plan template (admin-only)."""
+    from decimal import Decimal as _D
+
+    from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
+    from orchestra.db.models.orchestra_models import (
+        BillingMode,
+        CollectionMethod,
+        FxPolicy,
+        ProrationPolicy,
+    )
+
+    def _enum_or_400(enum_cls, value, field):
+        try:
+            return enum_cls(value)
+        except ValueError:
+            allowed = ", ".join(e.value for e in enum_cls)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid {field}={value!r}. Must be one of: {allowed}",
+            )
+
+    template_dao = BillingPlanTemplateDAO(session)
+    if template_dao.get_by_name(body.name) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Template with name {body.name!r} already exists.",
+        )
+
+    try:
+        template = template_dao.create_template(
+            name=body.name,
+            display_name=body.display_name,
+            billing_mode=_enum_or_400(BillingMode, body.billing_mode, "billing_mode"),
+            is_custom=body.is_custom,
+            is_active=body.is_active,
+            description=body.description,
+            commit_amount=(
+                _D(str(body.commit_amount))
+                if body.commit_amount is not None
+                else None
+            ),
+            currency=body.currency,
+            commit_period=body.commit_period,
+            commit_schedule=body.commit_schedule,
+            base_pricing_factor=_D(str(body.base_pricing_factor)),
+            overage_pricing_factor=_D(str(body.overage_pricing_factor)),
+            collection_method=_enum_or_400(
+                CollectionMethod,
+                body.collection_method,
+                "collection_method",
+            ),
+            proration_policy=_enum_or_400(
+                ProrationPolicy,
+                body.proration_policy,
+                "proration_policy",
+            ),
+            credits_rollover_policy=body.credits_rollover_policy,
+            fx_policy=(
+                _enum_or_400(FxPolicy, body.fx_policy, "fx_policy")
+                if body.fx_policy is not None
+                else None
+            ),
+            fx_locked_rate=(
+                _D(str(body.fx_locked_rate))
+                if body.fx_locked_rate is not None
+                else None
+            ),
+            supersedes_template_id=body.supersedes_template_id,
+            created_by_user_id=body.created_by_user_id,
+        )
+    except HTTPException:
+        # Re-raise enum-validation errors from _enum_or_400 verbatim.
+        session.rollback()
+        raise
+    except Exception as exc:
+        # Surface DB check-constraint violations (positive commit_amount
+        # requires commit_period, non-USD requires fx_policy, etc.) as
+        # HTTP 400 rather than 500.
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Template invalid: {exc}")
+
+    session.commit()
+    return BillingPlanTemplateResponse.from_orm_row(template)
+
+
+@router.get(
+    "/billing/plans/templates",
+    response_model=List[BillingPlanTemplateResponse],
+    summary="Admin: List billing plan templates",
+    description=(
+        "List billing plan templates. Defaults to active catalog rows "
+        "(``is_custom=false`` AND ``is_active=true``). Pass query "
+        "parameters ``include_custom=true`` to also return bespoke "
+        "per-customer contracts, and ``include_inactive=true`` to also "
+        "return deprecated rows."
+    ),
+)
+def admin_list_billing_templates(
+    include_custom: Optional[bool] = Query(default=None),
+    include_inactive: bool = Query(default=False),
+    session=Depends(get_db_session),
+) -> List[BillingPlanTemplateResponse]:
+    """List billing plan templates filtered by catalog placement.
+
+    Two orthogonal axes:
+
+    * ``include_custom`` — None = both, True = custom-only,
+      False = catalog-only (the default for self-serve UIs).
+    * ``include_inactive`` — False = active-only (default),
+      True = also return deprecated rows.
+    """
+    from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
+
+    templates = BillingPlanTemplateDAO(session).list_catalog(
+        include_custom=include_custom,
+        include_inactive=include_inactive,
+    )
+    return [BillingPlanTemplateResponse.from_orm_row(t) for t in templates]
+
+
+@router.post(
+    "/billing/plans/templates/{template_id}/deprecate",
+    summary="Admin: Deprecate a billing plan template",
+    description=(
+        "Flip ``is_active`` to false. Existing assignments keep working; "
+        "new assignments to this template are blocked. The ``is_custom`` "
+        "flag is preserved (a deprecated bespoke contract stays bespoke). "
+        "No-op for templates that are already inactive."
+    ),
+)
+def admin_deprecate_billing_template(
+    template_id: int,
+    session=Depends(get_db_session),
+) -> dict:
+    """Deprecate a template (flip ``is_active`` to false).
+
+    Refuses with HTTP 409 if any account still has the template as
+    their active assignment — see ``TemplateInUseError`` in the DAO
+    for the full rationale.
+    """
+    from orchestra.db.dao.billing_plan_template_dao import (
+        BillingPlanTemplateDAO,
+        TemplateInUseError,
+    )
+
+    template_dao = BillingPlanTemplateDAO(session)
+    template = template_dao.get_by_id(template_id)
+    if template is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Template id={template_id} not found.",
+        )
+    try:
+        template_dao.deprecate(template_id)
+    except TemplateInUseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    session.commit()
+    # Re-read so the response reflects the new state.
+    refreshed = template_dao.get_by_id(template_id)
+    return {
+        "status": "ok",
+        "template_id": template_id,
+        "is_active": bool(refreshed.is_active) if refreshed else None,
+        "is_custom": bool(refreshed.is_custom) if refreshed else None,
+    }
+
+
+@router.post(
+    "/billing/stripe-customer",
+    response_model=EnsureStripeCustomerResponse,
+    summary="Admin: Ensure a billing account has a Stripe Customer",
+    description=(
+        "Idempotent: returns the existing ``stripe_customer_id`` if set, "
+        "otherwise creates a Stripe Customer using the BillingProfile "
+        "fields (and the optional fallbacks for any missing values). "
+        "Required prerequisite for assigning a METERED template to an "
+        "account that has never gone through the Checkout flow."
+    ),
+)
+def admin_ensure_stripe_customer(
+    body: EnsureStripeCustomerRequest,
+    session: Session = Depends(get_db_session),
+) -> EnsureStripeCustomerResponse:
+    """Create-or-return a Stripe Customer for a billing account."""
+    from orchestra.lib.billing import ensure_stripe_customer
+
+    ba = _resolve_billing_account(
+        session,
+        user_id=body.user_id,
+        organization_id=body.organization_id,
+    )
+    pre_existing = ba.stripe_customer_id
+
+    is_business = (
+        body.is_business
+        if body.is_business is not None
+        else body.organization_id is not None
+    )
+
+    try:
+        customer_id = ensure_stripe_customer(
+            session,
+            ba,
+            is_business=is_business,
+            fallback_email=body.fallback_email,
+            fallback_name=body.fallback_name,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.StripeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Stripe API error: {exc}",
+        )
+
+    session.commit()
+    return EnsureStripeCustomerResponse(
+        billing_account_id=ba.id,
+        stripe_customer_id=customer_id,
+        created=pre_existing is None,
+    )
+
+
+@router.put(
+    "/billing/profile",
+    response_model=BillingProfileResponse,
+    summary="Admin: Update the business profile of a billing account",
+    description=(
+        "Partial update — only fields explicitly set on the request "
+        "are written. ``billing_address`` is merged with the existing "
+        "dict (so the caller can patch a single line). If the account "
+        "already has a ``stripe_customer_id``, the same fields are "
+        "best-effort synced to Stripe so the next invoice picks them "
+        "up; sync failures are logged but do not fail the request "
+        "(matches the customer-facing endpoint contract)."
+    ),
+)
+def admin_update_billing_profile(
+    body: BillingProfileUpdateRequest,
+    session=Depends(get_db_session),
+) -> BillingProfileResponse:
+    """Admin-side equivalent of the customer-facing profile update."""
+    from orchestra.lib.billing import sync_billing_profile_to_stripe
+
+    log = logging.getLogger(__name__)
+
+    ba = _resolve_billing_account(
+        session,
+        user_id=body.user_id,
+        organization_id=body.organization_id,
+    )
+
+    # Snapshot the existing address before mutating — used by the
+    # tax-id sync helper as a fallback for country resolution when
+    # the caller patches tax_id without re-sending the full address.
+    existing_address = dict(ba.billing_address or {})
+
+    ba_dao = BillingAccountDAO(session)
+    updated = ba_dao.update_billing_profile(
+        billing_account_id=ba.id,
+        billing_email=body.billing_email,
+        name=body.name,
+        tax_id=body.tax_id,
+        tax_id_type=body.tax_id_type,
+        billing_address=body.billing_address,
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BillingAccount {ba.id} not found.",
+        )
+    session.flush()
+
+    # Push the changes to Stripe so the next invoice / current
+    # Customer record reflect them. Only fields the caller actually
+    # provided are forwarded — `sync_billing_profile_to_stripe`
+    # already skips ``None`` values.
+    if ba.stripe_customer_id:
+        is_business = (
+            body.is_business
+            if body.is_business is not None
+            else body.organization_id is not None
+        )
+        sync_billing_profile_to_stripe(
+            ba.stripe_customer_id,
+            is_business=is_business,
+            billing_email=body.billing_email,
+            name=body.name,
+            tax_id=body.tax_id,
+            billing_address=body.billing_address,
+            existing_billing_address=existing_address,
+            logger_instance=log,
+        )
+
+    session.commit()
+    session.refresh(ba)
+    return BillingProfileResponse(
+        billing_account_id=ba.id,
+        billing_email=ba.billing_email,
+        name=ba.name,
+        tax_id=ba.tax_id,
+        tax_id_type=ba.tax_id_type,
+        billing_address=ba.billing_address or {},
+    )
+
+
+@router.patch(
+    "/billing/payment-preferences",
+    response_model=PaymentPreferencesResponse,
+    summary="Admin: Set the payment-method preference for a billing account",
+    description=(
+        "Override which Stripe payment methods are exposed on hosted "
+        "invoices for a specific billing account. Use this to mark a "
+        "customer as wire-only (``['customer_balance']``), card-only "
+        "(``['card']``), or any combination supported by the "
+        "PaymentMethodType enum.\n\n"
+        "Pass ``preferred_payment_method_types: null`` (or omit it) to "
+        "clear the override and fall back to the per-CollectionMethod "
+        "defaults: ``['card']`` for AUTO_CARD, "
+        "``['card', 'customer_balance']`` for SEND_INVOICE_NET_30. "
+        "Validation is strict — empty lists, duplicates, and unknown "
+        "method names are rejected with 400."
+    ),
+)
+def admin_set_payment_preferences(
+    body: PaymentPreferencesRequest,
+    session: Session = Depends(get_db_session),
+) -> PaymentPreferencesResponse:
+    """Set or clear the per-customer payment-method override."""
+    ba = _resolve_billing_account(
+        session,
+        user_id=body.user_id,
+        organization_id=body.organization_id,
+    )
+    try:
+        BillingAccountDAO(session).set_payment_preferences(
+            ba.id,
+            preferred_payment_method_types=body.preferred_payment_method_types,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    session.commit()
+    session.refresh(ba)
+    return PaymentPreferencesResponse(
+        billing_account_id=ba.id,
+        preferred_payment_method_types=ba.preferred_payment_method_types,
+    )
+
+
+@router.post(
+    "/billing/plans/set",
+    summary="Admin: Set a billing account's active plan",
+    description=(
+        "Set the active plan for a billing account, atomically and "
+        "uniformly. Replaces the previous assign/change/cancel triplet:\n"
+        "* default → custom template (was assign)\n"
+        "* template A → template B (was change_plan)\n"
+        "* custom → DEFAULT_TEMPLATE_ID (was cancel — closes the "
+        "active custom row and inserts a fresh default plan assignment "
+        "row in the same transaction; the new row's `change_reason` "
+        "documents *why* the cancellation happened)\n\n"
+        "AT_BOUNDARY enforced: `effective_at` must be midnight UTC on "
+        "the 1st of a month (defaults to next month). Settlement of "
+        "in-flight balances is the operator's responsibility — call "
+        "this AFTER any needed add_credits/deduct_credits adjustments. "
+        "Idempotent: returns `status='noop'` when the account is "
+        "already on `template_id`."
+    ),
+)
+def admin_set_plan(
+    body: SetPlanRequest,
+    session=Depends(get_db_session),
+) -> dict:
+    """Set the active plan for a billing account."""
+    from orchestra.db.dao.billing_plan_assignment_dao import (
+        BillingPlanAssignmentDAO,
+        ConcurrentPlanChangeError,
+        PendingRechargesError,
+        TemplateNotAssignableError,
+    )
+    from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
+    from orchestra.db.models.enums import BillingMode
+
+    ba = _resolve_billing_account(
+        session,
+        user_id=body.user_id,
+        organization_id=body.organization_id,
+    )
+
+    # METERED templates require a Stripe Customer on the account so the
+    # metered invoicer can attach monthly invoices. CREDITS templates
+    # don't need this — the wallet/checkout flow handles it. If the
+    # template lookup misses, fall through and let set_plan() raise the
+    # canonical 404.
+    #
+    # The implicit ``auto_create_stripe_customer`` escape hatch was
+    # removed in 2026-05 (see ``AdminSetPlanRequest``); operators must
+    # now provision a Stripe Customer up-front via
+    # ``POST /v0/admin/billing/stripe-customer`` (the Business
+    # Profile + Provision flow does this implicitly). We surface the
+    # missing customer as a 409 with a "do this first" pointer rather
+    # than silently doing it for them, so any state we set up via
+    # ``ensure_stripe_customer`` lives in a single, explicit code
+    # path.
+    template = BillingPlanTemplateDAO(session).get_by_id(body.template_id)
+    needs_stripe_customer = (
+        template is not None
+        and template.billing_mode == BillingMode.METERED
+        and not ba.stripe_customer_id
+    )
+    if needs_stripe_customer:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Billing account {ba.id} has no Stripe Customer. "
+                "METERED templates require one so the metered invoicer "
+                "can attach monthly invoices. Provision the customer "
+                "first via POST /v0/admin/billing/stripe-customer "
+                "(or use the admin UI's Business Profile + Provision "
+                "flow), then retry."
+            ),
+        )
+
+    # ``_enforce_at_boundary`` handles ``None`` by returning the next
+    # month boundary — honouring the AT_BOUNDARY proration policy by
+    # default. Don't short-circuit on ``None``, or set_plan() falls back
+    # to "now" and the new assignment starts mid-month.
+    effective_at = _enforce_at_boundary(body.effective_at)
+    plan_dao = BillingPlanAssignmentDAO(session)
+    try:
+        assignment = plan_dao.set_plan(
+            billing_account_id=ba.id,
+            template_id=body.template_id,
+            created_by_user_id=body.created_by_user_id,
+            change_reason=body.change_reason,
+            effective_at=effective_at,
+        )
+    except TemplateNotAssignableError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PendingRechargesError as exc:
+        # 409 with a structured payload so the admin UI can list the
+        # offending recharge ids and offer a "drain & retry" affordance
+        # rather than the generic-error path.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "pending_recharges",
+                "message": str(exc),
+                "billing_account_id": exc.billing_account_id,
+                "pending_recharge_ids": exc.pending_recharge_ids,
+            },
+        )
+    except ConcurrentPlanChangeError as exc:
+        # Two writers raced on the same account; the partial unique
+        # index rejected the second insert. The DAO already rolled
+        # back, so the session is clean — just surface a structured
+        # 409 the admin UI can recognise and retry after refetching
+        # the active plan.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "concurrent_plan_change",
+                "message": str(exc),
+                "billing_account_id": exc.billing_account_id,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    session.commit()
+    if assignment is None:
+        return {
+            "status": "noop",
+            "billing_account_id": ba.id,
+            "assignment": None,
+            "message": (
+                f"Account is already on template id={body.template_id}."
+            ),
+        }
+    return {
+        "status": "ok",
+        "billing_account_id": ba.id,
+        "assignment": BillingPlanAssignmentResponse.from_orm_row(
+            assignment,
+        ).model_dump(),
+    }
+
+
+@router.get(
+    "/billing/plans/active",
+    summary="Admin: Get the active plan for a billing account",
+    description=(
+        "Return the active assignment for an account. Every account has "
+        "an active assignment (the default plan), so the response "
+        "always includes a real `active_assignment` object — `null` "
+        "indicates an application-invariant violation that the daily "
+        "reconciliation routine flags as critical."
+    ),
+)
+def admin_get_active_plan(
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """Get the currently-active plan assignment for an account."""
+    from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
+
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    active = BillingPlanAssignmentDAO(session).get_active(ba.id)
+    if active is None:
+        # Application-invariant violation: every BA should have an
+        # active assignment. Return a 500 with a clear pointer to the
+        # reconciliation runbook so on-call doesn't have to guess.
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"BillingAccount {ba.id} has no active "
+                "BillingPlanAssignment. Application invariant violated "
+                "(see managed-billing-runbook §6.1, "
+                "plan_assignment_null_pointer)."
+            ),
+        )
+    return {
+        "billing_account_id": ba.id,
+        "active_assignment": BillingPlanAssignmentResponse.from_orm_row(active).model_dump(),
+    }
+
+
+@router.get(
+    "/billing/plans/history",
+    response_model=PlanHistoryResponse,
+    summary="Admin: List a billing account's plan history",
+    description="Return all plan assignments (open + closed), newest first.",
+)
+def admin_list_plan_history(
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    limit: int = Query(100, ge=1, le=500),
+    session=Depends(get_db_session),
+) -> PlanHistoryResponse:
+    """List the full plan history for an account."""
+    from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
+
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    rows = BillingPlanAssignmentDAO(session).list_history(ba.id, limit=limit)
+    return PlanHistoryResponse(
+        billing_account_id=ba.id,
+        assignments=[BillingPlanAssignmentResponse.from_orm_row(r) for r in rows],
+    )
+
+
+@router.post(
+    "/billing/invoice-metered-month/account",
+    summary="Admin: Re-run the metered invoicer for one account/period",
+    description=(
+        "Per-account replay of the monthly metered-invoicer routine, "
+        "for retrying one customer that failed in the scheduled bulk "
+        "run without re-scanning every eligible account. The bulk "
+        "run is owned by Cloud Scheduler "
+        "(``orchestra-production-monthly-metered-invoicer``, "
+        "``5 2 1 * *`` UTC — five minutes after the credits-mode "
+        "scheduler), so there is intentionally no admin-facing "
+        "endpoint to fire it manually; staging dry-runs invoke the "
+        "``invoice_metered_month`` routine directly via the Python "
+        "shell. See ``monthly_metered_invoicer`` module docstring "
+        "for the full scheduling rationale."
+        "\n\n"
+        "This single-account variant exists for the legitimate ops "
+        "case of \"we voided this customer's invoice in the Stripe "
+        "dashboard, please regenerate it\". "
+        "``force=true`` deletes the existing ``Recharge`` row for the "
+        "(account, period) before running so the routine doesn't "
+        "short-circuit on the idempotency check — use only after voiding "
+        "the corresponding Stripe invoice in the dashboard, otherwise the "
+        "customer ends up with two invoices for the same month."
+    ),
+)
+def admin_rerun_metered_invoicing_for_account(
+    year: int,
+    month: int,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    force: bool = False,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Re-run the metered invoicer for a single billing account."""
+    from orchestra.routines.monthly_metered_invoicer import (
+        invoice_metered_month_for_account,
+    )
+
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    try:
+        result = invoice_metered_month_for_account(
+            ba.id,
+            year,
+            month,
+            session=session,
+            force=force,
+        )
+        session.commit()
+        return {
+            "status": "success",
+            "billing_account_id": ba.id,
+            "period": result.period,
+            "accounts_invoiced": result.accounts_invoiced,
+            "accounts_skipped": result.accounts_skipped,
+            "accounts_failed": result.accounts_failed,
+            "errors": result.errors,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Per-account metered re-run failed: {exc}",
+        )
+
+
+# ===========================================================================
+# GET /v0/admin/invoices
+#
+# Cross-account invoice list for the admin console. Paginated over
+# historical ``Recharge`` rows with optional synthesis of "upcoming"
+# rows projected from active METERED assignments via
+# ``monthly_metered_invoicer.estimate_in_progress_invoice``. The
+# customer-scoped equivalent is ``GET /v0/billing/invoices`` in
+# ``billing.views`` — that one is keyed off the API-key billing
+# account; this one is unscoped admin tooling.
+#
+# Currency is *not* converted: each row carries its literal contract
+# currency (the template's ``currency`` field, falling back to
+# ``USD`` for legacy rows where ``plan_id`` is NULL). Mixing
+# currencies in a single total would be misleading; the FE renders
+# the code beside each amount and any cross-currency rollup is
+# intentionally out of scope here.
+# ===========================================================================
+
+
+@router.get(
+    "/invoices",
+    response_model=AdminInvoiceListResponse,
+    summary="Admin: cross-account invoice list (historical + upcoming)",
+    description=(
+        "Returns historical invoice rows (``Recharge`` rows in any "
+        "non-internal status — ``PENDING_INVOICE`` is internal "
+        "plumbing and excluded) joined to recipient identity (org "
+        "name when org-owned, user email otherwise) and plan "
+        "metadata.\n\n"
+        "When ``include_upcoming=true`` (default) and ``offset==0``, "
+        "the response is prefixed with one synthesised ``UPCOMING`` "
+        "row per active METERED assignment that hasn't been "
+        "invoiced for the current calendar month yet. Synthesis "
+        "calls ``estimate_in_progress_invoice`` per account; that "
+        "fans out FX lookups so the route is intentionally not in "
+        "the hot path of any customer-facing flow.\n\n"
+        "Each row carries its literal contract currency (3-letter "
+        "ISO). The endpoint never converts FX — common-denominator "
+        "totals would hide cross-currency exposure and belong on a "
+        "separate explicitly-priced rollup if ever needed."
+    ),
+)
+def admin_list_invoices(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = Query(
+        None,
+        description=(
+            "Filter by status. Accepts any RechargeStatus value plus "
+            "``UPCOMING`` to scope to projected rows only. "
+            "Comma-separated list allowed (e.g. ``PAID,FAILED``)."
+        ),
+    ),
+    currency: Optional[str] = Query(
+        None,
+        description="3-letter ISO. Filters historical rows by their plan's currency.",
+    ),
+    plan_template_id: Optional[int] = Query(
+        None,
+        description="Restrict to recharges whose assignment points at this template.",
+    ),
+    from_date: Optional[_dt.date] = Query(
+        None,
+        description="Inclusive lower bound on ``Recharge.invoice_group`` (period-end date).",
+    ),
+    to_date: Optional[_dt.date] = Query(
+        None,
+        description="Inclusive upper bound on ``Recharge.invoice_group``.",
+    ),
+    q: Optional[str] = Query(
+        None,
+        description=(
+            "Recipient search — case-insensitive substring match against "
+            "org name, user email, billing email, or stripe_invoice_id. "
+            "Numeric ``q`` also matches billing_account_id."
+        ),
+    ),
+    include_upcoming: bool = Query(
+        True,
+        description="If true (default) and offset==0, prepend UPCOMING projections.",
+    ),
+    session: Session = Depends(get_db_session),
+) -> AdminInvoiceListResponse:
+    """List invoices across all billing accounts (admin)."""
+    from sqlalchemy import or_, select, func as sa_func
+
+    from orchestra.db.dao.billing_plan_assignment_dao import (
+        BillingPlanAssignmentDAO,
+    )
+    from orchestra.db.models.orchestra_models import (
+        BillingPlanAssignment,
+        BillingPlanTemplate,
+    )
+    from orchestra.routines.monthly_metered_invoicer import (
+        estimate_in_progress_invoice,
+    )
+
+    requested_statuses: Optional[set[str]] = None
+    upcoming_only = False
+    if status:
+        requested_statuses = {s.strip().upper() for s in status.split(",") if s.strip()}
+        if requested_statuses == {"UPCOMING"}:
+            upcoming_only = True
+
+    # ----- Build the historical (Recharge-backed) query --------------------
+    # Surface every recharge except the internal-plumbing
+    # PENDING_INVOICE bucket, which has no Stripe-side artefact yet
+    # and exists only to mark "we owe this customer an invoice at
+    # period close". Operators want to see it in the admin view too,
+    # so we keep it under an explicit filter — opt-in via ``status``.
+    default_visible = [
+        RechargeStatus.INVOICE_CREATED.value,
+        RechargeStatus.PAID.value,
+        RechargeStatus.FAILED.value,
+        RechargeStatus.DISPUTED.value,
+        RechargeStatus.PENDING_INVOICE.value,
+    ]
+
+    # ``Organization`` and ``User`` both link *to* ``BillingAccount`` via
+    # ``billing_account_id``. LEFT-OUTER-JOIN both and let the row-loop
+    # pick whichever side resolved — exactly one will, by domain
+    # invariant (a BA is owned by either a user or an org, never both).
+    base_q = (
+        select(Recharge, BillingAccount, Organization, User, BillingPlanAssignment, BillingPlanTemplate)
+        .join(BillingAccount, BillingAccount.id == Recharge.billing_account_id)
+        .outerjoin(
+            Organization,
+            Organization.billing_account_id == BillingAccount.id,
+        )
+        .outerjoin(
+            User,
+            User.billing_account_id == BillingAccount.id,
+        )
+        .outerjoin(
+            BillingPlanAssignment,
+            BillingPlanAssignment.id == Recharge.plan_id,
+        )
+        .outerjoin(
+            BillingPlanTemplate,
+            BillingPlanTemplate.id == BillingPlanAssignment.template_id,
+        )
+    )
+
+    if requested_statuses and not upcoming_only:
+        # Drop the synthetic ``UPCOMING`` token before passing to SQL.
+        sql_statuses = requested_statuses - {"UPCOMING"}
+        if sql_statuses:
+            base_q = base_q.where(Recharge.status.in_(sql_statuses))
+        else:
+            # User asked for UPCOMING + something invalid; degrade to default
+            base_q = base_q.where(Recharge.status.in_(default_visible))
+    else:
+        base_q = base_q.where(Recharge.status.in_(default_visible))
+
+    if currency:
+        base_q = base_q.where(BillingPlanTemplate.currency == currency.upper())
+    if plan_template_id is not None:
+        base_q = base_q.where(BillingPlanAssignment.template_id == plan_template_id)
+    if from_date is not None:
+        base_q = base_q.where(Recharge.invoice_group >= from_date)
+    if to_date is not None:
+        base_q = base_q.where(Recharge.invoice_group <= to_date)
+    if q:
+        needle = f"%{q.strip()}%"
+        clauses = [
+            Organization.name.ilike(needle),
+            User.email.ilike(needle),
+            BillingAccount.billing_email.ilike(needle),
+            Recharge.stripe_invoice_id.ilike(needle),
+        ]
+        try:
+            ba_id_match = int(q.strip())
+            clauses.append(BillingAccount.id == ba_id_match)
+        except ValueError:
+            pass
+        base_q = base_q.where(or_(*clauses))
+
+    # Total count for pagination — issued before LIMIT/OFFSET so the FE
+    # can render "showing 1-50 of N". Cheap because the same indexes
+    # cover the WHERE clause.
+    count_q = select(sa_func.count()).select_from(base_q.subquery())
+    total = int(session.execute(count_q).scalar() or 0)
+
+    historical_items: list[AdminInvoiceListItem] = []
+    if not upcoming_only:
+        rows = list(
+            session.execute(
+                base_q.order_by(Recharge.at.desc()).offset(offset).limit(limit),
+            ).all(),
+        )
+        for recharge, ba, org, user, _assignment, template in rows:
+            ts = recharge.at
+            if ts and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+
+            # Resolve the displayed amount + currency.
+            #
+            # * METERED rows (produced by ``monthly_metered_invoicer``)
+            #   carry ``detail.invoiced_local`` + ``detail.currency`` —
+            #   the authoritative invoice face value in the contract
+            #   currency, equal to ``commit_charge_local +
+            #   overage_charge_local - grants_local``. This is the right
+            #   number to show on the admin row because it matches what
+            #   the customer was actually invoiced (see
+            #   ``InvoicesTable.formatInvoiceAmount`` for the matching
+            #   customer-side logic).
+            # * Every other row type (auto_recharge, manual top-up,
+            #   commit_topup for CREDITS COMMITMENT, …) is intrinsically
+            #   USD-denominated — the plan template's ``currency`` is
+            #   only meaningful for the METERED path, so we deliberately
+            #   ignore it on the fallback and label the row USD to match
+            #   ``Recharge.amount_usd``.
+            detail = recharge.detail or {}
+            inv_local_raw = detail.get("invoiced_local") if isinstance(detail, dict) else None
+            detail_ccy = detail.get("currency") if isinstance(detail, dict) else None
+            if inv_local_raw is not None and detail_ccy:
+                try:
+                    display_amount = Decimal(str(inv_local_raw))
+                    display_currency = str(detail_ccy)
+                except (ArithmeticError, ValueError):
+                    display_amount = Decimal(recharge.amount_usd)
+                    display_currency = "USD"
+            else:
+                display_amount = Decimal(recharge.amount_usd)
+                display_currency = "USD"
+
+            historical_items.append(
+                AdminInvoiceListItem(
+                    kind="HISTORICAL",
+                    id=recharge.id,
+                    billing_account_id=ba.id,
+                    recipient_kind="ORG" if org is not None else "USER",
+                    recipient_id=str(org.id) if org is not None else (user.id if user else ""),
+                    recipient_name=(org.name if org else (user.name if user else None)),
+                    recipient_email=(
+                        ba.billing_email
+                        or (user.email if user else None)
+                    ),
+                    at=ts.isoformat() if ts else "",
+                    invoice_group=(
+                        recharge.invoice_group.isoformat()
+                        if recharge.invoice_group
+                        else None
+                    ),
+                    type=recharge.type,
+                    status=recharge.status,
+                    amount=display_amount,
+                    currency=display_currency,
+                    stripe_invoice_id=recharge.stripe_invoice_id,
+                    plan_assignment_id=recharge.plan_id,
+                    plan_template_id=(template.id if template else None),
+                    plan_template_name=(template.name if template else None),
+                    plan_template_display_name=(
+                        template.display_name if template and getattr(template, "display_name", None) else (template.name if template else None)
+                    ),
+                    billing_mode=(
+                        template.billing_mode if template else None
+                    ),
+                ),
+            )
+
+    # ----- Synthesise UPCOMING rows ---------------------------------------
+    # Only on the first page, and only when the caller didn't filter
+    # them out — otherwise pagination becomes ambiguous (UPCOMING rows
+    # have no stable id to cursor against). One row per active METERED
+    # assignment that hasn't been invoiced for the current period yet.
+    upcoming_items: list[AdminInvoiceListItem] = []
+    want_upcoming = (
+        include_upcoming
+        and (offset == 0 or upcoming_only)
+        and (
+            requested_statuses is None
+            or "UPCOMING" in requested_statuses
+        )
+    )
+    if want_upcoming:
+        # Pull active METERED assignments, joined to BA + recipient.
+        # ``billing_mode`` lives on the template, not the assignment.
+        # ``period_end_label`` is the last day of the current calendar
+        # month — the metered invoicer pins this on each Recharge as
+        # ``invoice_group``, so it's also our key for "already
+        # invoiced this period?" below.
+        now_utc = datetime.now(timezone.utc)
+        if now_utc.month == 12:
+            next_month_start = now_utc.replace(
+                year=now_utc.year + 1, month=1, day=1,
+                hour=0, minute=0, second=0, microsecond=0,
+            )
+        else:
+            next_month_start = now_utc.replace(
+                month=now_utc.month + 1, day=1,
+                hour=0, minute=0, second=0, microsecond=0,
+            )
+        period_end_label = next_month_start.date() - timedelta(days=1)
+        metered_q = (
+            select(BillingAccount, Organization, User, BillingPlanAssignment, BillingPlanTemplate)
+            .join(
+                BillingPlanAssignment,
+                BillingPlanAssignment.billing_account_id == BillingAccount.id,
+            )
+            .join(
+                BillingPlanTemplate,
+                BillingPlanTemplate.id == BillingPlanAssignment.template_id,
+            )
+            .outerjoin(
+                Organization,
+                Organization.billing_account_id == BillingAccount.id,
+            )
+            .outerjoin(
+                User,
+                User.billing_account_id == BillingAccount.id,
+            )
+            .where(
+                BillingPlanTemplate.billing_mode == "METERED",
+                BillingPlanAssignment.started_at <= now_utc,
+                or_(
+                    BillingPlanAssignment.ended_at.is_(None),
+                    BillingPlanAssignment.ended_at > now_utc,
+                ),
+            )
+        )
+        if currency:
+            metered_q = metered_q.where(BillingPlanTemplate.currency == currency.upper())
+        if plan_template_id is not None:
+            metered_q = metered_q.where(BillingPlanAssignment.template_id == plan_template_id)
+        if q:
+            needle = f"%{q.strip()}%"
+            mclauses = [
+                Organization.name.ilike(needle),
+                User.email.ilike(needle),
+                BillingAccount.billing_email.ilike(needle),
+            ]
+            try:
+                ba_id_match = int(q.strip())
+                mclauses.append(BillingAccount.id == ba_id_match)
+            except ValueError:
+                pass
+            metered_q = metered_q.where(or_(*mclauses))
+
+        for ba, org, user, assignment, template in session.execute(metered_q).all():
+            try:
+                est = estimate_in_progress_invoice(
+                    session, billing_account_id=ba.id, as_of=now_utc,
+                )
+            except Exception:
+                # Best-effort: a single account's projection failing
+                # (FX provider down, malformed plan, etc.) shouldn't
+                # take the whole admin page down. Skip and move on.
+                continue
+            if est is None:
+                continue
+            # Already invoiced for this period? Skip — the historical
+            # row already represents it and double-counting on the
+            # admin page would be confusing.
+            already = session.execute(
+                select(Recharge.id)
+                .where(
+                    Recharge.billing_account_id == ba.id,
+                    Recharge.plan_id == assignment.id,
+                    Recharge.invoice_group == period_end_label,
+                )
+                .limit(1),
+            ).scalar()
+            if already is not None:
+                continue
+            projected_amount = est.contract_usage_local
+            # Subtract any in-period grants surfaced by the estimate;
+            # ``raw_usage_local - grants`` is the "what we'd actually
+            # bill today" view, which is what an operator wants to see.
+            invoiced_local = getattr(est, "invoiced_local", None)
+            if invoiced_local is not None:
+                projected_amount = invoiced_local
+            upcoming_items.append(
+                AdminInvoiceListItem(
+                    kind="UPCOMING",
+                    id=None,
+                    billing_account_id=ba.id,
+                    recipient_kind="ORG" if org is not None else "USER",
+                    recipient_id=str(org.id) if org is not None else (user.id if user else ""),
+                    recipient_name=(org.name if org else (user.name if user else None)),
+                    recipient_email=(
+                        ba.billing_email
+                        or (user.email if user else None)
+                    ),
+                    at=est.period_end_exclusive.isoformat(),
+                    invoice_group=period_end_label.isoformat(),
+                    type=None,
+                    status="UPCOMING",
+                    amount=Decimal(projected_amount),
+                    currency=est.currency or "USD",
+                    stripe_invoice_id=None,
+                    plan_assignment_id=assignment.id,
+                    plan_template_id=template.id,
+                    plan_template_name=template.name,
+                    plan_template_display_name=(
+                        getattr(template, "display_name", None) or template.name
+                    ),
+                    billing_mode="METERED",
+                ),
+            )
+        # Sort upcoming by projected amount desc — operators care about
+        # exposure first, calendar second (all upcoming rows share the
+        # same period-end date so date sorting wouldn't distinguish them).
+        upcoming_items.sort(key=lambda it: it.amount, reverse=True)
+
+    if upcoming_only:
+        items = upcoming_items
+    else:
+        items = upcoming_items + historical_items
+
+    return AdminInvoiceListResponse(
+        invoices=items,
+        limit=limit,
+        offset=offset,
+        total=total,
+        upcoming_count=len(upcoming_items),
+    )
+
+
+# ===========================================================================
+# Plan groups (admin)
+# ===========================================================================
+#
+# Plan groups are catalog-scoping objects used by the customer-facing
+# self-serve switch endpoint (``POST /v0/billing/plan``). The admin
+# surface is intentionally minimal: groups have no domain logic of
+# their own, and operators usually create one or two at platform
+# launch and then forget about them. CRUD lives here so the admin UI
+# has a single place to manage the catalog without spinning up a
+# separate admin service.
+#
+# All policy decisions encoded here:
+#   * No DAO unit tests (per product policy — surface is small enough
+#     that the API tests cover the contract end-to-end);
+#   * Group operations are admin-gated through the existing
+#     /v0/admin/* router auth; no self-serve mutation;
+#   * Member position rewrites use the DAO's clear-then-set so
+#     re-ordering is atomic from the client's view.
+
+
+# NOTE: Projection helpers (``_plan_group_to_schema`` /
+# ``_plan_group_member_to_schema``) used to live here; they were
+# inlined at every endpoint because the projection logic is
+# lightweight (~10 lines, no shared invariants worth abstracting)
+# and inlining keeps each endpoint readable as one self-contained
+# unit. If a non-trivial transformation ever needs to be applied to
+# every PlanGroup/Member projection, fold it into a DAO method on
+# ``BillingPlanGroupDAO`` rather than reviving a private view-layer
+# helper.
+
+
+@router.post(
+    "/billing/plans/groups",
+    response_model=PlanGroupResponse,
+    summary="Admin: Create a plan group",
+    description=(
+        "Create an empty plan group. Add members via "
+        "``POST /v0/admin/billing/plans/groups/{id}/members``."
+    ),
+)
+def admin_create_plan_group(
+    body: PlanGroupCreateRequest,
+    session: Session = Depends(get_db_session),
+) -> PlanGroupResponse:
+    from orchestra.db.dao.billing_plan_group_dao import (
+        BillingPlanGroupDAO,
+        PlanGroupMemberError,
+    )
+
+    dao = BillingPlanGroupDAO(session)
+    try:
+        group = dao.create_group(
+            name=body.name,
+            display_name=body.display_name,
+            description=body.description,
+            is_active=body.is_active,
+            created_by_user_id=body.created_by_user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PlanGroupMemberError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    session.commit()
+    members = dao.list_members(group.id, include_inactive_templates=True)
+    return PlanGroupResponse(
+        id=group.id,
+        name=group.name,
+        display_name=group.display_name,
+        description=group.description,
+        is_active=bool(group.is_active),
+        created_at=(
+            group.created_at.isoformat()
+            if group.created_at is not None
+            else _dt.datetime.now(timezone.utc).isoformat()
+        ),
+        created_by_user_id=group.created_by_user_id,
+        members=[
+            PlanGroupMemberItem(
+                template_id=m.template_id,
+                template_name=m.template.name,
+                template_display_name=m.template.display_name or m.template.name,
+                is_active=bool(m.template.is_active),
+                position=m.position,
+                added_at=m.added_at.isoformat() if m.added_at is not None else None,
+            )
+            for m in members
+        ],
+    )
+
+
+@router.get(
+    "/billing/plans/groups",
+    response_model=PlanGroupListResponse,
+    summary="Admin: List all plan groups",
+    description=(
+        "Return a compact summary of every group (members are omitted "
+        "for payload size). Use the per-group GET for the full member "
+        "list. ``include_inactive=true`` includes deprecated groups."
+    ),
+)
+def admin_list_plan_groups(
+    include_inactive: bool = False,
+    session: Session = Depends(get_db_session),
+) -> PlanGroupListResponse:
+    from orchestra.db.dao.billing_plan_group_dao import BillingPlanGroupDAO
+
+    dao = BillingPlanGroupDAO(session)
+    groups = dao.list_all(include_inactive=include_inactive)
+    return PlanGroupListResponse(
+        groups=[
+            PlanGroupSummaryItem(
+                id=g.id,
+                name=g.name,
+                display_name=g.display_name,
+                is_active=bool(g.is_active),
+                member_count=len(
+                    dao.list_members(g.id, include_inactive_templates=True),
+                ),
+            )
+            for g in groups
+        ],
+    )
+
+
+@router.get(
+    "/billing/plans/groups/{group_id}",
+    response_model=PlanGroupResponse,
+    summary="Admin: Get one plan group with its members",
+)
+def admin_get_plan_group(
+    group_id: int,
+    session: Session = Depends(get_db_session),
+) -> PlanGroupResponse:
+    from orchestra.db.dao.billing_plan_group_dao import BillingPlanGroupDAO
+
+    dao = BillingPlanGroupDAO(session)
+    group = dao.get_by_id(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail=f"plan_group id={group_id}")
+    members = dao.list_members(group.id, include_inactive_templates=True)
+    return PlanGroupResponse(
+        id=group.id,
+        name=group.name,
+        display_name=group.display_name,
+        description=group.description,
+        is_active=bool(group.is_active),
+        created_at=(
+            group.created_at.isoformat()
+            if group.created_at is not None
+            else _dt.datetime.now(timezone.utc).isoformat()
+        ),
+        created_by_user_id=group.created_by_user_id,
+        members=[
+            PlanGroupMemberItem(
+                template_id=m.template_id,
+                template_name=m.template.name,
+                template_display_name=m.template.display_name or m.template.name,
+                is_active=bool(m.template.is_active),
+                position=m.position,
+                added_at=m.added_at.isoformat() if m.added_at is not None else None,
+            )
+            for m in members
+        ],
+    )
+
+
+@router.patch(
+    "/billing/plans/groups/{group_id}",
+    response_model=PlanGroupResponse,
+    summary="Admin: Update a plan group's metadata",
+    description=(
+        "Mutate any of ``display_name`` / ``description`` / ``is_active``. "
+        "Pass empty string to clear a string field. Setting "
+        "``is_active=false`` is refused with HTTP 409 if any account "
+        "currently points at this group — reassign every account's "
+        "``plan_group_id`` first."
+    ),
+)
+def admin_update_plan_group(
+    group_id: int,
+    body: PlanGroupUpdateRequest,
+    session: Session = Depends(get_db_session),
+) -> PlanGroupResponse:
+    from orchestra.db.dao.billing_plan_group_dao import (
+        BillingPlanGroupDAO,
+        PlanGroupInUseError,
+        PlanGroupNotFoundError,
+    )
+
+    dao = BillingPlanGroupDAO(session)
+    try:
+        group = dao.update_group(
+            group_id,
+            display_name=body.display_name,
+            description=body.description,
+            is_active=body.is_active,
+        )
+    except PlanGroupNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PlanGroupInUseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    session.commit()
+    members = dao.list_members(group.id, include_inactive_templates=True)
+    return PlanGroupResponse(
+        id=group.id,
+        name=group.name,
+        display_name=group.display_name,
+        description=group.description,
+        is_active=bool(group.is_active),
+        created_at=(
+            group.created_at.isoformat()
+            if group.created_at is not None
+            else _dt.datetime.now(timezone.utc).isoformat()
+        ),
+        created_by_user_id=group.created_by_user_id,
+        members=[
+            PlanGroupMemberItem(
+                template_id=m.template_id,
+                template_name=m.template.name,
+                template_display_name=m.template.display_name or m.template.name,
+                is_active=bool(m.template.is_active),
+                position=m.position,
+                added_at=m.added_at.isoformat() if m.added_at is not None else None,
+            )
+            for m in members
+        ],
+    )
+
+
+@router.post(
+    "/billing/plans/groups/{group_id}/members",
+    response_model=PlanGroupResponse,
+    summary="Admin: Add a template to a plan group",
+)
+def admin_add_plan_group_member(
+    group_id: int,
+    body: PlanGroupAddMemberRequest,
+    session: Session = Depends(get_db_session),
+) -> PlanGroupResponse:
+    from orchestra.db.dao.billing_plan_group_dao import (
+        BillingPlanGroupDAO,
+        PlanGroupMemberError,
+        PlanGroupNotFoundError,
+    )
+
+    dao = BillingPlanGroupDAO(session)
+    try:
+        dao.add_member(
+            group_id=group_id,
+            template_id=body.template_id,
+            position=body.position,
+        )
+    except PlanGroupNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PlanGroupMemberError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    session.commit()
+    group = dao.get_by_id(group_id)
+    members = dao.list_members(group.id, include_inactive_templates=True)
+    return PlanGroupResponse(
+        id=group.id,
+        name=group.name,
+        display_name=group.display_name,
+        description=group.description,
+        is_active=bool(group.is_active),
+        created_at=(
+            group.created_at.isoformat()
+            if group.created_at is not None
+            else _dt.datetime.now(timezone.utc).isoformat()
+        ),
+        created_by_user_id=group.created_by_user_id,
+        members=[
+            PlanGroupMemberItem(
+                template_id=m.template_id,
+                template_name=m.template.name,
+                template_display_name=m.template.display_name or m.template.name,
+                is_active=bool(m.template.is_active),
+                position=m.position,
+                added_at=m.added_at.isoformat() if m.added_at is not None else None,
+            )
+            for m in members
+        ],
+    )
+
+
+@router.delete(
+    "/billing/plans/groups/{group_id}/members/{template_id}",
+    response_model=PlanGroupResponse,
+    summary="Admin: Remove a template from a plan group",
+)
+def admin_remove_plan_group_member(
+    group_id: int,
+    template_id: int,
+    session: Session = Depends(get_db_session),
+) -> PlanGroupResponse:
+    from orchestra.db.dao.billing_plan_group_dao import (
+        BillingPlanGroupDAO,
+        PlanGroupMemberError,
+    )
+
+    dao = BillingPlanGroupDAO(session)
+    if dao.get_by_id(group_id) is None:
+        raise HTTPException(status_code=404, detail=f"plan_group id={group_id}")
+    try:
+        dao.remove_member(group_id=group_id, template_id=template_id)
+    except PlanGroupMemberError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    session.commit()
+    group = dao.get_by_id(group_id)
+    members = dao.list_members(group.id, include_inactive_templates=True)
+    return PlanGroupResponse(
+        id=group.id,
+        name=group.name,
+        display_name=group.display_name,
+        description=group.description,
+        is_active=bool(group.is_active),
+        created_at=(
+            group.created_at.isoformat()
+            if group.created_at is not None
+            else _dt.datetime.now(timezone.utc).isoformat()
+        ),
+        created_by_user_id=group.created_by_user_id,
+        members=[
+            PlanGroupMemberItem(
+                template_id=m.template_id,
+                template_name=m.template.name,
+                template_display_name=m.template.display_name or m.template.name,
+                is_active=bool(m.template.is_active),
+                position=m.position,
+                added_at=m.added_at.isoformat() if m.added_at is not None else None,
+            )
+            for m in members
+        ],
+    )
+
+
+@router.put(
+    "/billing/plans/groups/{group_id}/positions",
+    response_model=PlanGroupResponse,
+    summary="Admin: Re-order plan group members",
+    description=(
+        "Atomically rewrite the position column for the listed members. "
+        "Members not listed retain their existing position. "
+        "Two members cannot share a position; the DAO uses a "
+        "clear-then-set pass so admins can swap rungs in a single "
+        "request without an intermediate collision."
+    ),
+)
+def admin_set_plan_group_positions(
+    group_id: int,
+    body: PlanGroupSetPositionsRequest,
+    session: Session = Depends(get_db_session),
+) -> PlanGroupResponse:
+    from orchestra.db.dao.billing_plan_group_dao import (
+        BillingPlanGroupDAO,
+        PlanGroupMemberError,
+        PlanGroupNotFoundError,
+    )
+
+    dao = BillingPlanGroupDAO(session)
+    try:
+        dao.set_positions(
+            group_id=group_id,
+            positions=[(e.template_id, e.position) for e in body.positions],
+        )
+    except PlanGroupNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PlanGroupMemberError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    session.commit()
+    group = dao.get_by_id(group_id)
+    members = dao.list_members(group.id, include_inactive_templates=True)
+    return PlanGroupResponse(
+        id=group.id,
+        name=group.name,
+        display_name=group.display_name,
+        description=group.description,
+        is_active=bool(group.is_active),
+        created_at=(
+            group.created_at.isoformat()
+            if group.created_at is not None
+            else _dt.datetime.now(timezone.utc).isoformat()
+        ),
+        created_by_user_id=group.created_by_user_id,
+        members=[
+            PlanGroupMemberItem(
+                template_id=m.template_id,
+                template_name=m.template.name,
+                template_display_name=m.template.display_name or m.template.name,
+                is_active=bool(m.template.is_active),
+                position=m.position,
+                added_at=m.added_at.isoformat() if m.added_at is not None else None,
+            )
+            for m in members
+        ],
+    )
+
+
+@router.put(
+    "/billing/accounts/plan-group",
+    response_model=AssignPlanGroupResponse,
+    summary="Admin: Assign a plan group on a billing account",
+    description=(
+        "Set ``BillingAccount.plan_group_id`` to ``group_id``. Every "
+        "account is always on some group (NULL is no longer a valid "
+        "state — see DEFAULT_PLAN_GROUP_ID); to revert an account to "
+        "the platform default, pass ``group_id=1``. Setting a group "
+        "does NOT change the active plan — call "
+        "``POST /v0/admin/billing/plan`` separately. The customer-side "
+        "switcher hides itself automatically when the active template "
+        "isn't a member of the assigned group, so picking a group "
+        "without first reassigning the customer's plan is harmless."
+    ),
+)
+def admin_assign_plan_group(
+    body: AssignPlanGroupRequest,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session: Session = Depends(get_db_session),
+) -> AssignPlanGroupResponse:
+    from orchestra.db.dao.billing_plan_group_dao import BillingPlanGroupDAO
+
+    ba = _resolve_billing_account(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    group = BillingPlanGroupDAO(session).get_by_id(body.group_id)
+    if group is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"plan_group id={body.group_id} not found",
+        )
+    ba.plan_group_id = group.id
+    session.commit()
+    return AssignPlanGroupResponse(
+        billing_account_id=ba.id,
+        plan_group_id=ba.plan_group_id,
+        plan_group_name=group.display_name or group.name,
+    )

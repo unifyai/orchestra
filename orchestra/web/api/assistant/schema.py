@@ -1771,6 +1771,13 @@ class AssistantSpendResponse(BaseModel):
         None,
         description="Current credit balance of the billing account.",
     )
+    billing_mode: str = Field(
+        "CREDITS",
+        description=(
+            "Billing mode of the assistant's billing account: CREDITS "
+            "(pre-paid wallet) or METERED (invoiced monthly)."
+        ),
+    )
 
 
 class AssistantSpendingLimitResponse(BaseModel):

@@ -2641,6 +2641,365 @@ class TestUnjustifiedSuspensions:
 
 
 # ============================================================================
+# Managed-billing v2 — plan assignment integrity
+# ============================================================================
+
+
+def _make_metered_template(dbsession, *, name: str):
+    """Cheap METERED template for reconciliation tests."""
+    from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
+    from orchestra.db.models.enums import (
+        BillingMode,
+        CollectionMethod,
+    )
+
+    return BillingPlanTemplateDAO(dbsession).create_template(
+        name=name,
+        billing_mode=BillingMode.METERED,
+        commit_amount=Decimal("1000"),
+        commit_period="MONTHLY",
+        base_pricing_factor=Decimal("1.0"),
+        overage_pricing_factor=Decimal("1.0"),
+        collection_method=CollectionMethod.SEND_INVOICE_NET_30,
+        is_custom=True,
+        is_active=True,
+    )
+
+
+class TestPlanAssignmentIntegrity:
+    """``_check_plan_assignment_integrity`` — denormalised pointer health."""
+
+    def test_null_pointer_is_critical(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """A BA whose plan_assignment_id is NULL violates the v2 invariant."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        # `make_billing_account` routes through BillingAccountDAO.create,
+        # which inserts a default plan assignment. Force the broken
+        # state explicitly by NULLing the pointer afterwards.
+        ba = make_billing_account(dbsession, credits=0)
+        from sqlalchemy import text
+
+        dbsession.execute(
+            text(
+                "UPDATE billing_account SET plan_assignment_id = NULL WHERE id = :id",
+            ),
+            {"id": ba.id},
+        )
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "plan_assignment_null_pointer"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(hits) == 1
+        assert hits[0].severity == "critical"
+
+    def test_pointer_to_closed_row_is_critical(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.dao.billing_plan_assignment_dao import (
+            BillingPlanAssignmentDAO,
+        )
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(dbsession, credits=0)
+        tpl = _make_metered_template(dbsession, name="recon-closed-pointer")
+        assignment = BillingPlanAssignmentDAO(dbsession).set_plan(
+            billing_account_id=ba.id,
+            template_id=tpl.id,
+        )
+        # Force the pathological state: pointer set, but the row was
+        # closed without the pointer being cleared.
+        assignment.ended_at = _dt.datetime.now(_dt.timezone.utc)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "plan_assignment_pointer_to_closed_row"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(hits) == 1
+        assert hits[0].severity == "critical"
+
+    def test_orphan_pointer_is_critical(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.dao.billing_plan_assignment_dao import (
+            BillingPlanAssignmentDAO,
+        )
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(dbsession, credits=0)
+        tpl = _make_metered_template(dbsession, name="recon-orphan-pointer")
+        assignment = BillingPlanAssignmentDAO(dbsession).set_plan(
+            billing_account_id=ba.id,
+            template_id=tpl.id,
+        )
+        # Hard-delete the assignment row but force-restore the pointer
+        # afterwards (FK is SET NULL on delete, so we have to put it
+        # back manually to simulate the corrupt state). Re-pointing at
+        # a deleted plan id triggers the FK-on-update check, so flip
+        # the session into ``session_replication_role = replica`` for
+        # the duration of the corruption — that disables FK trigger
+        # enforcement and lets us recreate the exact "orphan pointer"
+        # state the reconciliation routine is meant to detect.
+        plan_id = assignment.id
+        dbsession.delete(assignment)
+        dbsession.flush()
+        from sqlalchemy import text
+
+        dbsession.execute(text("SET session_replication_role = replica"))
+        try:
+            dbsession.execute(
+                text("UPDATE billing_account SET plan_assignment_id=:pid WHERE id=:id"),
+                {"pid": plan_id, "id": ba.id},
+            )
+        finally:
+            dbsession.execute(text("SET session_replication_role = DEFAULT"))
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "plan_assignment_orphan_pointer"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(hits) == 1
+        assert hits[0].severity == "critical"
+
+    def test_orphan_active_assignment_row_is_critical(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """An active assignment row that no BA points at is corruption."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.dao.billing_plan_assignment_dao import (
+            BillingPlanAssignmentDAO,
+        )
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(dbsession, credits=0)
+        tpl = _make_metered_template(dbsession, name="recon-orphan-active")
+        BillingPlanAssignmentDAO(dbsession).set_plan(
+            billing_account_id=ba.id,
+            template_id=tpl.id,
+        )
+        # Clear the pointer so the active row becomes orphan (the row
+        # itself is still ended_at IS NULL).
+        from sqlalchemy import text
+
+        dbsession.execute(
+            text("UPDATE billing_account SET plan_assignment_id=NULL WHERE id=:id"),
+            {"id": ba.id},
+        )
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "plan_assignment_orphan_active_row"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(hits) == 1
+        assert hits[0].severity == "critical"
+
+    def test_healthy_pointer_produces_no_discrepancy(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.dao.billing_plan_assignment_dao import (
+            BillingPlanAssignmentDAO,
+        )
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(dbsession, credits=0)
+        tpl = _make_metered_template(dbsession, name="recon-healthy")
+        BillingPlanAssignmentDAO(dbsession).set_plan(
+            billing_account_id=ba.id,
+            template_id=tpl.id,
+        )
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+        plan_categories = {
+            "plan_assignment_orphan_pointer",
+            "plan_assignment_pointer_to_closed_row",
+            "plan_assignment_orphan_active_row",
+            "plan_assignment_cross_account_leak",
+        }
+        hits = [
+            d for d in result.discrepancies if d.category in plan_categories
+        ]
+        assert hits == []
+
+
+class TestPlanGroupNullPointer:
+    """``_check_plan_group_null_pointer`` — plan_group_id IS NULL
+    is a schema-invariant violation (column is NOT NULL with a
+    server default of 1). Every account must point at *some*
+    group; clearing must go through the admin assign endpoint
+    pointing at the platform default (id=1), never via direct SQL.
+    """
+
+    def test_null_plan_group_id_is_critical(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        # ``BillingAccountDAO.create`` sets plan_group_id to
+        # DEFAULT_PLAN_GROUP_ID; force the broken state with a
+        # raw UPDATE to simulate a manual SQL slip.
+        ba = make_billing_account(dbsession, credits=0)
+        from sqlalchemy import text
+
+        dbsession.execute(
+            text(
+                "UPDATE billing_account "
+                "SET plan_group_id = NULL WHERE id = :id",
+            ),
+            {"id": ba.id},
+        )
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession)
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "plan_group_null_pointer"
+            and d.billing_account_id == ba.id
+        ]
+        assert len(hits) == 1
+        assert hits[0].severity == "critical"
+
+    def test_default_plan_group_pointer_is_quiet(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """Pristine accounts (auto-assigned to DEFAULT_PLAN_GROUP_ID)
+        must NOT trigger the null-pointer discrepancy — only true
+        NULLs do."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        make_billing_account(dbsession, credits=0)
+        result = recon_mod.reconcile(session=dbsession)
+        assert not any(
+            d.category == "plan_group_null_pointer" for d in result.discrepancies
+        )
+
+
+# ============================================================================
+# Managed-billing v2 — missed metered invoicing
+# ============================================================================
+
+
+class TestMeteredInvoicingCompleteness:
+    def test_missing_recharge_for_closed_period_is_warning(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """METERED account active across a closed period without a
+        MONTHLY_COMMIT Recharge for that period is flagged."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+        from orchestra.db.dao.billing_plan_assignment_dao import (
+            BillingPlanAssignmentDAO,
+        )
+        from sqlalchemy import text
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+
+        ba = make_billing_account(
+            dbsession,
+            credits=0,
+            stripe_customer_id="cus_recon_missed",
+        )
+        tpl = _make_metered_template(dbsession, name="recon-missed-period")
+        a = BillingPlanAssignmentDAO(dbsession).set_plan(
+            billing_account_id=ba.id,
+            template_id=tpl.id,
+        )
+        # Backdate started_at well into the past so multiple closed
+        # periods elapsed before today.
+        old_start = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=120)
+        dbsession.execute(
+            text("UPDATE billing_plan_assignment SET started_at=:ts WHERE id=:id"),
+            {"ts": old_start, "id": a.id},
+        )
+        dbsession.commit()
+        # The conftest binds the test session with ``expire_on_commit=False``,
+        # so without an explicit expire the ORM identity-map keeps the
+        # pre-UPDATE ``started_at`` and the reconciliation query (which
+        # walks ``session.query(BillingPlanAssignment, ...)``) sees stale
+        # values — making the missed-period scan a no-op.
+        dbsession.expire_all()
+
+        result = recon_mod.reconcile(session=dbsession, lookback_days=180)
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "metered_invoicing_missed_period"
+            and d.billing_account_id == ba.id
+        ]
+        # At least one missed period within the lookback window.
+        assert len(hits) >= 1
+        assert all(h.severity == "warning" for h in hits)
+
+    def test_credits_account_is_not_checked(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """A pristine (CREDITS-default) account is out of scope."""
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
+        ba = make_billing_account(dbsession, credits=10)
+        dbsession.commit()
+
+        result = recon_mod.reconcile(session=dbsession, lookback_days=180)
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "metered_invoicing_missed_period"
+            and d.billing_account_id == ba.id
+        ]
+        assert hits == []
+
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
