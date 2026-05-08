@@ -137,6 +137,89 @@ async def _run_pool_resolution_followups(
                 )
 
 
+async def _create_organization_with_coordinator(
+    session: Session,
+    *,
+    name: str,
+    owner_user_id: str,
+    timezone: str | None,
+) -> dict:
+    """Create an organization workspace with owner access and Coordinator state."""
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    role_dao = RoleDAO(session)
+
+    created_pubsub_topic = False
+    coordinator_id: int | None = None
+    try:
+        org = org_dao.create(
+            name=name,
+            owner_id=owner_user_id,
+            timezone=timezone,
+        )
+
+        owner_role = role_dao.get_by_name("Owner", organization_id=None)
+        if not owner_role:
+            raise ValueError("Owner system role not found")
+
+        org_member_dao.create(
+            organization_id=org.id,
+            user_id=owner_user_id,
+            role_id=owner_role.id,
+        )
+
+        new_api_key = generate_key()
+        api_key_dao.create(
+            key=new_api_key,
+            name=f"org_{org.name}",
+            user_id=owner_user_id,
+            organization_id=org.id,
+        )
+
+        coordinator = create_organization_coordinator(
+            session,
+            owner_user_id=owner_user_id,
+            organization_id=org.id,
+            timezone=timezone,
+            space_name=name,
+        )
+        coordinator_id = coordinator.agent_id
+
+        pubsub_response = await create_pubsub_topic(
+            str(coordinator.agent_id),
+            deploy_env=coordinator.deploy_env,
+        )
+        if pubsub_topic_response_failed(pubsub_response):
+            raise ValueError(
+                f"Coordinator topic provisioning failed: {pubsub_response}",
+            )
+        created_pubsub_topic = not pubsub_response.get("skipped")
+
+        org_response = OrganizationResponse.model_validate(org)
+        response_data = {
+            **org_response.model_dump(),
+            "api_key": new_api_key,
+            "coordinator_id": str(coordinator_id),
+        }
+        session.commit()
+        return response_data
+    except Exception as e:
+        session.rollback()
+        if created_pubsub_topic and coordinator_id is not None:
+            try:
+                await delete_pubsub_topic(str(coordinator_id))
+            except Exception:
+                logger.exception(
+                    "Failed to clean up Coordinator topic after org creation rollback",
+                )
+        logger.error("Failed to create organization: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create organization",
+        )
+
+
 @router.post(
     "/organizations",
     status_code=status.HTTP_201_CREATED,
@@ -155,9 +238,6 @@ async def create_organization(
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    role_dao = RoleDAO(session)
     user_dao = UserDAO(session)
 
     # Check if organization name already exists
@@ -175,79 +255,12 @@ async def create_organization(
         owner_row = user_dao.get_by_id(user_id)
         org_timezone = owner_row[0].timezone if owner_row else None
 
-    # Create organization
-    created_pubsub_topic = False
-    coordinator_id: int | None = None
-    try:
-        # timezone: provided > owner's timezone > None (runtime defaults to UTC)
-        org = org_dao.create(
-            name=organization.name,
-            owner_id=user_id,
-            timezone=org_timezone,
-        )
-
-        # Get Owner system role
-        owner_role = role_dao.get_by_name("Owner", organization_id=None)
-        if not owner_role:
-            raise ValueError("Owner system role not found")
-
-        # Add creator as owner member with Owner role
-        org_member_dao.create(
-            organization_id=org.id,
-            user_id=user_id,
-            role_id=owner_role.id,
-        )
-
-        # Create organization API key for the owner
-        new_api_key = generate_key()
-        api_key_dao.create(
-            key=new_api_key,
-            name=f"org_{org.name}",
-            user_id=user_id,
-            organization_id=org.id,
-        )
-
-        coordinator = create_organization_coordinator(
-            session,
-            owner_user_id=user_id,
-            organization_id=org.id,
-            timezone=org_timezone,
-            space_name=organization.name,
-        )
-        coordinator_id = coordinator.agent_id
-
-        pubsub_response = await create_pubsub_topic(
-            str(coordinator.agent_id),
-            deploy_env=coordinator.deploy_env,
-        )
-        if pubsub_topic_response_failed(pubsub_response):
-            raise ValueError(
-                f"Coordinator topic provisioning failed: {pubsub_response}",
-            )
-        created_pubsub_topic = not pubsub_response.get("skipped")
-
-        session.commit()
-
-        org_response = OrganizationResponse.model_validate(org)
-        return {
-            **org_response.model_dump(),
-            "api_key": new_api_key,
-            "coordinator_id": str(coordinator_id),
-        }
-    except Exception as e:
-        session.rollback()
-        if created_pubsub_topic and coordinator_id is not None:
-            try:
-                await delete_pubsub_topic(str(coordinator_id))
-            except Exception:
-                logger.exception(
-                    "Failed to clean up Coordinator topic after org creation rollback",
-                )
-        logger.error(f"Failed to create organization: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create organization",
-        )
+    return await _create_organization_with_coordinator(
+        session,
+        name=organization.name,
+        owner_user_id=user_id,
+        timezone=org_timezone,
+    )
 
 
 @router.get("/organizations", response_model=List[OrganizationResponse])
@@ -2552,7 +2565,7 @@ def admin_disable_free_trial(
     "/organizations",
     status_code=status.HTTP_201_CREATED,
 )
-def admin_create_organization(
+async def admin_create_organization(
     organization: AdminOrganizationCreate,
     session: Session = Depends(get_db_session),
 ) -> dict:
@@ -2565,9 +2578,6 @@ def admin_create_organization(
     (logo, invites, etc.), and later transfers ownership to the client.
     """
     org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    role_dao = RoleDAO(session)
     user_dao = UserDAO(session)
 
     # Validate creator exists
@@ -2593,37 +2603,12 @@ def admin_create_organization(
         creator = creator_row[0]
         org_timezone = creator.timezone if creator.timezone else None
 
-    org = org_dao.create(
+    return await _create_organization_with_coordinator(
+        session,
         name=organization.name,
-        owner_id=organization.creator_user_id,
+        owner_user_id=organization.creator_user_id,
         timezone=org_timezone,
     )
-
-    owner_role = role_dao.get_by_name("Owner", organization_id=None)
-    if not owner_role:
-        raise ValueError("Owner system role not found")
-
-    org_member_dao.create(
-        organization_id=org.id,
-        user_id=organization.creator_user_id,
-        role_id=owner_role.id,
-    )
-
-    new_api_key = generate_key()
-    api_key_dao.create(
-        key=new_api_key,
-        name=f"org_{org.name}",
-        user_id=organization.creator_user_id,
-        organization_id=org.id,
-    )
-
-    session.commit()
-
-    org_response = OrganizationResponse.model_validate(org)
-    return {
-        **org_response.model_dump(),
-        "api_key": new_api_key,
-    }
 
 
 # =============================================================================

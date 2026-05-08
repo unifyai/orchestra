@@ -259,6 +259,8 @@ def _resolved_contact_ids_for_assistants(
     if not assistant_ids:
         return {}
 
+    ensure_personal_contact_memberships(session, assistant_ids)
+
     relationship_values = {
         CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
         CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,

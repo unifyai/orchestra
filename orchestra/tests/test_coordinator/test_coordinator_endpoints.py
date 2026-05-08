@@ -30,7 +30,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.task_machine_state_service import (
     build_task_activation_context_name,
 )
-from orchestra.tests.utils import HEADERS, create_test_user
+from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
 
@@ -155,22 +155,19 @@ def _personal_memberships(
     ).all()
 
 
-@pytest.mark.anyio
-async def test_create_organization_provisions_coordinator_and_org_default_space(
-    client: AsyncClient,
+def _assert_coordinator_workspace_provisioned(
     dbsession: Session,
+    *,
+    org_data: dict,
+    owner_user_id: str,
 ) -> None:
-    """Organization creation provisions the Coordinator, default space, and grants."""
-    owner = await _create_user(client, "org-provision")
-
-    org_data = await _create_org(client, owner, "provision")
     coordinator_id = int(org_data["coordinator_id"])
 
     coordinator = dbsession.get(Assistant, coordinator_id)
     assert coordinator is not None
     assert coordinator.is_coordinator is True
     assert coordinator.organization_id == org_data["id"]
-    assert coordinator.user_id == owner["id"]
+    assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert {
         (membership.contact_id, membership.relationship)
@@ -191,7 +188,7 @@ async def test_create_organization_provisions_coordinator_and_org_default_space(
     )
     assert space is not None
     assert space.name == org_data["name"]
-    assert space.owner_user_id == owner["id"]
+    assert space.owner_user_id == owner_user_id
 
     membership = dbsession.scalar(
         select(AssistantSpaceMembership).where(
@@ -203,10 +200,54 @@ async def test_create_organization_provisions_coordinator_and_org_default_space(
 
     resource_access_dao = ResourceAccessDAO(dbsession)
     assert resource_access_dao.check_user_permission(
-        owner["id"],
+        owner_user_id,
         "assistant",
         coordinator.agent_id,
         "assistant:write",
+    )
+
+
+@pytest.mark.anyio
+async def test_create_organization_provisions_coordinator_and_org_default_space(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Organization creation provisions the Coordinator, default space, and grants."""
+    owner = await _create_user(client, "org-provision")
+
+    org_data = await _create_org(client, owner, "provision")
+
+    _assert_coordinator_workspace_provisioned(
+        dbsession,
+        org_data=org_data,
+        owner_user_id=owner["id"],
+    )
+
+
+@pytest.mark.anyio
+async def test_admin_create_organization_provisions_coordinator_and_org_default_space(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Admin organization creation provisions the same Coordinator workspace."""
+    owner = await _create_user(client, "admin-org-provision")
+
+    response = await client.post(
+        "/v0/admin/organizations",
+        json={
+            "name": "Coordinator Admin Org provision",
+            "creator_user_id": owner["id"],
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED, response.json()
+    org_data = response.json()
+
+    _assert_coordinator_workspace_provisioned(
+        dbsession,
+        org_data=org_data,
+        owner_user_id=owner["id"],
     )
 
 
