@@ -80,6 +80,7 @@ from orchestra.services.contact_membership_service import (
     ensure_personal_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
+    ensure_coordinator_owner_contact_rows,
     preseed_colleague_contexts,
     require_authorized_coordinator,
     require_authorized_preseed_target,
@@ -260,6 +261,7 @@ def _resolved_contact_ids_for_assistants(
         return {}
 
     ensure_personal_contact_memberships(session, assistant_ids)
+    ensure_coordinator_owner_contact_rows(session, assistant_ids)
 
     relationship_values = {
         CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
