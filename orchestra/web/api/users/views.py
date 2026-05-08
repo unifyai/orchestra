@@ -1214,12 +1214,17 @@ async def create_personal_coordinator_endpoint(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Failed to create Coordinator.",
             )
+        if created_pubsub_topic and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+            created_pubsub_topic = False
         coordinator = get_personal_coordinator(session, user_id)
         if coordinator is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Failed to create Coordinator.",
             )
+        coordinator = create_personal_coordinator(session, user_id)
+        session.commit()
     except Exception:
         session.rollback()
         if created_pubsub_topic and coordinator_id is not None:
