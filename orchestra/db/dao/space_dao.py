@@ -34,6 +34,11 @@ class SpaceDAO:
         self.session = session
         self.resource_access_dao = ResourceAccessDAO(session)
 
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        """Normalize space name text for case-insensitive key matching."""
+        return value.strip().lower()
+
     def create(
         self,
         *,
@@ -53,6 +58,28 @@ class SpaceDAO:
         self.session.add(space)
         self.session.flush()
         return space
+
+    def find_team_space_by_natural_key(
+        self,
+        *,
+        owner_user_id: str,
+        organization_id: Optional[int],
+        name: str,
+    ) -> Optional[Space]:
+        """Return a team space that already matches the natural key."""
+        normalized_name = self._normalize_name(name)
+        query = self.session.query(Space).filter(
+            Space.kind == "team",
+            sa.func.lower(sa.func.trim(Space.name)) == normalized_name,
+        )
+        if organization_id is None:
+            query = query.filter(
+                Space.organization_id.is_(None),
+                Space.owner_user_id == owner_user_id,
+            )
+        else:
+            query = query.filter(Space.organization_id == organization_id)
+        return query.order_by(Space.created_at.asc(), Space.space_id.asc()).first()
 
     def get(self, space_id: int) -> Optional[Space]:
         """Return a space by primary key."""

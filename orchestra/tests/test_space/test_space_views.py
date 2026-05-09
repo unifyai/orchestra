@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from fastapi import status
@@ -143,6 +144,79 @@ async def test_space_crud_returns_space_shape_without_membership_status(
         headers=owner["headers"],
     )
     assert deleted.status_code == status.HTTP_204_NO_CONTENT, deleted.text
+
+
+@pytest.mark.anyio
+async def test_create_space_conflicts_on_normalized_name_in_same_scope(
+    client: AsyncClient,
+) -> None:
+    owner = await create_test_user(
+        client,
+        f"space-dedupe-owner-{uuid4().hex[:8]}@test.com",
+    )
+    first = await client.post(
+        "/v0/spaces",
+        headers=owner["headers"],
+        json={
+            "name": "Revenue Desk",
+            "description": "Revenue workspace for planning and execution outcomes.",
+            "organization_id": None,
+        },
+    )
+    assert first.status_code == status.HTTP_201_CREATED, first.json()
+    first_id = first.json()["space_id"]
+
+    duplicate = await client.post(
+        "/v0/spaces",
+        headers=owner["headers"],
+        json={
+            "name": "  revenue desk ",
+            "description": "Revenue workspace for planning and execution outcomes.",
+            "organization_id": None,
+        },
+    )
+    assert duplicate.status_code == status.HTTP_409_CONFLICT, duplicate.json()
+    detail = duplicate.json()["detail"]
+    assert detail["error"] == "space_already_exists"
+    assert detail["existing_id"] == first_id
+
+
+@pytest.mark.anyio
+async def test_create_space_allows_same_name_across_personal_users(
+    client: AsyncClient,
+) -> None:
+    first_owner = await create_test_user(
+        client,
+        f"space-cross-scope-owner-a-{uuid4().hex[:8]}@test.com",
+    )
+    second_owner = await create_test_user(
+        client,
+        f"space-cross-scope-owner-b-{uuid4().hex[:8]}@test.com",
+    )
+    personal = await client.post(
+        "/v0/spaces",
+        headers=first_owner["headers"],
+        json={
+            "name": "Support Desk",
+            "description": "Support workspace for customer escalations and triage.",
+            "organization_id": None,
+        },
+    )
+    assert personal.status_code == status.HTTP_201_CREATED, personal.json()
+
+    second_scope_space = await client.post(
+        "/v0/spaces",
+        headers=second_owner["headers"],
+        json={
+            "name": "Support Desk",
+            "description": "Support workspace for customer escalations and triage.",
+            "organization_id": None,
+        },
+    )
+    assert (
+        second_scope_space.status_code == status.HTTP_201_CREATED
+    ), second_scope_space.json()
+    assert second_scope_space.json()["space_id"] != personal.json()["space_id"]
 
 
 @pytest.mark.anyio

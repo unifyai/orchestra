@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import available_timezones
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
@@ -38,6 +38,14 @@ class AssistantDAO:
 
     def __init__(self, session: Session):
         self.session = session
+
+    @staticmethod
+    def _normalize_name_part(value: Optional[str]) -> Optional[str]:
+        """Normalize optional name text for case-insensitive matching."""
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized or None
 
     def create_assistant(
         self,
@@ -105,6 +113,46 @@ class AssistantDAO:
         self.session.add(assistant)
         self.session.flush()
         return assistant
+
+    def find_by_natural_key(
+        self,
+        *,
+        user_id: str,
+        organization_id: Optional[int],
+        first_name: Optional[str],
+        surname: Optional[str],
+    ) -> Optional[Assistant]:
+        """Return an assistant with the same normalized natural-name key.
+
+        Organization scope:
+            ``organization_id + first_name + surname``
+
+        Personal scope:
+            ``user_id + first_name + surname`` with ``organization_id`` NULL
+        """
+        normalized_first_name = self._normalize_name_part(first_name)
+        if normalized_first_name is None:
+            return None
+        normalized_surname = self._normalize_name_part(surname) or ""
+
+        stmt = select(Assistant).where(
+            func.lower(func.trim(func.coalesce(Assistant.first_name, "")))
+            == normalized_first_name,
+            func.lower(func.trim(func.coalesce(Assistant.surname, "")))
+            == normalized_surname,
+        )
+        if organization_id is None:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+            )
+        else:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+
+        rows = self.session.execute(
+            stmt.order_by(Assistant.created_at.asc(), Assistant.agent_id.asc()),
+        ).scalars()
+        return rows.first()
 
     def get_assistant_by_id(
         self,
