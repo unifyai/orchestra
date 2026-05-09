@@ -149,6 +149,37 @@ async def test_create_assistant_missing_field(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_assistant_conflicts_on_normalized_name_in_same_scope(
+    client: AsyncClient,
+):
+    first = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Casey",
+            "surname": "Recruiter",
+            "create_infra": False,
+        },
+        headers=HEADERS,
+    )
+    assert first.status_code == 200, first.json()
+    existing_id = int(first.json()["info"]["agent_id"])
+
+    duplicate = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "  casey ",
+            "surname": " recruiter  ",
+            "create_infra": False,
+        },
+        headers=HEADERS,
+    )
+    assert duplicate.status_code == status.HTTP_409_CONFLICT, duplicate.json()
+    detail = duplicate.json()["detail"]
+    assert detail["error"] == "assistant_already_exists"
+    assert detail["existing_id"] == existing_id
+
+
+@pytest.mark.anyio
 async def test_list_assistants_empty(client: AsyncClient):
     # `GET /v0/assistant` with no assistants -> 200 OK and empty list
     resp = await client.get("/v0/assistant", headers=HEADERS)

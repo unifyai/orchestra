@@ -195,6 +195,22 @@ def _membership_response(
     response_model=SpaceRead,
     status_code=status.HTTP_201_CREATED,
     tags=["Spaces"],
+    responses={
+        409: {
+            "description": "Workspace already exists for this scope and name key.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error": "space_already_exists",
+                            "message": "Workspace with this name already exists in this scope.",
+                            "existing_id": 123,
+                        },
+                    },
+                },
+            },
+        },
+    },
 )
 def create_space(
     request: Request,
@@ -212,6 +228,24 @@ def create_space(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to create spaces in this organization.",
+        )
+
+    existing_space = space_dao.find_team_space_by_natural_key(
+        owner_user_id=user_id,
+        organization_id=body.organization_id,
+        name=body.name,
+    )
+    if existing_space is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "space_already_exists",
+                "message": "Workspace with this name already exists in this scope.",
+                "existing_id": existing_space.space_id,
+                "name": body.name,
+                "organization_id": body.organization_id,
+                "kind": "team",
+            },
         )
 
     space = space_dao.create(

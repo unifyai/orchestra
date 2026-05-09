@@ -670,6 +670,20 @@ def _build_assistant_read(
                 },
             },
         },
+        409: {
+            "description": "Assistant already exists for this scope and name key.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error": "assistant_already_exists",
+                            "message": "Assistant with this name already exists in this scope.",
+                            "existing_id": 123,
+                        },
+                    },
+                },
+            },
+        },
         422: {
             "description": "Validation Error",
             "content": {
@@ -756,6 +770,27 @@ async def create_assistant(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
                 )
+
+        existing_assistant = assistant_dao.find_by_natural_key(
+            user_id=user_id,
+            organization_id=organization_id,
+            first_name=assistant_in.first_name,
+            surname=assistant_in.surname,
+        )
+        if existing_assistant is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "assistant_already_exists",
+                    "message": (
+                        "Assistant with this name already exists in this scope."
+                    ),
+                    "existing_id": existing_assistant.agent_id,
+                    "first_name": assistant_in.first_name,
+                    "surname": assistant_in.surname,
+                    "organization_id": organization_id,
+                },
+            )
 
         parsed_weekly_limit = (
             Decimal(assistant_in.weekly_limit)
