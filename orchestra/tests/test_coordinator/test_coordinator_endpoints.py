@@ -21,10 +21,12 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantSecret,
     AssistantSpaceMembership,
+    BillingAccount,
     ContactMembership,
     Context,
     LogEvent,
     LogEventContext,
+    Organization,
     Project,
     Space,
     User,
@@ -40,6 +42,14 @@ EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
 @pytest.fixture(autouse=True)
 def coordinator_pubsub_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep Coordinator tests inside Orchestra's API/database boundary."""
+    monkeypatch.setattr(
+        "orchestra.web.api.assistant.views.wake_up_assistant",
+        AsyncMock(return_value=MagicMock(status_code=200)),
+    )
+    monkeypatch.setattr(
+        "orchestra.web.api.assistant.views.reawaken_assistant",
+        AsyncMock(return_value=MagicMock(status_code=200, json=lambda: {})),
+    )
     monkeypatch.setattr(
         "orchestra.web.api.organization.views.create_pubsub_topic",
         AsyncMock(return_value={"success": True}),
@@ -422,6 +432,51 @@ async def test_assistant_list_repairs_missing_coordinator_owner_contact_row(
 
 
 @pytest.mark.anyio
+async def test_org_assistant_creation_bootstraps_owner_contact_row(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Org-scoped POST /assistant writes the owner contact row for chat lookup."""
+    credits_response = await client.get("/v0/credits", headers=HEADERS)
+    assert credits_response.status_code == status.HTTP_200_OK, credits_response.json()
+    owner = {"id": credits_response.json()["id"], "headers": HEADERS}
+    org_data = await _create_org(client, owner, "org-assistant-owner-contact")
+    headers = {"Authorization": f"Bearer {org_data['api_key']}"}
+    organization = dbsession.get(Organization, org_data["id"])
+    assert organization is not None
+    billing_account = BillingAccount(
+        credits=10_000,
+        billing_setup_complete=True,
+    )
+    dbsession.add(billing_account)
+    dbsession.flush()
+    organization.billing_account_id = billing_account.id
+    dbsession.commit()
+
+    create = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Org",
+            "surname": "Bootstrap",
+            "create_infra": False,
+        },
+        headers=headers,
+    )
+    assert create.status_code == status.HTTP_200_OK, create.json()
+    assistant_id = int(create.json()["info"]["agent_id"])
+    assistant = dbsession.get(Assistant, assistant_id)
+    assert assistant is not None
+    assert assistant.organization_id == org_data["id"]
+    assert assistant.is_coordinator is False
+
+    _assert_owner_contact_row(
+        dbsession,
+        coordinator=assistant,
+        owner_user_id=owner["id"],
+    )
+
+
+@pytest.mark.anyio
 async def test_reset_clears_only_coordinator_contexts(
     client: AsyncClient,
     dbsession: Session,
@@ -541,6 +596,11 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
         (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
         (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
     }
+    _assert_owner_contact_row(
+        dbsession,
+        coordinator=coordinator,
+        owner_user_id=owner["id"],
+    )
 
     mismatch = await client.post(
         f"/v0/user/{other['id']}/coordinator",

@@ -65,6 +65,7 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.lib.billing import get_billing_entity
+from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_spec_from_assistant,
@@ -805,6 +806,7 @@ async def create_assistant(
 
         # Create "Assistants" project if it doesn't exist (for logging purposes)
         ASSISTANTS_PROJECT_NAME = "Assistants"
+        assistants_project: Project | None
 
         if organization_id is not None:
             # For org context, check if project exists in org (not user-access based)
@@ -895,6 +897,23 @@ async def create_assistant(
                     description="Project to manage and track all your assistants.",
                     is_versioned=False,
                 )
+                session.flush()
+                assistants_project = project_dao.get_by_user_and_name(
+                    user_id=user_id,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    organization_id=None,
+                )
+
+        if assistants_project is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="assistants_project_missing",
+            )
+        ensure_owner_contact_row(
+            session,
+            assistant=assistant,
+            project=assistants_project,
+        )
 
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later

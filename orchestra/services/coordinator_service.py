@@ -6,7 +6,6 @@ from typing import Any, Sequence
 from fastapi import HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -24,10 +23,9 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
     Space,
-    User,
 )
+from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.contact_membership_service import (
-    BOSS_CONTACT_RESPONSE_POLICY,
     PERSONAL_BOSS_CONTACT_ID,
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
@@ -50,7 +48,6 @@ COORDINATOR_RESET_CONTEXTS = (
     "Transcripts",
     "Exchanges",
 )
-COORDINATOR_CONTACTS_CONTEXT = "Contacts"
 COORDINATOR_TRANSCRIPTS_CONTEXT = "Transcripts"
 COORDINATOR_EXCHANGES_CONTEXT = "Exchanges"
 COORDINATOR_CHAT_MEDIUM = "unify_message"
@@ -61,10 +58,8 @@ PRESEED_SERVER_FIELDS = frozenset(
     {"_user_id", "_assistant_id", "authoring_assistant_id"},
 )
 PRESEED_TASK_SERVER_FIELDS = frozenset({"assistant_id"})
-CONTACTS_UNIQUE_KEYS = {"contact_id": "int"}
 TRANSCRIPTS_UNIQUE_KEYS = {"message_id": "int"}
 EXCHANGES_UNIQUE_KEYS = {"exchange_id": "int"}
-CONTACTS_AUTO_COUNTING = {"contact_id": None}
 TRANSCRIPTS_AUTO_COUNTING = {"message_id": None}
 EXCHANGES_AUTO_COUNTING = {"exchange_id": None}
 
@@ -575,44 +570,6 @@ def _ensure_context(
     return context
 
 
-def _owner_contact_entries(user: User) -> dict[str, Any]:
-    """Build the root-local contact row for the Coordinator owner."""
-    return {
-        "contact_id": PERSONAL_BOSS_CONTACT_ID,
-        "first_name": user.name,
-        "surname": user.last_name,
-        "email_address": user.email,
-        "job_title": user.job_title,
-        "bio": user.bio,
-        "timezone": user.timezone,
-        "is_system": True,
-        "should_respond": True,
-        "response_policy": BOSS_CONTACT_RESPONSE_POLICY,
-    }
-
-
-def _find_contact_log_by_contact_id(
-    session: Session,
-    *,
-    context: Context,
-    contact_id: int,
-) -> LogEvent | None:
-    return session.scalar(
-        select(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(
-            LogEventContext.context_id == context.id,
-            LogEvent.data["contact_id"].astext == str(contact_id),
-        )
-        .order_by(LogEvent.id.asc())
-        .limit(1),
-    )
-
-
-def _log_data_contains(log_data: dict[str, Any], entries: dict[str, Any]) -> bool:
-    return all(log_data.get(key) == value for key, value in entries.items())
-
-
 def _create_coordinator_log_entry(
     session: Session,
     *,
@@ -713,49 +670,11 @@ def _ensure_coordinator_owner_contact_row(
     coordinator: Assistant,
 ) -> int:
     """Ensure the owner can be resolved as the Coordinator's chat contact."""
-    _lock_coordinator_context(
+    return ensure_owner_contact_row(
         session,
-        coordinator=coordinator,
-        suffix=COORDINATOR_CONTACTS_CONTEXT,
+        assistant=coordinator,
+        project=_project_for_coordinator(session, coordinator),
     )
-    owner = session.get(User, coordinator.user_id)
-    if owner is None:
-        raise ValueError(
-            f"Coordinator owner user {coordinator.user_id!r} was not found",
-        )
-
-    project = _project_for_coordinator(session, coordinator)
-    context_name = _coordinator_context_name(coordinator, COORDINATOR_CONTACTS_CONTEXT)
-    context = _ensure_context(
-        session,
-        project_id=project.id,
-        context_name=context_name,
-        unique_keys=CONTACTS_UNIQUE_KEYS,
-        auto_counting=CONTACTS_AUTO_COUNTING,
-    )
-    entries = _owner_contact_entries(owner)
-    existing = _find_contact_log_by_contact_id(
-        session,
-        context=context,
-        contact_id=PERSONAL_BOSS_CONTACT_ID,
-    )
-    if existing is not None:
-        if _log_data_contains(existing.data, entries):
-            return existing.id
-        existing.data = {**existing.data, **entries}
-        flag_modified(existing, "data")
-        session.flush()
-        return existing.id
-
-    result = _create_coordinator_log_entry(
-        session,
-        project=project,
-        context=context,
-        context_name=context_name,
-        entries=entries,
-    )
-    session.flush()
-    return result["log_event_ids"][0]
 
 
 def ensure_coordinator_owner_contact_rows(
