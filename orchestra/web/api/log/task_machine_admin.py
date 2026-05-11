@@ -7,6 +7,7 @@ from orchestra.db.models.orchestra_models import Assistant, Project
 from orchestra.services.task_machine_state_service import (
     create_task_outbound_operation_if_absent,
     create_task_run_if_absent,
+    get_latest_task_run_for_task,
     get_task_activation,
     update_task_outbound_operation,
     update_task_run,
@@ -19,6 +20,8 @@ from orchestra.web.api.log.schema import (
     TaskOutboundOperationMutationResponse,
     TaskOutboundOperationUpdateRequest,
     TaskRunCreateOrAdoptRequest,
+    TaskRunLatestRequest,
+    TaskRunLatestResponse,
     TaskRunMutationResponse,
     TaskRunUpdateRequest,
 )
@@ -196,6 +199,32 @@ def patch_task_run(
         updates=request.updates,
     )
     return {"run": dict(run.data or {})}
+
+
+@router.post(
+    "/task-run/latest",
+    response_model=TaskRunLatestResponse,
+)
+def get_latest_task_run(
+    request: TaskRunLatestRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Return the most recently updated task run for one assistant/task pair."""
+
+    project = _get_internal_project_or_404(
+        session,
+        project_name=request.project_name,
+        assistant_id=request.assistant_id,
+    )
+    run = get_latest_task_run_for_task(
+        session=session,
+        project_id=project.id,
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+        source_task_log_id=request.source_task_log_id,
+    )
+    return {"run": dict(run.data or {}) if run is not None else None}
 
 
 @router.post(
