@@ -1043,6 +1043,30 @@ class TaskRunUpdateRequest(BaseModel):
     )
 
 
+class TaskRunLatestRequest(BaseModel):
+    """Lookup the latest run row for one assistant/task pair."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(description="Assistant identifier that owns the run.")
+    task_id: int = Field(description="Logical task identifier.")
+    source_task_log_id: Optional[int] = Field(
+        default=None,
+        description="Optional Tasks row log id used to resolve assistant-scoped contexts.",
+    )
+
+
+class TaskRunLatestResponse(BaseModel):
+    """Latest task run lookup response."""
+
+    run: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Most recently updated run row payload, or null when absent.",
+    )
+
+
 class TaskRunMutationResponse(BaseModel):
     """Serialized task run payload returned by internal mutation endpoints."""
 
