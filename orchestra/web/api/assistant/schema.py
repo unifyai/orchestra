@@ -231,7 +231,6 @@ class AssistantCreate(BaseModel):
         return self
 
     model_config = ConfigDict(
-        extra="forbid",
         from_attributes=True,
         json_schema_extra={
             "example": {

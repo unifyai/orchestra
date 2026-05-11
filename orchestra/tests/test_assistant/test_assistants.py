@@ -122,6 +122,22 @@ async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_
 
 
 @pytest.mark.anyio
+async def test_create_assistant_ignores_unknown_fields(client: AsyncClient):
+    payload = {
+        "first_name": "Desktop",
+        "surname": "Flow",
+        "is_user_desktop": True,
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    data = resp.json()["info"]
+    assert data["first_name"] == "Desktop"
+    assert data["surname"] == "Flow"
+    assert data["is_local"] is False
+
+
+@pytest.mark.anyio
 async def test_create_assistant_rejects_deploy_env(client: AsyncClient):
     payload = {
         "first_name": "Rejected",
