@@ -561,6 +561,59 @@ async def test_remove_space_member_cleans_space_contact_overlays(
 
 
 @pytest.mark.anyio
+async def test_create_org_space_auto_adds_coordinator_and_publishes_refresh(
+    client: AsyncClient,
+    dbsession: Session,
+    reawaken_assistant_mock: AsyncMock,
+    monkeypatch,
+) -> None:
+    """Organization-scoped spaces always add the Coordinator as a live member."""
+
+    monkeypatch.setattr(
+        "orchestra.web.api.organization.views.create_pubsub_topic",
+        AsyncMock(return_value={"success": True, "skipped": True}),
+    )
+    owner = await create_test_user(client, "space-org-coordinator-owner@test.com")
+    organization = await create_test_org(client, owner, "Coordinator Space Org")
+    reawaken_assistant_mock.reset_mock()
+
+    created = await _create_space(
+        client,
+        owner["headers"],
+        name="Org Setup",
+        organization_id=organization["id"],
+    )
+
+    coordinator = (
+        dbsession.query(Assistant)
+        .filter(
+            Assistant.organization_id == organization["id"],
+            Assistant.is_coordinator.is_(True),
+        )
+        .one()
+    )
+    membership = (
+        dbsession.query(AssistantSpaceMembership)
+        .filter(
+            AssistantSpaceMembership.assistant_id == coordinator.agent_id,
+            AssistantSpaceMembership.space_id == created["space_id"],
+        )
+        .one_or_none()
+    )
+    assert membership is not None
+
+    reawaken_assistant_mock.assert_awaited_once()
+    payload = reawaken_assistant_mock.await_args.kwargs["data"]
+    assert payload["assistant_id"] == str(coordinator.agent_id)
+    assert payload["update_kind"] == "membership"
+    assert created["space_id"] in json.loads(payload["space_ids"])
+    assert any(
+        summary["space_id"] == created["space_id"] and summary["name"] == "Org Setup"
+        for summary in json.loads(payload["space_summaries"])
+    )
+
+
+@pytest.mark.anyio
 async def test_org_admin_adds_org_assistant_directly(
     client: AsyncClient,
     dbsession: Session,
