@@ -11,6 +11,7 @@ from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SpaceDAO
 from orchestra.db.dao.space_invite_dao import SPACE_INVITE_STATUS_PENDING
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Space, SpaceInvite
+from orchestra.services.coordinator_service import get_org_coordinator
 from orchestra.services.space_cleanup_service import (
     SpaceCleanupAuthError,
     SpaceCleanupConflictError,
@@ -212,7 +213,7 @@ def _membership_response(
         },
     },
 )
-def create_space(
+async def create_space(
     request: Request,
     body: SpaceCreate,
     session: Session = Depends(get_db_session),
@@ -254,7 +255,25 @@ def create_space(
         organization_id=body.organization_id,
         owner_user_id=user_id,
     )
+    refresh_payloads = []
+    if body.organization_id is not None:
+        coordinator = get_org_coordinator(session, body.organization_id)
+        if (
+            coordinator is not None
+            and space_dao.get_membership(
+                space_id=space.space_id,
+                assistant_id=coordinator.agent_id,
+            )
+            is None
+        ):
+            space_dao.add_membership(
+                space=space,
+                assistant=coordinator,
+                added_by=user_id,
+            )
+            refresh_payloads = membership_refresh_payloads(session, [coordinator])
     session.commit()
+    await publish_membership_refreshes_best_effort(refresh_payloads)
     return _space_read(space)
 
 
