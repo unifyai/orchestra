@@ -1047,6 +1047,45 @@ def get_task_run(
     )
 
 
+def get_latest_task_run_for_task(
+    session: Session,
+    project_id: int,
+    *,
+    assistant_id: str,
+    task_id: int,
+    source_task_log_id: int | None = None,
+    tasks_context_name: str | None = None,
+) -> LogEvent | None:
+    """Return the most recently updated run row for one assistant/task pair."""
+
+    resolved_tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project_id,
+        assistant_id=assistant_id,
+        source_task_log_id=source_task_log_id,
+        tasks_context_name=tasks_context_name,
+    )
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=resolved_tasks_context_name,
+    )
+    return (
+        session.query(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEventContext.context_id == context_ids.runs_context_id,
+            LogEvent.data.has_key("assistant_id"),
+            LogEvent.data.has_key("task_id"),
+            LogEvent.data.op("->>")("assistant_id") == str(assistant_id),
+            LogEvent.data.op("->>")("task_id") == str(task_id),
+        )
+        .order_by(LogEvent.updated_at.desc(), LogEvent.created_at.desc())
+        .first()
+    )
+
+
 def create_task_outbound_operation_if_absent(
     session: Session,
     project_id: int,
