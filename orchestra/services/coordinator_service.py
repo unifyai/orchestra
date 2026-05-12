@@ -17,12 +17,10 @@ from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    AssistantSpaceMembership,
     Context,
     LogEvent,
     LogEventContext,
     Project,
-    Space,
     User,
 )
 from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
@@ -245,50 +243,6 @@ def grant_owner_access_to_assistant(
     )
 
 
-def ensure_org_default_space(
-    session: Session,
-    *,
-    organization_id: int,
-    owner_user_id: str,
-    assistant: Assistant,
-    name: str = "Organization Default",
-) -> Space:
-    """Ensure the organization has its default Coordinator memory space."""
-    space = session.scalar(
-        select(Space).where(
-            Space.organization_id == organization_id,
-            Space.kind == "org_default",
-        ),
-    )
-    if space is None:
-        space = Space(
-            name=name,
-            description="Default shared memory for the organization Coordinator.",
-            organization_id=organization_id,
-            owner_user_id=owner_user_id,
-            kind="org_default",
-        )
-        session.add(space)
-        session.flush()
-
-    membership = session.scalar(
-        select(AssistantSpaceMembership).where(
-            AssistantSpaceMembership.assistant_id == assistant.agent_id,
-            AssistantSpaceMembership.space_id == space.space_id,
-        ),
-    )
-    if membership is None:
-        session.add(
-            AssistantSpaceMembership(
-                assistant_id=assistant.agent_id,
-                space_id=space.space_id,
-                added_by=owner_user_id,
-            ),
-        )
-        session.flush()
-    return space
-
-
 def create_personal_coordinator(
     session: Session,
     user_id: str,
@@ -375,21 +329,13 @@ def create_organization_coordinator(
     owner_user_id: str,
     organization_id: int,
     timezone: str | None,
-    space_name: str = "Organization Default",
 ) -> Assistant:
-    """Create or return the organization's Coordinator and default space."""
+    """Create or return the organization's Coordinator."""
     existing = get_org_coordinator(session, organization_id)
     if existing is not None:
         _ensure_coordinator_default_nationality(existing)
         ensure_personal_contact_memberships(session, [existing.agent_id])
         _ensure_coordinator_owner_contact_row(session, coordinator=existing)
-        ensure_org_default_space(
-            session,
-            organization_id=organization_id,
-            owner_user_id=owner_user_id,
-            assistant=existing,
-            name=space_name,
-        )
         return existing
 
     assistant = create_coordinator_assistant(
@@ -412,13 +358,6 @@ def create_organization_coordinator(
         session,
         owner_user_id=owner_user_id,
         organization_id=organization_id,
-    )
-    ensure_org_default_space(
-        session,
-        organization_id=organization_id,
-        owner_user_id=owner_user_id,
-        assistant=assistant,
-        name=space_name,
     )
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
     return assistant
@@ -645,66 +584,22 @@ def _create_coordinator_log_entry(
     return result
 
 
-def _context_has_exchange(
+def _context_has_logs(
     session: Session,
     *,
-    project_id: int,
-    context_name: str,
-    exchange_id: int,
+    context: Context,
 ) -> bool:
-    context = _get_context(
-        session,
-        project_id=project_id,
-        context_name=context_name,
-    )
-    if context is None:
-        return False
     return (
         session.scalar(
             select(LogEvent.id)
             .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
             .where(
                 LogEventContext.context_id == context.id,
-                LogEvent.data["exchange_id"].astext == str(exchange_id),
             )
             .limit(1),
         )
         is not None
     )
-
-
-def _existing_coordinator_opener_log_id(
-    session: Session,
-    *,
-    project_id: int,
-    transcript_context: Context,
-    exchange_context_name: str,
-) -> int | None:
-    candidates = session.scalars(
-        select(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(
-            LogEventContext.context_id == transcript_context.id,
-            LogEvent.data["medium"].astext == COORDINATOR_CHAT_MEDIUM,
-            LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
-            LogEvent.data["metadata"]["source"].astext == COORDINATOR_OPENER_SOURCE,
-        )
-        .order_by(LogEvent.id.asc()),
-    ).all()
-    for candidate in candidates:
-        exchange_id = candidate.data.get("exchange_id")
-        if (
-            candidate.data.get("receiver_ids") == [PERSONAL_BOSS_CONTACT_ID]
-            and isinstance(exchange_id, int)
-            and _context_has_exchange(
-                session,
-                project_id=project_id,
-                context_name=exchange_context_name,
-                exchange_id=exchange_id,
-            )
-        ):
-            return candidate.id
-    return None
 
 
 def _ensure_coordinator_owner_contact_row(
@@ -961,15 +856,6 @@ def seed_coordinator_transcript(
         coordinator,
         COORDINATOR_EXCHANGES_CONTEXT,
     )
-    existing_id = _existing_coordinator_opener_log_id(
-        session,
-        project_id=project.id,
-        transcript_context=transcript_context,
-        exchange_context_name=exchange_context_name,
-    )
-    if existing_id is not None:
-        return existing_id
-
     exchange_context = _ensure_context(
         session,
         project_id=project.id,
@@ -977,6 +863,17 @@ def seed_coordinator_transcript(
         unique_keys=EXCHANGES_UNIQUE_KEYS,
         auto_counting=EXCHANGES_AUTO_COUNTING,
     )
+    if _context_has_logs(
+        session,
+        context=transcript_context,
+    ) or _context_has_logs(
+        session,
+        context=exchange_context,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="coordinator_transcript_not_empty",
+        )
     exchange_result = _create_coordinator_log_entry(
         session,
         project=project,
