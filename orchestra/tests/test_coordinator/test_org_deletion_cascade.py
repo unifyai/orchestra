@@ -68,26 +68,40 @@ def org_delete_boundaries(monkeypatch: pytest.MonkeyPatch) -> _CommsClient:
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
+        "orchestra.web.api.utils.assistant_infra.create_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
         "orchestra.web.api.organization.views.delete_pubsub_topic",
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
-        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
-        AsyncMock(
-            return_value={
-                "processed": 1,
-                "completed": 1,
-                "retried": 0,
-                "failed": 0,
-                "errors": [],
-            },
-        ),
+        "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
     )
     bucket = MagicMock()
     bucket.delete_org_account_photos.return_value = 0
+    bucket.delete_assistant_file.return_value = None
+    bucket.delete_all_assistant_data.return_value = {
+        "media": 0,
+        "recordings": 0,
+        "attachments": 0,
+    }
     monkeypatch.setattr(
         "orchestra.web.api.organization.views.BucketService",
         MagicMock(return_value=bucket),
+    )
+    monkeypatch.setattr(
+        "orchestra.services.assistant_cleanup_service.BucketService",
+        MagicMock(return_value=bucket),
+    )
+    monkeypatch.setattr(
+        "orchestra.services.assistant_cleanup_service.delete_phone_number",
+        AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(space_cleanup_service, "ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(
@@ -168,17 +182,6 @@ def _make_org_assistant(
     dbsession.add(assistant)
     dbsession.flush()
     return assistant
-
-
-def _org_default_space(dbsession: Session, *, organization_id: int) -> Space:
-    space = dbsession.scalar(
-        sa.select(Space).where(
-            Space.organization_id == organization_id,
-            Space.kind == "org_default",
-        ),
-    )
-    assert space is not None
-    return space
 
 
 def _assistants_project(dbsession: Session, *, organization_id: int) -> Project:
@@ -288,8 +291,13 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
     org = await _create_org(client, owner, "success")
     organization_id = org["id"]
     coordinator_id = int(org["coordinator_id"])
-    org_default = _org_default_space(dbsession, organization_id=organization_id)
-    org_default_space_id = org_default.space_id
+    first_space = await _create_org_space(
+        client,
+        owner,
+        organization_id=organization_id,
+        name="Success Shared",
+    )
+    first_space_id = first_space["space_id"]
     team_space = await _create_org_space(
         client,
         owner,
@@ -316,8 +324,8 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
     _add_context_log(
         dbsession,
         project=project,
-        context_name=f"Spaces/{org_default_space_id}/Knowledge",
-        entries={"fact": "org-wide"},
+        context_name=f"Spaces/{first_space_id}/Knowledge",
+        entries={"fact": "shared"},
     )
     _add_context_log(
         dbsession,
@@ -347,7 +355,7 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
         101,
     ]
     dbsession.expire_all()
-    assert dbsession.get(Space, org_default_space_id) is None
+    assert dbsession.get(Space, first_space_id) is None
     assert dbsession.get(Space, team_space_id) is None
     assert dbsession.get(Assistant, coordinator_id) is None
     assert dbsession.get(Assistant, team_assistant_id) is None
@@ -357,13 +365,13 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
             .select_from(AssistantSpaceMembership)
             .where(
                 AssistantSpaceMembership.space_id.in_(
-                    [org_default_space_id, team_space_id],
+                    [first_space_id, team_space_id],
                 ),
             ),
         )
         == 0
     )
-    assert _space_context_count(dbsession, org_default_space_id) == 0
+    assert _space_context_count(dbsession, first_space_id) == 0
     assert _space_context_count(dbsession, team_space_id) == 0
 
 
@@ -379,8 +387,13 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
     org = await _create_org(client, owner, "retry")
     organization_id = org["id"]
     coordinator_id = int(org["coordinator_id"])
-    org_default = _org_default_space(dbsession, organization_id=organization_id)
-    org_default_space_id = org_default.space_id
+    first_space = await _create_org_space(
+        client,
+        owner,
+        organization_id=organization_id,
+        name="Retry Shared",
+    )
+    first_space_id = first_space["space_id"]
     team_space = await _create_org_space(
         client,
         owner,
@@ -407,7 +420,7 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
     _add_context_log(
         dbsession,
         project=project,
-        context_name=f"Spaces/{org_default_space_id}/Knowledge",
+        context_name=f"Spaces/{first_space_id}/Knowledge",
         entries={"fact": "cleaned first"},
     )
     _add_context_log(
@@ -434,11 +447,11 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
 
     assert first.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     dbsession.expire_all()
-    assert dbsession.get(Space, org_default_space_id) is None
+    assert dbsession.get(Space, first_space_id) is None
     remaining_space = dbsession.get(Space, team_space_id)
     assert remaining_space is not None
     assert remaining_space.status == "deleting"
-    assert _space_context_count(dbsession, org_default_space_id) == 0
+    assert _space_context_count(dbsession, first_space_id) == 0
     assert _space_context_count(dbsession, team_space_id) == 1
     assert (
         _org_delete_cleanup_task_count(
