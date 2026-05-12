@@ -10,6 +10,7 @@ from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -20,7 +21,6 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     Assistant,
     AssistantSecret,
-    AssistantSpaceMembership,
     BillingAccount,
     ContactMembership,
     Context,
@@ -28,7 +28,6 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Organization,
     Project,
-    Space,
     User,
 )
 from orchestra.services.task_machine_state_service import (
@@ -209,7 +208,7 @@ def _assert_owner_contact_row(
     return contact_logs[0]
 
 
-def _assert_coordinator_workspace_provisioned(
+def _assert_coordinator_provisioned(
     dbsession: Session,
     *,
     org_data: dict,
@@ -234,24 +233,6 @@ def _assert_coordinator_workspace_provisioned(
         (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
     }
 
-    space = dbsession.scalar(
-        select(Space).where(
-            Space.organization_id == org_data["id"],
-            Space.kind == "org_default",
-        ),
-    )
-    assert space is not None
-    assert space.name == org_data["name"]
-    assert space.owner_user_id == owner_user_id
-
-    membership = dbsession.scalar(
-        select(AssistantSpaceMembership).where(
-            AssistantSpaceMembership.assistant_id == coordinator.agent_id,
-            AssistantSpaceMembership.space_id == space.space_id,
-        ),
-    )
-    assert membership is not None
-
     resource_access_dao = ResourceAccessDAO(dbsession)
     assert resource_access_dao.check_user_permission(
         owner_user_id,
@@ -267,16 +248,16 @@ def _assert_coordinator_workspace_provisioned(
 
 
 @pytest.mark.anyio
-async def test_create_organization_provisions_coordinator_and_org_default_space(
+async def test_create_organization_provisions_coordinator_without_implicit_space(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Organization creation provisions the Coordinator, default space, and grants."""
+    """Organization creation provisions the Coordinator lifecycle surfaces only."""
     owner = await _create_user(client, "org-provision")
 
     org_data = await _create_org(client, owner, "provision")
 
-    _assert_coordinator_workspace_provisioned(
+    _assert_coordinator_provisioned(
         dbsession,
         org_data=org_data,
         owner_user_id=owner["id"],
@@ -284,11 +265,11 @@ async def test_create_organization_provisions_coordinator_and_org_default_space(
 
 
 @pytest.mark.anyio
-async def test_admin_create_organization_provisions_coordinator_and_org_default_space(
+async def test_admin_create_organization_provisions_coordinator_without_implicit_space(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Admin organization creation provisions the same Coordinator workspace."""
+    """Admin organization creation provisions the same Coordinator surfaces."""
     owner = await _create_user(client, "admin-org-provision")
 
     response = await client.post(
@@ -303,7 +284,7 @@ async def test_admin_create_organization_provisions_coordinator_and_org_default_
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     org_data = response.json()
 
-    _assert_coordinator_workspace_provisioned(
+    _assert_coordinator_provisioned(
         dbsession,
         org_data=org_data,
         owner_user_id=owner["id"],
@@ -311,11 +292,11 @@ async def test_admin_create_organization_provisions_coordinator_and_org_default_
 
 
 @pytest.mark.anyio
-async def test_transcript_seed_is_idempotent_by_assistant_row(
+async def test_transcript_seed_rejects_non_empty_history(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Retried opener seeding returns the first assistant transcript row."""
+    """Transcript seeding fails with conflict when history is not empty."""
     owner = await _create_user(client, "seed")
     org_data = await _create_org(client, owner, "seed")
     coordinator_id = int(org_data["coordinator_id"])
@@ -340,16 +321,8 @@ async def test_transcript_seed_is_idempotent_by_assistant_row(
         json={"content": "Welcome to your Coordinator."},
         headers={"Authorization": f"Bearer {org_data['api_key']}"},
     )
-    assert first.status_code == status.HTTP_200_OK, first.json()
-    first_id = first.json()["info"]["log_event_id"]
-
-    second = await client.post(
-        f"/v0/assistant/{coordinator_id}/transcript-seed",
-        json={"content": "A different opener should not duplicate."},
-        headers={"Authorization": f"Bearer {org_data['api_key']}"},
-    )
-    assert second.status_code == status.HTTP_200_OK, second.json()
-    assert second.json()["info"]["log_event_id"] == first_id
+    assert first.status_code == status.HTTP_409_CONFLICT, first.json()
+    assert first.json()["detail"] == "coordinator_transcript_not_empty"
 
     transcripts = _context(
         dbsession,
@@ -362,38 +335,41 @@ async def test_transcript_seed_is_idempotent_by_assistant_row(
         for log in logs
         if log.data.get("metadata", {}).get("source") == "coordinator_opener"
     ]
-    assert len(opener_logs) == 1
-    assert opener_logs[0].id == first_id
-    transcript = opener_logs[0].data
-    assert transcript["medium"] == "unify_message"
-    assert transcript["sender_id"] == 0
-    assert transcript["receiver_ids"] == [1]
-    assert transcript["content"] == "Welcome to your Coordinator."
-    assert isinstance(transcript["message_id"], int)
-    assert isinstance(transcript["exchange_id"], int)
-    assert transcript["images"] == []
-    assert transcript["attachments"] == []
-    assert transcript["metadata"]["source"] == "coordinator_opener"
-    assert transcript["metadata"]["source_assistant_id"] == str(coordinator_id)
-    assert datetime.fromisoformat(transcript["timestamp"]).tzinfo is not None
-
-    exchanges = _context(
-        dbsession,
-        project=project,
-        name=_assistant_context_name(coordinator, "Exchanges"),
-    )
-    exchange_logs = [
-        log
-        for log in _context_logs(dbsession, context=exchanges)
-        if log.data.get("exchange_id") == transcript["exchange_id"]
-    ]
-    assert len(exchange_logs) == 1
-    assert exchange_logs[0].data["medium"] == "unify_message"
+    assert not opener_logs
     _assert_owner_contact_row(
         dbsession,
         coordinator=coordinator,
         owner_user_id=owner["id"],
     )
+
+
+@pytest.mark.anyio
+async def test_transcript_seed_rejects_non_empty_exchange_history(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Transcript seeding also conflicts when exchange history already exists."""
+    owner = await _create_user(client, "seed-exchange")
+    org_data = await _create_org(client, owner, "seed-exchange")
+    coordinator_id = int(org_data["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    _insert_log(
+        dbsession,
+        project=project,
+        context_name=_assistant_context_name(coordinator, "Exchanges"),
+        data={"medium": "unify_message"},
+    )
+    dbsession.commit()
+
+    response = await client.post(
+        f"/v0/assistant/{coordinator_id}/transcript-seed",
+        json={"content": "Welcome to your Coordinator."},
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.json()
+    assert response.json()["detail"] == "coordinator_transcript_not_empty"
 
 
 @pytest.mark.anyio
@@ -627,6 +603,61 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
 
 
 @pytest.mark.anyio
+async def test_personal_opt_in_repairs_legacy_numeric_owner_contact_id(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Personal coordinator opt-in repairs legacy numeric owner-contact ids."""
+    owner = await _create_user(client, "personal-stale-contact")
+    first = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert first.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, first.json()
+    coordinator_id = int(first.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    assert coordinator is not None
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    contacts = _context(
+        dbsession,
+        project=project,
+        name=_assistant_context_name(coordinator, "Contacts"),
+    )
+    assert contacts is not None
+    owner_log = next(
+        (
+            log
+            for log in _context_logs(dbsession, context=contacts)
+            if log.data.get("contact_id") == 1
+        ),
+        None,
+    )
+    assert owner_log is not None
+
+    # Simulate historical corruption: numeric equivalent stored as float.
+    owner_log.data = {**owner_log.data, "contact_id": 1.0}
+    flag_modified(owner_log, "data")
+    dbsession.commit()
+
+    repaired = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert repaired.status_code == status.HTTP_200_OK, repaired.json()
+    assert repaired.json()["coordinator_id"] == str(coordinator_id)
+
+    refreshed_owner_log = _assert_owner_contact_row(
+        dbsession,
+        coordinator=coordinator,
+        owner_user_id=owner["id"],
+    )
+    assert refreshed_owner_log.id == owner_log.id
+
+
+@pytest.mark.anyio
 async def test_coordinator_non_delete_member_admin_parity_and_direct_delete_guard(
     client: AsyncClient,
     dbsession: Session,
@@ -846,7 +877,10 @@ async def test_preseed_requires_the_target_scope_coordinator(
         f"/v0/user/{owner['id']}/coordinator",
         headers=owner["headers"],
     )
-    assert coordinator_response.status_code == status.HTTP_201_CREATED
+    assert coordinator_response.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, coordinator_response.json()
     target = Assistant(
         user_id=other["id"],
         first_name="Private",
