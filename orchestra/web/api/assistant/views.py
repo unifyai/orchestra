@@ -461,7 +461,7 @@ async def create_assistant(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Billing is not set up. Please add a payment method first.",
                 )
-            if billing_entity.credits < total_creation_cost:
+            if not billing_entity.has_sufficient_credits(total_creation_cost):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -749,13 +749,12 @@ async def create_assistant(
     # Phase 2: Deduct credits from the correct billing account (user or org).
     if not settings.is_staging:
         try:
-            from orchestra.lib.billing import deduct_credits
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(
-                session,
-                billing_entity,
-                Decimal(str(total_creation_cost)),
+            BillingAccountDAO(session).deduct_credits(
+                billing_entity.billing_account_id,
+                float(total_creation_cost),
                 category="hire",
                 assistant_id=assistant.agent_id if assistant else None,
                 user_id=user_id,
@@ -1384,7 +1383,9 @@ async def create_assistant_contact(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Billing is not set up. Please add a payment method first.",
             )
-        if one_time_cost > 0 and billing_entity.credits < one_time_cost:
+        if one_time_cost > 0 and not billing_entity.has_sufficient_credits(
+            one_time_cost,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail=(
@@ -1489,13 +1490,12 @@ async def create_assistant_contact(
 
         # 7. Deduct one-time cost
         if not settings.is_staging and one_time_cost > 0:
-            from orchestra.lib.billing import deduct_credits
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(
-                session,
-                billing_entity,
-                one_time_cost,
+            BillingAccountDAO(session).deduct_credits(
+                billing_entity.billing_account_id,
+                float(one_time_cost),
                 category="resources",
                 assistant_id=assistant_id,
                 user_id=user_id,
@@ -1784,7 +1784,7 @@ async def connect_assistant_account(
             "redirect_uri": f"{adapters_url}/microsoft/auth/callback",
             "scope": scope_string,
             "response_mode": "query",
-            "prompt": "consent",
+            "prompt": "select_account",
             "state": encoded_state,
         }
         oauth_url = (
@@ -4313,7 +4313,9 @@ async def generate_assistant_photo(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Billing is not set up. Please add a payment method first.",
             )
-        if billing_entity.credits < settings.photo_generation_cost:
+        if not billing_entity.has_sufficient_credits(
+            Decimal(str(settings.photo_generation_cost)),
+        ):
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Insufficient credits to generate a photo.",
@@ -4332,13 +4334,12 @@ async def generate_assistant_photo(
 
         # 4. Deduct credits after successful generation if not in staging
         if not settings.is_staging:
-            from orchestra.lib.billing import deduct_credits
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(
-                session,
-                billing_entity,
-                Decimal(str(settings.photo_generation_cost)),
+            BillingAccountDAO(session).deduct_credits(
+                billing_entity.billing_account_id,
+                float(settings.photo_generation_cost),
                 category="media",
                 user_id=user_id,
                 organization_id=organization_id,
@@ -4481,7 +4482,9 @@ async def edit_assistant_photo(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Billing is not set up. Please add a payment method first.",
                 )
-            if billing_entity.credits < settings.photo_generation_cost:
+            if not billing_entity.has_sufficient_credits(
+                Decimal(str(settings.photo_generation_cost)),
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to edit a photo.",
@@ -4498,13 +4501,12 @@ async def edit_assistant_photo(
 
         # 4. Deduct credits after successful edit if not in staging
         if not settings.is_staging:
-            from orchestra.lib.billing import deduct_credits
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             edit_entity = get_billing_entity(session, user_id, organization_id)
-            deduct_credits(
-                session,
-                edit_entity,
-                Decimal(str(settings.photo_generation_cost)),
+            BillingAccountDAO(session).deduct_credits(
+                edit_entity.billing_account_id,
+                float(settings.photo_generation_cost),
                 category="media",
                 user_id=user_id,
                 organization_id=organization_id,
@@ -4737,7 +4739,7 @@ async def animate_video_endpoint(
                     detail="Billing is not set up. Please add a payment method first.",
                 )
             video_cost = settings.video_generation_cost * billable_duration
-            if billing_entity.credits < video_cost:
+            if not billing_entity.has_sufficient_credits(Decimal(str(video_cost))):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to generate video.",
@@ -4753,14 +4755,13 @@ async def animate_video_endpoint(
 
         # Deduct credits after successful prediction creation
         if not settings.is_staging:
-            from orchestra.lib.billing import deduct_credits
+            from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
             video_cost = settings.video_generation_cost * billable_duration
-            deduct_credits(
-                session,
-                billing_entity,
-                Decimal(str(video_cost)),
+            BillingAccountDAO(session).deduct_credits(
+                billing_entity.billing_account_id,
+                float(video_cost),
                 category="media",
                 user_id=user_id,
                 organization_id=organization_id,
@@ -5807,6 +5808,7 @@ async def get_assistant_spend(
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
     credit_balance = None
+    billing_account = None
     if assistant.organization_id is not None:
         org = (
             session.query(Organization)
@@ -5815,10 +5817,20 @@ async def get_assistant_spend(
         )
         if org and org.billing_account:
             credit_balance = float(org.billing_account.credits)
+            billing_account = org.billing_account
     else:
         user = session.query(User).filter(User.id == assistant.user_id).first()
         if user and user.billing_account:
             credit_balance = float(user.billing_account.credits)
+            billing_account = user.billing_account
+
+    billing_mode = "CREDITS"
+    if billing_account is not None:
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+        billing_mode = (
+            BillingAccountDAO(session).resolve_billing_mode(billing_account).value
+        )
 
     return AssistantSpendResponse(
         agent_id=agent_id,
@@ -5828,6 +5840,7 @@ async def get_assistant_spend(
         limit_set_at=assistant.monthly_spending_cap_set_at,
         percent_used=percent_used,
         credit_balance=credit_balance,
+        billing_mode=billing_mode,
     )
 
 

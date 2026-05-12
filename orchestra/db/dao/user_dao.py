@@ -108,12 +108,15 @@ class UserDAO:
                 raise ValueError(f"Invalid WhatsApp number: {result['error']}")
             whatsapp_number = result["formatted_phone_number"]
 
-        # Create a BillingAccount for this user
-        billing_account = BillingAccount(
+        # Create a BillingAccount for this user via BillingAccountDAO so
+        # the v2 invariant (every BA has an active default
+        # assignment + NOT NULL plan_assignment_id) is established
+        # automatically.
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+        billing_account = BillingAccountDAO(self.session).create(
             credits=credits,
         )
-        self.session.add(billing_account)
-        self.session.flush()  # Get the billing_account.id
 
         user = User(
             email=email,

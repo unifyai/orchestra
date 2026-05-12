@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import requests
 
 if TYPE_CHECKING:
-    from orchestra.routines.billing_health import HealthReport
     from orchestra.routines.billing_reconciliation import ReconciliationResult
 
 logger = logging.getLogger(__name__)
@@ -82,28 +81,11 @@ def notify_reconciliation(
     return _send_webhook(webhook_url, content=content, embeds=[embed])
 
 
-def notify_health(report: HealthReport, *, environment: str = "") -> bool:
-    """Send a Discord message summarising a health check.
-
-    Returns ``True`` if the message was sent (or skipped because no
-    webhook is configured), ``False`` on delivery failure.
-    """
-    webhook_url = os.environ.get(WEBHOOK_URL_ENV)
-    if not webhook_url:
-        logger.debug("No Discord webhook configured, skipping notification")
-        return True
-
-    env_tag = environment.upper() or _detect_environment()
-    embed = _format_health_embed(report, env_tag)
-
-    content = ""
-    if report.critical_count > 0:
-        content = _build_mention_string(
-            f"🔴 **{report.critical_count} critical alerts** "
-            f"in {env_tag} billing health",
-        )
-
-    return _send_webhook(webhook_url, content=content, embeds=[embed])
+# ``notify_health`` and the matching ``_format_health_embed`` formatter
+# were retired together with ``orchestra.routines.billing_health`` in
+# the v2 billing refactor — health-snapshot KPIs now live in Grafana
+# (``billing-dashboard``). Reconciliation discrepancies still flow
+# through ``notify_reconciliation`` below.
 
 
 # ---------------------------------------------------------------------------
@@ -214,209 +196,11 @@ def _format_reconciliation_embed(result: ReconciliationResult, env_tag: str) -> 
     }
 
 
-def _format_health_embed(report: HealthReport, env_tag: str) -> dict:
-    """Build a Discord embed for a health report."""
-    snap = report.account_snapshot
-    activity = report.recharge_activity
-
-    if report.critical_count > 0:
-        color = COLOR_RED
-        title = f"🔴 Billing Health — {env_tag}"
-    elif report.warning_count > 0:
-        color = COLOR_YELLOW
-        title = f"⚠️ Billing Health — {env_tag}"
-    else:
-        color = COLOR_GREEN
-        title = f"✅ Billing Health — {env_tag}"
-
-    # Build paid-by-type breakdown line
-    by_type_parts = []
-    for rtype, info in sorted(activity.paid_by_type.items()):
-        credits = info.get("credits", 0)
-        usd = info.get("usd", 0)
-        if usd > 0:
-            by_type_parts.append(
-                f"**{info['count']}** {rtype} (${usd:,.2f})",
-            )
-        elif credits > 0:
-            by_type_parts.append(
-                f"**{info['count']}** {rtype} ({credits:,.0f} credits)",
-            )
-        else:
-            by_type_parts.append(f"**{info['count']}** {rtype}")
-    by_type_line = (
-        " · ".join(by_type_parts) if by_type_parts else "no paid recharges in window"
-    )
-
-    fields = [
-        {
-            "name": "\u200b",
-            "value": (
-                "*Snapshot of account billing statuses, recharge "
-                "activity, and contact provisioning health.*"
-            ),
-            "inline": False,
-        },
-        {
-            "name": "Accounts",
-            "value": (
-                f"🟢 **{snap.active}** active · "
-                f"🟡 **{snap.past_due}** past due · "
-                f"🔴 **{snap.suspended}** suspended\n"
-                f"**{snap.total}** total · "
-                f"**${float(snap.total_balance):,.2f}** total balance"
-            ),
-            "inline": False,
-        },
-        {
-            "name": "At Risk",
-            "value": (
-                f"**{snap.at_risk}** active accounts with ≤ 0 credits\n"
-                f"**{snap.zero_balance}** at zero · "
-                f"**{snap.negative_balance}** negative"
-            ),
-            "inline": True,
-        },
-        {
-            "name": "Autorecharge",
-            "value": (
-                f"**{snap.autorecharge_enabled}** enabled · "
-                f"**{snap.autorecharge_disabled}** disabled"
-            ),
-            "inline": True,
-        },
-        {
-            "name": "Recharges (24 h)",
-            "value": (
-                f"✅ **{activity.paid_count}** paid "
-                f"(${float(activity.paid_usd):,.2f})\n"
-                f"❌ **{activity.failed_count}** failed "
-                f"(${float(activity.failed_usd):,.2f})\n"
-                f"⏳ **{activity.pending_count}** pending · "
-                f"⚖️ **{activity.disputed_count}** disputed"
-            ),
-            "inline": False,
-        },
-    ]
-
-    if by_type_parts:
-        fields.append(
-            {
-                "name": "Paid by type",
-                "value": by_type_line,
-                "inline": False,
-            },
-        )
-
-    if activity.auto_recharge_total > 0:
-        rate_pct = activity.auto_recharge_failure_rate * 100
-        fields.append(
-            {
-                "name": "Auto-recharge health",
-                "value": (
-                    f"**{activity.auto_recharge_failed}**/"
-                    f"**{activity.auto_recharge_total}** failed "
-                    f"(**{rate_pct:.1f}%** failure rate)"
-                ),
-                "inline": True,
-            },
-        )
-
-    if report.stuck_recharges > 0:
-        fields.append(
-            {
-                "name": "Stuck recharges",
-                "value": f"**{report.stuck_recharges}** pending > 24 h",
-                "inline": True,
-            },
-        )
-
-    inv = report.invoice_snapshot
-    if inv.total > 0:
-        fields.append(
-            {
-                "name": "Invoices (all time)",
-                "value": (
-                    f"✅ **{inv.paid}** paid "
-                    f"(${float(inv.paid_usd):,.2f})\n"
-                    f"⏳ **{inv.pending}** pending "
-                    f"(${float(inv.pending_usd):,.2f})\n"
-                    f"❌ **{inv.failed}** failed "
-                    f"(${float(inv.failed_usd):,.2f})"
-                    + (
-                        f"\n⚖️ **{inv.uncollectible}** disputed "
-                        f"(${float(inv.uncollectible_usd):,.2f})"
-                        if inv.uncollectible > 0
-                        else ""
-                    )
-                ),
-                "inline": False,
-            },
-        )
-
-    contacts = report.contact_snapshot
-    if contacts.active > 0 or contacts.grace_period > 0:
-        issues = []
-        if contacts.stale_billing > 0:
-            issues.append(f"⚠️ **{contacts.stale_billing}** unbilled for current month")
-        if contacts.stuck_grace > 0:
-            issues.append(f"⚠️ **{contacts.stuck_grace}** stuck in grace > 14d")
-        if contacts.active_on_suspended > 0:
-            issues.append(
-                f"🔴 **{contacts.active_on_suspended}** active on suspended BA",
-            )
-        if contacts.cost_mismatches > 0:
-            issues.append(f"ℹ️ **{contacts.cost_mismatches}** cost mismatches")
-
-        value = (
-            f"📞 **{contacts.active}** active · "
-            f"⏳ **{contacts.grace_period}** grace period · "
-            f"**${float(contacts.total_monthly_cost):,.2f}**/mo"
-        )
-        if issues:
-            value += "\n" + "\n".join(issues)
-
-        fields.append(
-            {
-                "name": "Provisioned Contacts",
-                "value": value,
-                "inline": False,
-            },
-        )
-
-    if report.alerts:
-        lines = []
-        for a in report.alerts:
-            icon = (
-                "🔴"
-                if a.severity == "critical"
-                else "🟡" if a.severity == "warning" else "ℹ️"
-            )
-            lines.append(f"{icon} {a.detail}")
-        fields.append(
-            {
-                "name": f"Alerts ({len(report.alerts)})",
-                "value": "\n".join(lines),
-                "inline": False,
-            },
-        )
-
-    if report.errors:
-        error_lines = [f"• {e[:120]}" for e in report.errors[:5]]
-        fields.append(
-            {
-                "name": f"Errors ({len(report.errors)})",
-                "value": "\n".join(error_lines),
-                "inline": False,
-            },
-        )
-
-    return {
-        "title": title,
-        "color": color,
-        "fields": fields,
-        "footer": {"text": report.timestamp},
-    }
+# ``_format_health_embed`` was retired together with ``notify_health``
+# (and the upstream ``orchestra.routines.billing_health`` module). The
+# health-snapshot subsystem is replaced by Grafana dashboards;
+# reconciliation discrepancies still flow through
+# ``notify_reconciliation`` above.
 
 
 # ---------------------------------------------------------------------------

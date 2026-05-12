@@ -1,3 +1,22 @@
+-- Managed billing v2: default plan_group (id=1).
+-- Mirrors the seed in migration 2026-05-04-16-00_metered_and_billing_plan.py.
+-- Must be inserted before any billing_account rows because the new
+-- ``billing_account.plan_group_id`` column is NOT NULL with default=1
+-- and there is a RESTRICT FK to plan_group.id.
+INSERT INTO plan_group (
+    id, name, display_name, description,
+    is_active, created_at
+) VALUES (
+    1, 'default', 'Default',
+    'Platform-default plan group, auto-assigned to every account.',
+    true, now()
+)
+ON CONFLICT (id) DO NOTHING;
+SELECT setval(
+    pg_get_serial_sequence('plan_group', 'id'),
+    GREATEST(1, (SELECT COALESCE(MAX(id), 1) FROM plan_group))
+);
+
 -- Billing accounts (shared billing for users)
 INSERT INTO billing_account (id, credits, stripe_customer_id, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, billing_setup_complete, tier)
 VALUES (1, 10000, null, False, 0, 25, 'ACTIVE', False, 'developer');
@@ -38,6 +57,42 @@ INSERT INTO api_key("user_id", "key") VALUES ('seconday_user', '2nd_api_key');
 
 -- Recharge
 INSERT INTO recharge_type VALUES ('free');
+
+-- Managed billing v2: implicit-default PAYG template.
+-- Mirrors the seed in migration 2026-05-04-16-00_managed_billing_v2_init.py
+-- so test DBs (which build the schema via meta.create_all rather than
+-- alembic) have the same baseline. Accounts whose plan_assignment_id is NULL
+-- semantically resolve to this row.
+INSERT INTO billing_plan_template (
+    id, name, display_name, description,
+    billing_mode,
+    commit_amount, currency, commit_period, commit_schedule,
+    base_pricing_factor, overage_pricing_factor,
+    collection_method,
+    proration_policy, credits_rollover_policy,
+    fx_policy, fx_locked_rate,
+    is_custom, is_active, created_at
+) VALUES (
+    1, 'default', 'Default',
+    'Platform-default pay-as-you-go plan. Credit-based wallet with auto-recharge support.',
+    'CREDITS',
+    NULL, 'USD', NULL, NULL,
+    1.0, 1.0,
+    'AUTO_CARD',
+    'PRORATE', NULL,
+    NULL, NULL,
+    false, true, now()
+);
+SELECT setval(
+    pg_get_serial_sequence('billing_plan_template', 'id'),
+    GREATEST(1, (SELECT COALESCE(MAX(id), 1) FROM billing_plan_template))
+);
+
+-- Managed billing v2: link the default template into the default group so
+-- the platform-default ladder has at least one member (mirrors the migration).
+INSERT INTO plan_group_member (group_id, template_id, position, added_at)
+VALUES (1, 1, 0, now())
+ON CONFLICT (group_id, template_id) DO NOTHING;
 
 -- REMOVED: Legacy tables that have been deleted
 -- The following sections have been removed because the tables no longer exist:

@@ -2240,8 +2240,16 @@ async def get_org_spend(
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
     credit_balance = None
+    billing_mode = "CREDITS"
     if org.billing_account:
         credit_balance = float(org.billing_account.credits)
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+        billing_mode = (
+            BillingAccountDAO(session)
+            .resolve_billing_mode(org.billing_account)
+            .value
+        )
 
     return OrgSpendResponse(
         organization_id=organization_id,
@@ -2251,6 +2259,7 @@ async def get_org_spend(
         limit_set_at=org.monthly_spending_cap_set_at,
         percent_used=percent_used,
         credit_balance=credit_balance,
+        billing_mode=billing_mode,
     )
 
 
