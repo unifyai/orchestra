@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, select, text
+from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -23,6 +23,7 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
     Space,
+    User,
 )
 from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.contact_membership_service import (
@@ -38,6 +39,7 @@ from orchestra.services.task_machine_state_service import (
 )
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
+from orchestra.web.api.utils.assistant_infra import create_pubsub_topic
 
 ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
@@ -52,7 +54,6 @@ COORDINATOR_TRANSCRIPTS_CONTEXT = "Transcripts"
 COORDINATOR_EXCHANGES_CONTEXT = "Exchanges"
 COORDINATOR_CHAT_MEDIUM = "unify_message"
 COORDINATOR_OPENER_SOURCE = "coordinator_opener"
-COORDINATOR_ADMIN_ROLES = {"Owner", "Admin"}
 PRESEED_SHARED_CONTEXT_PREFIX = "Spaces"
 PRESEED_SERVER_FIELDS = frozenset(
     {"_user_id", "_assistant_id", "authoring_assistant_id"},
@@ -288,14 +289,21 @@ def ensure_org_default_space(
     return space
 
 
-def create_personal_coordinator(session: Session, user_id: str) -> Assistant:
-    """Create or return the user's personal Coordinator."""
+def create_personal_coordinator(
+    session: Session,
+    user_id: str,
+) -> tuple[Assistant, bool]:
+    """Create or return the user's personal Coordinator.
+
+    Returns ``(assistant, created)`` where ``created`` is ``True`` only when this
+    call inserted the assistant row.
+    """
     existing = get_personal_coordinator(session, user_id)
     if existing is not None:
         _ensure_coordinator_default_nationality(existing)
         ensure_personal_contact_memberships(session, [existing.agent_id])
         _ensure_coordinator_owner_contact_row(session, coordinator=existing)
-        return existing
+        return existing, False
 
     assistant = create_coordinator_assistant(
         session,
@@ -313,7 +321,52 @@ def create_personal_coordinator(session: Session, user_id: str) -> Assistant:
         organization_id=None,
     )
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
-    return assistant
+    return assistant, True
+
+
+async def ensure_personal_coordinator_provisioned(
+    session: Session,
+    *,
+    user_id: str,
+) -> tuple[Assistant, bool]:
+    """Ensure personal Coordinator row and pubsub topic both exist.
+
+    Returns ``(assistant, created)`` where ``created`` indicates whether this
+    call created the Coordinator row.
+    """
+    coordinator, created_coordinator = create_personal_coordinator(session, user_id)
+    pubsub_response = await create_pubsub_topic(
+        str(coordinator.agent_id),
+        deploy_env=coordinator.deploy_env,
+    )
+    if pubsub_topic_response_failed(pubsub_response):
+        raise ValueError(f"Coordinator topic provisioning failed: {pubsub_response}")
+    return coordinator, created_coordinator
+
+
+def list_user_ids_missing_personal_coordinator(
+    session: Session,
+    *,
+    limit: int | None = None,
+) -> list[str]:
+    """Return user IDs that do not yet have a personal Coordinator."""
+    personal_coordinator = aliased(Assistant)
+    stmt = (
+        select(User.id)
+        .outerjoin(
+            personal_coordinator,
+            and_(
+                personal_coordinator.user_id == User.id,
+                personal_coordinator.organization_id.is_(None),
+                personal_coordinator.is_coordinator.is_(True),
+            ),
+        )
+        .where(personal_coordinator.agent_id.is_(None))
+        .order_by(User.created_at.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list(session.scalars(stmt).all())
 
 
 def create_organization_coordinator(
@@ -426,16 +479,6 @@ def require_authorized_coordinator(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to modify this Coordinator.",
-        )
-
-    member = OrganizationMemberDAO(session).get_member_with_details(
-        user_id=user_id,
-        organization_id=coordinator.organization_id,
-    )
-    if member is None or member.get("role_name") not in COORDINATOR_ADMIN_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="admin_required",
         )
     return coordinator
 

@@ -38,6 +38,19 @@ _EMAIL_PATCH_TARGET = "orchestra.web.api.utils.email.send_email_async"
 _TURNSTILE_PATCH_TARGET = "orchestra.web.api.auth.views.verify_turnstile_token"
 
 
+@pytest.fixture(autouse=True)
+def _stub_personal_coordinator_pubsub_calls() -> None:
+    """Keep user-creation tests inside Orchestra by stubbing infra fanout."""
+    with (
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic,
+    ):
+        mock_create_pubsub_topic.return_value = {"success": True}
+        yield
+
+
 def _assert_default_tasks_seeded(session: Session, user_id: str):
     """
     Assert that DefaultTasksSeeder created all expected entities for the user.
