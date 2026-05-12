@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_PROMO,
     BillingAccount,
+    BillingMode,
+    BillingPlanAssignment,
+    BillingPlanTemplate,
     Organization,
     Recharge,
     RechargeStatus,
@@ -51,14 +54,38 @@ class BillingAccountDAO:
 
     def create(self, **kwargs) -> BillingAccount:
         """
-        Create a new billing account.
+        Create a new billing account with its initial default plan.
 
-        :param kwargs: Optional initial field values (credits, tier, etc.)
+        Establishes the v2 application invariant: every ``BillingAccount``
+        gets an active default ``BillingPlanAssignment`` and a
+        matching ``plan_assignment_id`` in the same flush window, so the
+        account is never observably plan-less to a concurrent
+        transaction. The DB column is nullable (PostgreSQL ``NOT NULL``
+        is not deferrable, which would create a chicken-and-egg with
+        the assignment row's FK back to the BA), but in production the
+        only path to a NULL ``plan_assignment_id`` is bypassing this
+        factory — the daily reconciliation routine flags any such row
+        as ``plan_assignment_null_pointer`` (critical).
+
+        :param kwargs: Optional initial field values (credits, etc.)
         :return: The created BillingAccount instance.
         """
+        # Local import to avoid a top-level cycle: BillingPlanAssignmentDAO
+        # references the same model module as BillingAccount and we keep
+        # the import lazy so DAO load order stays stable.
+        from orchestra.db.dao.billing_plan_assignment_dao import (
+            BillingPlanAssignmentDAO,
+        )
+
         billing_account = BillingAccount(**kwargs)
         self.session.add(billing_account)
-        self.session.flush()  # Get the ID
+        self.session.flush()  # Get the BA id
+
+        BillingPlanAssignmentDAO(
+            self.session,
+        ).assign_default_at_signup(billing_account.id)
+        # `assign_default_at_signup` syncs plan_assignment_id via
+        # `_insert_active_assignment`; nothing further to do here.
         return billing_account
 
     def get(self, billing_account_id: int) -> Optional[BillingAccount]:
@@ -175,6 +202,103 @@ class BillingAccountDAO:
             return decimal.Decimal("0")
         return ba.credits
 
+    def resolve_billing_mode(self, billing_account: BillingAccount) -> BillingMode:
+        """Return the billing mode currently in force for an account.
+
+        Single source of truth: ``BillingMode`` is intentionally not
+        denormalised on ``BillingAccount`` (no cache to drift out of
+        sync). Callers branching on mode (credit guards, response
+        serialisers, invoicers) should always use this.
+
+        One indexed JOIN to fetch the active assignment's template
+        ``billing_mode``. Pristine accounts hit the seeded default
+        template (``billing_mode='CREDITS'``) — no special case in
+        Python; the row exists for them because both the migration
+        backfill and ``BillingAccountDAO.create`` insert a default
+        assignment.
+
+        Falls back to ``CREDITS`` if the lookup returns nothing — that
+        path is reachable only when ``plan_assignment_id IS NULL`` (a
+        schema-invariant violation that the reconciliation routine
+        flags as ``plan_assignment_null_pointer``, critical) or when
+        the FK target was deleted out of band. CREDITS is the
+        conservative fallback — it won't accidentally bypass a credit
+        guard while the corruption is being investigated.
+        """
+        mode = self.session.execute(
+            select(BillingPlanTemplate.billing_mode)
+            .join(
+                BillingPlanAssignment,
+                BillingPlanAssignment.template_id == BillingPlanTemplate.id,
+            )
+            .where(BillingPlanAssignment.id == billing_account.plan_assignment_id),
+        ).scalar_one_or_none()
+        if mode is None:
+            return BillingMode.CREDITS
+        return BillingMode(mode)
+
+    def set_payment_preferences(
+        self,
+        billing_account_id: int,
+        *,
+        preferred_payment_method_types: list[str] | None,
+    ) -> BillingAccount:
+        """Set (or clear) the per-customer payment-method override.
+
+        Pass ``None`` to clear and fall back to the invoicer's per-
+        ``CollectionMethod`` defaults. Pass a list of
+        ``PaymentMethodType`` values (``"card"``, ``"customer_balance"``)
+        to restrict / change what the customer sees on the hosted
+        invoice page.
+
+        Validation lives here (vs. the endpoint) so any caller — admin
+        endpoint, internal script, future self-serve UI — gets the
+        same guarantees:
+
+        * Each entry must be a recognised ``PaymentMethodType`` value;
+          unknown methods would silently break ``Invoice.create``.
+        * The list must be non-empty (an empty list would leave the
+          customer with literally no way to pay; clear with ``None``
+          instead, which the invoicer interprets as "use the default").
+        * No duplicates — Stripe rejects duplicate
+          ``payment_method_types`` entries.
+
+        Returns the refreshed ORM row so callers can immediately
+        serialise it.
+        """
+        from orchestra.db.models.enums import PaymentMethodType
+
+        ba = self.get(billing_account_id)
+        if ba is None:
+            raise ValueError(f"BillingAccount {billing_account_id} not found")
+
+        if preferred_payment_method_types is not None:
+            if len(preferred_payment_method_types) == 0:
+                raise ValueError(
+                    "preferred_payment_method_types cannot be empty — pass "
+                    "None to clear and fall back to invoicer defaults.",
+                )
+            if len(set(preferred_payment_method_types)) != len(
+                preferred_payment_method_types,
+            ):
+                raise ValueError(
+                    "preferred_payment_method_types contains duplicates: "
+                    f"{preferred_payment_method_types!r}",
+                )
+            allowed = {m.value for m in PaymentMethodType}
+            unknown = [
+                m for m in preferred_payment_method_types if m not in allowed
+            ]
+            if unknown:
+                raise ValueError(
+                    f"Unsupported payment method(s) {unknown!r}; "
+                    f"allowed values are {sorted(allowed)!r}.",
+                )
+
+        ba.preferred_payment_method_types = preferred_payment_method_types
+        self.session.flush()
+        return ba
+
     def add_credits(
         self,
         billing_account_id: int,
@@ -188,13 +312,31 @@ class BillingAccountDAO:
         detail: dict[str, Any] | None = None,
     ) -> Optional[decimal.Decimal]:
         """
-        Add credits to a billing account.
+        Add credits to a billing account, dispatching on billing-mode.
 
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
         A :class:`CreditTransaction` ledger row is inserted atomically
-        in the same transaction.
+        in the same transaction. The active plan-assignment in force at
+        write time is captured on the ledger row from
+        ``BillingAccount.plan_assignment_id`` (no caller-supplied override).
+
+        Behaviour by mode (resolved from the account's active plan
+        template):
+
+        * **CREDITS** mode (default PAYG, future Pro plans): the wallet
+          (``BillingAccount.credits``) is mutated. Returns the new wallet
+          balance.
+        * **METERED** mode (enterprise contracts): the wallet is left
+          untouched and the ``monthly_metered_invoicer`` sums signed
+          amounts at month-end (a grant on a METERED account is
+          effectively a discount on the next invoice). Returns ``None``.
+
+        In both modes a :class:`CreditTransaction` ledger row with the
+        same shape is appended.
+
+        Returns ``None`` if the account is not found.
 
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to add.
@@ -206,7 +348,8 @@ class BillingAccountDAO:
         :param organization_id: Optional organization context.
         :param description: Human-readable description.
         :param detail: Category-specific JSONB metadata.
-        :return: New credit balance, or None if not found.
+        :return: New credit balance for CREDITS mode, ``None`` for
+            METERED or if the account is missing.
         """
         from orchestra.lib.billing_events import (
             track_balance_after,
@@ -217,24 +360,27 @@ class BillingAccountDAO:
         if ba is None:
             return None
 
-        track_balance_before(self.session, billing_account_id, ba.credits)
-        new_credits = ba.credits + decimal.Decimal(str(quantity))
-        ba.credits = new_credits
-        track_balance_after(self.session, billing_account_id, new_credits)
+        amount = decimal.Decimal(str(quantity))
+        is_metered = self.resolve_billing_mode(ba) == BillingMode.METERED
+
+        if not is_metered:
+            track_balance_before(self.session, billing_account_id, ba.credits)
+            ba.credits = ba.credits + amount
+            track_balance_after(self.session, billing_account_id, ba.credits)
 
         self._record_transaction(
             billing_account_id=billing_account_id,
-            amount=decimal.Decimal(str(quantity)),
-            balance_after=new_credits,
+            amount=amount,
             category=category,
             assistant_id=assistant_id,
             user_id=user_id,
             organization_id=organization_id,
             description=description,
             detail=detail,
+            plan_assignment_id=ba.plan_assignment_id,
         )
 
-        return new_credits
+        return None if is_metered else ba.credits
 
     def deduct_credits(
         self,
@@ -249,13 +395,30 @@ class BillingAccountDAO:
         detail: dict[str, Any] | None = None,
     ) -> Optional[decimal.Decimal]:
         """
-        Deduct credits from a billing account.
+        Deduct credits from a billing account, dispatching on billing-mode.
 
         Acquires a ``FOR UPDATE`` row lock to prevent lost-update races
         when multiple transactions add/deduct credits concurrently.
 
         A :class:`CreditTransaction` ledger row is inserted atomically
-        in the same transaction.
+        in the same transaction. The active plan-assignment in force at
+        write time is captured on the ledger row from
+        ``BillingAccount.plan_assignment_id`` (no caller-supplied override).
+
+        Behaviour by mode (resolved from the account's active plan
+        template):
+
+        * **CREDITS** mode: wallet is mutated (allowed to go negative
+          so the spending-limit hook can block subsequent calls). Returns
+          the new wallet balance.
+        * **METERED** mode: wallet is left untouched; the monthly metered
+          invoicer sums these debits at period end and produces a Stripe
+          invoice. Returns ``None``.
+
+        In both modes a :class:`CreditTransaction` ledger row with the
+        same shape is appended.
+
+        Returns ``None`` if the account is not found.
 
         :param billing_account_id: BillingAccount ID.
         :param quantity: Positive number of credits to deduct.
@@ -267,7 +430,8 @@ class BillingAccountDAO:
         :param organization_id: Optional organization context.
         :param description: Human-readable description.
         :param detail: Category-specific JSONB metadata.
-        :return: New credit balance, or None if not found.
+        :return: New credit balance for CREDITS mode, ``None`` for
+            METERED or if the account is missing.
         """
         from orchestra.lib.billing_events import (
             track_balance_after,
@@ -278,33 +442,34 @@ class BillingAccountDAO:
         if ba is None:
             return None
 
-        track_balance_before(self.session, billing_account_id, ba.credits)
-        new_credits = ba.credits - decimal.Decimal(str(quantity))
-
-        if new_credits < 0:
-            logger.warning(
-                f"BillingAccount {billing_account_id} credits went negative: "
-                f"{new_credits}. Deducted {quantity} from {ba.credits}.",
-            )
-
-        ba.credits = new_credits
-        track_balance_after(self.session, billing_account_id, new_credits)
-
         amount = decimal.Decimal(str(quantity))
+        is_metered = self.resolve_billing_mode(ba) == BillingMode.METERED
+
+        if not is_metered:
+            track_balance_before(self.session, billing_account_id, ba.credits)
+            ba.credits = ba.credits - amount
+
+            if ba.credits < 0:
+                logger.warning(
+                    f"BillingAccount {billing_account_id} credits went negative: "
+                    f"{ba.credits}. Deducted {quantity}.",
+                )
+
+            track_balance_after(self.session, billing_account_id, ba.credits)
 
         self._record_transaction(
             billing_account_id=billing_account_id,
             amount=-amount,
-            balance_after=new_credits,
             category=category,
             assistant_id=assistant_id,
             user_id=user_id,
             organization_id=organization_id,
             description=description,
             detail=detail,
+            plan_assignment_id=ba.plan_assignment_id,
         )
 
-        return new_credits
+        return None if is_metered else ba.credits
 
     # ------------------------------------------------------------------
     # Ledger helpers
@@ -315,13 +480,13 @@ class BillingAccountDAO:
         *,
         billing_account_id: int,
         amount: decimal.Decimal,
-        balance_after: decimal.Decimal,
         category: str,
         assistant_id: int | None = None,
         user_id: str | None = None,
         organization_id: int | None = None,
         description: str | None = None,
         detail: dict[str, Any] | None = None,
+        plan_assignment_id: int | None = None,
     ) -> None:
         """Insert a :class:`CreditTransaction` row."""
         from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
@@ -330,13 +495,13 @@ class BillingAccountDAO:
         txn_dao.insert(
             billing_account_id=billing_account_id,
             amount=amount,
-            balance_after=balance_after,
             category=category,
             assistant_id=assistant_id,
             user_id=user_id,
             organization_id=organization_id,
             description=description,
             detail=detail,
+            plan_assignment_id=plan_assignment_id,
         )
 
     # =========================================================================
@@ -615,9 +780,9 @@ class BillingAccountDAO:
         self._record_transaction(
             billing_account_id=billing_account_id,
             amount=amount,
-            balance_after=ba.credits,
             category="promo",
             description="Promotional credit grant",
+            plan_assignment_id=ba.plan_assignment_id,
         )
 
         recharge = Recharge(

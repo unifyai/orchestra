@@ -230,6 +230,7 @@ async def test_task_create_projects_scheduled_activation(
     assert activation["source_task_log_id"] == created_task_log_id
     assert activation["activation_kind"] == "scheduled"
     assert activation["execution_mode"] == "live"
+    assert activation["entrypoint"] is None
     assert activation["next_due_at"] == "2026-04-10T09:00:00+00:00"
     assert activation["repeat"] == [{"unit": "day", "count": 1}]
     assert activation["activation_revision"]
@@ -520,6 +521,64 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     assert updated_run["state"] == "completed"
     assert updated_run["completed_at"] == "2026-04-10T09:05:00+00:00"
     assert updated_run["result_summary"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_task_run_latest_returns_most_recent_task_run(client: AsyncClient):
+    """The internal run lookup should return the latest run for a logical task."""
+
+    await _ensure_task_machine_project(client)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=303),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
+
+    for run_key in ("live:42:303:first", "live:42:303:second"):
+        create_response = await client.post(
+            "/v0/admin/task-run/create-or-adopt",
+            json={
+                "project_name": TASK_MACHINE_PROJECT_NAME,
+                "run_key": run_key,
+                "assistant_id": "42",
+                "task_id": 303,
+                "source_task_log_id": source_task_log_id,
+                "source_type": "scheduled",
+                "execution_mode": "live",
+                "state": "pending",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert create_response.status_code == 200, create_response.json()
+
+    update_response = await client.post(
+        "/v0/admin/task-run/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "run_key": "live:42:303:second",
+            "updates": {"state": "completed"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    latest_response = await client.post(
+        "/v0/admin/task-run/latest",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 303,
+            "source_task_log_id": source_task_log_id,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert latest_response.status_code == 200, latest_response.json()
+    assert latest_response.json()["run"]["run_key"] == "live:42:303:second"
+    assert latest_response.json()["run"]["state"] == "completed"
 
 
 @pytest.mark.anyio

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import Enum  # noqa: F401  — re-exported below
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
@@ -22,37 +22,39 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import backref, relationship
 
 from orchestra.db.base import Base
 
+# Billing-domain enums + sentinel constants live in their own module so
+# non-ORM consumers (lib, routines, web/api) can import them without
+# pulling the full 4k-line model file. Re-exported here for backward
+# compatibility with existing call sites that did
+# ``from orchestra.db.models.orchestra_models import BillingMode``.
+from orchestra.db.models.enums import (  # noqa: E402, F401
+    DEFAULT_PLAN_GROUP_ID,
+    DEFAULT_TEMPLATE_ID,
+    RECHARGE_TYPE_AUTO,
+    RECHARGE_TYPE_MONTHLY_COMMIT,
+    RECHARGE_TYPE_OVERAGE_TRUEUP,
+    RECHARGE_TYPE_PAYMENT,
+    RECHARGE_TYPE_PROMO,
+    BillingMode,
+    CommitSchedule,
+    CollectionMethod,
+    CommitPeriod,
+    CreditsRolloverPolicy,
+    FxPolicy,
+    PaymentMethodType,
+    ProrationPolicy,
+    RechargeStatus,
+    StrEnum,
+)
+
 # ContactMembership has a `relationship` column, so keep a callable alias for
 # relationship() inside that class body.
 orm_relationship = relationship
-
-# Python 3.11 ships enum.StrEnum. – Provide a fallback for older versions
-try:
-    from enum import StrEnum
-except ImportError:  # pragma: no cover
-
-    class StrEnum(str, Enum):  # type: ignore[override]
-        """Minimal back-port of enum.StrEnum."""
-
-
-# New enum mirrors the DB type ``recharge_status`` (see migration 20250520…)
-class RechargeStatus(StrEnum):
-    PENDING_INVOICE = "PENDING_INVOICE"
-    INVOICE_CREATED = "INVOICE_CREATED"
-    PAID = "PAID"
-    FAILED = "FAILED"
-    DISPUTED = "DISPUTED"
-
-
-# Recharge type constants (moved from consts.py)
-RECHARGE_TYPE_AUTO = "auto"
-RECHARGE_TYPE_PAYMENT = "payment"
-RECHARGE_TYPE_PROMO = "promo"
 
 
 class BillingAccount(Base):
@@ -114,6 +116,28 @@ class BillingAccount(Base):
         server_default="developer",
     )  # developer, pro, enterprise (future)
 
+    # === MANAGED BILLING v2 — current plan assignment ===
+    # Points to the currently-active ``BillingPlanAssignment`` row (which in
+    # turn references a ``BillingPlanTemplate``). Every account carries a
+    # real pointer at all times — pristine self-serve accounts get a
+    # default plan assignment at signup via ``BillingAccountDAO.create``,
+    # the migration backfilled the same for accounts that pre-date v2, and
+    # ``set_plan`` always closes-and-inserts (including for cancellations,
+    # which insert a fresh default plan row). The column is *nullable in
+    # the DB* (PostgreSQL ``NOT NULL`` is not deferrable, which would
+    # create a chicken-and-egg with the assignment row's FK back to the
+    # BA) but **NOT NULL by application contract** — any NULL pointer in
+    # production is corruption that the daily reconciliation routine flags
+    # as ``plan_assignment_null_pointer`` (critical). Resolve via
+    # ``BillingAccountDAO.resolve_billing_mode()`` /
+    # ``BillingPlanAssignmentDAO.resolve_effective_plan()``.
+    plan_assignment_id = Column(
+        BigInteger,
+        ForeignKey("billing_plan_assignment.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # === BILLING PROFILE (optional — available to all billing entities) ===
     # A personal user can add their name / tax details without creating an org.
     # An org fills these in for proper business invoicing.
@@ -129,6 +153,57 @@ class BillingAccount(Base):
         nullable=True,
     )  # pending, verified, unverified, unavailable (from Stripe)
     billing_address = Column(JSONB, nullable=True, default=dict)
+
+    # Per-customer override for the payment methods exposed on
+    # ``send_invoice`` Stripe invoices. NULL means "use the invoicer's
+    # defaults for this template's collection_method"
+    # (``['card']`` for AUTO_CARD, ``['card', 'customer_balance']``
+    # for SEND_INVOICE_NET_30). A non-NULL list lets ops mark a
+    # customer as "wire only" (``['customer_balance']``) or
+    # "card only" without minting a new BillingPlanTemplate version.
+    # Validated against the supported set in
+    # ``BillingAccountDAO.set_payment_preferences``.
+    preferred_payment_method_types = Column(
+        ARRAY(String),
+        nullable=True,
+    )
+
+    # === PLAN GROUP — self-serve switch catalog ===
+    # Optional pointer at the ``PlanGroup`` this account is allowed to
+    # self-serve switch within. NULL means "no self-serve switching for
+    # this account" (admins can still call ``set_plan`` directly via the
+    # admin API). When set, the customer billing page surfaces a
+    # "Switch plan" section listing every active member of this group;
+    # the customer endpoint refuses to assign a template that isn't a
+    # member, so this column is the ACL boundary.
+    #
+    # Deliberately a single FK (not a junction table) — a billing
+    # account is on at most one self-serve catalog at a time, mirroring
+    # the single-pointer pattern used for ``plan_assignment_id``.
+    # Members of the group can include the currently-active template
+    # but don't have to (admins may have moved an account onto a custom
+    # template that's outside its public ladder).
+    #
+    # Defaults to ``DEFAULT_PLAN_GROUP_ID = 1`` (the system default
+    # group) at INSERT time on both the Python and DB sides. The
+    # column is ``NOT NULL`` by schema invariant — every account is
+    # always on *some* group, mirroring the ``plan_assignment_id``
+    # contract. There is intentionally no "opt-out" state: customers
+    # whose current template isn't in their assigned group simply
+    # see no switcher (the customer-facing endpoint hides the section
+    # when no member is ``is_current``).
+    #
+    # ``ON DELETE RESTRICT`` on the FK enforces the same invariant
+    # at the DB layer — deleting a group with referencing accounts
+    # would otherwise silently NULL the column.
+    plan_group_id = Column(
+        BigInteger,
+        ForeignKey("plan_group.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        default=DEFAULT_PLAN_GROUP_ID,
+        server_default=text(str(DEFAULT_PLAN_GROUP_ID)),
+    )
 
     # === TIMESTAMPS ===
     created_at = Column(TIMESTAMP, server_default=func.now())
@@ -179,6 +254,23 @@ class Recharge(Base):
     )
     stripe_invoice_id = Column(String)
     invoice_group = Column(Date)
+    # Managed billing: link to the BillingPlanAssignment that produced
+    # this recharge. NULL for legacy rows and for all CREDITS-mode auto-recharge
+    # / payment / promo rows where no plan applies. Set for METERED-mode rows
+    # produced by ``monthly_metered_invoicer``.
+    plan_id = Column(
+        BigInteger,
+        ForeignKey("billing_plan_assignment.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # Optional audit JSONB. For METERED recharges produced by the metered
+    # invoicer, captures: ``raw_usage_usd``, ``base_pricing_factor``,
+    # ``overage_pricing_factor``, ``contract_usage_local``, ``commit_amount``,
+    # ``overage_local``, ``fx_rate``, ``period_start``, ``period_end``. Lets
+    # a customer dispute recompute the invoice from first principles without
+    # relying on transient state.
+    detail = Column(JSONB, nullable=True)
 
     # ORM relationships
     billing_account = relationship("BillingAccount", back_populates="recharges")
@@ -189,6 +281,464 @@ class Recharge(Base):
             "status IN ('PENDING_INVOICE','PAID','FAILED','INVOICE_CREATED','DISPUTED')",
             name="ck_recharge_status",
         ),
+    )
+
+
+class BillingPlanTemplate(Base):
+    """An immutable, named billing configuration.
+
+    Many ``BillingAccount``s can point at the same template via
+    ``BillingPlanAssignment``. Templates are *never mutated* after creation —
+    to change terms, create a new row (optionally chained via
+    ``supersedes_template_id``) and re-assign. This preserves audit truth:
+    a customer disputing an invoice can always reconstruct the exact terms
+    in force at the time.
+
+    The fields below are grouped:
+
+    * **Identity**         — ``name``, ``display_name``, ``description``
+    * **Settlement**       — ``billing_mode``  (CREDITS vs METERED)
+    * **Commit shape**     — ``commit_amount``, ``commit_period``,
+                             ``commit_schedule``  (all NULL ⇒ PAYG)
+    * **Pricing**          — ``base_pricing_factor``, ``overage_pricing_factor``
+    * **Currency & FX**    — ``currency``, ``fx_policy``, ``fx_locked_rate``
+    * **Collection**       — ``collection_method``
+    * **Lifecycle**        — ``proration_policy``, ``credits_rollover_policy``
+    * **Catalog**          — ``is_custom``, ``is_active``,
+                             ``supersedes_template_id``
+    * **Audit**            — ``created_at``, ``created_by_user_id``
+
+    Plan shape ("PAYG" vs "COMMITMENT") is derived, not stored:
+    ``commit_amount`` IS NULL / 0 → PAYG, positive → COMMITMENT.
+
+    Catalog placement uses two orthogonal booleans rather than a single
+    enum: ``is_custom`` toggles bespoke-vs-catalog, ``is_active`` toggles
+    live-vs-deprecated. A deprecated row keeps its ``is_custom`` flag so
+    audit history stays honest.
+
+    The implicit platform default lives at ``DEFAULT_TEMPLATE_ID = 1``
+    (seeded by the migration). Every account is assigned to *some*
+    template — there is no "pristine, no assignment" state.
+    """
+
+    __tablename__ = "billing_plan_template"
+
+    # ── Identity ─────────────────────────────────────────────────────────
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    #: Internal identifier (kebab-case, unique). Operators-only.
+    name = Column(String(120), nullable=False, unique=True)
+    #: Customer-facing label (invoices, dashboards). Falls back to ``name``.
+    display_name = Column(String(120), nullable=True)
+    description = Column(Text, nullable=True)
+
+    # ── Settlement ──────────────────────────────────────────────────────
+    #: CREDITS = prepaid wallet w/ auto-recharge.
+    #: METERED = invoice in arrears at month-end.
+    billing_mode = Column(
+        String,
+        nullable=False,
+        server_default=BillingMode.CREDITS.value,
+    )
+
+    # ── Commit shape ────────────────────────────────────────────────────
+    # Three NULLs ⇒ Pay-As-You-Go. Positive ``commit_amount`` requires
+    # both ``commit_period`` and ``commit_schedule`` (CHECK enforced).
+    #: Monthly minimum in the invoice currency, or NULL/0 for PAYG.
+    commit_amount = Column(Numeric, nullable=True)
+    #: How often the commit resets (MONTHLY / QUARTERLY / ANNUAL).
+    commit_period = Column(String, nullable=True)
+    #: When the commit is invoiced relative to its period (AMORTISED / UPFRONT).
+    commit_schedule = Column(String, nullable=True)
+
+    # ── Pricing ─────────────────────────────────────────────────────────
+    # No overage_policy / monthly cap — the platform never blocks usage
+    # based on plan terms; usage above commit always invoices at
+    # ``base × overage`` rate. Operators can void specific Stripe
+    # invoices when a charge shouldn't stand.
+    #
+    # Two-rate split lets enterprise contracts express the standard
+    # "discount within commit, premium above commit" structure that
+    # AWS Reserved Instances, Snowflake, Databricks etc. all use. The
+    # rates **stack** on overage: ``base_pricing_factor`` applies to
+    # all usage uniformly (commit-included + overage + PAYG), and
+    # ``overage_pricing_factor`` is an additional uplift on top, only
+    # for the overage portion. PAYG plans only ever exercise
+    # ``base_pricing_factor``; ``overage_pricing_factor`` is irrelevant
+    # for them and conventionally left at 1.0.
+    #: Multiplier on raw USD usage for ALL usage (commit-included,
+    #: overage, and PAYG). 1.00 = list price; 0.80 = 20% discount;
+    #: 1.10 = 10% premium; etc. Combined with ``overage_pricing_factor``
+    #: above commit (effective overage rate = base × overage).
+    base_pricing_factor = Column(
+        Numeric,
+        nullable=False,
+        server_default="1.0",
+    )
+    #: ADDITIONAL multiplier stacked on top of ``base_pricing_factor``
+    #: for usage ABOVE commit only. Only meaningful for COMMITMENT
+    #: plans; defaults to 1.00 (no overage penalty — base discount /
+    #: markup continues to apply uniformly above commit). Set > 1.00
+    #: to charge a premium for over-consumption (e.g. 1.25 = "25%
+    #: uplift over the base rate above commit"); a customer on a
+    #: ``base=0.80, overage=1.25`` plan pays ``0.80×1.25 = 1.00`` of
+    #: list price for above-commit usage, vs. ``0.80`` within commit.
+    overage_pricing_factor = Column(
+        Numeric,
+        nullable=False,
+        server_default="1.0",
+    )
+
+    # ── Currency & FX ───────────────────────────────────────────────────
+    # USD templates run with ``fx_policy IS NULL``; non-USD templates
+    # MUST set one (CHECK enforced). The metered invoicer dispatches on
+    # ``fx_policy`` to fetch / pin the conversion rate.
+    #: ISO-4217 invoice currency (USD / GBP / EUR / …).
+    currency = Column(String(3), nullable=False, server_default="USD")
+    #: NULL for USD; LOCKED_RATE / SPOT / PERIOD_AVERAGE for non-USD.
+    fx_policy = Column(String(32), nullable=True)
+    #: Required iff ``fx_policy = LOCKED_RATE``. 8-frac digits cover all G10/EM crosses.
+    fx_locked_rate = Column(Numeric(18, 8), nullable=True)
+
+    # ── Collection ──────────────────────────────────────────────────────
+    #: AUTO_CARD = Stripe pulls from saved card.
+    #: SEND_INVOICE_NET_30 = customer pushes (wire / customer balance / …).
+    collection_method = Column(
+        String,
+        nullable=False,
+        server_default=CollectionMethod.AUTO_CARD.value,
+    )
+
+    # ── Lifecycle ───────────────────────────────────────────────────────
+    #: How partial first/last periods are billed.
+    proration_policy = Column(
+        String,
+        nullable=False,
+        server_default=ProrationPolicy.PRORATE.value,
+    )
+    #: COMMITMENT+CREDITS only — what happens to unused credits at
+    #: period-end. NULL for every other quadrant (CHECK enforced).
+    credits_rollover_policy = Column(String, nullable=True)
+
+    # ── Catalog placement ───────────────────────────────────────────────
+    #: false = catalog (assignable to anyone). true = bespoke per-customer.
+    is_custom = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+    #: false = deprecated (no new assignments; existing ones keep billing).
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        server_default="true",
+    )
+    #: Optional pointer at the template this one replaces (audit chain).
+    supersedes_template_id = Column(
+        BigInteger,
+        ForeignKey("billing_plan_template.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # ── Audit ───────────────────────────────────────────────────────────
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_by_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "billing_mode IN ('CREDITS', 'METERED')",
+            name="ck_plan_template_billing_mode",
+        ),
+        sa.CheckConstraint(
+            "commit_period IS NULL OR commit_period IN "
+            "('MONTHLY', 'QUARTERLY', 'ANNUAL')",
+            name="ck_plan_template_commit_period",
+        ),
+        sa.CheckConstraint(
+            "commit_schedule IS NULL OR commit_schedule IN "
+            "('AMORTISED', 'UPFRONT')",
+            name="ck_plan_template_commit_schedule",
+        ),
+        sa.CheckConstraint(
+            "collection_method IN ('AUTO_CARD', 'SEND_INVOICE_NET_30')",
+            name="ck_plan_template_collection_method",
+        ),
+        sa.CheckConstraint(
+            "proration_policy IN ('PRORATE', 'SKIP_FIRST', 'FULL_FIRST')",
+            name="ck_plan_template_proration_policy",
+        ),
+        sa.CheckConstraint(
+            "credits_rollover_policy IS NULL OR credits_rollover_policy IN "
+            "('ROLL_OVER', 'FORFEIT_AT_PERIOD_END')",
+            name="ck_plan_template_credits_rollover_policy",
+        ),
+        # Pricing factors must be strictly positive (zero would silently
+        # waive every charge — never what an operator wants; if a plan
+        # truly shouldn't bill it should be marked inactive instead).
+        sa.CheckConstraint(
+            "base_pricing_factor > 0 AND overage_pricing_factor > 0",
+            name="ck_plan_template_pricing_factors_positive",
+        ),
+        # Commit + period travel together: a positive commit amount
+        # requires a period to attach to.
+        sa.CheckConstraint(
+            "(commit_amount IS NULL OR commit_amount = 0) OR "
+            "commit_period IS NOT NULL",
+            name="ck_plan_template_commit_has_period",
+        ),
+        # UPFRONT-schedule plans bill the full ``commit_amount`` on
+        # contract anniversaries; prorating that lump sum across a
+        # mid-month start would be confusing for both customer and
+        # accounting (the customer is buying a full period of
+        # coverage, not a fraction). Require FULL_FIRST proration so
+        # the first invoice carries the full commit and the contract
+        # anniversaries land on round month boundaries thereafter.
+        sa.CheckConstraint(
+            "commit_schedule IS DISTINCT FROM 'UPFRONT' OR "
+            "proration_policy = 'FULL_FIRST'",
+            name="ck_plan_template_upfront_requires_full_first",
+        ),
+        # PERIOD_AVERAGE FX averages business-day rates across the
+        # billing period; for UPFRONT-schedule plans the "billing
+        # period" is the calendar month the anniversary lands in, but
+        # the customer thinks of FX as locked at signing. Mixing the
+        # two is ambiguous (which month's average for a 12-month
+        # contract that anniversaries in March?). Require LOCKED_RATE
+        # or SPOT for UPFRONT non-USD plans.
+        sa.CheckConstraint(
+            "commit_schedule IS DISTINCT FROM 'UPFRONT' OR "
+            "fx_policy IS NULL OR fx_policy IN ('LOCKED_RATE', 'SPOT')",
+            name="ck_plan_template_upfront_no_period_average_fx",
+        ),
+        # ``credits_rollover_policy`` is only meaningful in the
+        # COMMITMENT + CREDITS cell. Anything else must leave it NULL.
+        sa.CheckConstraint(
+            "credits_rollover_policy IS NULL OR "
+            "(commit_amount IS NOT NULL AND commit_amount > 0 "
+            "AND billing_mode = 'CREDITS')",
+            name="ck_plan_template_credits_rollover_scope",
+        ),
+        # FX policy invariants — kept in sync with the migration so
+        # ``Base.metadata.create_all`` (used by some test paths) carries
+        # the same guarantees as alembic-managed prod databases.
+        sa.CheckConstraint(
+            "fx_policy IS NULL OR "
+            "fx_policy IN ('LOCKED_RATE', 'SPOT', 'PERIOD_AVERAGE')",
+            name="ck_plan_template_fx_policy",
+        ),
+        # USD ⇔ no-FX, non-USD ⇔ FX policy required. A single check
+        # encodes both directions.
+        sa.CheckConstraint(
+            "(currency = 'USD' AND fx_policy IS NULL) OR "
+            "(currency <> 'USD' AND fx_policy IS NOT NULL)",
+            name="ck_plan_template_fx_required_for_non_usd",
+        ),
+        sa.CheckConstraint(
+            "(fx_policy = 'LOCKED_RATE' AND fx_locked_rate IS NOT NULL "
+            "AND fx_locked_rate > 0) OR "
+            "(fx_policy IS DISTINCT FROM 'LOCKED_RATE' "
+            "AND fx_locked_rate IS NULL)",
+            name="ck_plan_template_fx_locked_rate",
+        ),
+        Index("ix_plan_template_is_active", "is_active"),
+    )
+
+
+class BillingPlanAssignment(Base):
+    """Time-bounded assignment of a ``BillingPlanTemplate`` to a ``BillingAccount``.
+
+    Each row represents one phase of one account's plan history. Plan
+    changes create a new row and set ``ended_at`` on the previous row.
+    Cancelling a non-default plan creates an explicit default plan row
+    (so every state is described by a row). **Every account has exactly
+    one active assignment at all times** — pristine self-serve accounts
+    get a default plan assignment at signup
+    (``BillingAccountDAO.create``), and the migration backfilled one
+    for every pre-v2 account. There is no "implicit default" /
+    "no row" shape; ``BillingAccount.plan_assignment_id IS NULL`` is
+    schema corruption that the daily reconciliation routine flags as
+    critical (the column is nullable in the DB only because
+    ``NOT NULL`` is not deferrable, which would create a
+    chicken-and-egg at row-creation time).
+
+    A unique partial index ensures at most one currently-active
+    assignment per billing account. Per-assignment overrides are
+    supported sparingly for negotiated tweaks that don't justify a
+    whole new template.
+
+    History is reconstructed by ordering on ``started_at DESC`` filtered
+    by ``billing_account_id`` — there is intentionally no per-row
+    ``supersedes`` pointer (it would duplicate the time order without
+    adding information).
+    """
+
+    __tablename__ = "billing_plan_assignment"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    template_id = Column(
+        BigInteger,
+        ForeignKey("billing_plan_template.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    # Lifecycle window. ``ended_at`` IS NULL means currently active.
+    started_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Audit
+    created_by_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    change_reason = Column(Text, nullable=True)
+
+    # ORM relationships
+    template = relationship("BillingPlanTemplate")
+
+    __table_args__ = (
+        # At most one currently-active assignment per billing account.
+        Index(
+            "ux_billing_plan_assignment_active_unique",
+            "billing_account_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        Index(
+            "ix_billing_plan_assignment_account_started",
+            "billing_account_id",
+            "started_at",
+        ),
+        sa.CheckConstraint(
+            "ended_at IS NULL OR ended_at >= started_at",
+            name="ck_billing_plan_assignment_window",
+        ),
+    )
+
+
+class PlanGroup(Base):
+    """A curated bundle of ``BillingPlanTemplate``s that an account can switch between.
+
+    Plan groups exist purely to scope the customer-facing self-serve
+    switch endpoint: ``BillingAccount.plan_group_id`` points at one of
+    these, and the customer is allowed to assign themselves any active
+    template that is a member. Templates themselves are unchanged and
+    a single template may belong to many groups (e.g. the public
+    Vantage ladder + a bespoke custom-tier ladder for a specific
+    customer).
+
+    Membership semantics are carried by ``PlanGroupMember.position``:
+    NULL = unordered alternatives (rendered as side-by-side cards),
+    populated = ordered ladder rung (lower position = "smaller" tier,
+    used to detect downgrades for AT_BOUNDARY-deferral). The schema
+    allows mixing — but in practice a group either declares all
+    positions or none.
+    """
+
+    __tablename__ = "plan_group"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # Operator-facing slug, unique catalog-wide. Exposed in admin
+    # logs / URLs; customer-facing UI uses ``display_name``.
+    name = Column(String, nullable=False, unique=True)
+    display_name = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_by_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    members = relationship(
+        "PlanGroupMember",
+        back_populates="group",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="PlanGroupMember.position.asc().nulls_last(), "
+        "PlanGroupMember.added_at.asc()",
+    )
+
+    __table_args__ = (Index("ix_plan_group_is_active", "is_active"),)
+
+
+class PlanGroupMember(Base):
+    """Junction row: a ``BillingPlanTemplate`` is offered as part of a ``PlanGroup``.
+
+    ``position`` carries the rung order: NULL means "this group is an
+    unordered set" (UX renders as cards), an integer means "ladder
+    rung at this position" — lower = "smaller" tier, so a target
+    position lower than the current account's position constitutes a
+    *downgrade* for the AT_BOUNDARY policy. Positions must be unique
+    within a group when set (enforced by a partial unique index in the
+    migration so unordered groups can have many NULLs).
+    """
+
+    __tablename__ = "plan_group_member"
+
+    group_id = Column(
+        BigInteger,
+        ForeignKey("plan_group.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    template_id = Column(
+        BigInteger,
+        ForeignKey("billing_plan_template.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    # NULL = unordered offer; integer = ladder rung. Lower = smaller
+    # tier (downgrade target). Must be unique within a group when set.
+    position = Column(Integer, nullable=True)
+    added_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    group = relationship("PlanGroup", back_populates="members")
+    template = relationship("BillingPlanTemplate")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "position IS NULL OR position >= 0",
+            name="ck_plan_group_member_position_non_negative",
+        ),
+        Index(
+            "ux_plan_group_member_position",
+            "group_id",
+            "position",
+            unique=True,
+            postgresql_where=text("position IS NOT NULL"),
+        ),
+        Index("ix_plan_group_member_template_id", "template_id"),
     )
 
 
@@ -3173,8 +3723,10 @@ class ConflictEvent(Base):
 class CreditTransaction(Base):
     """Append-only ledger of every credit movement on a billing account.
 
-    Positive ``amount`` = credits added (recharge, promo, refund, dispute).
-    Negative ``amount`` = credits spent (llm, hire, resources, media).
+    Positive ``amount`` = credits added (recharge, promo, refund, dispute,
+    grant, carryover).
+    Negative ``amount`` = credits spent (llm, hire, resources, media, seat,
+    subscription, forfeit_at_conversion).
 
     The public API constrains ``category`` to the canonical spending set
     (``llm | hire | resources | media``) for debits and
@@ -3182,11 +3734,17 @@ class CreditTransaction(Base):
     Internal reconciliation routines may use additional diagnostic
     categories (e.g. ``void``, ``stale_pending_recharge``).
 
-    ``balance_after`` is a snapshot captured in the same DB transaction
-    as the balance update so it can be used for reconciliation:
-    the latest row's ``balance_after`` must always equal
-    ``billing_account.credits``.  NULL for historical backfills
-    where the running balance cannot be reliably reconstructed.
+    The ledger is intentionally billing-mode-agnostic: the same row shape
+    serves CREDITS and METERED accounts. Drift between ledger and wallet
+    can be detected on demand by summing signed ``amount`` for the account
+    and comparing with ``billing_account.credits`` (CREDITS-mode only).
+
+    Managed billing: ``plan_assignment_id`` denormalises the
+    plan assignment that was active when this row was written. Lets the
+    metered invoicer attribute usage to the right plan version even when
+    plans change mid-period (deferred PRORATE_IMMEDIATELY support), and
+    gives audit traceability for the disputed-invoice case. NULL for
+    historical rows written before the v2 schema existed.
     """
 
     __tablename__ = "credit_transaction"
@@ -3205,7 +3763,6 @@ class CreditTransaction(Base):
 
     # Financial
     amount = Column(Numeric, nullable=False)
-    balance_after = Column(Numeric, nullable=True)
 
     # Dimensions (indexed for fast filtering)
     category = Column(String, nullable=False)
@@ -3215,6 +3772,13 @@ class CreditTransaction(Base):
 
     description = Column(String, nullable=True)
     detail = Column(JSONB, nullable=True)
+
+    plan_assignment_id = Column(
+        BigInteger,
+        ForeignKey("billing_plan_assignment.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         Index("ix_credit_txn_ba_at", "billing_account_id", "at"),

@@ -26,25 +26,34 @@ class CreditTransactionDAO:
         *,
         billing_account_id: int,
         amount: decimal.Decimal,
-        balance_after: decimal.Decimal | None,
         category: str,
         assistant_id: int | None = None,
         user_id: str | None = None,
         organization_id: int | None = None,
         description: str | None = None,
         detail: dict[str, Any] | None = None,
+        plan_assignment_id: int | None = None,
     ) -> CreditTransaction:
-        """Insert a new ledger row. Called by BillingAccountDAO, not directly."""
+        """Insert a new ledger row.
+
+        Normally called via the mode-aware ``BillingAccountDAO.add_credits``
+        / ``BillingAccountDAO.deduct_credits`` wrappers — not invoked
+        directly by feature code.
+
+        ``plan_assignment_id`` denormalises the plan in force when the row
+        was written; useful for reconstructing what a customer would have
+        been charged at the moment of usage.
+        """
         txn = CreditTransaction(
             billing_account_id=billing_account_id,
             amount=amount,
-            balance_after=balance_after,
             category=category,
             assistant_id=assistant_id,
             user_id=user_id,
             organization_id=organization_id,
             description=description,
             detail=detail,
+            plan_assignment_id=plan_assignment_id,
         )
         self.session.add(txn)
         self.session.flush()

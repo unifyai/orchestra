@@ -1830,8 +1830,16 @@ async def get_user_spend(
         percent_used = round((cumulative_spend / limit) * 100, 2)
 
     credit_balance = None
+    billing_mode = "CREDITS"
     if user.billing_account:
         credit_balance = float(user.billing_account.credits)
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+        billing_mode = (
+            BillingAccountDAO(session)
+            .resolve_billing_mode(user.billing_account)
+            .value
+        )
 
     return UserSpendResponse(
         user_id=user_id,
@@ -1841,6 +1849,7 @@ async def get_user_spend(
         limit_set_at=user.monthly_spending_cap_set_at,
         percent_used=percent_used,
         credit_balance=credit_balance,
+        billing_mode=billing_mode,
     )
 
 

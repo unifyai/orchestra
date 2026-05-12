@@ -39,10 +39,13 @@ class OrganizationDAO:
         :param timezone: IANA timezone string (e.g., "America/New_York"). Defaults to None.
         :return: The created Organization object.
         """
-        # Create a BillingAccount for this organization
-        billing_account = BillingAccount()
-        self.session.add(billing_account)
-        self.session.flush()  # Get the billing_account.id
+        # Create a BillingAccount for this organization via
+        # BillingAccountDAO so the v2 invariant (every BA has an active
+        # default plan assignment + NOT NULL plan_assignment_id) is
+        # established automatically.
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+        billing_account = BillingAccountDAO(self.session).create()
 
         org = Organization(
             name=name,

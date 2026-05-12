@@ -30,10 +30,12 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
     BillingAccount,
+    BillingMode,
 )
 from orchestra.routines.assistant_contact_levy import _get_billing_account_for_assistant
 from orchestra.routines.assistant_contact_notifications import (
@@ -335,12 +337,27 @@ async def _process_ba_grace_contacts(
 ) -> SuspensionAccountResult:
     """Process grace-period contacts for a single billing account.
 
-    If credits are ≥ 0 → restore all contacts to ``active``.
-    Otherwise:
-      - Contacts past the 14-day cutoff → deprovision + soft-delete.
-      - Contacts on notification days (7, 13) → send appropriate email.
+    For CREDITS accounts: if ``credits ≥ 0`` → restore to ``active``;
+    otherwise enforce the 14-day deprovision + deletion-notification
+    schedule.
+
+    For METERED accounts: the wallet is frozen and not a reliable
+    signal — METERED grace periods are entered/cleared by the metered
+    invoicing webhook flow (``invoice.payment_failed`` /
+    ``invoice.payment_succeeded``), not by this routine. We therefore
+    leave any METERED-account contacts that ended up in
+    ``grace_period`` alone here; the webhook path will clear them
+    when the next invoice is paid. (Defensive: in normal operation
+    this routine should never see a METERED account in grace because
+    the levy no longer trips the wallet-based grace trigger.)
     """
     ar = SuspensionAccountResult(billing_account_id=ba.id)
+
+    is_metered = (
+        BillingAccountDAO(session).resolve_billing_mode(ba) == BillingMode.METERED
+    )
+    if is_metered:
+        return ar
 
     # If the billing account has been topped up, clear grace period.
     if ba.credits >= 0:

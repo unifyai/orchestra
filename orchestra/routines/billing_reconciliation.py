@@ -52,6 +52,29 @@ Flag-only checks (never auto-fixed)
 - **Credit balance ceiling** — phantom credit injection detection.
 - **SUSPENDED with ``admin_freeze`` reason** — intentional admin action,
   never auto-fixed.
+- **Managed-billing structural checks** (flag-only — these surface
+  schema-level drift that should never auto-fix because the right
+  remediation is always context-dependent):
+
+  - *Plan assignment pointer integrity* — ``BillingAccount.plan_assignment_id``
+    must be NOT NULL (application contract; column is nullable in DB
+    only because PostgreSQL ``NOT NULL`` is not deferrable, which would
+    otherwise create a chicken-and-egg with the assignment row's FK
+    back to the BA) and must point at an *active* (``ended_at IS NULL``)
+    ``BillingPlanAssignment`` belonging to the same account;
+    conversely every active assignment row should be the target of
+    exactly one account's pointer. Catches NULL pointers (factory
+    bypass), stale denormalised pointers, and orphans.
+  - *Missed metered invoicing* — METERED accounts that had any usage
+    ledger activity in a closed period (``period_end_exclusive`` <
+    today) but no corresponding ``Recharge`` row of type
+    ``MONTHLY_COMMIT`` for that period. Catches scheduler outages or
+    silent invoicer skips.
+  - *Wallet contamination on METERED* — METERED accounts must keep
+    ``BillingAccount.credits == 0``; a non-zero wallet means a write
+    bypassed the mode dispatch in ``BillingAccountDAO.add_credits`` /
+    ``deduct_credits`` (or the account just transitioned and operator
+    forgot to settle).
 
 The routine uses the *same* ``STRIPE_SECRET_KEY`` that Orchestra is
 configured with — staging instances use a test-mode key, production
@@ -72,13 +95,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
+    RECHARGE_TYPE_MONTHLY_COMMIT,
     BillingAccount,
+    BillingPlanAssignment,
+    BillingPlanTemplate,
     Organization,
+    PlanGroup,
+    PlanGroupMember,
     Recharge,
     RechargeStatus,
     User,
     WebhookLog,
 )
+from orchestra.db.models.enums import BillingMode
 from orchestra.web.lifetime import get_engine
 
 BILLING_EVENT_TYPES = frozenset(
@@ -301,6 +330,20 @@ def _reconcile_with_session(
     _check_failed_recharge_voids(session, result, fix_level=fix_level)
     _check_orphaned_grace_periods(session, result, fix_level=fix_level)
     _check_unjustified_suspensions(session, result, fix_level=fix_level)
+    _check_plan_assignment_integrity(session, result)
+    _check_metered_invoicing_completeness(
+        session,
+        result,
+        lookback_days=lookback_days,
+    )
+    _check_upfront_assignment_mid_period_termination(
+        session,
+        result,
+        lookback_days=lookback_days,
+    )
+    _check_plan_groups_with_no_active_members(session, result)
+    _check_plan_group_null_pointer(session, result)
+    _check_cash_balance_unapplied(session, result, lookback_days=lookback_days)
 
     if fix_level > FIX_NONE and result.auto_fixed_count > 0:
         session.commit()
@@ -460,6 +503,78 @@ def _check_stale_recharges(
                         recharge.quantity,
                         recharge.billing_account_id,
                     )
+            elif stripe_status == "open":
+                # Stripe invoice still awaiting payment. For AUTO_CARD this
+                # should resolve within hours of finalisation (Stripe attempts
+                # the charge immediately); for SEND_INVOICE NET_30 it's
+                # expected to stay open for up to 30 days, so we use the
+                # invoice's ``due_date`` rather than its issue time as the
+                # staleness anchor. Stripe is already chasing the customer
+                # via dunning; this check exists for *us / Seren* to know
+                # there's a real receivable problem brewing on a high-value
+                # contract before it becomes a write-off.
+                _flag_overdue_open_invoice(recharge, inv, result)
+
+
+def _flag_overdue_open_invoice(
+    recharge: Recharge,
+    inv,
+    result: ReconciliationResult,
+) -> None:
+    """Emit a ``recharge_overdue`` discrepancy if a Stripe invoice in
+    ``open`` status is past its due date.
+
+    Two-tier severity:
+
+    * **warning** — 5+ days past due (Stripe's first chase emails have
+      gone out, customer has not engaged).
+    * **critical** — 14+ days past due (collections territory; ops should
+      reach out directly).
+
+    Flag-only — auto-fix would mean writing the receivable off, which is
+    always a human / accounting decision, never an automated one.
+    """
+    now = datetime.now(timezone.utc)
+    collection_method = inv.get("collection_method", "charge_automatically")
+
+    # Resolve "is this overdue?" — for SEND_INVOICE we rely on Stripe's
+    # ``due_date`` (the NET-N deadline). For AUTO_CARD there is no due
+    # date set on the invoice; "open and >24h old" is already an anomaly
+    # because the charge attempt should have settled by then.
+    due_ts = inv.get("due_date")
+    if collection_method == "send_invoice" and due_ts:
+        due_at = datetime.fromtimestamp(int(due_ts), tz=timezone.utc)
+        days_overdue = (now - due_at).days
+    else:
+        # AUTO_CARD path: anchor on issue time + 1 day grace.
+        issue_at = recharge.at.replace(tzinfo=timezone.utc)
+        days_overdue = max(0, (now - issue_at).days - 1)
+
+    if days_overdue < 5:
+        return  # Within normal Stripe-dunning window; nothing to flag.
+
+    severity = "critical" if days_overdue >= 14 else "warning"
+    amount_pretty = f"{int(inv.get('amount_due', 0)) / 100:,.2f} {inv.get('currency', '').upper()}"
+
+    result.discrepancies.append(
+        Discrepancy(
+            category="recharge_overdue",
+            severity=severity,
+            billing_account_id=recharge.billing_account_id,
+            stripe_id=recharge.stripe_invoice_id,
+            detail=(
+                f"Recharge {recharge.id} (Stripe invoice "
+                f"{recharge.stripe_invoice_id}, {amount_pretty}, "
+                f"collection={collection_method}) is {days_overdue} day(s) "
+                f"past due and still unpaid. Stripe is sending dunning "
+                f"emails automatically; this alert is for ops/Seren to "
+                f"decide whether to reach out directly. If the customer "
+                f"paid out-of-band to our bank account, mark the invoice "
+                f"paid via paid_out_of_band=true (admin endpoint) so the "
+                f"local Recharge updates."
+            ),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1461,6 +1576,511 @@ def _check_unjustified_suspensions(
 
 
 # ---------------------------------------------------------------------------
+# Managed-billing: plan assignment pointer integrity
+# ---------------------------------------------------------------------------
+
+
+def _check_plan_assignment_integrity(
+    session: Session,
+    result: ReconciliationResult,
+) -> None:
+    """Verify ``BillingAccount.plan_assignment_id`` ↔ ``BillingPlanAssignment``.
+
+    Four structural invariants of the managed-billing v2 schema, all
+    flagged as ``critical`` because every observed violation indicates
+    either DB corruption or a code path that bypassed
+    ``BillingPlanAssignmentDAO`` (the only code path allowed to touch
+    these columns):
+
+    1. ``plan_assignment_id IS NULL`` — the v2 application contract is
+       "every account has an active default plan assignment from
+       creation time". The DB column is nullable (PostgreSQL
+       ``NOT NULL`` is not deferrable) but the contract is enforced by
+       ``BillingAccountDAO.create`` + the migration backfill. A NULL
+       in production means a code path bypassed the factory or a
+       manual SQL op cleared the pointer.
+    2. ``plan_assignment_id`` is set but the pointed-to row doesn't exist
+       (orphan pointer; FK is ``ON DELETE SET NULL`` so this should
+       never persist — if it does, something deleted the row inside
+       the same transaction without nulling pointers, or a manual SQL
+       op corrupted state).
+    3. ``plan_assignment_id`` points at a row whose ``ended_at`` is set
+       (account thinks it's on a closed assignment — typically means
+       a ``set_plan`` ran without flushing the denormalised pointer
+       update).
+    4. ``plan_assignment_id`` points at a row that belongs to a *different*
+       ``billing_account_id`` (cross-account leak — should be impossible
+       via the DAO).
+
+    A complementary scan finds active (``ended_at IS NULL``) assignment
+    rows that no account points at — those are orphaned active
+    assignments that the metered invoicer would still consider for any
+    historical ``get_in_force_at`` lookup.
+
+    All flag-only — auto-fix would require choosing between "trust the
+    pointer" (close orphan rows) or "trust the row" (set the pointer);
+    operator should investigate the cause first.
+    """
+    # 1: scan for NULL pointers (application-invariant violation).
+    null_pointer_ba_ids = (
+        session.query(BillingAccount.id)
+        .filter(BillingAccount.plan_assignment_id.is_(None))
+        .all()
+    )
+    for (ba_id,) in null_pointer_ba_ids:
+        result.discrepancies.append(
+            Discrepancy(
+                category="plan_assignment_null_pointer",
+                severity="critical",
+                billing_account_id=ba_id,
+                detail=(
+                    f"BA {ba_id}.plan_assignment_id IS NULL — application "
+                    "invariant violated (every account is supposed to "
+                    "have an active default plan assignment from "
+                    "BillingAccountDAO.create). Likely cause: a code "
+                    "path constructed BillingAccount() directly bypassing "
+                    "the factory, or a manual SQL op cleared the pointer. "
+                    "Fix by inserting a default plan assignment row for "
+                    "this account and pointing plan_assignment_id at it."
+                ),
+            ),
+        )
+
+    # 2+3+4: walk each non-NULL plan_assignment_id and validate the pointee.
+    rows = session.execute(
+        BillingAccount.__table__.select().with_only_columns(
+            BillingAccount.id,
+            BillingAccount.plan_assignment_id,
+        ).where(BillingAccount.plan_assignment_id.isnot(None)),
+    ).all()
+    for ba_id, plan_id in rows:
+        assignment = session.get(BillingPlanAssignment, plan_id)
+        if assignment is None:
+            result.discrepancies.append(
+                Discrepancy(
+                    category="plan_assignment_orphan_pointer",
+                    severity="critical",
+                    billing_account_id=ba_id,
+                    detail=(
+                        f"BA {ba_id}.plan_assignment_id={plan_id} but "
+                        "billing_plan_assignment row does not exist"
+                    ),
+                ),
+            )
+            continue
+        if assignment.billing_account_id != ba_id:
+            result.discrepancies.append(
+                Discrepancy(
+                    category="plan_assignment_cross_account_leak",
+                    severity="critical",
+                    billing_account_id=ba_id,
+                    detail=(
+                        f"BA {ba_id}.plan_assignment_id={plan_id} points at an "
+                        f"assignment owned by BA {assignment.billing_account_id}"
+                    ),
+                ),
+            )
+            continue
+        if assignment.ended_at is not None:
+            result.discrepancies.append(
+                Discrepancy(
+                    category="plan_assignment_pointer_to_closed_row",
+                    severity="critical",
+                    billing_account_id=ba_id,
+                    detail=(
+                        f"BA {ba_id}.plan_assignment_id={plan_id} points at a "
+                        f"closed assignment (ended_at={assignment.ended_at!s}); "
+                        "denormalised pointer was not cleared/advanced when "
+                        "the row was closed"
+                    ),
+                ),
+            )
+
+    # Orphan active assignments: rows with ended_at IS NULL that no BA points at.
+    orphan_active = (
+        session.query(BillingPlanAssignment)
+        .outerjoin(
+            BillingAccount,
+            BillingAccount.plan_assignment_id == BillingPlanAssignment.id,
+        )
+        .filter(
+            BillingPlanAssignment.ended_at.is_(None),
+            BillingAccount.id.is_(None),
+        )
+        .all()
+    )
+    for assignment in orphan_active:
+        result.discrepancies.append(
+            Discrepancy(
+                category="plan_assignment_orphan_active_row",
+                severity="critical",
+                billing_account_id=assignment.billing_account_id,
+                detail=(
+                    f"BillingPlanAssignment {assignment.id} (BA "
+                    f"{assignment.billing_account_id}, template "
+                    f"{assignment.template_id}) is active "
+                    "(ended_at IS NULL) but no BillingAccount.plan_assignment_id "
+                    "points at it; either the BA's pointer was cleared "
+                    "without closing this row, or a duplicate active row was "
+                    "inserted bypassing set_plan()"
+                ),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Managed-billing v2: missed metered invoicing
+# ---------------------------------------------------------------------------
+
+
+def _check_metered_invoicing_completeness(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    lookback_days: int,
+) -> None:
+    """Find METERED accounts whose closed periods never produced a Recharge.
+
+    For each ``BillingPlanAssignment`` that covers any closed monthly
+    period within ``lookback_days`` and references a METERED template,
+    there must exist a ``Recharge`` row with ``type=MONTHLY_COMMIT``
+    and ``invoice_group`` matching that period's date marker. If there
+    isn't one, either the metered invoicer never ran for that period,
+    or it ran and silently skipped the account (the closed period
+    either had real usage that's now uninvoiced, OR the account was
+    legitimately empty + zero-commit, in which case the discrepancy
+    is a false positive — the operator can confirm via the runbook).
+
+    Flag-only at ``warning`` severity. Auto-fix would mean re-running
+    the invoicer, but that's already idempotent — operators should
+    drive that explicitly so they can review the result (call
+    :func:`orchestra.routines.monthly_metered_invoicer.invoice_metered_month`
+    from a Python shell for a full re-run, or use the per-account
+    admin endpoint ``POST /v0/admin/billing/invoice-metered-month/account``
+    when only one customer needs replaying).
+    """
+    today_utc = datetime.now(timezone.utc).date()
+    cutoff = today_utc - timedelta(days=lookback_days)
+
+    # Walk every BillingPlanAssignment whose template is METERED and
+    # which was active for at least part of the lookback window.
+    metered_assignments = (
+        session.query(BillingPlanAssignment, BillingPlanTemplate)
+        .join(
+            BillingPlanTemplate,
+            BillingPlanTemplate.id == BillingPlanAssignment.template_id,
+        )
+        .filter(
+            BillingPlanTemplate.billing_mode == BillingMode.METERED.value,
+            BillingPlanAssignment.started_at < datetime.now(timezone.utc),
+            (BillingPlanAssignment.ended_at.is_(None))
+            | (
+                BillingPlanAssignment.ended_at
+                > datetime(cutoff.year, cutoff.month, 1, tzinfo=timezone.utc)
+            ),
+        )
+        .all()
+    )
+
+    # Enumerate the closed periods (1st-of-month markers, in UTC) that
+    # fall between max(assignment.started_at, cutoff) and today.
+    for assignment, template in metered_assignments:
+        period_start = max(
+            assignment.started_at.date()
+            if assignment.started_at.tzinfo
+            else assignment.started_at.date(),
+            cutoff,
+        )
+        end_bound = (
+            assignment.ended_at.date()
+            if assignment.ended_at is not None
+            else today_utc
+        )
+        # Iterate first-of-month markers strictly after period_start
+        # and strictly before today (a period is "closed" once we're
+        # past its end-of-month boundary).
+        cursor = datetime(period_start.year, period_start.month, 1).date()
+        while True:
+            # Advance cursor to the *next* month boundary (we invoice
+            # for the period that just ended at this boundary).
+            if cursor.month == 12:
+                next_marker = cursor.replace(year=cursor.year + 1, month=1)
+            else:
+                next_marker = cursor.replace(month=cursor.month + 1)
+            if next_marker > end_bound or next_marker >= today_utc:
+                break
+
+            recharge_exists = (
+                session.query(Recharge.id)
+                .filter(
+                    Recharge.billing_account_id
+                    == assignment.billing_account_id,
+                    Recharge.type == RECHARGE_TYPE_MONTHLY_COMMIT,
+                    Recharge.invoice_group == next_marker,
+                )
+                .first()
+                is not None
+            )
+            if not recharge_exists:
+                result.discrepancies.append(
+                    Discrepancy(
+                        category="metered_invoicing_missed_period",
+                        severity="warning",
+                        billing_account_id=assignment.billing_account_id,
+                        detail=(
+                            f"BA {assignment.billing_account_id} on METERED "
+                            f"template {template.id} ({template.name!r}) has "
+                            f"no MONTHLY_COMMIT Recharge for period ending "
+                            f"{next_marker.isoformat()}. Either the invoicer "
+                            "missed the run, or it skipped the account "
+                            "(zero usage + zero commit = legitimate skip; "
+                            "Stripe customer missing = needs ensure-customer; "
+                            "FX provider down = retry). Re-run by "
+                            "calling invoice_metered_month() from a "
+                            "Python shell, or replay just this account via "
+                            "POST /v0/admin/billing/invoice-metered-month/account."
+                        ),
+                    ),
+                )
+            cursor = next_marker
+
+
+# ---------------------------------------------------------------------------
+# Managed-billing v2: UPFRONT contracts cancelled mid-period
+# ---------------------------------------------------------------------------
+
+
+_MONTHS_IN_PERIOD: dict[str, int] = {
+    "MONTHLY": 1,
+    "QUARTERLY": 3,
+    "ANNUAL": 12,
+}
+
+
+def _check_upfront_assignment_mid_period_termination(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    lookback_days: int,
+) -> None:
+    """Flag UPFRONT-schedule assignments that ended mid-period.
+
+    UPFRONT-schedule plans bill the *full* ``commit_amount`` on the
+    contract anniversary. If a customer cancels (or is migrated to a
+    different plan) before the next anniversary, they paid for
+    coverage they aren't going to use — the operator may owe a
+    pro-rated refund per the contract's terms. The platform does not
+    auto-refund (refund policy is per-contract; some agreements lock
+    upfront commits as non-refundable, others guarantee unused
+    portions back) — this check just surfaces the assignment so an
+    operator can review.
+
+    Specifically, fire ``warning`` for any ``BillingPlanAssignment``
+    where:
+
+    * ``ended_at`` falls within the last ``lookback_days``,
+    * the template is COMMITMENT (``commit_amount > 0``) +
+      ``commit_schedule = 'UPFRONT'``,
+    * ``ended_at`` is **not** on a commit-period boundary from
+      ``started_at`` (i.e. mid-period).
+
+    The check is informational; no auto-fix. The discrepancy detail
+    spells out the unused-period dollar value so the operator has the
+    refund math at hand.
+    """
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+
+    candidates = (
+        session.query(BillingPlanAssignment, BillingPlanTemplate)
+        .join(
+            BillingPlanTemplate,
+            BillingPlanTemplate.id == BillingPlanAssignment.template_id,
+        )
+        .filter(
+            BillingPlanAssignment.ended_at.isnot(None),
+            BillingPlanAssignment.ended_at >= cutoff_dt,
+            BillingPlanTemplate.commit_amount.isnot(None),
+            BillingPlanTemplate.commit_amount > 0,
+            BillingPlanTemplate.commit_schedule == "UPFRONT",
+        )
+        .all()
+    )
+
+    for assignment, template in candidates:
+        started_at = assignment.started_at
+        ended_at = assignment.ended_at
+        if started_at is None or ended_at is None:
+            continue
+
+        months_per_period = _MONTHS_IN_PERIOD.get(
+            template.commit_period or "MONTHLY",
+            1,
+        )
+
+        # "On a period boundary" = elapsed full months from started_at
+        # to ended_at is divisible by the period length AND the day-of-
+        # month / time-of-day match (or, more pragmatically, both are
+        # day-1 boundaries since plan changes typically occur at month
+        # rollovers via AT_BOUNDARY policy).
+        elapsed_months = (
+            (ended_at.year - started_at.year) * 12
+            + (ended_at.month - started_at.month)
+        )
+        # Treat day-of-month mismatch (or sub-month elapsed) as
+        # mid-period. Anything > 0 months, divisible by months_per_period,
+        # and same day-of-month, is a clean boundary.
+        on_boundary = (
+            elapsed_months > 0
+            and elapsed_months % months_per_period == 0
+            and ended_at.day == started_at.day
+        )
+        if on_boundary:
+            continue
+
+        # Compute approximate unused-period coverage in dollars for
+        # the alert detail. Uses simple month proration:
+        # unused_months = months_per_period - (elapsed_months % months_per_period).
+        commit_amount = float(template.commit_amount)
+        monthly_equiv = commit_amount / months_per_period
+        completed_months = elapsed_months % months_per_period
+        unused_months = max(0, months_per_period - completed_months)
+        approx_unused_value = monthly_equiv * unused_months
+
+        result.discrepancies.append(
+            Discrepancy(
+                category="upfront_assignment_ended_mid_period",
+                severity="warning",
+                billing_account_id=assignment.billing_account_id,
+                detail=(
+                    f"BA {assignment.billing_account_id} ended "
+                    f"UPFRONT assignment {assignment.id} (template "
+                    f"{template.id} {template.name!r}, "
+                    f"{template.commit_period} commit "
+                    f"{commit_amount:.2f} {template.currency}) on "
+                    f"{ended_at.date().isoformat()}, mid-period "
+                    f"({completed_months}/{months_per_period} months "
+                    "completed). Customer paid the full commit upfront "
+                    f"on {started_at.date().isoformat()}; approx "
+                    f"{unused_months}/{months_per_period} months "
+                    f"({approx_unused_value:.2f} {template.currency}) "
+                    "of coverage unused. Review contract terms — issue "
+                    "a manual refund via Stripe if unused coverage is "
+                    "refundable, otherwise document the policy decision "
+                    "in the assignment's change_reason."
+                ),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Plan-group hygiene checks
+#
+# Informational only: plan groups don't drive any invoice math, only
+# the customer-facing self-serve surface, so empty / inactive groups
+# are a UX/operator problem rather than a billing-correctness one.
+# The auto-fix tier never touches them — fixing them requires
+# deciding which templates should be in the group, which is an
+# operator call.
+#
+# A previous "member drift" check (active template not in assigned
+# group) was removed when DEFAULT_PLAN_GROUP_ID was introduced and
+# every account became auto-assigned to it: a custom Enterprise
+# assignment + the platform-default group is a deliberate, expected
+# state (the FE hide-rule suppresses the switcher when the active
+# template isn't in the group), not drift to flag.
+# ---------------------------------------------------------------------------
+
+
+def _check_plan_groups_with_no_active_members(
+    session: Session,
+    result: ReconciliationResult,
+) -> None:
+    """Flag plan_group rows that no longer contain any assignable templates.
+
+    Either the operator deprecated all member templates without
+    deprecating the group, or the group was never populated. The
+    customer billing page renders an empty switch section in this
+    case (no harm) but the group is still listed in the admin
+    catalog; surface so it can be retired or refilled.
+    """
+    # Active groups whose membership intersected with active
+    # templates is empty. Done in one SQL pass to avoid loading every
+    # member into memory.
+    from sqlalchemy import not_, select
+
+    active_member_subq = (
+        select(PlanGroupMember.group_id)
+        .join(BillingPlanTemplate, BillingPlanTemplate.id == PlanGroupMember.template_id)
+        .where(BillingPlanTemplate.is_active.is_(True))
+        .distinct()
+    )
+    empty_groups = (
+        session.query(PlanGroup)
+        .filter(PlanGroup.is_active.is_(True))
+        .filter(not_(PlanGroup.id.in_(active_member_subq)))
+        .all()
+    )
+    for group in empty_groups:
+        result.discrepancies.append(
+            Discrepancy(
+                category="plan_group_no_active_members",
+                severity="warning",
+                detail=(
+                    f"PlanGroup id={group.id} ({group.name!r}) is active "
+                    "but has no assignable members (every linked template "
+                    "is deprecated or the group is empty). Customers "
+                    "assigned to this group see an empty switch list. "
+                    "Add at least one active template via "
+                    "POST /v0/admin/billing/plans/groups/{id}/members, "
+                    "or deprecate the group with PATCH ... is_active=false."
+                ),
+            ),
+        )
+
+
+def _check_plan_group_null_pointer(
+    session: Session,
+    result: ReconciliationResult,
+) -> None:
+    """Flag accounts whose ``plan_group_id`` is NULL.
+
+    Mirrors ``plan_assignment_null_pointer``: ``plan_group_id`` is
+    NOT NULL by schema invariant (every account auto-inherits
+    ``DEFAULT_PLAN_GROUP_ID = 1`` at creation, and the migration
+    backfilled every historical row). A NULL here means a manual SQL
+    op cleared the column — fix by setting it back to 1, or to a
+    real custom group via the admin assign-plan-group endpoint.
+
+    Severity is ``critical`` to match the assignment pointer check;
+    even though the customer billing page degrades gracefully (the
+    self-serve switcher just stays hidden), every other piece of
+    code that joins through ``plan_group_id`` would silently miss
+    the row.
+    """
+    null_pointer_ba_ids = (
+        session.query(BillingAccount.id)
+        .filter(BillingAccount.plan_group_id.is_(None))
+        .all()
+    )
+    for (ba_id,) in null_pointer_ba_ids:
+        result.discrepancies.append(
+            Discrepancy(
+                category="plan_group_null_pointer",
+                severity="critical",
+                billing_account_id=ba_id,
+                detail=(
+                    f"BA {ba_id}.plan_group_id IS NULL — schema "
+                    "invariant violated (the column is NOT NULL and "
+                    "auto-defaults to DEFAULT_PLAN_GROUP_ID = 1). "
+                    "Likely cause: a manual SQL op cleared the "
+                    "column. Fix by reassigning the account via the "
+                    "admin endpoint (typically to group_id=1)."
+                ),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Post-collection enrichment
 # ---------------------------------------------------------------------------
 
@@ -1581,6 +2201,126 @@ def _enrich_discrepancies(
 
         if d.billing_account_id and d.category in credit_categories:
             d.recharge_context = recharge_map.get(d.billing_account_id)
+
+
+# ---------------------------------------------------------------------------
+# Stripe customer_balance — unapplied funds alerting
+# ---------------------------------------------------------------------------
+
+
+def _check_cash_balance_unapplied(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    lookback_days: int,
+) -> None:
+    """Flag wire-transfer overpayments that didn't auto-apply to an invoice.
+
+    Customers paying via ``customer_balance`` (bank transfer) settle by
+    wiring funds to a Stripe-issued virtual account. Stripe normally
+    auto-applies the new balance to an open invoice and emits
+    ``invoice.payment_succeeded`` — picked up by the regular webhook
+    handler.
+
+    Two non-happy-path event types signal funds that *aren't* moving
+    through that flow:
+
+    * ``unapplied_from_payment`` — Stripe reversed an earlier
+      ``applied_to_payment`` (typically refund / dispute / invoice
+      voided after auto-apply). The funds are back in the customer's
+      cash balance and won't auto-clear without a matching open
+      invoice in the same currency.
+    * ``adjusted_for_overdraft`` — Stripe corrected a balance that
+      went negative (rare; usually a refund issued against funds
+      that had already been pulled into a charge).
+
+    The webhook handler logs these at WARNING but doesn't surface
+    them anywhere persistent. We replay them via the Stripe Events
+    API in the reconciliation lookback window so on-call has a
+    single dashboard for "money sitting on a customer that ops
+    needs to refund or carry forward".
+
+    Flag-only at ``warning`` severity — auto-fix would mean either
+    issuing a refund (financial decision the routine can't safely
+    make) or creating a placeholder invoice (changes contract
+    semantics). The runbook step is to consult the customer's cash
+    balance in the Stripe dashboard and either refund or wait for
+    the next monthly invoice to consume the credit.
+    """
+    lookback_ts = int(
+        (datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp(),
+    )
+    try:
+        events = stripe.Event.list(
+            type="customer_cash_balance_transaction.created",
+            created={"gte": lookback_ts},
+            limit=100,
+        )
+    except Exception as e:
+        result.errors.append(
+            f"Failed to list customer_cash_balance_transaction events: {e}",
+        )
+        return
+
+    flagged_types = ("unapplied_from_payment", "adjusted_for_overdraft")
+    seen = 0
+    max_events = 500
+
+    for event in events.auto_paging_iter():
+        seen += 1
+        if seen > max_events:
+            break
+
+        event_id = (
+            event.get("id") if isinstance(event, dict) else getattr(event, "id", "")
+        )
+        data = (
+            event.get("data", {}).get("object", {})
+            if isinstance(event, dict)
+            else getattr(event, "data", {}).get("object", {})
+        )
+        txn_type = data.get("type") if isinstance(data, dict) else None
+        if txn_type not in flagged_types:
+            continue
+
+        customer_id = data.get("customer") if isinstance(data, dict) else None
+        net_amount = data.get("net_amount") if isinstance(data, dict) else None
+        currency = data.get("currency") if isinstance(data, dict) else None
+        ending_balance = (
+            data.get("ending_balance") if isinstance(data, dict) else None
+        )
+
+        ba_id = None
+        if customer_id:
+            ba = (
+                session.query(BillingAccount)
+                .filter_by(stripe_customer_id=customer_id)
+                .first()
+            )
+            ba_id = ba.id if ba is not None else None
+
+        result.discrepancies.append(
+            Discrepancy(
+                category="cash_balance_unapplied_funds",
+                severity="warning",
+                billing_account_id=ba_id,
+                stripe_id=event_id,
+                detail=(
+                    f"Stripe customer_cash_balance_transaction {event_id} "
+                    f"({txn_type}) on customer {customer_id}: net_amount="
+                    f"{net_amount} {currency or '?'}, ending_balance="
+                    f"{ending_balance}. Funds sit unapplied on the customer "
+                    "and will not auto-clear without an open invoice in "
+                    "the matching currency. Action: review in Stripe "
+                    "dashboard → Customer → Cash balance, then either "
+                    "refund the surplus or leave it as a credit toward "
+                    "the next invoice (the next monthly run will consume "
+                    "it automatically if so)."
+                ),
+            ),
+        )
+
+    result.events_checked += seen
 
 
 # ---------------------------------------------------------------------------

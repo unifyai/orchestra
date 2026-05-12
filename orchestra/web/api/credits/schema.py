@@ -22,15 +22,22 @@ PUBLIC_CATEGORIES: set[str] = SPENDING_CATEGORIES | CREDIT_CATEGORIES
 
 class CreditsResponse(BaseModel):
     """
-    Response model for credits models.
+    Response model for credits balance.
 
     Attributes:
-        id (str): The id of the users.
-        credits (float): The credits of the users.
+        id (str): The id of the user / organization.
+        credits (float): The wallet balance.
+        billing_mode (str): ``"CREDITS"`` for prepaid wallet accounts,
+            ``"METERED"`` for accounts billed via monthly invoice. The
+            wallet on a METERED account is frozen and may carry any
+            leftover balance from a prior CREDITS phase — callers
+            should not gate billable actions on the balance for METERED
+            accounts. Defaults to ``"CREDITS"`` for back-compat.
     """
 
     id: str
     credits: float
+    billing_mode: Literal["CREDITS", "METERED"] = "CREDITS"
 
 
 class DeductCreditsRequest(BaseModel):
@@ -99,7 +106,6 @@ class TransactionItem(BaseModel):
     id: int
     at: datetime
     amount: float
-    balance_after: Optional[float] = None
     category: str
     assistant_id: Optional[int] = None
     user_id: Optional[str] = None

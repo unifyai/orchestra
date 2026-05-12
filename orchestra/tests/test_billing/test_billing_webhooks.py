@@ -1634,6 +1634,154 @@ class TestChargeIdempotency:
 
 
 # ============================================================================
+# customer_cash_balance_transaction.* (wire-transfer breadcrumbs)
+# ============================================================================
+
+
+class TestCashBalanceTransactionEvent:
+    """Coverage for ``customer_cash_balance_transaction.*`` handling.
+
+    These are *informational* events emitted when a wire payment via
+    ``customer_balance`` flows through Stripe's virtual bank account.
+    The recharge → PAID transition still happens through
+    ``invoice.payment_succeeded`` once Stripe auto-applies the
+    received balance, so this handler must:
+
+    * always 200 (never block Stripe with a 4xx/5xx);
+    * never mutate Recharge status (that's the invoice-event handler's
+      job, and double-marking would race with it);
+    * route through ``handle_event_core`` for *every* sub-type
+      (``funded``, ``applied_to_payment``, ``unapplied_from_payment``,
+      ``adjusted_for_overdraft``).
+    """
+
+    def _event(self, *, txn_type: str, customer: str = "cus_wire_test"):
+        return {
+            "id": f"evt_cash_balance_{txn_type}",
+            # Stripe's actual event name uses underscores throughout
+            # (NOT the dotted "customer.*" form used by tax_id /
+            # updated). See docs.stripe.com/api/events/types.
+            "type": "customer_cash_balance_transaction.created",
+            "data": {
+                "object": {
+                    "customer": customer,
+                    "type": txn_type,
+                    "currency": "usd",
+                    "net_amount": 125000,
+                    "ending_balance": 125000,
+                },
+            },
+        }
+
+    def test_funded_event_acks_without_touching_recharges(
+        self,
+        dbsession,
+        caplog,
+    ):
+        """``funded`` (wire arrived) → 200, no recharge mutation, info log.
+
+        The recharge is still ``INVOICE_CREATED`` after this event;
+        only ``invoice.payment_succeeded`` (which Stripe sends after
+        auto-applying the balance) is allowed to mark it PAID.
+        """
+        import logging
+
+        from orchestra.web.api.webhooks.stripe import handle_event_core
+
+        user, ba = make_user_with_billing(
+            dbsession,
+            "wire_funded_user",
+            stripe_customer_id="cus_wire_test",
+        )
+        rec = Recharge(
+            billing_account_id=ba.id,
+            quantity=10,
+            amount_usd=Decimal("1250"),
+            status=RechargeStatus.INVOICE_CREATED,
+            stripe_invoice_id="in_wire_open",
+            type="usage",
+        )
+        dbsession.add(rec)
+        dbsession.commit()
+
+        with caplog.at_level(logging.INFO, logger="orchestra.web.api.webhooks.stripe"):
+            response = handle_event_core(
+                self._event(txn_type="funded"),
+                dbsession,
+            )
+        assert response.status_code == 200
+
+        dbsession.refresh(rec)
+        # Critical: the recharge stays INVOICE_CREATED. Marking it PAID
+        # here would race with the invoice.payment_succeeded handler
+        # that fires moments later when Stripe auto-applies the
+        # balance.
+        assert rec.status == RechargeStatus.INVOICE_CREATED
+
+        # And the BillingAccount was correlated by stripe_customer_id
+        # so the operator log line is useful.
+        assert any(
+            "cash_balance_transaction" in (r.getMessage() or "")
+            or "cash_balance_transaction" in str(getattr(r, "msg", ""))
+            for r in caplog.records
+        )
+
+    def test_unapplied_from_payment_logs_warning(self, dbsession, caplog):
+        """Overpayment / surplus → WARNING log so ops can decide.
+
+        ``unapplied_from_payment`` (and ``adjusted_for_overdraft``)
+        leave money sitting on the customer's cash balance with no
+        matching invoice — Stripe won't auto-clear these. We log at
+        WARNING so the on-call channel surfaces it.
+        """
+        import logging
+
+        from orchestra.web.api.webhooks.stripe import handle_event_core
+
+        make_user_with_billing(
+            dbsession,
+            "wire_overpaid_user",
+            stripe_customer_id="cus_wire_test",
+        )
+        dbsession.commit()
+
+        with caplog.at_level(
+            logging.WARNING,
+            logger="orchestra.web.api.webhooks.stripe",
+        ):
+            response = handle_event_core(
+                self._event(txn_type="unapplied_from_payment"),
+                dbsession,
+            )
+        assert response.status_code == 200
+        # At least one WARNING-level record from the cash-balance
+        # handler. (Other modules may emit unrelated warnings; we only
+        # care that ours fired.)
+        assert any(
+            r.levelname == "WARNING"
+            and "cash_balance_transaction"
+            in (str(r.getMessage()) + str(getattr(r, "msg", "")))
+            for r in caplog.records
+        )
+
+    def test_unknown_customer_acks_without_error(self, dbsession):
+        """Stripe customer not in our DB → still 200.
+
+        Could happen if a Stripe event arrives for a customer that
+        was deleted on our side, or for a TEST event replayed against
+        prod. Returning anything but 200 makes Stripe retry up to
+        3 days; for an info-only event that's just noise.
+        """
+        from orchestra.web.api.webhooks.stripe import handle_event_core
+
+        response = handle_event_core(
+            self._event(txn_type="funded", customer="cus_unknown_to_us"),
+            dbsession,
+        )
+        assert response.status_code == 200
+
+
+# ============================================================================
 # handle_event_core Dispatch
 # ============================================================================
 

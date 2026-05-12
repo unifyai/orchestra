@@ -19,6 +19,7 @@ from orchestra.db.models.orchestra_models import (
     AssistantContact,
     AssistantContactCost,
     BillingAccount,
+    BillingMode,
     Organization,
     User,
 )
@@ -533,6 +534,14 @@ class AssistantContactDAO:
         If credits are now >= 0, restores all contacts from
         ``grace_period`` to ``active``.
 
+        For METERED accounts the wallet is frozen and may carry any
+        leftover balance from a prior CREDITS phase, so the wallet
+        balance is not a reliable signal. Grace period for METERED
+        accounts is driven by ``invoice.payment_succeeded`` /
+        ``invoice.payment_failed`` webhooks instead — clear
+        unconditionally here when called for a METERED account
+        (the caller has already established that an invoice was paid).
+
         Does NOT change ``account_status`` — that is only set by
         dispute/fraud events.
 
@@ -541,9 +550,16 @@ class AssistantContactDAO:
         reawaken affected assistants on its next run; contacts in grace_period
         still have provisioned resources, so they remain functional.
         """
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
         self.session.refresh(ba)
 
-        if ba.credits >= 0:
+        is_metered = (
+            BillingAccountDAO(self.session).resolve_billing_mode(ba)
+            == BillingMode.METERED
+        )
+
+        if is_metered or ba.credits >= 0:
             try:
                 affected = self.clear_grace_period_for_billing_account(ba)
                 if affected:
