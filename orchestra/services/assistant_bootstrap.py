@@ -1,5 +1,6 @@
 """Bootstrap helpers that keep assistant chat contexts queryable."""
 
+from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
@@ -12,11 +13,16 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.unique_constraint_dao import (
+    COMPOSITE_KEY_FIELD,
+    UniqueConstraintDAO,
+)
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
     LogEvent,
     LogEventContext,
+    LogUniqueConstraint,
     Project,
     User,
 )
@@ -141,16 +147,43 @@ def _find_contact_log_by_contact_id(
     context: Context,
     contact_id: int,
 ) -> LogEvent | None:
-    return session.scalar(
+    logs = session.scalars(
         select(LogEvent)
         .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
         .where(
             LogEventContext.context_id == context.id,
-            LogEvent.data["contact_id"].astext == str(contact_id),
+            LogEvent.data.has_key("contact_id"),
         )
-        .order_by(LogEvent.id.asc())
-        .limit(1),
-    )
+        .order_by(LogEvent.id.asc()),
+    ).all()
+    for log in logs:
+        if _normalized_contact_id(log.data.get("contact_id")) == contact_id:
+            return log
+    return None
+
+
+def _normalized_contact_id(raw_value: Any) -> int | None:
+    """Best-effort integer normalization for legacy contact-id shapes."""
+    if isinstance(raw_value, bool):
+        return None
+    if isinstance(raw_value, int):
+        return raw_value
+    if isinstance(raw_value, float):
+        if raw_value.is_integer():
+            return int(raw_value)
+        return None
+    if isinstance(raw_value, str):
+        value = raw_value.strip()
+        if not value:
+            return None
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation:
+            return None
+        if parsed == parsed.to_integral_value():
+            return int(parsed)
+        return None
+    return None
 
 
 def _log_data_contains(log_data: dict[str, Any], entries: dict[str, Any]) -> bool:
@@ -198,6 +231,35 @@ def _create_log_entry(
     return result
 
 
+def _is_duplicate_contact_key_error(exc: HTTPException) -> bool:
+    if exc.status_code != status.HTTP_400_BAD_REQUEST:
+        return False
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return (
+        "Duplicate composite key already exists for this context" in detail
+        and "contact_id" in detail
+    )
+
+
+def _clear_stale_contact_unique_constraint(
+    session: Session,
+    *,
+    context_id: int,
+    contact_id: int,
+) -> None:
+    """Drop a stale lookup entry for one Contacts composite key."""
+    value_hash = UniqueConstraintDAO.hash_composite(
+        {"contact_id": contact_id},
+        ["contact_id"],
+    )
+    session.query(LogUniqueConstraint).filter(
+        LogUniqueConstraint.context_id == context_id,
+        LogUniqueConstraint.field_name == COMPOSITE_KEY_FIELD,
+        LogUniqueConstraint.value_hash == value_hash,
+    ).delete(synchronize_session=False)
+    session.flush()
+
+
 def ensure_owner_contact_row(
     session: Session,
     *,
@@ -240,13 +302,43 @@ def ensure_owner_contact_row(
         session.flush()
         return existing.id
 
-    result = _create_log_entry(
-        session,
-        project=resolved_project,
-        context=context,
-        context_name=context_name,
-        entries=entries,
-    )
+    try:
+        result = _create_log_entry(
+            session,
+            project=resolved_project,
+            context=context,
+            context_name=context_name,
+            entries=entries,
+        )
+    except HTTPException as exc:
+        if not _is_duplicate_contact_key_error(exc):
+            raise
+
+        existing = _find_contact_log_by_contact_id(
+            session,
+            context=context,
+            contact_id=PERSONAL_BOSS_CONTACT_ID,
+        )
+        if existing is not None:
+            if not _log_data_contains(existing.data, entries):
+                existing.data = {**existing.data, **entries}
+                flag_modified(existing, "data")
+                session.flush()
+            return existing.id
+
+        _clear_stale_contact_unique_constraint(
+            session,
+            context_id=context.id,
+            contact_id=PERSONAL_BOSS_CONTACT_ID,
+        )
+        result = _create_log_entry(
+            session,
+            project=resolved_project,
+            context=context,
+            context_name=context_name,
+            entries=entries,
+        )
+
     session.flush()
     return result["log_event_ids"][0]
 
