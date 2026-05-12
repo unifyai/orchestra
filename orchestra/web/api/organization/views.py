@@ -182,7 +182,6 @@ async def _create_organization_with_coordinator(
             owner_user_id=owner_user_id,
             organization_id=org.id,
             timezone=timezone,
-            space_name=name,
         )
         coordinator_id = coordinator.agent_id
 
