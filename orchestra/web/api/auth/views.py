@@ -51,6 +51,9 @@ from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.services.coordinator_service import (
+    ensure_personal_coordinator_provisioned,
+)
 from orchestra.settings import settings
 from orchestra.web.api.auth.schema import (
     AuthenticateResponse,
@@ -84,6 +87,7 @@ from orchestra.web.api.auth.schema import (
 )
 from orchestra.web.api.dependencies import enforce_unify_members_only
 from orchestra.web.api.users.schema import AccountRequest
+from orchestra.web.api.utils.assistant_infra import delete_pubsub_topic
 from orchestra.web.api.utils.auth_rate_limiting import enforce_auth_rate_limit
 
 admin_router = APIRouter()
@@ -285,7 +289,7 @@ def verify_code(
     response_model=AuthVerifyResponse,
     status_code=status.HTTP_200_OK,
 )
-def create_user_after_verification(
+async def create_user_after_verification(
     body: CreateUserRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -338,43 +342,59 @@ def create_user_after_verification(
         )
     verification.token_jti = None
 
-    # Create User + EmailAccount in a single transaction
-    user = user_dao.create(
-        email=email,
-        name=verification.name,
-        last_name=verification.last_name,
-    )
-    session.flush()  # Get user.id
-
-    api_key_dao = ApiKeyDAO(session)
-    from orchestra.web.api.users.views import generate_key
-
-    new_api_key = generate_key()
-    api_key_dao.create(key=new_api_key, name="", user_id=user.id)
-
-    # Seed default project for the new user.
-    # DefaultTasksSeeder.seed() uses session.flush() (not commit), so it's safe
-    # to call within the current transaction — no savepoint needed.
+    created_coordinator = False
+    coordinator_id: int | None = None
     try:
-        from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+        # Create User + EmailAccount in a single transaction
+        user = user_dao.create(
+            email=email,
+            name=verification.name,
+            last_name=verification.last_name,
+        )
+        session.flush()  # Get user.id
 
-        DefaultTasksSeeder.seed(session, user_id=str(user.id))
-    except Exception as e:
-        logger.warning(f"Failed to seed default tasks for user {user.id}: {e}")
+        api_key_dao = ApiKeyDAO(session)
+        from orchestra.web.api.users.views import generate_key
 
-    auth_dao.create_email_credentials(
-        user_id=user.id,
-        password_hash=verification.password_hash,
-        email_verified=True,
-    )
+        new_api_key = generate_key()
+        api_key_dao.create(key=new_api_key, name="", user_id=user.id)
 
-    # Initialize onboarding status for the new user
-    onboarding_dao = OnboardingStatusDAO(session)
-    onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
+        # Seed default project for the new user.
+        # DefaultTasksSeeder.seed() uses session.flush() (not commit), so it's safe
+        # to call within the current transaction — no savepoint needed.
+        try:
+            from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 
-    # Delete the verification entry
-    auth_dao.delete_verification(verification.id)
-    session.commit()
+            DefaultTasksSeeder.seed(session, user_id=str(user.id))
+        except Exception as e:
+            logger.warning(f"Failed to seed default tasks for user {user.id}: {e}")
+
+        auth_dao.create_email_credentials(
+            user_id=user.id,
+            password_hash=verification.password_hash,
+            email_verified=True,
+        )
+
+        # Initialize onboarding status for the new user
+        onboarding_dao = OnboardingStatusDAO(session)
+        onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
+
+        coordinator, created_coordinator = (
+            await ensure_personal_coordinator_provisioned(
+                session,
+                user_id=str(user.id),
+            )
+        )
+        coordinator_id = coordinator.agent_id
+
+        # Delete the verification entry
+        auth_dao.delete_verification(verification.id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        if created_coordinator and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+        raise
 
     return AuthVerifyResponse(
         id=str(user.id),

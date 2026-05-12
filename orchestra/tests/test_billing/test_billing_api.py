@@ -107,6 +107,22 @@ def _env_secrets(monkeypatch):
     monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_test", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _stub_personal_coordinator_pubsub_calls(monkeypatch):
+    """Keep billing API tests isolated from coordinator Pub/Sub provisioning."""
+
+    async def _fake_create_pubsub_topic(*_args, **_kwargs):
+        return {"name": "projects/test/topics/test-topic"}
+
+    import orchestra.services.coordinator_service as coordinator_service
+
+    monkeypatch.setattr(
+        coordinator_service,
+        "create_pubsub_topic",
+        _fake_create_pubsub_topic,
+    )
+
+
 # ============================================================================
 # Schema Smoke Tests
 # ============================================================================

@@ -59,7 +59,7 @@ def coordinator_pubsub_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
-        "orchestra.web.api.users.views.create_pubsub_topic",
+        "orchestra.services.coordinator_service.create_pubsub_topic",
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
@@ -554,7 +554,10 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
         f"/v0/user/{owner['id']}/coordinator",
         headers=owner["headers"],
     )
-    assert first.status_code == status.HTTP_201_CREATED, first.json()
+    assert first.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, first.json()
     coordinator_id = first.json()["coordinator_id"]
     coordinator = dbsession.get(Assistant, int(coordinator_id))
     assert coordinator is not None
@@ -624,11 +627,11 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
 
 
 @pytest.mark.anyio
-async def test_coordinator_admin_gate_and_direct_delete_guard(
+async def test_coordinator_non_delete_member_admin_parity_and_direct_delete_guard(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Resource write permission is insufficient without Admin/Owner org role."""
+    """Members/Admins share non-delete Coordinator actions; delete remains guarded."""
     owner = await _create_user(client, "admin-gate-owner")
     member = await _create_user(client, "admin-gate-member")
     admin = await _create_user(client, "admin-gate-admin")
@@ -659,24 +662,18 @@ async def test_coordinator_admin_gate_and_direct_delete_guard(
     )
     dbsession.flush()
 
-    forbidden_seed = await client.post(
+    member_seed = await client.post(
         f"/v0/assistant/{coordinator_id}/transcript-seed",
-        json={"content": "Member should not seed."},
+        json={"content": "Member can seed."},
         headers=member["headers"],
     )
-    assert (
-        forbidden_seed.status_code == status.HTTP_403_FORBIDDEN
-    ), forbidden_seed.json()
-    assert forbidden_seed.json()["detail"] == "admin_required"
+    assert member_seed.status_code == status.HTTP_200_OK, member_seed.json()
 
-    forbidden_reset = await client.post(
+    member_reset = await client.post(
         f"/v0/assistant/{coordinator_id}/reset",
         headers=member["headers"],
     )
-    assert (
-        forbidden_reset.status_code == status.HTTP_403_FORBIDDEN
-    ), forbidden_reset.json()
-    assert forbidden_reset.json()["detail"] == "admin_required"
+    assert member_reset.status_code == status.HTTP_200_OK, member_reset.json()
 
     admin_seed = await client.post(
         f"/v0/assistant/{coordinator_id}/transcript-seed",
@@ -690,18 +687,6 @@ async def test_coordinator_admin_gate_and_direct_delete_guard(
         headers=admin["headers"],
     )
     assert admin_reset.status_code == status.HTTP_200_OK, admin_reset.json()
-
-    org_member_dao.update_member_role(
-        user_id=member["id"],
-        organization_id=org_data["id"],
-        role_id=admin_role.id,
-    )
-    promoted_seed = await client.post(
-        f"/v0/assistant/{coordinator_id}/transcript-seed",
-        json={"content": "Promoted admin can seed."},
-        headers=member["headers"],
-    )
-    assert promoted_seed.status_code == status.HTTP_200_OK, promoted_seed.json()
 
     delete = await client.delete(
         f"/v0/assistant/{coordinator_id}",

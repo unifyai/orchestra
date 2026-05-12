@@ -34,9 +34,9 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.coordinator_service import (
-    create_personal_coordinator,
+    ensure_personal_coordinator_provisioned,
     get_personal_coordinator,
-    pubsub_topic_response_failed,
+    list_user_ids_missing_personal_coordinator,
 )
 from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
@@ -70,10 +70,7 @@ from orchestra.web.api.users.schema import (
     UserSpendingLimitResponse,
     UserSpendResponse,
 )
-from orchestra.web.api.utils.assistant_infra import (
-    create_pubsub_topic,
-    delete_pubsub_topic,
-)
+from orchestra.web.api.utils.assistant_infra import delete_pubsub_topic
 from orchestra.web.api.utils.http_responses import not_found
 
 admin_router = APIRouter()
@@ -88,40 +85,57 @@ logger = logging.getLogger(__name__)
 
 
 @admin_router.post("/user")
-def create_user(
+async def create_user(
     user: UserRequest,
     session: Session = Depends(get_db_session),
 ):
     user_dao = UserDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    created_coordinator = False
+    coordinator_id: int | None = None
 
-    user_dao.create(
-        email=user.email,
-        name=user.name,
-        last_name=user.last_name,
-        job_title=user.job_title,
-        bio=user.bio,
-        image=user.image,
-        timezone=user.timezone,
-        phone_number=user.phone_number,
-        whatsapp_number=user.whatsapp_number,
-        discord_id=user.discord_id,
-    )
-    user_row = user_dao.filter(email=user.email)
-    new_user = user_row[0][0]
-
-    new_api_key = generate_key()
-    api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
-
-    # Seed default Unity project, interface, tab, and table tile for tasks
     try:
-        DefaultTasksSeeder.seed(session, user_id=new_user.id)
-    except Exception as e:
-        print(e)
+        user_dao.create(
+            email=user.email,
+            name=user.name,
+            last_name=user.last_name,
+            job_title=user.job_title,
+            bio=user.bio,
+            image=user.image,
+            timezone=user.timezone,
+            phone_number=user.phone_number,
+            whatsapp_number=user.whatsapp_number,
+            discord_id=user.discord_id,
+        )
+        user_row = user_dao.filter(email=user.email)
+        new_user = user_row[0][0]
 
-    # Initialize onboarding status for the new user
-    onboarding_dao = OnboardingStatusDAO(session)
-    onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+        new_api_key = generate_key()
+        api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
+
+        # Seed default Unity project, interface, tab, and table tile for tasks
+        try:
+            DefaultTasksSeeder.seed(session, user_id=new_user.id)
+        except Exception as e:
+            print(e)
+
+        # Initialize onboarding status for the new user
+        onboarding_dao = OnboardingStatusDAO(session)
+        onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+
+        coordinator, created_coordinator = (
+            await ensure_personal_coordinator_provisioned(
+                session,
+                user_id=str(new_user.id),
+            )
+        )
+        coordinator_id = coordinator.agent_id
+        session.commit()
+    except Exception:
+        session.rollback()
+        if created_coordinator and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+        raise
 
     return {
         "id": new_user.id,
@@ -912,14 +926,12 @@ def list_organization(
 
 
 @admin_router.post("/organization")
-def create_organization(
+async def create_organization(
     name: str,
-    owner_id: Optional[str] = None,
+    owner_id: str,
     session: Session = Depends(get_db_session),
 ):
     organization_dao = OrganizationDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
     user_dao = UserDAO(session)
 
     existing_org = organization_dao.filter(owner_id=owner_id)
@@ -929,21 +941,19 @@ def create_organization(
             detail="This user already has an organization.",
         )
 
-    # Get Owner role
-    owner_role = role_dao.get_by_name("Owner", organization_id=None)
-    if not owner_role:
-        raise HTTPException(status_code=500, detail="Owner system role not found")
-
-    # Get owner's timezone to initialize org timezone
+    # Get owner's timezone to initialize org timezone and reuse canonical org creation.
     owner_row = user_dao.get_by_id(owner_id) if owner_id else None
     owner_timezone = owner_row[0].timezone if owner_row else None
 
-    organization_dao.create(name=name, owner_id=owner_id, timezone=owner_timezone)
-    new_org = organization_dao.filter(owner_id=owner_id)
-    organization_member_dao.create(
-        organization_id=new_org[0][0].id,
-        user_id=owner_id,
-        role_id=owner_role.id,
+    from orchestra.web.api.organization.views import (
+        _create_organization_with_coordinator,
+    )
+
+    await _create_organization_with_coordinator(
+        session,
+        name=name,
+        owner_user_id=owner_id,
+        timezone=owner_timezone,
     )
     return "Organization created successfully!"
 
@@ -1185,53 +1195,112 @@ async def create_personal_coordinator_endpoint(
         raise not_found("User")
 
     existing = get_personal_coordinator(session, user_id)
-    if existing is not None:
-        coordinator = create_personal_coordinator(session, user_id)
-        session.commit()
-        response.status_code = status.HTTP_200_OK
-        return {"coordinator_id": str(coordinator.agent_id)}
+    response.status_code = (
+        status.HTTP_200_OK if existing is not None else status.HTTP_201_CREATED
+    )
 
-    created_pubsub_topic = False
+    created_coordinator = False
     coordinator_id: int | None = None
     try:
-        coordinator = create_personal_coordinator(session, user_id)
-        coordinator_id = coordinator.agent_id
-        pubsub_response = await create_pubsub_topic(
-            str(coordinator.agent_id),
-            deploy_env=coordinator.deploy_env,
-        )
-        if pubsub_topic_response_failed(pubsub_response):
-            raise ValueError(
-                f"Coordinator topic provisioning failed: {pubsub_response}",
+        coordinator, created_coordinator = (
+            await ensure_personal_coordinator_provisioned(
+                session,
+                user_id=user_id,
             )
-        created_pubsub_topic = not pubsub_response.get("skipped")
+        )
+        coordinator_id = coordinator.agent_id
         session.commit()
     except IntegrityError as exc:
         session.rollback()
-        response.status_code = status.HTTP_200_OK
         if "ux_assistants_one_personal_coordinator_per_user" not in str(exc.orig):
+            if created_coordinator and coordinator_id is not None:
+                await delete_pubsub_topic(str(coordinator_id))
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Failed to create Coordinator.",
             )
-        if created_pubsub_topic and coordinator_id is not None:
+        if created_coordinator and coordinator_id is not None:
             await delete_pubsub_topic(str(coordinator_id))
-            created_pubsub_topic = False
+            created_coordinator = False
+        response.status_code = status.HTTP_200_OK
         coordinator = get_personal_coordinator(session, user_id)
         if coordinator is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Failed to create Coordinator.",
             )
-        coordinator = create_personal_coordinator(session, user_id)
-        session.commit()
+        try:
+            coordinator, created_coordinator = (
+                await ensure_personal_coordinator_provisioned(
+                    session,
+                    user_id=user_id,
+                )
+            )
+            coordinator_id = coordinator.agent_id
+            session.commit()
+        except Exception:
+            session.rollback()
+            if created_coordinator and coordinator_id is not None:
+                await delete_pubsub_topic(str(coordinator_id))
+            raise
     except Exception:
         session.rollback()
-        if created_pubsub_topic and coordinator_id is not None:
+        if created_coordinator and coordinator_id is not None:
             await delete_pubsub_topic(str(coordinator_id))
         raise
 
     return {"coordinator_id": str(coordinator.agent_id)}
+
+
+@admin_router.post("/coordinator/personal/backfill")
+async def backfill_personal_coordinators(
+    limit: int = Query(500, ge=1, le=5000),
+    dry_run: bool = Query(True),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Backfill missing personal Coordinators for existing users."""
+    target_user_ids = list_user_ids_missing_personal_coordinator(session, limit=limit)
+    if dry_run:
+        return {
+            "dry_run": True,
+            "target_count": len(target_user_ids),
+            "target_user_ids": target_user_ids,
+        }
+
+    created = 0
+    skipped = 0
+    errors: list[dict[str, str]] = []
+
+    for user_id in target_user_ids:
+        created_coordinator = False
+        coordinator_id: int | None = None
+        try:
+            coordinator, created_coordinator = (
+                await ensure_personal_coordinator_provisioned(
+                    session,
+                    user_id=user_id,
+                )
+            )
+            coordinator_id = coordinator.agent_id
+            session.commit()
+            if created_coordinator:
+                created += 1
+            else:
+                skipped += 1
+        except Exception as exc:
+            session.rollback()
+            if created_coordinator and coordinator_id is not None:
+                await delete_pubsub_topic(str(coordinator_id))
+            errors.append({"user_id": user_id, "error": str(exc)})
+
+    return {
+        "dry_run": False,
+        "target_count": len(target_user_ids),
+        "created": created,
+        "skipped_existing": skipped,
+        "failed": len(errors),
+        "errors": errors,
+    }
 
 
 @router.patch("/user/query-logging")
@@ -1912,11 +1981,15 @@ async def get_user_spend(
     billing_mode = "CREDITS"
     if user.billing_account:
         credit_balance = float(user.billing_account.credits)
-        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
         billing_mode = (
             BillingAccountDAO(session)
+<<<<<<< HEAD
             .resolve_billing_mode(user.billing_account)
+=======
+            .resolve_billing_mode(
+                user.billing_account,
+            )
+>>>>>>> befd3b2d (feat(coordinator): auto-provision personal coordinators and add backfill endpoint)
             .value
         )
 
