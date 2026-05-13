@@ -36,6 +36,7 @@ from orchestra.services.task_machine_state_service import (
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
+EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 
 
 @pytest.fixture(autouse=True)
@@ -222,6 +223,7 @@ def _assert_coordinator_provisioned(
     assert coordinator.organization_id == org_data["id"]
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
+    assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
     assert {
         (membership.contact_id, membership.relationship)
         for membership in _personal_memberships(
@@ -518,6 +520,41 @@ async def test_reset_clears_only_coordinator_contexts(
 
 
 @pytest.mark.anyio
+async def test_personal_opt_in_repairs_unset_desktop_mode(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Personal opt-in restores the Coordinator desktop default when missing."""
+    owner = await _create_user(client, "personal-desktop-default")
+
+    first = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert first.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, first.json()
+    coordinator_id = int(first.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    assert coordinator is not None
+    assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+
+    coordinator.desktop_mode = None
+    dbsession.commit()
+
+    repaired = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert repaired.status_code == status.HTTP_200_OK, repaired.json()
+    assert repaired.json()["coordinator_id"] == str(coordinator_id)
+
+    dbsession.refresh(coordinator)
+    assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+
+
+@pytest.mark.anyio
 async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag(
     client: AsyncClient,
     dbsession: Session,
@@ -538,7 +575,9 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     coordinator = dbsession.get(Assistant, int(coordinator_id))
     assert coordinator is not None
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
+    assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
     coordinator.nationality = None
+    coordinator.desktop_mode = None
     dbsession.commit()
 
     second = await client.post(
@@ -549,6 +588,7 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     assert second.json()["coordinator_id"] == coordinator_id
     dbsession.refresh(coordinator)
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
+    assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
 
     dbsession.execute(
         delete(ContactMembership).where(
