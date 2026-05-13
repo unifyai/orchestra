@@ -22,13 +22,8 @@ from sqlalchemy import (
     func,
     text,
 )
-<<<<<<< HEAD
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import backref, relationship
-=======
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import backref, relationship, validates
->>>>>>> 503eb6aa (feat(coordinator): add coordinator provisioning endpoints)
 
 from orchestra.db.base import Base
 

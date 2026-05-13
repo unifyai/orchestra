@@ -1982,15 +1982,7 @@ async def get_user_spend(
     if user.billing_account:
         credit_balance = float(user.billing_account.credits)
         billing_mode = (
-            BillingAccountDAO(session)
-<<<<<<< HEAD
-            .resolve_billing_mode(user.billing_account)
-=======
-            .resolve_billing_mode(
-                user.billing_account,
-            )
->>>>>>> befd3b2d (feat(coordinator): auto-provision personal coordinators and add backfill endpoint)
-            .value
+            BillingAccountDAO(session).resolve_billing_mode(user.billing_account).value
         )
 
     return UserSpendResponse(
