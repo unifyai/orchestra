@@ -1,14 +1,14 @@
 """Seed personal contact memberships.
 
 Revision ID: seed_personal_cm
-Revises: remove_org_default_space_kind
+Revises: drop_space_invites
 Create Date: 2026-05-05 12:00:00.000000
 """
 
 from alembic import op
 
 revision = "seed_personal_cm"
-down_revision = "remove_org_default_space_kind"
+down_revision = "drop_space_invites"
 branch_labels = None
 depends_on = None
 
