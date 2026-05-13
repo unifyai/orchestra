@@ -42,6 +42,7 @@ from orchestra.web.api.utils.assistant_infra import create_pubsub_topic
 ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
 COORDINATOR_DEFAULT_NATIONALITY = "United States"
+COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 COORDINATOR_RESET_CONTEXTS = (
     "Coordinator/State",
     "Coordinator/Checklist",
@@ -67,6 +68,12 @@ def _ensure_coordinator_default_nationality(assistant: Assistant) -> None:
     """Ensure Coordinator rows carry the nationality required for runtime startup."""
     if assistant.nationality is None:
         assistant.nationality = COORDINATOR_DEFAULT_NATIONALITY
+
+
+def _ensure_coordinator_default_desktop_mode(assistant: Assistant) -> None:
+    """Ensure Coordinator rows request a managed desktop when unset."""
+    if not assistant.desktop_mode:
+        assistant.desktop_mode = COORDINATOR_DEFAULT_DESKTOP_MODE
 
 
 def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None:
@@ -115,7 +122,7 @@ def create_coordinator_assistant(
         nationality=COORDINATOR_DEFAULT_NATIONALITY,
         profile_photo=None,
         profile_video=None,
-        desktop_mode=None,
+        desktop_mode=COORDINATOR_DEFAULT_DESKTOP_MODE,
         user_desktop_id=None,
         user_desktop_filesys_sync=False,
         about="Coordinates setup and shared assistant memory.",
@@ -243,6 +250,18 @@ def grant_owner_access_to_assistant(
     )
 
 
+def _repair_existing_coordinator_state(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> None:
+    """Repair Coordinator defaults and required owner-facing overlays."""
+    _ensure_coordinator_default_nationality(coordinator)
+    _ensure_coordinator_default_desktop_mode(coordinator)
+    ensure_personal_contact_memberships(session, [coordinator.agent_id])
+    _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
+
+
 def create_personal_coordinator(
     session: Session,
     user_id: str,
@@ -254,9 +273,7 @@ def create_personal_coordinator(
     """
     existing = get_personal_coordinator(session, user_id)
     if existing is not None:
-        _ensure_coordinator_default_nationality(existing)
-        ensure_personal_contact_memberships(session, [existing.agent_id])
-        _ensure_coordinator_owner_contact_row(session, coordinator=existing)
+        _repair_existing_coordinator_state(session, coordinator=existing)
         return existing, False
 
     assistant = create_coordinator_assistant(
@@ -333,9 +350,7 @@ def create_organization_coordinator(
     """Create or return the organization's Coordinator."""
     existing = get_org_coordinator(session, organization_id)
     if existing is not None:
-        _ensure_coordinator_default_nationality(existing)
-        ensure_personal_contact_memberships(session, [existing.agent_id])
-        _ensure_coordinator_owner_contact_row(session, coordinator=existing)
+        _repair_existing_coordinator_state(session, coordinator=existing)
         return existing
 
     assistant = create_coordinator_assistant(
