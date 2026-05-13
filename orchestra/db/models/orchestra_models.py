@@ -41,9 +41,9 @@ from orchestra.db.models.enums import (  # noqa: E402, F401
     RECHARGE_TYPE_PAYMENT,
     RECHARGE_TYPE_PROMO,
     BillingMode,
-    CommitSchedule,
     CollectionMethod,
     CommitPeriod,
+    CommitSchedule,
     CreditsRolloverPolicy,
     FxPolicy,
     PaymentMethodType,
@@ -462,8 +462,7 @@ class BillingPlanTemplate(Base):
             name="ck_plan_template_commit_period",
         ),
         sa.CheckConstraint(
-            "commit_schedule IS NULL OR commit_schedule IN "
-            "('AMORTISED', 'UPFRONT')",
+            "commit_schedule IS NULL OR commit_schedule IN " "('AMORTISED', 'UPFRONT')",
             name="ck_plan_template_commit_schedule",
         ),
         sa.CheckConstraint(
@@ -1276,14 +1275,8 @@ class Space(Base):
             name="ck_spaces_status",
         ),
         sa.CheckConstraint(
-            "kind IN ('team', 'org_default')",
+            "kind = 'team'",
             name="ck_spaces_kind",
-        ),
-        Index(
-            "ux_spaces_one_org_default_per_org",
-            "organization_id",
-            unique=True,
-            postgresql_where=text("kind = 'org_default'"),
         ),
     )
 
