@@ -32,6 +32,7 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    AssistantSpaceMembership,
     Recharge,
     RechargeStatus,
     Space,
@@ -47,9 +48,17 @@ from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.services.coordinator_service import (
     create_organization_coordinator,
+    get_personal_coordinator,
     pubsub_topic_response_failed,
 )
 from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
+from orchestra.services.space_cleanup_service import (
+    purge_assistant_overlay as purge_space_member_overlay,
+)
+from orchestra.services.space_membership_refresh_service import (
+    membership_refresh_payloads,
+    publish_membership_refreshes_best_effort,
+)
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     AdminOrganizationCreate,
@@ -975,6 +984,7 @@ async def remove_organization_member(
         )
 
     cleanup_task_ids: list[int] = []
+    space_membership_refreshes = []
 
     # Remove member and clean up all associated data
     try:
@@ -1050,7 +1060,37 @@ async def remove_organization_member(
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 
-        # 8. Clean up shared-pool routes for the departing member
+        # 8. Remove the member's personal Coordinator from org-scoped spaces.
+        personal_coordinator = get_personal_coordinator(session, user_id=user_id)
+        if personal_coordinator is not None:
+            personal_coordinator_space_ids = [
+                int(space_id)
+                for (space_id,) in session.execute(
+                    select(Space.space_id)
+                    .join(
+                        AssistantSpaceMembership,
+                        AssistantSpaceMembership.space_id == Space.space_id,
+                    )
+                    .where(
+                        AssistantSpaceMembership.assistant_id
+                        == personal_coordinator.agent_id,
+                        Space.organization_id == organization_id,
+                    ),
+                ).all()
+            ]
+            for space_id in personal_coordinator_space_ids:
+                await purge_space_member_overlay(
+                    session,
+                    assistant_id=personal_coordinator.agent_id,
+                    space_id=space_id,
+                )
+            if personal_coordinator_space_ids:
+                space_membership_refreshes = membership_refresh_payloads(
+                    session,
+                    [personal_coordinator],
+                )
+
+        # 9. Clean up shared-pool routes for the departing member
         from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
         pool_dao = SharedPoolDAO(session)
@@ -1064,6 +1104,9 @@ async def remove_organization_member(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to remove member",
         )
+
+    if space_membership_refreshes:
+        await publish_membership_refreshes_best_effort(space_membership_refreshes)
 
     await fan_out_contact_sync_for_org(organization_id, session)
 
@@ -2316,9 +2359,7 @@ async def get_org_spend(
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
         billing_mode = (
-            BillingAccountDAO(session)
-            .resolve_billing_mode(org.billing_account)
-            .value
+            BillingAccountDAO(session).resolve_billing_mode(org.billing_account).value
         )
 
     return OrgSpendResponse(
