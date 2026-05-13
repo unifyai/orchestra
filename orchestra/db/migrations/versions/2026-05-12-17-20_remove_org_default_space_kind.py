@@ -1,14 +1,14 @@
 """Remove org_default space semantics from the spaces contract.
 
 Revision ID: remove_org_default_space_kind
-Revises: seed_personal_cm
+Revises: drop_credit_balance_after
 Create Date: 2026-05-12 17:20:00.000000
 """
 
 from alembic import op
 
 revision = "remove_org_default_space_kind"
-down_revision = "seed_personal_cm"
+down_revision = "drop_credit_balance_after"
 branch_labels = None
 depends_on = None
 
