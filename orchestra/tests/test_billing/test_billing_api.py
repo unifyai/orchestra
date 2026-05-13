@@ -2885,6 +2885,121 @@ class TestAdminBillingEndpoints:
         assert response.status_code == 200
 
     @pytest.mark.anyio
+    async def test_create_recharge_invoice_group_is_month_end_for_non_midnight_at(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        """Regression: ``create_recharge`` must stamp ``invoice_group`` to the
+        last day of the calendar month even when ``datetime.now(UTC)`` is not
+        midnight.
+
+        The pre-fix arithmetic
+        ``(at.replace(day=1) + 32d).replace(day=1) - 1us`` preserved the
+        ``hour/minute/second`` components of ``at``, so for any non-midnight
+        invocation the final ``.date()`` cast landed on the **1st of the next
+        month** rather than the last day of the current month — which made
+        ``monthly_credits_invoicer`` (which filters on
+        ``Recharge.invoice_group == month_end_utc(today)``) silently skip
+        auto-recharges. This produced 78+ rows with first-of-next-month
+        ``invoice_group`` values in production (Recharge 20934 / Nassim being
+        the one that actually got stuck in ``PENDING_INVOICE`` and surfaced
+        via reconciliation on 2026-05-13).
+        """
+        import calendar
+
+        from orchestra.web.api.admin import views as admin_views
+
+        frozen = datetime(2026, 3, 15, 14, 30, 0, tzinfo=dt.timezone.utc)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):  # noqa: D401
+                return frozen.astimezone(tz) if tz is not None else frozen.replace(
+                    tzinfo=None,
+                )
+
+        monkeypatch.setattr(admin_views, "datetime", _FrozenDatetime)
+
+        user = await create_test_user(client, "invoice_group_regression@test.com")
+        user_id = user["id"]
+
+        response = await client.post(
+            "/v0/admin/create_recharge",
+            json={"user_id": user_id, "quantity": 5, "type": "promo"},
+            headers=ADMIN_HEADERS,
+        )
+        if response.status_code == 404:
+            pytest.skip("Recharge endpoint not available at this path")
+        assert response.status_code == 200, response.text
+
+        dbsession.expire_all()
+        ba_id = (
+            dbsession.query(User.billing_account_id).filter_by(id=user_id).scalar()
+        )
+        recharge = (
+            dbsession.query(Recharge)
+            .filter_by(billing_account_id=ba_id)
+            .order_by(Recharge.at.desc())
+            .first()
+        )
+        assert recharge is not None
+        last_day = calendar.monthrange(2026, 3)[1]
+        assert recharge.invoice_group == dt.date(2026, 3, last_day), (
+            "invoice_group must be the last day of the month, even when "
+            "datetime.now(UTC) has a non-zero time-of-day component; "
+            f"got {recharge.invoice_group!r}"
+        )
+
+    @pytest.mark.anyio
+    async def test_create_recharge_invoice_group_respects_target_month(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        """``target_month='YYYY-MM'`` must also resolve to the last day of
+        that month (not the 1st of the *next* month, which the pre-fix
+        in-line arithmetic in ``admin/views.py`` could produce for any
+        non-midnight wall-clock).
+        """
+        import calendar
+
+        user = await create_test_user(
+            client,
+            "invoice_group_target_month@test.com",
+        )
+        user_id = user["id"]
+
+        response = await client.post(
+            "/v0/admin/create_recharge",
+            json={
+                "user_id": user_id,
+                "quantity": 5,
+                "type": "promo",
+                "target_month": "2026-02",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        if response.status_code == 404:
+            pytest.skip("Recharge endpoint not available at this path")
+        assert response.status_code == 200, response.text
+
+        dbsession.expire_all()
+        ba_id = (
+            dbsession.query(User.billing_account_id).filter_by(id=user_id).scalar()
+        )
+        recharge = (
+            dbsession.query(Recharge)
+            .filter_by(billing_account_id=ba_id)
+            .order_by(Recharge.at.desc())
+            .first()
+        )
+        assert recharge is not None
+        last_day = calendar.monthrange(2026, 2)[1]
+        assert recharge.invoice_group == dt.date(2026, 2, last_day)
+
+    @pytest.mark.anyio
     async def test_freeze_account_by_stripe_id(self, client: AsyncClient):
         url = "/v0/admin/user"
         params = {"email": "billing_freeze@example.com"}

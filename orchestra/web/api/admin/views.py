@@ -34,6 +34,7 @@ from orchestra.services.assistant_cleanup_service import (
     MAX_CLEANUP_TASK_BATCH_SIZE,
     process_assistant_cleanup_tasks,
 )
+from orchestra.lib.time import month_end_utc
 from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     AdminInvoiceListItem,
@@ -374,19 +375,24 @@ def create_recharge_model(
     if new_recharge_object.target_month:
         try:
             year, month = map(int, new_recharge_object.target_month.split("-"))
-            target_date = datetime(year, month, 1, tzinfo=timezone.utc)
-            first_next_month = (
-                target_date.replace(day=1) + timedelta(days=32)
-            ).replace(day=1)
-            invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+            invoice_group = month_end_utc(_dt.date(year, month, 1))
         except ValueError:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid target_month format. Use 'YYYY-MM' (e.g., '2025-06')",
             )
     else:
-        first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
-        invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+        # Use month_end_utc to get the last day of the current month.
+        # The previous in-line formula (replace(day=1) + 32d → replace(day=1)
+        # → subtract 1us → .date()) did NOT zero out ``at``'s time-of-day
+        # component, so for any recharge created at non-midnight UTC the
+        # final subtraction stayed on the 1st of the next month instead of
+        # crossing back into the previous day. That produced 78+ recharges
+        # in production with first-of-next-month invoice_group values —
+        # cosmetic on PAID promo/payment rows, but a real invoicing skip
+        # for the one PENDING_INVOICE auto-recharge that ever went through
+        # this endpoint (Recharge 20934 / Nassim, reconciled 2026-05-13).
+        invoice_group = month_end_utc(at)
 
     # Set status based on recharge type
     if new_recharge_object.type in ["payment", "promo"]:
