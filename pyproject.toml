@@ -20,7 +20,11 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.12"
+# Pinned to 3.12.x: several core deps (asyncpg 0.28, tiktoken 0.7, etc.) lack
+# Python 3.13 wheels and would otherwise fall back to source builds requiring
+# a Rust toolchain or unavailable system headers. Bump explicitly when those
+# deps publish 3.13 wheels.
+python = "~3.12"
 fastapi = "^0.100.0"
 uvicorn = { version = "^0.22.0", extras = ["standard"] }
 pydantic = "^2"
