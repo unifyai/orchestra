@@ -1,17 +1,20 @@
 """REST endpoints for shared space lifecycle operations."""
 
-from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SpaceDAO
-from orchestra.db.dao.space_invite_dao import SPACE_INVITE_STATUS_PENDING
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Assistant, Space, SpaceInvite
-from orchestra.services.coordinator_service import get_org_coordinator
+from orchestra.db.models.orchestra_models import Assistant, Space
+from orchestra.services.coordinator_service import (
+    ensure_personal_coordinator_provisioned,
+    get_org_coordinator,
+    get_personal_coordinator,
+)
 from orchestra.services.space_cleanup_service import (
     SpaceCleanupAuthError,
     SpaceCleanupConflictError,
@@ -26,12 +29,8 @@ from orchestra.services.space_membership_refresh_service import (
     membership_refresh_payloads,
     publish_membership_refreshes_best_effort,
 )
-from orchestra.settings import settings
 from orchestra.web.api.space.schema import (
     SpaceCreate,
-    SpaceInviteCreate,
-    SpaceInviteDecision,
-    SpaceInviteRead,
     SpaceMember,
     SpaceMemberCreate,
     SpaceMembershipResponse,
@@ -40,6 +39,7 @@ from orchestra.web.api.space.schema import (
     SpaceSummary,
     SpaceUpdate,
 )
+from orchestra.web.api.utils.assistant_infra import delete_pubsub_topic
 
 router = APIRouter()
 
@@ -54,12 +54,6 @@ def _space_summary(space: Space) -> SpaceSummary:
     """Build the compact representation of a space."""
 
     return SpaceSummary.model_validate(space)
-
-
-def _space_invite_read(invite: SpaceInvite) -> SpaceInviteRead:
-    """Build the public representation of a space invitation."""
-
-    return SpaceInviteRead.model_validate(invite)
 
 
 def _space_member_read(membership, assistant: Assistant) -> SpaceMember:
@@ -153,41 +147,74 @@ def _require_assistant_read(
     )
 
 
-def _require_pending_invite(invite: SpaceInvite) -> None:
-    """Require an invitation to still be pending."""
-
-    if invite.status != SPACE_INVITE_STATUS_PENDING:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="invite_not_pending",
-        )
-
-
-def _require_unexpired_invite(invite: SpaceInvite) -> None:
-    """Reject acceptance of expired invitations."""
-
-    if invite.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invite_expired",
-        )
-
-
 def _membership_response(
     *,
-    membership_status: SpaceMembershipStatus,
     assistant_id: int,
     space_id: int,
-    invite: SpaceInvite | None = None,
 ) -> SpaceMembershipResponse:
-    """Build the discriminator response for adding a member."""
+    """Build the response for adding a member."""
 
     return SpaceMembershipResponse(
-        membership_status=membership_status,
+        membership_status=SpaceMembershipStatus.active,
         assistant_id=assistant_id,
         space_id=space_id,
-        invite_id=invite.invite_id if invite else None,
-        expires_at=invite.expires_at if invite else None,
+    )
+
+
+def _require_org_member_target(
+    org_member_dao: OrganizationMemberDAO,
+    *,
+    space: Space,
+    member_user_id: str,
+) -> None:
+    """Require member-targeted adds to reference an active org member."""
+
+    if space.organization_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="member_target_requires_org_space",
+        )
+    if org_member_dao.get_member(member_user_id, space.organization_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization member not found.",
+        )
+
+
+def _require_membership_target_allowed(
+    org_member_dao: OrganizationMemberDAO,
+    *,
+    actor_user_id: str,
+    space: Space,
+    assistant: Assistant,
+) -> None:
+    """Require the target assistant to be eligible for the space."""
+
+    if space.organization_id is None:
+        if assistant.user_id != actor_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="assistant_not_eligible_for_space",
+            )
+        return
+
+    if assistant.organization_id == space.organization_id:
+        return
+
+    if assistant.user_id == actor_user_id:
+        return
+
+    if assistant.organization_id is None and assistant.is_coordinator:
+        if org_member_dao.get_member(assistant.user_id, space.organization_id):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="personal_coordinator_not_org_member",
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="assistant_not_eligible_for_space",
     )
 
 
@@ -397,51 +424,103 @@ async def delete_space(
 )
 async def add_space_member(
     request: Request,
+    response: Response,
     space_id: int,
     body: SpaceMemberCreate,
     session: Session = Depends(get_db_session),
 ) -> SpaceMembershipResponse:
-    """Add an assistant to a space or create an owner approval request."""
+    """Add an eligible assistant to a space using direct membership."""
 
     user_id = request.state.user_id
     space_dao = SpaceDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
     space = _get_space_or_404(space_dao, space_id)
-    assistant = _get_assistant_or_404(space_dao, body.assistant_id)
     _require_space_mutation(space_dao, user_id, space)
     _require_active_space(space)
 
-    if space_dao.get_membership(
-        space_id=space.space_id,
-        assistant_id=assistant.agent_id,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="already_member",
+    created_personal_coordinator = False
+    created_personal_coordinator_id: int | None = None
+    try:
+        if body.member_user_id:
+            _require_org_member_target(
+                org_member_dao,
+                space=space,
+                member_user_id=body.member_user_id,
+            )
+            existing_personal_coordinator = get_personal_coordinator(
+                session,
+                body.member_user_id,
+            )
+            if existing_personal_coordinator is not None:
+                _require_membership_target_allowed(
+                    org_member_dao,
+                    actor_user_id=user_id,
+                    space=space,
+                    assistant=existing_personal_coordinator,
+                )
+                if space_dao.get_membership(
+                    space_id=space.space_id,
+                    assistant_id=existing_personal_coordinator.agent_id,
+                ):
+                    response.status_code = status.HTTP_200_OK
+                    return _membership_response(
+                        assistant_id=existing_personal_coordinator.agent_id,
+                        space_id=space.space_id,
+                    )
+            try:
+                assistant, created_personal_coordinator = (
+                    await ensure_personal_coordinator_provisioned(
+                        session,
+                        user_id=body.member_user_id,
+                    )
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="personal_coordinator_provisioning_failed",
+                ) from exc
+            created_personal_coordinator_id = assistant.agent_id
+        else:
+            if body.assistant_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="assistant_id_or_member_user_id_required",
+                )
+            assistant = _get_assistant_or_404(space_dao, body.assistant_id)
+        _require_membership_target_allowed(
+            org_member_dao,
+            actor_user_id=user_id,
+            space=space,
+            assistant=assistant,
         )
 
-    if space_dao.should_add_directly(user_id=user_id, space=space, assistant=assistant):
-        space_dao.add_membership(space=space, assistant=assistant, added_by=user_id)
+        if space_dao.get_membership(
+            space_id=space.space_id,
+            assistant_id=assistant.agent_id,
+        ):
+            response.status_code = status.HTTP_200_OK
+            return _membership_response(
+                assistant_id=assistant.agent_id,
+                space_id=space.space_id,
+            )
+
+        space_dao.add_membership(
+            space=space,
+            assistant=assistant,
+            added_by=user_id,
+        )
         refresh_payloads = membership_refresh_payloads(session, [assistant])
         session.commit()
-        await publish_membership_refreshes_best_effort(refresh_payloads)
-        return _membership_response(
-            membership_status=SpaceMembershipStatus.active,
-            assistant_id=assistant.agent_id,
-            space_id=space.space_id,
-        )
+    except Exception:
+        session.rollback()
+        if created_personal_coordinator and created_personal_coordinator_id is not None:
+            await delete_pubsub_topic(str(created_personal_coordinator_id))
+        raise
 
-    invite, _ = space_dao.create_or_refresh_invite(
-        space=space,
-        assistant=assistant,
-        invited_by=user_id,
-        expiry_days=settings.space_invite_expiry_days,
-    )
-    session.commit()
+    await publish_membership_refreshes_best_effort(refresh_payloads)
     return _membership_response(
-        membership_status=SpaceMembershipStatus.pending_invitation,
         assistant_id=assistant.agent_id,
         space_id=space.space_id,
-        invite=invite,
     )
 
 
@@ -532,182 +611,3 @@ def list_spaces_for_assistant(
         for space in space_dao.list_spaces_for_assistant(assistant_id)
         if space_dao.can_read(request.state.user_id, space)
     ]
-
-
-@router.post(
-    "/spaces/{space_id}/invites",
-    response_model=SpaceInviteRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["Spaces"],
-)
-def create_space_invite(
-    request: Request,
-    response: Response,
-    space_id: int,
-    body: SpaceInviteCreate,
-    session: Session = Depends(get_db_session),
-) -> SpaceInviteRead:
-    """Create or refresh an owner-user invitation for an assistant."""
-
-    user_id = request.state.user_id
-    space_dao = SpaceDAO(session)
-    space = _get_space_or_404(space_dao, space_id)
-    assistant = _get_assistant_or_404(space_dao, body.assistant_id)
-    _require_space_mutation(space_dao, user_id, space)
-    _require_active_space(space)
-
-    if space_dao.get_membership(
-        space_id=space.space_id,
-        assistant_id=assistant.agent_id,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="already_member",
-        )
-
-    invite, created = space_dao.create_or_refresh_invite(
-        space=space,
-        assistant=assistant,
-        invited_by=user_id,
-        expiry_days=settings.space_invite_expiry_days,
-    )
-    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-    session.commit()
-    return _space_invite_read(invite)
-
-
-@router.get(
-    "/spaces/{space_id}/invites",
-    response_model=List[SpaceInviteRead],
-    status_code=status.HTTP_200_OK,
-    tags=["Spaces"],
-)
-def list_space_invites(
-    request: Request,
-    space_id: int,
-    session: Session = Depends(get_db_session),
-) -> list[SpaceInviteRead]:
-    """List invitations for an administrable space."""
-
-    space_dao = SpaceDAO(session)
-    space = _get_space_or_404(space_dao, space_id)
-    _require_space_mutation(space_dao, request.state.user_id, space)
-    return [
-        _space_invite_read(invite)
-        for invite in space_dao.list_invites_for_space(space_id)
-    ]
-
-
-@router.get(
-    "/space-invites/pending",
-    response_model=List[SpaceInviteRead],
-    status_code=status.HTTP_200_OK,
-    tags=["Spaces"],
-)
-def list_pending_space_invites(
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> list[SpaceInviteRead]:
-    """List pending invitations for assistants owned by the caller."""
-
-    space_dao = SpaceDAO(session)
-    return [
-        _space_invite_read(invite)
-        for invite in space_dao.list_pending_invites_for_owner(request.state.user_id)
-    ]
-
-
-@router.post(
-    "/space-invites/{invite_id}/accept",
-    response_model=SpaceInviteDecision,
-    status_code=status.HTTP_200_OK,
-    tags=["Spaces"],
-)
-async def accept_space_invite(
-    request: Request,
-    invite_id: int,
-    session: Session = Depends(get_db_session),
-) -> SpaceInviteDecision:
-    """Accept a pending space invitation for one of the caller's assistants."""
-
-    space_dao = SpaceDAO(session)
-    invite = space_dao.get_invite(invite_id)
-    if invite is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Invite not found.",
-        )
-    if invite.invited_owner_id != request.state.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to accept this invite.",
-        )
-    _require_pending_invite(invite)
-    _require_unexpired_invite(invite)
-    space_dao.accept_invite(invite)
-    assistant = _get_assistant_or_404(space_dao, invite.assistant_id)
-    refresh_payloads = membership_refresh_payloads(session, [assistant])
-    session.commit()
-    await publish_membership_refreshes_best_effort(refresh_payloads)
-    return SpaceInviteDecision(status="accepted")
-
-
-@router.post(
-    "/space-invites/{invite_id}/decline",
-    response_model=SpaceInviteDecision,
-    status_code=status.HTTP_200_OK,
-    tags=["Spaces"],
-)
-def decline_space_invite(
-    request: Request,
-    invite_id: int,
-    session: Session = Depends(get_db_session),
-) -> SpaceInviteDecision:
-    """Decline a pending space invitation."""
-
-    space_dao = SpaceDAO(session)
-    invite = space_dao.get_invite(invite_id)
-    if invite is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Invite not found.",
-        )
-    if invite.invited_owner_id != request.state.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to decline this invite.",
-        )
-    _require_pending_invite(invite)
-    space_dao.decline_invite(invite)
-    session.commit()
-    return SpaceInviteDecision(status="declined")
-
-
-@router.delete(
-    "/space-invites/{invite_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["Spaces"],
-)
-def cancel_space_invite(
-    request: Request,
-    invite_id: int,
-    session: Session = Depends(get_db_session),
-) -> Response:
-    """Cancel a pending invitation created by the caller."""
-
-    space_dao = SpaceDAO(session)
-    invite = space_dao.get_invite(invite_id)
-    if invite is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Invite not found.",
-        )
-    if invite.invited_by != request.state.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to cancel this invite.",
-        )
-    _require_pending_invite(invite)
-    space_dao.cancel_invite(invite)
-    session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)

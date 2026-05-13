@@ -1,26 +1,17 @@
-"""Data access helpers for spaces, memberships, and invitations."""
+"""Data access helpers for spaces and memberships."""
 
-from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dao.space_invite_dao import (
-    SPACE_INVITE_STATUS_ACCEPTED,
-    SPACE_INVITE_STATUS_CANCELLED,
-    SPACE_INVITE_STATUS_DECLINED,
-    SPACE_INVITE_STATUS_PENDING,
-)
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantSpaceMembership,
     Organization,
     OrganizationMember,
     Space,
-    SpaceInvite,
 )
 
 SPACE_STATUS_ACTIVE = "active"
@@ -337,155 +328,8 @@ class SpaceDAO:
             )
         return memberships
 
-    def should_add_directly(
-        self,
-        *,
-        user_id: str,
-        space: Space,
-        assistant: Assistant,
-    ) -> bool:
-        """Return whether a member add can materialize without owner approval."""
-
-        if assistant.user_id == user_id:
-            return True
-        if (
-            space.organization_id is not None
-            and assistant.organization_id == space.organization_id
-        ):
-            return self.resource_access_dao.check_org_member_permission(
-                user_id,
-                space.organization_id,
-                "org:write",
-            )
-        return False
-
-    def create_or_refresh_invite(
-        self,
-        *,
-        space: Space,
-        assistant: Assistant,
-        invited_by: str,
-        expiry_days: int,
-    ) -> tuple[SpaceInvite, bool]:
-        """Create a pending invite or refresh the existing pending row."""
-
-        expires_at = datetime.now(timezone.utc) + timedelta(days=expiry_days)
-        existing = self.pending_invite_for_pair(
-            space_id=space.space_id,
-            assistant_id=assistant.agent_id,
-        )
-        statement = (
-            insert(SpaceInvite.__table__)
-            .values(
-                space_id=space.space_id,
-                assistant_id=assistant.agent_id,
-                invited_by=invited_by,
-                invited_owner_id=assistant.user_id,
-                expires_at=expires_at,
-            )
-            .on_conflict_do_update(
-                index_elements=[SpaceInvite.space_id, SpaceInvite.assistant_id],
-                index_where=SpaceInvite.status == SPACE_INVITE_STATUS_PENDING,
-                set_={
-                    "expires_at": expires_at,
-                    "invited_by": invited_by,
-                    "invited_owner_id": assistant.user_id,
-                },
-            )
-            .returning(SpaceInvite.invite_id)
-        )
-        invite_id = self.session.execute(statement).scalar_one()
-        invite = self.get_invite(int(invite_id))
-        assert invite is not None
-        self.session.flush()
-        return invite, existing is None
-
-    def get_invite(self, invite_id: int) -> Optional[SpaceInvite]:
-        """Return an invitation by primary key."""
-
-        return self.session.get(SpaceInvite, invite_id)
-
-    def pending_invite_for_pair(
-        self,
-        *,
-        space_id: int,
-        assistant_id: int,
-    ) -> Optional[SpaceInvite]:
-        """Return the pending invitation for a space and assistant pair."""
-
-        return (
-            self.session.query(SpaceInvite)
-            .filter(
-                SpaceInvite.space_id == space_id,
-                SpaceInvite.assistant_id == assistant_id,
-                SpaceInvite.status == SPACE_INVITE_STATUS_PENDING,
-            )
-            .one_or_none()
-        )
-
-    def list_invites_for_space(self, space_id: int) -> list[SpaceInvite]:
-        """Return all invitations for a space."""
-
-        return list(
-            self.session.query(SpaceInvite)
-            .filter(SpaceInvite.space_id == space_id)
-            .order_by(SpaceInvite.created_at.desc())
-            .all(),
-        )
-
-    def list_pending_invites_for_owner(self, user_id: str) -> list[SpaceInvite]:
-        """Return unexpired pending invitations for an assistant owner."""
-
-        now = datetime.now(timezone.utc)
-        return list(
-            self.session.query(SpaceInvite)
-            .filter(
-                SpaceInvite.invited_owner_id == user_id,
-                SpaceInvite.status == SPACE_INVITE_STATUS_PENDING,
-                SpaceInvite.expires_at >= now,
-            )
-            .order_by(SpaceInvite.created_at.desc())
-            .all(),
-        )
-
-    def accept_invite(self, invite: SpaceInvite) -> SpaceInvite:
-        """Accept an invitation and materialize the live membership."""
-
-        membership = self.get_membership(
-            space_id=invite.space_id,
-            assistant_id=invite.assistant_id,
-        )
-        if membership is None:
-            self.session.add(
-                AssistantSpaceMembership(
-                    assistant_id=invite.assistant_id,
-                    space_id=invite.space_id,
-                    added_by=invite.invited_by,
-                ),
-            )
-        invite.status = SPACE_INVITE_STATUS_ACCEPTED
-        invite.decided_at = datetime.now(timezone.utc)
-        self.session.flush()
-        return invite
-
-    def decline_invite(self, invite: SpaceInvite) -> SpaceInvite:
-        """Decline an invitation without creating a membership."""
-
-        invite.status = SPACE_INVITE_STATUS_DECLINED
-        invite.decided_at = datetime.now(timezone.utc)
-        self.session.flush()
-        return invite
-
-    def cancel_invite(self, invite: SpaceInvite) -> SpaceInvite:
-        """Cancel an invitation by its creator."""
-
-        invite.status = SPACE_INVITE_STATUS_CANCELLED
-        invite.decided_at = datetime.now(timezone.utc)
-        self.session.flush()
-        return invite
-
-    def has_live_members_or_pending_invites(self, space_id: int) -> bool:
-        """Return whether a space still has live members or pending invites."""
+    def has_live_members(self, space_id: int) -> bool:
+        """Return whether a space still has live members."""
 
         membership_count = (
             self.session.query(sa.func.count())
@@ -493,18 +337,7 @@ class SpaceDAO:
             .filter(AssistantSpaceMembership.space_id == space_id)
             .scalar()
         )
-        if membership_count:
-            return True
-        pending_invite_count = (
-            self.session.query(sa.func.count())
-            .select_from(SpaceInvite)
-            .filter(
-                SpaceInvite.space_id == space_id,
-                SpaceInvite.status == SPACE_INVITE_STATUS_PENDING,
-            )
-            .scalar()
-        )
-        return bool(pending_invite_count)
+        return bool(membership_count)
 
     def _readable_organization_ids(self, user_id: str) -> list[int]:
         """Return organization ids where the user has org read access."""

@@ -1,10 +1,10 @@
-"""Schemas for shared spaces, memberships, and invitations."""
+"""Schemas for shared spaces and memberships."""
 
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SPACE_DESCRIPTION_MIN_LENGTH = 20
 SPACE_DESCRIPTION_MAX_LENGTH = 1000
@@ -34,7 +34,6 @@ class SpaceMembershipStatus(str, Enum):
     """Membership creation outcomes returned by the member-add endpoint."""
 
     active = "active"
-    pending_invitation = "pending_invitation"
 
 
 class SpaceCreate(BaseModel):
@@ -100,9 +99,20 @@ class SpaceSummary(BaseModel):
 
 
 class SpaceMemberCreate(BaseModel):
-    """Request body for adding an assistant to a space."""
+    """Request body for adding a member target to a space."""
 
-    assistant_id: int
+    assistant_id: Optional[int] = None
+    member_user_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_target_shape(self):
+        has_assistant_id = self.assistant_id is not None
+        has_member_user_id = bool(self.member_user_id)
+        if has_assistant_id == has_member_user_id:
+            raise ValueError(
+                "Provide exactly one of assistant_id or member_user_id.",
+            )
+        return self
 
 
 class SpaceMember(BaseModel):
@@ -122,33 +132,3 @@ class SpaceMembershipResponse(BaseModel):
     membership_status: SpaceMembershipStatus
     assistant_id: int
     space_id: int
-    invite_id: Optional[int] = None
-    expires_at: Optional[datetime] = None
-
-
-class SpaceInviteCreate(BaseModel):
-    """Request body for inviting an assistant owner to join a space."""
-
-    assistant_id: int
-
-
-class SpaceInviteRead(BaseModel):
-    """Invitation lifecycle state for adding an assistant to a space."""
-
-    invite_id: int
-    space_id: int
-    assistant_id: int
-    invited_by: str
-    invited_owner_id: str
-    status: str
-    created_at: datetime
-    expires_at: datetime
-    decided_at: Optional[datetime] = None
-
-    model_config = {"from_attributes": True}
-
-
-class SpaceInviteDecision(BaseModel):
-    """Response for invitation accept/decline transitions."""
-
-    status: str

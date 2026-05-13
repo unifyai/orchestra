@@ -114,7 +114,6 @@ class Settings(CoreSettings):
     )
 
     assistant_creation_cost: float = 10.0
-    space_invite_expiry_days: int = 7
 
     photo_generation_cost: float = 0.05
     video_generation_cost: float = 0.20
