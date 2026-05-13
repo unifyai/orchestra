@@ -18,7 +18,6 @@ from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
-from orchestra.db.dao.space_invite_dao import SpaceInviteDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -740,9 +739,7 @@ def trigger_monthly_metered_invoicing(
 ) -> dict:
     """Trigger the metered-mode invoicing routine for a period."""
     try:
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         # Resolve the requested period for the soft current/future-month
         # guard. Mirrors the routine's own default-resolution logic
@@ -772,7 +769,9 @@ def trigger_monthly_metered_invoicing(
             )
 
         result = invoice_metered_month(
-            resolved_year, resolved_month, session=session
+            resolved_year,
+            resolved_month,
+            session=session,
         )
         return {
             "status": "success",
@@ -1692,45 +1691,6 @@ def admin_cleanup_expired_invites(
         )
 
 
-@router.post(
-    "/cleanup/expired-space-invites",
-    summary="Admin: Cleanup expired space invitations",
-    description="Transition all expired pending space invitations. "
-    "Called by scheduled cleanup job.",
-)
-def admin_cleanup_expired_space_invites(
-    session=Depends(get_db_session),
-) -> dict:
-    """Transition expired space invitations to their terminal status.
-
-    This endpoint is designed to be called by a scheduled job. It marks
-    pending invitations whose expiry timestamp is in the past as expired.
-
-    :param session: Database session.
-    :return: Count of transitioned invitations and timestamp.
-    """
-    invite_dao = SpaceInviteDAO(session)
-
-    try:
-        transitioned_count = invite_dao.expire_pending_invites()
-        session.commit()
-
-        return {
-            "transitioned_count": transitioned_count,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "message": (
-                f"Transitioned {transitioned_count} pending space-invite(s) "
-                "to expired"
-            ),
-        }
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to cleanup expired space invites: {str(e)}",
-        )
-
-
 @router.get(
     "/cleanup/assistant-runtime",
     summary="Admin: Inspect durable assistant cleanup tasks",
@@ -2119,9 +2079,7 @@ def admin_create_billing_template(
             is_active=body.is_active,
             description=body.description,
             commit_amount=(
-                _D(str(body.commit_amount))
-                if body.commit_amount is not None
-                else None
+                _D(str(body.commit_amount)) if body.commit_amount is not None else None
             ),
             currency=body.currency,
             commit_period=body.commit_period,
@@ -2557,9 +2515,7 @@ def admin_set_plan(
             "status": "noop",
             "billing_account_id": ba.id,
             "assignment": None,
-            "message": (
-                f"Account is already on template id={body.template_id}."
-            ),
+            "message": (f"Account is already on template id={body.template_id}."),
         }
     return {
         "status": "ok",
@@ -2610,7 +2566,9 @@ def admin_get_active_plan(
         )
     return {
         "billing_account_id": ba.id,
-        "active_assignment": BillingPlanAssignmentResponse.from_orm_row(active).model_dump(),
+        "active_assignment": BillingPlanAssignmentResponse.from_orm_row(
+            active,
+        ).model_dump(),
     }
 
 
@@ -2655,7 +2613,7 @@ def admin_list_plan_history(
         "``POST /admin/billing/invoice-metered-month``; this "
         "single-account endpoint is the narrow-blast-radius "
         "alternative for ops cases like \"we voided this customer's "
-        "invoice in the Stripe dashboard, please regenerate it\". "
+        'invoice in the Stripe dashboard, please regenerate it". '
         "Staging dry-runs invoke ``invoice_metered_month`` directly "
         "via the Python shell. See ``monthly_metered_invoicer`` "
         "module docstring for the full scheduling rationale."
@@ -2809,18 +2767,14 @@ def admin_list_invoices(
     session: Session = Depends(get_db_session),
 ) -> AdminInvoiceListResponse:
     """List invoices across all billing accounts (admin)."""
-    from sqlalchemy import or_, select, func as sa_func
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import or_, select
 
-    from orchestra.db.dao.billing_plan_assignment_dao import (
-        BillingPlanAssignmentDAO,
-    )
     from orchestra.db.models.orchestra_models import (
         BillingPlanAssignment,
         BillingPlanTemplate,
     )
-    from orchestra.routines.monthly_metered_invoicer import (
-        estimate_in_progress_invoice,
-    )
+    from orchestra.routines.monthly_metered_invoicer import estimate_in_progress_invoice
 
     requested_statuses: Optional[set[str]] = None
     upcoming_only = False
@@ -2848,7 +2802,14 @@ def admin_list_invoices(
     # pick whichever side resolved — exactly one will, by domain
     # invariant (a BA is owned by either a user or an org, never both).
     base_q = (
-        select(Recharge, BillingAccount, Organization, User, BillingPlanAssignment, BillingPlanTemplate)
+        select(
+            Recharge,
+            BillingAccount,
+            Organization,
+            User,
+            BillingPlanAssignment,
+            BillingPlanTemplate,
+        )
         .join(BillingAccount, BillingAccount.id == Recharge.billing_account_id)
         .outerjoin(
             Organization,
@@ -2952,7 +2913,9 @@ def admin_list_invoices(
             #   reach this code path — the stripe_invoice_id filter
             #   excludes them.)
             detail = recharge.detail or {}
-            inv_local_raw = detail.get("invoiced_local") if isinstance(detail, dict) else None
+            inv_local_raw = (
+                detail.get("invoiced_local") if isinstance(detail, dict) else None
+            )
             detail_ccy = detail.get("currency") if isinstance(detail, dict) else None
             if inv_local_raw is not None and detail_ccy:
                 try:
@@ -2971,11 +2934,12 @@ def admin_list_invoices(
                     id=recharge.id,
                     billing_account_id=ba.id,
                     recipient_kind="ORG" if org is not None else "USER",
-                    recipient_id=str(org.id) if org is not None else (user.id if user else ""),
+                    recipient_id=(
+                        str(org.id) if org is not None else (user.id if user else "")
+                    ),
                     recipient_name=(org.name if org else (user.name if user else None)),
                     recipient_email=(
-                        ba.billing_email
-                        or (user.email if user else None)
+                        ba.billing_email or (user.email if user else None)
                     ),
                     at=ts.isoformat() if ts else "",
                     invoice_group=(
@@ -2992,11 +2956,11 @@ def admin_list_invoices(
                     plan_template_id=(template.id if template else None),
                     plan_template_name=(template.name if template else None),
                     plan_template_display_name=(
-                        template.display_name if template and getattr(template, "display_name", None) else (template.name if template else None)
+                        template.display_name
+                        if template and getattr(template, "display_name", None)
+                        else (template.name if template else None)
                     ),
-                    billing_mode=(
-                        template.billing_mode if template else None
-                    ),
+                    billing_mode=(template.billing_mode if template else None),
                 ),
             )
 
@@ -3009,10 +2973,7 @@ def admin_list_invoices(
     want_upcoming = (
         include_upcoming
         and (offset == 0 or upcoming_only)
-        and (
-            requested_statuses is None
-            or "UPCOMING" in requested_statuses
-        )
+        and (requested_statuses is None or "UPCOMING" in requested_statuses)
     )
     if want_upcoming:
         # Pull active METERED assignments, joined to BA + recipient.
@@ -3024,17 +2985,32 @@ def admin_list_invoices(
         now_utc = datetime.now(timezone.utc)
         if now_utc.month == 12:
             next_month_start = now_utc.replace(
-                year=now_utc.year + 1, month=1, day=1,
-                hour=0, minute=0, second=0, microsecond=0,
+                year=now_utc.year + 1,
+                month=1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
             )
         else:
             next_month_start = now_utc.replace(
-                month=now_utc.month + 1, day=1,
-                hour=0, minute=0, second=0, microsecond=0,
+                month=now_utc.month + 1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
             )
         period_end_label = next_month_start.date() - timedelta(days=1)
         metered_q = (
-            select(BillingAccount, Organization, User, BillingPlanAssignment, BillingPlanTemplate)
+            select(
+                BillingAccount,
+                Organization,
+                User,
+                BillingPlanAssignment,
+                BillingPlanTemplate,
+            )
             .join(
                 BillingPlanAssignment,
                 BillingPlanAssignment.billing_account_id == BillingAccount.id,
@@ -3061,9 +3037,13 @@ def admin_list_invoices(
             )
         )
         if currency:
-            metered_q = metered_q.where(BillingPlanTemplate.currency == currency.upper())
+            metered_q = metered_q.where(
+                BillingPlanTemplate.currency == currency.upper(),
+            )
         if plan_template_id is not None:
-            metered_q = metered_q.where(BillingPlanAssignment.template_id == plan_template_id)
+            metered_q = metered_q.where(
+                BillingPlanAssignment.template_id == plan_template_id,
+            )
         if q:
             needle = f"%{q.strip()}%"
             mclauses = [
@@ -3081,7 +3061,9 @@ def admin_list_invoices(
         for ba, org, user, assignment, template in session.execute(metered_q).all():
             try:
                 est = estimate_in_progress_invoice(
-                    session, billing_account_id=ba.id, as_of=now_utc,
+                    session,
+                    billing_account_id=ba.id,
+                    as_of=now_utc,
                 )
             except Exception:
                 # Best-effort: a single account's projection failing
@@ -3117,11 +3099,12 @@ def admin_list_invoices(
                     id=None,
                     billing_account_id=ba.id,
                     recipient_kind="ORG" if org is not None else "USER",
-                    recipient_id=str(org.id) if org is not None else (user.id if user else ""),
+                    recipient_id=(
+                        str(org.id) if org is not None else (user.id if user else "")
+                    ),
                     recipient_name=(org.name if org else (user.name if user else None)),
                     recipient_email=(
-                        ba.billing_email
-                        or (user.email if user else None)
+                        ba.billing_email or (user.email if user else None)
                     ),
                     at=est.period_end_exclusive.isoformat(),
                     invoice_group=period_end_label.isoformat(),

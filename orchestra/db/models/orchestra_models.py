@@ -1248,11 +1248,6 @@ class Space(Base):
         back_populates="space",
         passive_deletes=True,
     )
-    invites = relationship(
-        "SpaceInvite",
-        back_populates="space",
-        passive_deletes=True,
-    )
     contact_memberships = relationship(
         "ContactMembership",
         back_populates="target_space",
@@ -1309,67 +1304,6 @@ class AssistantSpaceMembership(Base):
     __table_args__ = (
         sa.PrimaryKeyConstraint("assistant_id", "space_id"),
         Index("ix_asm_space_id", "space_id"),
-    )
-
-
-class SpaceInvite(Base):
-    """User-anchored invitation for adding an assistant to a space."""
-
-    __tablename__ = "space_invites"
-
-    invite_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    space_id = Column(
-        BigInteger,
-        ForeignKey("spaces.space_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    assistant_id = Column(
-        Integer,
-        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    invited_by = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    invited_owner_id = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    status = Column(
-        Text,
-        nullable=False,
-        default="pending",
-        server_default="pending",
-    )
-    created_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
-    decided_at = Column(TIMESTAMP(timezone=True), nullable=True)
-
-    space = relationship("Space", back_populates="invites")
-    assistant = relationship("Assistant")
-    inviter = relationship("User", foreign_keys=[invited_by])
-    invited_owner = relationship("User", foreign_keys=[invited_owner_id])
-
-    __table_args__ = (
-        sa.CheckConstraint(
-            "status IN ('pending', 'accepted', 'declined', 'cancelled', 'expired')",
-            name="ck_space_invites_status",
-        ),
-        Index(
-            "ix_space_invites_pending",
-            "space_id",
-            "assistant_id",
-            unique=True,
-            postgresql_where=text("status = 'pending'"),
-        ),
-        Index("ix_space_invites_invited_owner", "invited_owner_id"),
     )
 
 

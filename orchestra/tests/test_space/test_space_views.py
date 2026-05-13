@@ -20,7 +20,6 @@ from orchestra.db.models.orchestra_models import (
     AssistantSpaceMembership,
     ContactMembership,
     Space,
-    SpaceInvite,
 )
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_org, create_test_user
 
@@ -89,6 +88,22 @@ def reawaken_assistant_mock(monkeypatch) -> AsyncMock:
     mock = AsyncMock(return_value={"success": True})
     monkeypatch.setattr(
         "orchestra.services.space_membership_refresh_service.reawaken_assistant",
+        mock,
+    )
+    return mock
+
+
+@pytest.fixture(autouse=True)
+def coordinator_pubsub_mock(monkeypatch) -> AsyncMock:
+    """Keep coordinator provisioning on the in-process test boundary."""
+
+    mock = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        mock,
+    )
+    monkeypatch.setattr(
+        "orchestra.web.api.organization.views.create_pubsub_topic",
         mock,
     )
     return mock
@@ -650,7 +665,6 @@ async def test_org_admin_adds_org_assistant_directly(
 
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     assert response.json()["membership_status"] == "active"
-    assert response.json()["invite_id"] is None
     assert (
         dbsession.query(AssistantSpaceMembership)
         .filter(
@@ -662,12 +676,11 @@ async def test_org_admin_adds_org_assistant_directly(
 
 
 @pytest.mark.anyio
-async def test_cross_owner_member_add_creates_pending_invitation_until_accept(
+async def test_cross_owner_member_add_to_personal_space_is_forbidden(
     client: AsyncClient,
     dbsession: Session,
-    reawaken_assistant_mock: AsyncMock,
 ) -> None:
-    """Cross-owner personal adds require the invited owner to accept."""
+    """Personal spaces reject cross-owner assistant membership adds."""
 
     inviter = await create_test_user(client, "space-inviter@test.com")
     invited_owner = await create_test_user(client, "space-invited-owner@test.com")
@@ -679,120 +692,87 @@ async def test_cross_owner_member_add_creates_pending_invitation_until_accept(
         headers=inviter["headers"],
         json={"assistant_id": assistant.agent_id},
     )
-    assert add_response.status_code == status.HTTP_201_CREATED, add_response.json()
-    body = add_response.json()
-    assert body["membership_status"] == "pending_invitation"
-    assert body["invite_id"]
-    assert body["expires_at"]
-
-    assert (
-        dbsession.query(AssistantSpaceMembership)
-        .filter(
-            AssistantSpaceMembership.assistant_id == assistant.agent_id,
-            AssistantSpaceMembership.space_id == space["space_id"],
-        )
-        .one_or_none()
-        is None
-    )
-
-    pending = await client.get(
-        "/v0/space-invites/pending",
-        headers=invited_owner["headers"],
-    )
-    assert pending.status_code == status.HTTP_200_OK, pending.json()
-    assert [invite["invite_id"] for invite in pending.json()] == [body["invite_id"]]
-    reawaken_assistant_mock.reset_mock()
-
-    accepted = await client.post(
-        f"/v0/space-invites/{body['invite_id']}/accept",
-        headers=invited_owner["headers"],
-    )
-    assert accepted.status_code == status.HTTP_200_OK, accepted.json()
-    assert accepted.json() == {"status": "accepted"}
-    reawaken_assistant_mock.assert_awaited_once()
-    assert reawaken_assistant_mock.await_args.kwargs["data"] == {
-        "assistant_id": str(assistant.agent_id),
-        "space_ids": json.dumps([space["space_id"]]),
-        "space_summaries": json.dumps(
-            [
-                {
-                    "space_id": space["space_id"],
-                    "name": "Shared Home",
-                    "description": "Shared Home shared workspace",
-                },
-            ],
-        ),
-        "update_kind": "membership",
-    }
-
-    invite = dbsession.get(SpaceInvite, body["invite_id"])
-    assert invite.status == "accepted"
-    assert invite.decided_at is not None
-    assert (
-        dbsession.query(AssistantSpaceMembership)
-        .filter(
-            AssistantSpaceMembership.assistant_id == assistant.agent_id,
-            AssistantSpaceMembership.space_id == space["space_id"],
-        )
-        .one()
-    )
+    assert add_response.status_code == status.HTTP_403_FORBIDDEN, add_response.json()
+    assert add_response.json()["detail"] == "assistant_not_eligible_for_space"
 
 
 @pytest.mark.anyio
-async def test_invite_reissue_cancel_and_already_member_contract(
+async def test_org_member_target_add_auto_provisions_personal_coordinator_and_is_idempotent(
     client: AsyncClient,
     dbsession: Session,
+    reawaken_assistant_mock: AsyncMock,
+    monkeypatch,
 ) -> None:
-    """Pending invites are idempotent and terminal rows persist for audit."""
+    """Member-target adds auto-provision personal Coordinators and stay idempotent."""
 
-    inviter = await create_test_user(client, "space-reissue-inviter@test.com")
-    invited_owner = await create_test_user(client, "space-reissue-owner@test.com")
-    invited_assistant = _make_assistant(dbsession, owner_id=invited_owner["id"])
-    member_assistant = _make_assistant(dbsession, owner_id=inviter["id"])
-    invite_space = await _create_space(client, inviter["headers"], name="Invite Space")
-    member_space = await _create_space(client, inviter["headers"], name="Member Space")
-
-    first_invite = await client.post(
-        f"/v0/spaces/{invite_space['space_id']}/invites",
-        headers=inviter["headers"],
-        json={"assistant_id": invited_assistant.agent_id},
+    create_topic_mock = AsyncMock(return_value={"success": True, "skipped": True})
+    monkeypatch.setattr(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        create_topic_mock,
     )
-    assert first_invite.status_code == status.HTTP_201_CREATED, first_invite.json()
-    first_body = first_invite.json()
-
-    reissued = await client.post(
-        f"/v0/spaces/{invite_space['space_id']}/invites",
-        headers=inviter["headers"],
-        json={"assistant_id": invited_assistant.agent_id},
-    )
-    assert reissued.status_code == status.HTTP_200_OK, reissued.json()
-    assert reissued.json()["invite_id"] == first_body["invite_id"]
-    assert reissued.json()["expires_at"] >= first_body["expires_at"]
-
-    cancelled = await client.delete(
-        f"/v0/space-invites/{first_body['invite_id']}",
-        headers=inviter["headers"],
-    )
-    assert cancelled.status_code == status.HTTP_204_NO_CONTENT, cancelled.text
-
-    invite = dbsession.get(SpaceInvite, first_body["invite_id"])
-    assert invite.status == "cancelled"
-    assert invite.decided_at is not None
-
+    owner = await create_test_user(client, "space-member-target-owner@test.com")
+    member = await create_test_user(client, "space-member-target-member@test.com")
+    organization = await create_test_org(client, owner, "Space Member Target Org")
     add_member = await client.post(
-        f"/v0/spaces/{member_space['space_id']}/members",
-        headers=inviter["headers"],
-        json={"assistant_id": member_assistant.agent_id},
+        f"/v0/organizations/{organization['id']}/members",
+        headers=owner["headers"],
+        json={"user_id": member["id"]},
     )
     assert add_member.status_code == status.HTTP_201_CREATED, add_member.json()
-
-    already_member = await client.post(
-        f"/v0/spaces/{member_space['space_id']}/invites",
-        headers=inviter["headers"],
-        json={"assistant_id": member_assistant.agent_id},
+    space = await _create_space(
+        client,
+        owner["headers"],
+        name="Org Member Target",
+        organization_id=organization["id"],
     )
-    assert already_member.status_code == status.HTTP_409_CONFLICT
-    assert already_member.json()["detail"] == "already_member"
+    reawaken_assistant_mock.reset_mock()
+
+    first_add = await client.post(
+        f"/v0/spaces/{space['space_id']}/members",
+        headers=owner["headers"],
+        json={"member_user_id": member["id"]},
+    )
+    assert first_add.status_code == status.HTTP_201_CREATED, first_add.json()
+    first_body = first_add.json()
+    assert first_body["membership_status"] == "active"
+
+    coordinator = (
+        dbsession.query(Assistant)
+        .filter(
+            Assistant.user_id == member["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        )
+        .one()
+    )
+    assert first_body["assistant_id"] == coordinator.agent_id
+    first_topic_calls = create_topic_mock.await_count
+    assert first_topic_calls >= 1
+
+    create_topic_mock.side_effect = RuntimeError(
+        "idempotent membership add should not reprovision topic",
+    )
+
+    second_add = await client.post(
+        f"/v0/spaces/{space['space_id']}/members",
+        headers=owner["headers"],
+        json={"member_user_id": member["id"]},
+    )
+    assert second_add.status_code == status.HTTP_200_OK, second_add.json()
+    assert second_add.json()["assistant_id"] == coordinator.agent_id
+    assert second_add.json()["membership_status"] == "active"
+    assert create_topic_mock.await_count == first_topic_calls
+
+    memberships = (
+        dbsession.query(AssistantSpaceMembership)
+        .filter(
+            AssistantSpaceMembership.assistant_id == coordinator.agent_id,
+            AssistantSpaceMembership.space_id == space["space_id"],
+        )
+        .all()
+    )
+    assert len(memberships) == 1
+    reawaken_assistant_mock.assert_awaited_once()
 
 
 @pytest.mark.anyio
@@ -836,13 +816,7 @@ async def test_unrelated_org_admin_cannot_access_another_org_space(
         f"/v0/spaces/{org_a_space['space_id']}/members",
         headers=org_b_owner["headers"],
     )
-    list_invites_response = await client.get(
-        f"/v0/spaces/{org_a_space['space_id']}/invites",
-        headers=org_b_owner["headers"],
-    )
-
     assert get_response.status_code == status.HTTP_403_FORBIDDEN
     assert patch_response.status_code == status.HTTP_403_FORBIDDEN
     assert add_member_response.status_code == status.HTTP_403_FORBIDDEN
     assert list_members_response.status_code == status.HTTP_403_FORBIDDEN
-    assert list_invites_response.status_code == status.HTTP_403_FORBIDDEN

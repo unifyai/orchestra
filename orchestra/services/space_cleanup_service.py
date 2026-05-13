@@ -22,7 +22,6 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
     Space,
-    SpaceInvite,
 )
 from orchestra.services import task_machine_state_service
 from orchestra.services.space_membership_refresh_service import (
@@ -241,7 +240,6 @@ def _purge_shared_space_contexts(session: Session, *, space_id: int) -> None:
 def _drop_space_rows(session: Session, *, space_id: int) -> None:
     """Delete relational rows owned by a space."""
 
-    session.execute(delete(SpaceInvite).where(SpaceInvite.space_id == space_id))
     session.execute(
         delete(AssistantSpaceMembership).where(
             AssistantSpaceMembership.space_id == space_id,

@@ -269,7 +269,6 @@ class Settings(BaseSettings):
 
     # Assistant creation
     assistant_creation_cost: float = 10.0
-    space_invite_expiry_days: int = 7
 
     # Assistant photo generation
     photo_generation_cost: float = (
