@@ -505,14 +505,14 @@ async def test_remove_space_member_cleans_space_contact_overlays(
         [
             ContactMembership(
                 assistant_id=assistant.agent_id,
-                contact_id=1,
+                contact_id=7,
                 target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
                 target_space_id=removed_space["space_id"],
                 relationship="coworker",
             ),
             ContactMembership(
                 assistant_id=assistant.agent_id,
-                contact_id=2,
+                contact_id=8,
                 target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
                 target_space_id=retained_space["space_id"],
                 relationship="coworker",
@@ -549,12 +549,43 @@ async def test_remove_space_member_cleans_space_contact_overlays(
         "update_kind": "membership",
     }
     remaining = (
-        dbsession.query(ContactMembership.contact_id)
+        dbsession.query(ContactMembership)
         .filter(ContactMembership.assistant_id == assistant.agent_id)
-        .order_by(ContactMembership.contact_id)
+        .order_by(
+            ContactMembership.target_scope,
+            ContactMembership.target_space_id,
+            ContactMembership.contact_id,
+        )
         .all()
     )
-    assert [contact_id for (contact_id,) in remaining] == [0, 1, 2, 3]
+    assert all(
+        not (
+            row.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE
+            and row.target_space_id == removed_space["space_id"]
+        )
+        for row in remaining
+    )
+    retained_rows = [
+        row
+        for row in remaining
+        if row.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE
+        and row.target_space_id == retained_space["space_id"]
+    ]
+    assert {(row.contact_id, row.relationship) for row in retained_rows} == {
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+        (8, "coworker"),
+    }
+    personal_rows = [
+        row
+        for row in remaining
+        if row.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
+    ]
+    assert {(row.contact_id, row.relationship) for row in personal_rows} == {
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+        (3, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+    }
     assert (
         dbsession.query(AssistantSpaceMembership)
         .filter(
@@ -616,6 +647,20 @@ async def test_create_org_space_auto_adds_coordinator_and_publishes_refresh(
         .one_or_none()
     )
     assert membership is not None
+    coordinator_overlays = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == coordinator.agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id == created["space_id"],
+        )
+        .order_by(ContactMembership.contact_id.asc())
+        .all()
+    )
+    assert [(row.contact_id, row.relationship) for row in coordinator_overlays] == [
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+    ]
 
     reawaken_assistant_mock.assert_awaited_once()
     payload = reawaken_assistant_mock.await_args.kwargs["data"]
@@ -665,6 +710,10 @@ async def test_org_admin_adds_org_assistant_directly(
 
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     assert response.json()["membership_status"] == "active"
+    expected_boss_policy = (
+        "Your immediate manager, please do whatever they ask you to do within reason, "
+        "and do *not* withhold any information from them."
+    )
     assert (
         dbsession.query(AssistantSpaceMembership)
         .filter(
@@ -673,6 +722,85 @@ async def test_org_admin_adds_org_assistant_directly(
         )
         .one()
     )
+    overlays = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == assistant.agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id == space["space_id"],
+            ContactMembership.relationship.in_(
+                [
+                    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                ],
+            ),
+        )
+        .order_by(ContactMembership.contact_id.asc())
+        .all()
+    )
+    assert [
+        (
+            row.contact_id,
+            row.relationship,
+            row.should_respond,
+            row.response_policy,
+            row.can_edit,
+        )
+        for row in overlays
+    ] == [
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF, True, "", True),
+        (
+            1,
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            True,
+            expected_boss_policy,
+            True,
+        ),
+    ]
+    dbsession.query(ContactMembership).filter(
+        ContactMembership.assistant_id == assistant.agent_id,
+        ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+        ContactMembership.target_space_id == space["space_id"],
+        ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    ).delete()
+    dbsession.commit()
+
+    second_add = await client.post(
+        f"/v0/spaces/{space['space_id']}/members",
+        headers=owner["headers"],
+        json={"assistant_id": assistant.agent_id},
+    )
+    assert second_add.status_code == status.HTTP_200_OK, second_add.json()
+    assert second_add.json()["membership_status"] == "active"
+    overlays_after_second_add = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == assistant.agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id == space["space_id"],
+        )
+        .order_by(ContactMembership.contact_id.asc())
+        .all()
+    )
+    assert [
+        (
+            row.contact_id,
+            row.relationship,
+            row.should_respond,
+            row.response_policy,
+            row.can_edit,
+        )
+        for row in overlays_after_second_add
+    ] == [
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF, True, "", True),
+        (
+            1,
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            True,
+            expected_boss_policy,
+            True,
+        ),
+    ]
 
 
 @pytest.mark.anyio
@@ -748,6 +876,20 @@ async def test_org_member_target_add_auto_provisions_personal_coordinator_and_is
     assert first_body["assistant_id"] == coordinator.agent_id
     first_topic_calls = create_topic_mock.await_count
     assert first_topic_calls >= 1
+    first_overlays = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == coordinator.agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id == space["space_id"],
+        )
+        .order_by(ContactMembership.contact_id.asc())
+        .all()
+    )
+    assert [(row.contact_id, row.relationship) for row in first_overlays] == [
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+    ]
 
     create_topic_mock.side_effect = RuntimeError(
         "idempotent membership add should not reprovision topic",
@@ -762,6 +904,20 @@ async def test_org_member_target_add_auto_provisions_personal_coordinator_and_is
     assert second_add.json()["assistant_id"] == coordinator.agent_id
     assert second_add.json()["membership_status"] == "active"
     assert create_topic_mock.await_count == first_topic_calls
+    second_overlays = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == coordinator.agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id == space["space_id"],
+        )
+        .order_by(ContactMembership.contact_id.asc())
+        .all()
+    )
+    assert [(row.contact_id, row.relationship) for row in second_overlays] == [
+        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+    ]
 
     memberships = (
         dbsession.query(AssistantSpaceMembership)

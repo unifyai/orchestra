@@ -10,6 +10,9 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SpaceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Space
+from orchestra.services.contact_membership_service import (
+    ensure_space_contact_memberships,
+)
 from orchestra.services.coordinator_service import (
     ensure_personal_coordinator_provisioned,
     get_org_coordinator,
@@ -161,6 +164,17 @@ def _membership_response(
     )
 
 
+def _ensure_member_space_contacts(
+    session: Session,
+    *,
+    assistant_id: int,
+    space_id: int,
+) -> None:
+    """Ensure default space-scoped self/boss overlays for one live membership."""
+
+    ensure_space_contact_memberships(session, [(assistant_id, space_id)])
+
+
 def _require_org_member_target(
     org_member_dao: OrganizationMemberDAO,
     *,
@@ -297,6 +311,11 @@ async def create_space(
                 space=space,
                 assistant=coordinator,
                 added_by=user_id,
+            )
+            _ensure_member_space_contacts(
+                session,
+                assistant_id=coordinator.agent_id,
+                space_id=space.space_id,
             )
             refresh_payloads = membership_refresh_payloads(session, [coordinator])
     session.commit()
@@ -462,6 +481,11 @@ async def add_space_member(
                     space_id=space.space_id,
                     assistant_id=existing_personal_coordinator.agent_id,
                 ):
+                    _ensure_member_space_contacts(
+                        session,
+                        assistant_id=existing_personal_coordinator.agent_id,
+                        space_id=space.space_id,
+                    )
                     response.status_code = status.HTTP_200_OK
                     return _membership_response(
                         assistant_id=existing_personal_coordinator.agent_id,
@@ -498,6 +522,11 @@ async def add_space_member(
             space_id=space.space_id,
             assistant_id=assistant.agent_id,
         ):
+            _ensure_member_space_contacts(
+                session,
+                assistant_id=assistant.agent_id,
+                space_id=space.space_id,
+            )
             response.status_code = status.HTTP_200_OK
             return _membership_response(
                 assistant_id=assistant.agent_id,
@@ -508,6 +537,11 @@ async def add_space_member(
             space=space,
             assistant=assistant,
             added_by=user_id,
+        )
+        _ensure_member_space_contacts(
+            session,
+            assistant_id=assistant.agent_id,
+            space_id=space.space_id,
         )
         refresh_payloads = membership_refresh_payloads(session, [assistant])
         session.commit()
