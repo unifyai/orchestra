@@ -30,12 +30,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_SCOPE_SPACE,
+)
 from orchestra.db.models.orchestra_models import ApiKey as ApiKeyModel
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
     AssistantContactCost,
+    AssistantSpaceMembership,
     BillingAccount,
+    ContactMembership,
     Organization,
     User,
 )
@@ -3346,6 +3352,93 @@ class TestBYODContactCreation:
         assert contact.provider == "google_workspace"
         assert contact.provisioned_by == "user"
         assert contact.status == "active"
+
+    @pytest.mark.anyio
+    async def test_byod_contact_response_persists_space_identity_heal(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """BYOD response writes any repaired space identity overlays durably."""
+        create_resp = await client.post(
+            "/v0/assistant",
+            json={"first_name": "BYOD", "surname": "SpaceHeal", "create_infra": False},
+            headers=HEADERS,
+        )
+        assert create_resp.status_code == status.HTTP_200_OK
+        agent_id = int(create_resp.json()["info"]["agent_id"])
+
+        create_space_resp = await client.post(
+            "/v0/spaces",
+            json={
+                "name": "BYOD Space Heal",
+                "description": "Space heal regression test",
+            },
+            headers=HEADERS,
+        )
+        assert (
+            create_space_resp.status_code == status.HTTP_201_CREATED
+        ), create_space_resp.json()
+        space_id = int(create_space_resp.json()["space_id"])
+
+        add_member_resp = await client.post(
+            f"/v0/spaces/{space_id}/members",
+            json={"assistant_id": agent_id},
+            headers=HEADERS,
+        )
+        assert (
+            add_member_resp.status_code == status.HTTP_201_CREATED
+        ), add_member_resp.json()
+        assert (
+            dbsession.query(AssistantSpaceMembership)
+            .filter(
+                AssistantSpaceMembership.assistant_id == agent_id,
+                AssistantSpaceMembership.space_id == space_id,
+            )
+            .one_or_none()
+            is not None
+        )
+
+        removed = (
+            dbsession.query(ContactMembership)
+            .filter(
+                ContactMembership.assistant_id == agent_id,
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                ContactMembership.target_space_id == space_id,
+                ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            )
+            .delete()
+        )
+        assert removed == 1
+        dbsession.commit()
+
+        create_contact_resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "contact_value": "heal@example.com",
+                "email_provider": "google_workspace",
+            },
+            headers=HEADERS,
+        )
+        assert (
+            create_contact_resp.status_code == status.HTTP_200_OK
+        ), create_contact_resp.json()
+
+        healed_boss_row = (
+            dbsession.query(ContactMembership)
+            .filter(
+                ContactMembership.assistant_id == agent_id,
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                ContactMembership.target_space_id == space_id,
+                ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            )
+            .one_or_none()
+        )
+        assert healed_boss_row is not None
+        assert healed_boss_row.contact_id == 1
 
     @pytest.mark.anyio
     async def test_create_byod_ms365_contact(

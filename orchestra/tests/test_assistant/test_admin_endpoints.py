@@ -1314,9 +1314,14 @@ async def test_admin_assistant_projects_contact_ids_from_personal_memberships(
 async def test_admin_assistant_projects_contact_identity_roots(
     client: AsyncClient,
     dbsession,
+    monkeypatch,
 ):
-    """Assistant reads expose contact ids in the root where they are meaningful."""
+    """Assistant reads backfill missing space identities before projecting roots."""
 
+    monkeypatch.setattr(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        AsyncMock(return_value={"success": True, "skipped": True}),
+    )
     owner = await create_test_user(
         client,
         "contact-identity-roots@test.com",
@@ -1405,8 +1410,28 @@ async def test_admin_assistant_projects_contact_identity_roots(
                     "self_contact_id": 77,
                     "boss_contact_id": 78,
                 },
+                {
+                    "target_scope": CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                    "target_space_id": incomplete_space.space_id,
+                    "self_contact_id": 88,
+                    "boss_contact_id": 1,
+                },
             ],
         },
+    ]
+    incomplete_space_rows = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id == incomplete_space.space_id,
+        )
+        .order_by(ContactMembership.contact_id.asc())
+        .all()
+    )
+    assert [(row.contact_id, row.relationship) for row in incomplete_space_rows] == [
+        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+        (88, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
     ]
 
 
