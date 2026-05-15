@@ -23,7 +23,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -79,6 +79,7 @@ from orchestra.services.contact_membership_service import (
     PERSONAL_BOSS_CONTACT_ID,
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
+    ensure_space_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
     ensure_coordinator_owner_contact_rows,
@@ -378,44 +379,74 @@ def _resolved_contact_identity_roots_for_assistants(
         CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
         CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     }
-    rows = (
-        session.query(
+
+    def _fetch_space_identity_rows(
+        *,
+        pairs: set[tuple[int, int]] | None = None,
+    ) -> list[tuple[int, int, int | None, int, str]]:
+        query = session.query(
             ContactMembership.id,
             ContactMembership.assistant_id,
             ContactMembership.target_space_id,
             ContactMembership.contact_id,
             ContactMembership.relationship,
-        )
-        .filter(
+        ).filter(
             ContactMembership.assistant_id.in_(assistant_ids),
             ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
             ContactMembership.target_space_id.in_(active_space_ids),
             ContactMembership.relationship.in_(relationship_values),
         )
-        .order_by(
+        if pairs:
+            query = query.filter(
+                tuple_(
+                    ContactMembership.assistant_id,
+                    ContactMembership.target_space_id,
+                ).in_(sorted(pairs)),
+            )
+        return query.order_by(
             ContactMembership.assistant_id,
             ContactMembership.target_space_id,
             ContactMembership.relationship,
             ContactMembership.id,
+        ).all()
+
+    def _collect_ids_by_root(
+        rows: list[tuple[int, int, int | None, int, str]],
+    ) -> dict[tuple[int, int], dict[str, int]]:
+        ids: dict[tuple[int, int], dict[str, int]] = {}
+        seen: set[tuple[int, int, str]] = set()
+        for _, assistant_id, target_space_id, contact_id, relationship_name in rows:
+            if target_space_id is None:
+                continue
+            if target_space_id not in active_space_ids_by_assistant[assistant_id]:
+                continue
+
+            key = (assistant_id, target_space_id, relationship_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            ids.setdefault((assistant_id, target_space_id), {})[
+                relationship_name
+            ] = contact_id
+        return ids
+
+    ids_by_root = _collect_ids_by_root(_fetch_space_identity_rows())
+    missing_pairs = {
+        (assistant_id, space_id)
+        for assistant_id in assistant_ids
+        for space_id in active_space_ids_by_assistant[assistant_id]
+        if (
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF
+            not in ids_by_root.get((assistant_id, space_id), {})
+            or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS
+            not in ids_by_root.get((assistant_id, space_id), {})
         )
-        .all()
-    )
-
-    ids_by_root: dict[tuple[int, int], dict[str, int]] = {}
-    seen: set[tuple[int, int, str]] = set()
-    for _, assistant_id, target_space_id, contact_id, relationship_name in rows:
-        if target_space_id is None:
-            continue
-        if target_space_id not in active_space_ids_by_assistant[assistant_id]:
-            continue
-
-        key = (assistant_id, target_space_id, relationship_name)
-        if key in seen:
-            continue
-        seen.add(key)
-        ids_by_root.setdefault((assistant_id, target_space_id), {})[
-            relationship_name
-        ] = contact_id
+    }
+    if missing_pairs:
+        ensure_space_contact_memberships(session, sorted(missing_pairs))
+        ids_by_root.update(
+            _collect_ids_by_root(_fetch_space_identity_rows(pairs=missing_pairs)),
+        )
 
     for assistant_id in assistant_ids:
         for space_id in sorted(active_space_ids_by_assistant[assistant_id]):
@@ -1841,9 +1872,14 @@ async def create_assistant_contact(
             organization_id=organization_id,
         )
         try:
-            return InfoResponse(
+            response = InfoResponse(
                 info=_build_assistant_read(assistant, refreshed_session),
             )
+            refreshed_session.commit()
+            return response
+        except Exception:
+            refreshed_session.rollback()
+            raise
         finally:
             refreshed_session.close()
 
@@ -2037,9 +2073,14 @@ async def create_assistant_contact(
         organization_id=organization_id,
     )
     try:
-        return InfoResponse(
+        response = InfoResponse(
             info=_build_assistant_read(assistant, refreshed_session),
         )
+        refreshed_session.commit()
+        return response
+    except Exception:
+        refreshed_session.rollback()
+        raise
     finally:
         refreshed_session.close()
 
