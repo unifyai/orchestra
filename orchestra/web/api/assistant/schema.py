@@ -171,6 +171,14 @@ class AssistantCreate(BaseModel):
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
     )
+    is_coordinator: Optional[bool] = Field(
+        None,
+        description=(
+            "Reserved for coordinator bootstrap endpoints. "
+            "Generic assistant creation must not include this field."
+        ),
+        exclude=True,
+    )
     deploy_env: Optional[str] = Field(
         None,
         description="Deprecated. Must be null.",
@@ -216,6 +224,11 @@ class AssistantCreate(BaseModel):
                 raise ValueError(
                     "If providing voice information, both 'voice_id' and 'voice_provider' are required.",
                 )
+        if self.is_coordinator is not None:
+            raise ValueError(
+                "'is_coordinator' is not accepted on this endpoint. "
+                "Use POST /user/{user_id}/coordinator instead.",
+            )
         return self
 
     model_config = ConfigDict(
