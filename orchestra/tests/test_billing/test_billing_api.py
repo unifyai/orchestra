@@ -38,7 +38,6 @@ import math
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 import sqlalchemy as sa
@@ -66,10 +65,7 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.settings import settings
-from orchestra.tests.test_billing.conftest import (
-    make_billing_account,
-    make_user_with_billing,
-)
+from orchestra.tests.test_billing.conftest import make_user_with_billing
 from orchestra.tests.utils import (
     ADMIN_HEADERS,
     HEADERS,
@@ -2916,8 +2912,12 @@ class TestAdminBillingEndpoints:
         class _FrozenDatetime(datetime):
             @classmethod
             def now(cls, tz=None):  # noqa: D401
-                return frozen.astimezone(tz) if tz is not None else frozen.replace(
-                    tzinfo=None,
+                return (
+                    frozen.astimezone(tz)
+                    if tz is not None
+                    else frozen.replace(
+                        tzinfo=None,
+                    )
                 )
 
         monkeypatch.setattr(admin_views, "datetime", _FrozenDatetime)
@@ -2935,9 +2935,7 @@ class TestAdminBillingEndpoints:
         assert response.status_code == 200, response.text
 
         dbsession.expire_all()
-        ba_id = (
-            dbsession.query(User.billing_account_id).filter_by(id=user_id).scalar()
-        )
+        ba_id = dbsession.query(User.billing_account_id).filter_by(id=user_id).scalar()
         recharge = (
             dbsession.query(Recharge)
             .filter_by(billing_account_id=ba_id)
@@ -2986,9 +2984,7 @@ class TestAdminBillingEndpoints:
         assert response.status_code == 200, response.text
 
         dbsession.expire_all()
-        ba_id = (
-            dbsession.query(User.billing_account_id).filter_by(id=user_id).scalar()
-        )
+        ba_id = dbsession.query(User.billing_account_id).filter_by(id=user_id).scalar()
         recharge = (
             dbsession.query(Recharge)
             .filter_by(billing_account_id=ba_id)
@@ -3580,9 +3576,8 @@ class TestAdminBillingTemplates:
         assert "1 account" in resp.json()["detail"]
         # Template still active (no half-applied state).
         dbsession.expire_all()
-        from orchestra.db.dao.billing_plan_template_dao import (
-            BillingPlanTemplateDAO,
-        )
+        from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
+
         refreshed = BillingPlanTemplateDAO(dbsession).get_by_id(tpl.id)
         assert refreshed is not None and refreshed.is_active is True
 
@@ -5348,9 +5343,7 @@ class TestCustomerPlanSwitch:
         client: AsyncClient,
         dbsession: Session,
     ):
-        from orchestra.db.dao.billing_plan_assignment_dao import (
-            next_month_boundary_utc,
-        )
+        from orchestra.db.dao.billing_plan_assignment_dao import next_month_boundary_utc
 
         user = await create_test_user(client, "switch_at_boundary@test.com")
         small = _make_metered_template(

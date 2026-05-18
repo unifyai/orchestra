@@ -286,9 +286,7 @@ class BillingAccountDAO:
                     f"{preferred_payment_method_types!r}",
                 )
             allowed = {m.value for m in PaymentMethodType}
-            unknown = [
-                m for m in preferred_payment_method_types if m not in allowed
-            ]
+            unknown = [m for m in preferred_payment_method_types if m not in allowed]
             if unknown:
                 raise ValueError(
                     f"Unsupported payment method(s) {unknown!r}; "

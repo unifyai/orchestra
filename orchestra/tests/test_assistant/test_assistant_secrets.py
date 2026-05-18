@@ -157,7 +157,6 @@ async def _create_assistant(client: AsyncClient) -> int:
 
 
 class TestAssistantSecretModel:
-
     def test_create_secret(self, dbsession: Session):
         user, _ba = _make_user_ba(dbsession, "sec-model-1")
         a = _make_assistant(dbsession, user.id)
@@ -304,7 +303,6 @@ class TestAssistantSecretModel:
 
 
 class TestAssistantSecretDAO:
-
     def test_get_all_empty(self, dbsession: Session):
         user, _ba = _make_user_ba(dbsession, "sec-dao-1")
         a = _make_assistant(dbsession, user.id)
@@ -394,7 +392,6 @@ class TestAssistantSecretDAO:
 
 
 class TestCreateSecretEndpoint:
-
     @pytest.mark.anyio
     async def test_create_secret_success(
         self,
@@ -485,7 +482,6 @@ class TestCreateSecretEndpoint:
 
 
 class TestUpdateSecretEndpoint:
-
     @pytest.mark.anyio
     async def test_update_existing_secret(
         self,
@@ -561,7 +557,6 @@ class TestUpdateSecretEndpoint:
 
 
 class TestDeleteSecretEndpoint:
-
     @pytest.mark.anyio
     async def test_delete_existing_secret(
         self,
@@ -619,7 +614,6 @@ class TestDeleteSecretEndpoint:
 
 
 class TestAdminSecretsInResponse:
-
     @pytest.mark.anyio
     async def test_admin_response_includes_secrets(
         self,
@@ -754,7 +748,6 @@ class TestAdminSecretsInResponse:
 
 
 class TestSecretCleanupOnAssistantDeletion:
-
     @pytest.mark.anyio
     async def test_secrets_deleted_on_assistant_delete(
         self,
@@ -808,7 +801,6 @@ class TestSecretCleanupOnAssistantDeletion:
 
 
 class TestSecretEndToEnd:
-
     @pytest.mark.anyio
     async def test_full_secret_lifecycle(
         self,

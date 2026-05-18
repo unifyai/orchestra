@@ -5865,9 +5865,7 @@ def update_active_derived_logs(
                             )
 
                             if isinstance(condition, Subquery):
-                                q = session.query(
-                                    LogEvent.id,
-                                ).filter(
+                                q = session.query(LogEvent.id).filter(
                                     LogEvent.id.in_(
                                         select(q.subquery().c.id),
                                     ),

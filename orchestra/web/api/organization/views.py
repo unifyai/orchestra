@@ -2246,9 +2246,7 @@ async def get_org_spend(
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
         billing_mode = (
-            BillingAccountDAO(session)
-            .resolve_billing_mode(org.billing_account)
-            .value
+            BillingAccountDAO(session).resolve_billing_mode(org.billing_account).value
         )
 
     return OrgSpendResponse(

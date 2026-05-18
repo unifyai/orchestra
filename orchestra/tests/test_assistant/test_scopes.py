@@ -17,7 +17,6 @@ from orchestra.web.api.assistant.scopes import (
 
 
 class TestAvailableFeatures:
-
     def test_google_features(self):
         feats = available_features("google")
         assert set(feats) == set(GOOGLE_SCOPE_BUNDLES)
@@ -37,7 +36,6 @@ class TestAvailableFeatures:
 
 
 class TestBuildScopeString:
-
     def test_google_email_only(self):
         result = build_scope_string("google", ["email"])
         parts = result.split()
@@ -100,7 +98,6 @@ class TestBuildScopeString:
 
 
 class TestMapScopesToFeatures:
-
     def test_google_email_fully_granted(self):
         scopes = " ".join(GOOGLE_BASE_SCOPES + GOOGLE_SCOPE_BUNDLES["email"])
         feats = map_scopes_to_features("google", scopes)
@@ -169,7 +166,6 @@ class TestMapScopesToFeatures:
 
 
 class TestRequiredFeatures:
-
     def test_google_requires_email(self):
         assert REQUIRED_FEATURES["google"] == ["email"]
 

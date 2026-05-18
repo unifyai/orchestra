@@ -50,10 +50,7 @@ async def test_get_running_jobs_returns_running_job_names():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(
-        _GET_CLIENT_PATH,
-        return_value=mock_client,
-    ), patch(
+    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
         "http://comms:8000",
     ), patch(
@@ -94,10 +91,7 @@ async def test_get_running_jobs_filters_out_completed_jobs():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(
-        _GET_CLIENT_PATH,
-        return_value=mock_client,
-    ), patch(
+    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
         "http://comms:8000",
     ), patch(
@@ -115,10 +109,7 @@ async def test_get_running_jobs_empty_jobs_list():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(
-        _GET_CLIENT_PATH,
-        return_value=mock_client,
-    ), patch(
+    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
         "http://comms:8000",
     ), patch(
@@ -136,10 +127,7 @@ async def test_get_running_jobs_comms_returns_500():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(
-        _GET_CLIENT_PATH,
-        return_value=mock_client,
-    ), patch(
+    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
         "http://comms:8000",
     ), patch(
@@ -156,10 +144,7 @@ async def test_get_running_jobs_comms_unreachable():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
-    with patch(
-        _GET_CLIENT_PATH,
-        return_value=mock_client,
-    ), patch(
+    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
         "http://comms:8000",
     ), patch(
@@ -200,10 +185,7 @@ async def test_get_running_jobs_normalizes_assistant_id():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(
-        _GET_CLIENT_PATH,
-        return_value=mock_client,
-    ), patch(
+    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
         "http://comms:8000",
     ), patch(
@@ -230,10 +212,7 @@ async def test_get_runtime_status_returns_payload():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(
-        _GET_CLIENT_PATH,
-        return_value=mock_client,
-    ), patch(
+    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
         "orchestra.web.api.utils.assistant_infra.COMMS_URL",
         "http://comms:8000",
     ), patch(
