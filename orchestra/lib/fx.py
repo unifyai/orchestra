@@ -129,9 +129,7 @@ def _is_retriable(exc: Exception) -> bool:
 
 def _sleep_for_retry(attempt: int) -> None:
     """Backoff with light jitter so concurrent runners don't lockstep."""
-    base = _RETRY_BACKOFF_SECONDS[
-        min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)
-    ]
+    base = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
     jitter = random.uniform(0.0, _RETRY_JITTER_SECONDS)  # noqa: S311
     time.sleep(base + jitter)
 

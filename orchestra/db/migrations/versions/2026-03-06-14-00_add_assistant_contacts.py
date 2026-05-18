@@ -188,7 +188,8 @@ def upgrade() -> None:
 
     # Phone contacts
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO assistant_contacts
                 (assistant_id, contact_type, contact_value, provider,
                  provisioned_by, country_code, user_value, status, created_at, updated_at)
@@ -197,12 +198,14 @@ def upgrade() -> None:
                 'platform', phone_country, user_phone, 'active', created_at, NOW()
             FROM assistants
             WHERE phone IS NOT NULL AND phone != ''
-        """),
+        """,
+        ),
     )
 
     # Email contacts
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO assistant_contacts
                 (assistant_id, contact_type, contact_value, provider,
                  provisioned_by, status, created_at, updated_at)
@@ -211,12 +214,14 @@ def upgrade() -> None:
                 'platform', 'active', created_at, NOW()
             FROM assistants
             WHERE email IS NOT NULL AND email != ''
-        """),
+        """,
+        ),
     )
 
     # WhatsApp contacts
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO assistant_contacts
                 (assistant_id, contact_type, contact_value, provider,
                  provisioned_by, user_value, status, created_at, updated_at)
@@ -226,7 +231,8 @@ def upgrade() -> None:
             FROM assistants
             WHERE assistant_whatsapp_number IS NOT NULL
               AND assistant_whatsapp_number != ''
-        """),
+        """,
+        ),
     )
 
 

@@ -1836,9 +1836,7 @@ async def get_user_spend(
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
         billing_mode = (
-            BillingAccountDAO(session)
-            .resolve_billing_mode(user.billing_account)
-            .value
+            BillingAccountDAO(session).resolve_billing_mode(user.billing_account).value
         )
 
     return UserSpendResponse(
