@@ -2663,8 +2663,8 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
 
 #### JOIN LOG ####
 @dataclass(frozen=True)
-class _DirectJoinReducePlan:
-    """Eligibility details for the benchmark-backed direct reduce join path."""
+class _DirectJoinPlan:
+    """Eligibility details for benchmark-backed direct scalar join paths."""
 
     context_a_id: int
     context_b_id: int
@@ -2675,6 +2675,8 @@ class _DirectJoinReducePlan:
     fields_b: Dict[str, Any]
     keys: tuple[str, ...]
     group_by_fields: tuple[str, ...]
+    projected_aliases: tuple[str, ...]
+    sorting: Optional[Dict[str, str]] = None
     filter_side: Optional[str] = None
     filter_expr: Optional[str] = None
 
@@ -2847,7 +2849,22 @@ def _get_existing_context_id(
     return contexts[0][0].id
 
 
-def _classify_direct_join_reduce(
+def _normalize_sorting_spec(sorting: Optional[str]) -> Optional[Dict[str, str]]:
+    if not sorting:
+        return {}
+    try:
+        sort_spec = json.loads(sorting) if isinstance(sorting, str) else sorting
+    except Exception:
+        return None
+    if not isinstance(sort_spec, dict):
+        return None
+    for alias, direction in sort_spec.items():
+        if not isinstance(alias, str) or direction not in {"ascending", "descending"}:
+            return None
+    return sort_spec
+
+
+def _classify_direct_join_plan(
     *,
     project_id: int,
     pair_of_args: List[Dict[str, Any]],
@@ -2863,18 +2880,21 @@ def _classify_direct_join_reduce(
     key: Optional[Union[str, List[str]]],
     context_dao: ContextDAO,
     field_type_dao: FieldTypeDAO,
-) -> Optional[_DirectJoinReducePlan]:
+) -> Optional[_DirectJoinPlan]:
     """
-    Decide whether a join_query request is safe for the direct scalar reduce path.
+    Decide whether a join_query request is safe for a direct scalar join path.
 
     This is intentionally conservative. Requests outside the benchmarked shape
     use the generic path unchanged.
     """
-    if metric is None or key is None:
+    is_reduce_mode = metric is not None
+    if is_reduce_mode and key is None:
+        return None
+    if not is_reduce_mode and (key is not None or group_by is not None):
         return None
     if mode != "inner":
         return None
-    if sorting or limit is not None or offset:
+    if is_reduce_mode and (sorting or limit is not None or offset):
         return None
     if len(pair_of_args) != 2:
         return None
@@ -2898,13 +2918,26 @@ def _classify_direct_join_reduce(
     if alias_map is None:
         return None
 
-    keys = tuple([key] if isinstance(key, str) else list(key))
+    sort_spec = _normalize_sorting_spec(sorting)
+    if sort_spec is None:
+        return None
+
+    keys = (
+        tuple([key] if isinstance(key, str) else list(key))
+        if is_reduce_mode
+        else tuple()
+    )
     group_by_fields = (
         tuple()
         if group_by is None
         else tuple([group_by] if isinstance(group_by, str) else list(group_by))
     )
-    required_aliases = set(keys) | set(group_by_fields)
+    projected_aliases = tuple(alias_map.keys())
+    required_aliases = (
+        (set(keys) | set(group_by_fields))
+        if is_reduce_mode
+        else (set(projected_aliases) | set(sort_spec))
+    )
     if not required_aliases or not required_aliases.issubset(alias_map):
         return None
 
@@ -2958,7 +2991,7 @@ def _classify_direct_join_reduce(
     if not _can_use_text_join_key(join_key_a, join_key_b, fields_a, fields_b):
         return None
 
-    return _DirectJoinReducePlan(
+    return _DirectJoinPlan(
         context_a_id=context_a_id,
         context_b_id=context_b_id,
         join_key_a=join_key_a,
@@ -2968,6 +3001,8 @@ def _classify_direct_join_reduce(
         fields_b=fields_b,
         keys=keys,
         group_by_fields=group_by_fields,
+        projected_aliases=projected_aliases,
+        sorting=sort_spec,
         filter_side=filter_side,
         filter_expr=pushed_filter_expr,
     )
@@ -3081,7 +3116,7 @@ def _direct_reduce_aggregate_expression(metric: str, text_value, reduction_metho
 
 def _execute_multi_key_reduce_without_raw_values(
     *,
-    plan: _DirectJoinReducePlan,
+    plan: _DirectJoinPlan,
     metric: str,
     joined_from,
     get_text,
@@ -3150,31 +3185,16 @@ def _execute_multi_key_reduce_without_raw_values(
     return results
 
 
-def _execute_direct_join_reduce(
+def _build_direct_join_sources(
     *,
     project_id: int,
-    plan: _DirectJoinReducePlan,
-    metric: str,
+    plan: _DirectJoinPlan,
+    required_aliases: set[str],
     session,
-):
-    """
-    Execute eligible reduce joins through direct context sources and scalar keys.
-
-    This mirrors the existing response shape, but avoids the generic
-    filtered-ID subqueries and JSONB join-key comparison that dominated the
-    benchmarked workloads.
-    """
-    from orchestra.web.api.log.utils.metric_utils import (
-        REDUCTION_METHODS,
-        SHARED_VALUE_SAFE_METRICS,
-        _postprocess_aggregator_value,
-        _reduce_shared_value,
-        build_grouped_result,
-    )
-
+) -> tuple[Any, Any, Any]:
     fields_a = {plan.join_key_a}
     fields_b = {plan.join_key_b}
-    for alias in set(plan.keys) | set(plan.group_by_fields):
+    for alias in required_aliases:
         side, field_name = plan.alias_map[alias]
         if side == "A":
             fields_a.add(field_name)
@@ -3210,7 +3230,10 @@ def _execute_direct_join_reduce(
         session=session,
     )
     joined_from = source_a.join(source_b, source_a.c.join_key == source_b.c.join_key)
+    return source_a, source_b, joined_from
 
+
+def _direct_join_accessors(plan: _DirectJoinPlan, source_a, source_b):
     def get_text(alias: str):
         side, field_name = plan.alias_map[alias]
         source = source_a if side == "A" else source_b
@@ -3220,6 +3243,39 @@ def _execute_direct_join_reduce(
         side, field_name = plan.alias_map[alias]
         source = source_a if side == "A" else source_b
         return source.c[_direct_field_label(side, field_name, "jsonb")]
+
+    return get_text, get_jsonb
+
+
+def _execute_direct_join_reduce(
+    *,
+    project_id: int,
+    plan: _DirectJoinPlan,
+    metric: str,
+    session,
+):
+    """
+    Execute eligible reduce joins through direct context sources and scalar keys.
+
+    This mirrors the existing response shape, but avoids the generic
+    filtered-ID subqueries and JSONB join-key comparison that dominated the
+    benchmarked workloads.
+    """
+    from orchestra.web.api.log.utils.metric_utils import (
+        REDUCTION_METHODS,
+        SHARED_VALUE_SAFE_METRICS,
+        _postprocess_aggregator_value,
+        _reduce_shared_value,
+        build_grouped_result,
+    )
+
+    source_a, source_b, joined_from = _build_direct_join_sources(
+        project_id=project_id,
+        plan=plan,
+        required_aliases=set(plan.keys) | set(plan.group_by_fields),
+        session=session,
+    )
+    get_text, get_jsonb = _direct_join_accessors(plan, source_a, source_b)
 
     needs_raw_values = metric in SHARED_VALUE_SAFE_METRICS
     if len(plan.keys) > 1 and not needs_raw_values:
@@ -3298,6 +3354,53 @@ def _execute_direct_join_reduce(
     if len(plan.keys) == 1:
         return results[plan.keys[0]]
     return results
+
+
+def _execute_direct_join_rows(
+    *,
+    project_id: int,
+    plan: _DirectJoinPlan,
+    limit: Optional[int],
+    offset: int,
+    session,
+) -> dict:
+    """
+    Execute eligible row/filter joins through direct scalar sources.
+
+    Row mode keeps exact count semantics. The optimization is the direct join
+    shape and pushed side-local filter, not count skipping.
+    """
+    source_a, source_b, joined_from = _build_direct_join_sources(
+        project_id=project_id,
+        plan=plan,
+        required_aliases=set(plan.projected_aliases) | set(plan.sorting or {}),
+        session=session,
+    )
+    get_text, get_jsonb = _direct_join_accessors(plan, source_a, source_b)
+
+    jsonb_build_args = []
+    for alias in plan.projected_aliases:
+        jsonb_build_args.extend([literal(alias), get_jsonb(alias)])
+    merged_data = func.jsonb_build_object(*jsonb_build_args).label("merged_data")
+
+    base_q = select(merged_data).select_from(joined_from)
+    count_q = select(func.count()).select_from(base_q.subquery("cnt"))
+    total_count = session.execute(count_q).scalar() or 0
+
+    for alias, direction in (plan.sorting or {}).items():
+        sort_expr = get_text(alias)
+        if direction == "descending":
+            base_q = base_q.order_by(desc(sort_expr))
+        else:
+            base_q = base_q.order_by(asc(sort_expr))
+
+    base_q = base_q.offset(offset)
+    if limit is not None:
+        base_q = base_q.limit(limit)
+
+    rows = session.execute(base_q).fetchall()
+    logs = [dict(row[0]) if row[0] else {} for row in rows]
+    return {"logs": logs, "count": total_count}
 
 
 def _build_log_subquery(
@@ -4305,7 +4408,7 @@ def _join_query_internal(
             if key is None:
                 raise ValueError("`key` is required when `metric` is provided.")
 
-        direct_reduce_plan = _classify_direct_join_reduce(
+        direct_join_plan = _classify_direct_join_plan(
             project_id=project_id,
             pair_of_args=pair_of_args,
             join_expr=join_expr,
@@ -4321,11 +4424,19 @@ def _join_query_internal(
             context_dao=context_dao,
             field_type_dao=field_type_dao,
         )
-        if direct_reduce_plan is not None:
+        if direct_join_plan is not None and metric is not None:
             return _execute_direct_join_reduce(
                 project_id=project_id,
-                plan=direct_reduce_plan,
+                plan=direct_join_plan,
                 metric=metric,
+                session=session,
+            )
+        if direct_join_plan is not None:
+            return _execute_direct_join_rows(
+                project_id=project_id,
+                plan=direct_join_plan,
+                limit=limit,
+                offset=offset,
                 session=session,
             )
 
@@ -4359,7 +4470,7 @@ def _join_query_internal(
                 [group_by] if isinstance(group_by, str) else list(group_by),
             )
 
-        # The vetted direct-reduce fast path above is the only path allowed
+        # The vetted direct fast path above is the only path allowed
         # to bypass JSONB merge/column validation. Declined shapes use the
         # generic path to preserve existing behavior.
         _use_direct_reduce = False
