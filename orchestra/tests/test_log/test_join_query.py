@@ -8,6 +8,7 @@ the legacy materialise-then-query path.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Dict
 
 import pytest
@@ -90,6 +91,116 @@ def _base_payload(seeded, **overrides) -> Dict[str, Any]:
     return payload
 
 
+async def _create_string_join_reduce_fixture(
+    client: AsyncClient,
+    project_name: str,
+    fact_context: str,
+    dim_context: str,
+):
+    await _create_project(client, project_name)
+
+    fact_resp = await _create_log(
+        client,
+        project_name,
+        context=fact_context,
+        entries=[
+            {"join_id": "a", "amount": 10, "bonus": 1},
+            {"join_id": "b", "amount": 20, "bonus": 2},
+            {"join_id": "a", "amount": 30, "bonus": 3},
+        ],
+    )
+    assert fact_resp.status_code == 200, fact_resp.text
+
+    dim_resp = await _create_log(
+        client,
+        project_name,
+        context=dim_context,
+        entries=[
+            {"join_id": "a", "category": "alpha"},
+            {"join_id": "b", "category": "beta"},
+        ],
+    )
+    assert dim_resp.status_code == 200, dim_resp.text
+
+
+async def _create_path_join_reduce_fixture(
+    client: AsyncClient,
+    project_name: str,
+    fact_context: str,
+    dim_context: str,
+):
+    await _create_project(client, project_name)
+
+    fact_resp = await _create_log(
+        client,
+        project_name,
+        context=fact_context,
+        entries=[
+            {"_/join/key": "a", "_/amount": 10},
+            {"_/join/key": "b", "_/amount": 20},
+            {"_/join/key": "a", "_/amount": 30},
+        ],
+    )
+    assert fact_resp.status_code == 200, fact_resp.text
+
+    dim_resp = await _create_log(
+        client,
+        project_name,
+        context=dim_context,
+        entries=[
+            {"_/join/key": "a", "_/category": "alpha"},
+            {"_/join/key": "b", "_/category": "beta"},
+        ],
+    )
+    assert dim_resp.status_code == 200, dim_resp.text
+
+
+def _string_join_reduce_payload(
+    project_name: str,
+    fact_context: str,
+    dim_context: str,
+    **overrides,
+) -> dict:
+    payload = {
+        "project_name": project_name,
+        "pair_of_args": [{"context": fact_context}, {"context": dim_context}],
+        "join_expr": "A.join_id == B.join_id",
+        "mode": "inner",
+        "columns": {
+            "A.amount": "amount",
+            "B.category": "category",
+        },
+        "metric": "sum",
+        "key": "amount",
+        "group_by": "category",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _path_join_reduce_payload(
+    project_name: str,
+    fact_context: str,
+    dim_context: str,
+    **overrides,
+) -> dict:
+    payload = {
+        "project_name": project_name,
+        "pair_of_args": [{"context": fact_context}, {"context": dim_context}],
+        "join_expr": "A.`_/join/key` == B.`_/join/key`",
+        "mode": "inner",
+        "columns": {
+            "A._/amount": "amount",
+            "B._/category": "category",
+        },
+        "metric": "sum",
+        "key": "amount",
+        "group_by": "category",
+    }
+    payload.update(overrides)
+    return payload
+
+
 # ===================================================================
 # Reduce-mode tests
 # ===================================================================
@@ -152,6 +263,396 @@ async def test_join_query_no_matches(client: AsyncClient, seeded):
     assert resp.status_code == 200
     result = resp.json()
     assert int(result) == 0
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_uses_direct_scalar_path_for_string_join_keys(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-direct-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_reduce
+
+    def spy_execute_direct_join_reduce(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_reduce",
+        spy_execute_direct_join_reduce,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(project_name, fact_context, dim_context),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["alpha"]["shared_value"] is None
+    assert result["alpha"]["sum"] == pytest.approx(40)
+    assert result["beta"]["shared_value"] is None
+    assert result["beta"]["sum"] == pytest.approx(20)
+    assert len(calls) == 1
+    assert calls[0].join_key_a == "join_id"
+    assert calls[0].join_key_b == "join_id"
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_accepts_path_like_join_fields(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-path-fields-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_path_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_reduce
+
+    def spy_execute_direct_join_reduce(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_reduce",
+        spy_execute_direct_join_reduce,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_path_join_reduce_payload(project_name, fact_context, dim_context),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["alpha"]["shared_value"] is None
+    assert result["alpha"]["sum"] == pytest.approx(40)
+    assert result["beta"]["shared_value"] is None
+    assert result["beta"]["sum"] == pytest.approx(20)
+    assert len(calls) == 1
+    assert calls[0].join_key_a == "_/join/key"
+    assert calls[0].join_key_b == "_/join/key"
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_compound_join_expr_falls_back(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-compound-fallback-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_reduce
+
+    def spy_execute_direct_join_reduce(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_reduce",
+        spy_execute_direct_join_reduce,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            join_expr="A.join_id == B.join_id and A.amount > 10",
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["alpha"]["shared_value"] is None
+    assert result["alpha"]["sum"] == pytest.approx(30)
+    assert result["beta"]["shared_value"] is None
+    assert result["beta"]["sum"] == pytest.approx(20)
+    assert calls == []
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_pushes_side_local_filter(client: AsyncClient):
+    project_name = f"join-query-pushdown-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            filter_expr="amount > 10",
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["alpha"]["shared_value"] is None
+    assert result["alpha"]["sum"] == pytest.approx(30)
+    assert result["beta"]["shared_value"] is None
+    assert result["beta"]["sum"] == pytest.approx(20)
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_cross_side_filter_falls_back(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-cross-filter-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_reduce
+
+    def spy_execute_direct_join_reduce(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_reduce",
+        spy_execute_direct_join_reduce,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            filter_expr="amount > 10 and category == 'alpha'",
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["alpha"]["shared_value"] is None
+    assert result["alpha"]["sum"] == pytest.approx(30)
+    assert "beta" not in result
+    assert calls == []
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_multiple_keys_count_matches_expected_shape(
+    client: AsyncClient,
+):
+    project_name = f"join-query-multikey-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            columns={
+                "A.amount": "amount",
+                "A.bonus": "bonus",
+                "B.category": "category",
+            },
+            metric="count",
+            key=["amount", "bonus"],
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["amount"]["alpha"]["count"] == 2
+    assert result["amount"]["beta"]["count"] == 1
+    assert result["bonus"]["alpha"]["count"] == 2
+    assert result["bonus"]["beta"]["count"] == 1
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_does_not_text_match_numeric_and_string_keys(
+    client: AsyncClient,
+):
+    project_name = f"join-query-type-semantics-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_project(client, project_name)
+
+    fact_resp = await _create_log(
+        client,
+        project_name,
+        context=fact_context,
+        entries={"join_id": 1, "amount": 10},
+    )
+    assert fact_resp.status_code == 200, fact_resp.text
+    dim_resp = await _create_log(
+        client,
+        project_name,
+        context=dim_context,
+        entries={"join_id": "1", "category": "alpha"},
+    )
+    assert dim_resp.status_code == 200, dim_resp.text
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(project_name, fact_context, dim_context),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {}
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_missing_projected_field_falls_back_and_errors(
+    client: AsyncClient,
+):
+    project_name = f"join-query-missing-field-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            columns={
+                "A.missing_amount": "missing_amount",
+                "B.category": "category",
+            },
+            key="missing_amount",
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "missing_amount" in response.text
+
+
+@pytest.mark.anyio
+async def test_join_query_reduce_vector_column_falls_back_to_generic_path(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-vector-fallback-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    fields_resp = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "context": fact_context,
+            "fields": {"embedding": "vector"},
+        },
+        headers=HEADERS,
+    )
+    assert fields_resp.status_code == 200, fields_resp.text
+
+    calls = []
+    original = logging_utils._execute_direct_join_reduce
+
+    def spy_execute_direct_join_reduce(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_reduce",
+        spy_execute_direct_join_reduce,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_reduce_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            columns={
+                "A.amount": "amount",
+                "A.embedding": "embedding",
+                "B.category": "category",
+            },
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    assert calls == []
 
 
 # ===================================================================
