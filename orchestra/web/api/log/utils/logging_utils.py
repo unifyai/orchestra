@@ -2,6 +2,7 @@ import json
 import random
 import re
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -2661,6 +2662,644 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
 
 
 #### JOIN LOG ####
+@dataclass(frozen=True)
+class _DirectJoinReducePlan:
+    """Eligibility details for the benchmark-backed direct reduce join path."""
+
+    context_a_id: int
+    context_b_id: int
+    join_key_a: str
+    join_key_b: str
+    alias_map: Dict[str, tuple[str, str]]
+    fields_a: Dict[str, Any]
+    fields_b: Dict[str, Any]
+    keys: tuple[str, ...]
+    group_by_fields: tuple[str, ...]
+    filter_side: Optional[str] = None
+    filter_expr: Optional[str] = None
+
+
+_TEXT_JOIN_FIELD_TYPES = frozenset({"str", "enum"})
+
+
+def _normalize_join_column_aliases(
+    columns: Optional[Union[Dict[str, str], List[str]]],
+) -> Optional[Dict[str, tuple[str, str]]]:
+    """Map joined output aliases back to their source side and field."""
+    if columns is None:
+        return None
+
+    alias_map: Dict[str, tuple[str, str]] = {}
+    if isinstance(columns, dict):
+        column_specs = list(columns.items())
+    else:
+        column_specs = []
+        for col in columns:
+            if "." not in col:
+                return None
+            column_specs.append((col, col.split(".", 1)[1]))
+    if not column_specs:
+        return None
+
+    for source_col, alias in column_specs:
+        if "." not in source_col:
+            return None
+        table_alias, source_field = source_col.split(".", 1)
+        table_alias = table_alias.upper()
+        if table_alias not in {"A", "B"}:
+            return None
+        # Duplicate output aliases are ambiguous for reduce keys/grouping, so
+        # keep them on the generic path where existing JSONB merge semantics apply.
+        if alias in alias_map:
+            return None
+        alias_map[alias] = (table_alias, source_field)
+
+    return alias_map
+
+
+def _parse_join_field_ref(expr) -> Optional[tuple[str, str]]:
+    """Return (side, field) for parser output representing A.field or B.field."""
+    if not isinstance(expr, dict) or expr.get("operand") != "INDEX":
+        return None
+    lhs = expr.get("lhs")
+    rhs = expr.get("rhs")
+    if not isinstance(lhs, dict) or lhs.get("type") != "identifier":
+        return None
+    side = lhs.get("value")
+    if side not in {"A", "B"} or not isinstance(rhs, str):
+        return None
+    return side, rhs
+
+
+def _parse_simple_inner_join_keys(join_expr: str) -> Optional[tuple[str, str]]:
+    """Return (A field, B field) for simple A.x == B.y joins only."""
+    from orchestra.web.api.log.python2SQL.parsers import (
+        str_filter_exp_to_dict_using_ast,
+    )
+
+    try:
+        filter_dict = str_filter_exp_to_dict_using_ast(join_expr)
+    except Exception:
+        return None
+
+    if not isinstance(filter_dict, dict) or filter_dict.get("operand") != "==":
+        return None
+
+    left_ref = _parse_join_field_ref(filter_dict.get("lhs"))
+    right_ref = _parse_join_field_ref(filter_dict.get("rhs"))
+    if left_ref is None or right_ref is None:
+        return None
+
+    left_side, left_field = left_ref
+    right_side, right_field = right_ref
+    if left_side == right_side:
+        return None
+    if left_side == "A":
+        return left_field, right_field
+    return right_field, left_field
+
+
+def _collect_filter_identifiers(filter_dict) -> set[str]:
+    identifiers: set[str] = set()
+    if isinstance(filter_dict, dict):
+        if filter_dict.get("type") == "identifier":
+            identifiers.add(filter_dict["value"])
+        for value in filter_dict.values():
+            identifiers.update(_collect_filter_identifiers(value))
+    elif isinstance(filter_dict, list):
+        for item in filter_dict:
+            identifiers.update(_collect_filter_identifiers(item))
+    return identifiers
+
+
+def _source_fields_for_aliases(
+    aliases: set[str],
+    alias_map: Dict[str, tuple[str, str]],
+) -> tuple[set[str], set[str]]:
+    fields_a: set[str] = set()
+    fields_b: set[str] = set()
+    for alias in aliases:
+        side, field_name = alias_map[alias]
+        if side == "A":
+            fields_a.add(field_name)
+        else:
+            fields_b.add(field_name)
+    return fields_a, fields_b
+
+
+def _all_source_fields_exist_and_are_jsonb_backed(
+    alias_map: Dict[str, tuple[str, str]],
+    fields_a: Dict[str, Any],
+    fields_b: Dict[str, Any],
+) -> bool:
+    for side, field_name in alias_map.values():
+        fields = fields_a if side == "A" else fields_b
+        field_type = fields.get(field_name)
+        if field_type is None or field_type == "vector":
+            return False
+    return True
+
+
+def _can_use_text_join_key(
+    join_key_a: str,
+    join_key_b: str,
+    fields_a: Dict[str, Any],
+    fields_b: Dict[str, Any],
+) -> bool:
+    return (
+        fields_a.get(join_key_a) in _TEXT_JOIN_FIELD_TYPES
+        and fields_b.get(join_key_b) in _TEXT_JOIN_FIELD_TYPES
+    )
+
+
+def _classify_side_local_filter(
+    filter_expr: Optional[str],
+    alias_map: Dict[str, tuple[str, str]],
+) -> Optional[tuple[Optional[str], Optional[str], set[str]]]:
+    """Return the single source side a filter references, or None if unsafe."""
+    if not filter_expr:
+        return None, None, set()
+
+    from orchestra.web.api.log.python2SQL.parsers import (
+        str_filter_exp_to_dict_using_ast,
+    )
+
+    filter_dict = str_filter_exp_to_dict_using_ast(filter_expr)
+    identifiers = _collect_filter_identifiers(filter_dict)
+    if not identifiers or not identifiers.issubset(alias_map):
+        return None
+
+    sides = {alias_map[identifier][0] for identifier in identifiers}
+    if len(sides) != 1:
+        return None
+    return sides.pop(), filter_expr, identifiers
+
+
+def _get_existing_context_id(
+    context_dao: ContextDAO,
+    project_id: int,
+    context_name: str,
+) -> Optional[int]:
+    """Resolve an existing context without creating one."""
+    contexts = context_dao.filter(project_id=project_id, name=context_name)
+    if not contexts:
+        return None
+    return contexts[0][0].id
+
+
+def _classify_direct_join_reduce(
+    *,
+    project_id: int,
+    pair_of_args: List[Dict[str, Any]],
+    join_expr: str,
+    mode: str,
+    columns: Optional[Union[Dict[str, str], List[str]]],
+    filter_expr: Optional[str],
+    sorting: Optional[str],
+    limit: Optional[int],
+    offset: int,
+    group_by: Optional[Union[str, List[str]]],
+    metric: Optional[str],
+    key: Optional[Union[str, List[str]]],
+    context_dao: ContextDAO,
+    field_type_dao: FieldTypeDAO,
+) -> Optional[_DirectJoinReducePlan]:
+    """
+    Decide whether a join_query request is safe for the direct scalar reduce path.
+
+    This is intentionally conservative. Requests outside the benchmarked shape
+    use the generic path unchanged.
+    """
+    if metric is None or key is None:
+        return None
+    if mode != "inner":
+        return None
+    if sorting or limit is not None or offset:
+        return None
+    if len(pair_of_args) != 2:
+        return None
+
+    for side_args in pair_of_args:
+        if not side_args.get("context"):
+            return None
+        if (
+            side_args.get("filter_expr")
+            or side_args.get("from_ids")
+            or side_args.get("exclude_ids")
+        ):
+            return None
+
+    join_keys = _parse_simple_inner_join_keys(join_expr)
+    if join_keys is None:
+        return None
+    join_key_a, join_key_b = join_keys
+
+    alias_map = _normalize_join_column_aliases(columns)
+    if alias_map is None:
+        return None
+
+    keys = tuple([key] if isinstance(key, str) else list(key))
+    group_by_fields = (
+        tuple()
+        if group_by is None
+        else tuple([group_by] if isinstance(group_by, str) else list(group_by))
+    )
+    required_aliases = set(keys) | set(group_by_fields)
+    if not required_aliases or not required_aliases.issubset(alias_map):
+        return None
+
+    pushed_filter = _classify_side_local_filter(filter_expr, alias_map)
+    if pushed_filter is None:
+        return None
+    filter_side, pushed_filter_expr, filter_aliases = pushed_filter
+
+    context_a_id = _get_existing_context_id(
+        context_dao,
+        project_id,
+        pair_of_args[0]["context"],
+    )
+    context_b_id = _get_existing_context_id(
+        context_dao,
+        project_id,
+        pair_of_args[1]["context"],
+    )
+    if context_a_id is None or context_b_id is None:
+        return None
+
+    try:
+        fields_a = field_type_dao.get_field_types(
+            project_id=project_id,
+            context_id=context_a_id,
+        )
+        fields_b = field_type_dao.get_field_types(
+            project_id=project_id,
+            context_id=context_b_id,
+        )
+    except Exception:
+        return None
+
+    if not _all_source_fields_exist_and_are_jsonb_backed(alias_map, fields_a, fields_b):
+        return None
+
+    required_fields_a, required_fields_b = _source_fields_for_aliases(
+        required_aliases | filter_aliases,
+        alias_map,
+    )
+    required_fields_a.add(join_key_a)
+    required_fields_b.add(join_key_b)
+    if any(fields_a.get(field_name) == "vector" for field_name in required_fields_a):
+        return None
+    if any(fields_b.get(field_name) == "vector" for field_name in required_fields_b):
+        return None
+    if not all(field_name in fields_a for field_name in required_fields_a):
+        return None
+    if not all(field_name in fields_b for field_name in required_fields_b):
+        return None
+    if not _can_use_text_join_key(join_key_a, join_key_b, fields_a, fields_b):
+        return None
+
+    return _DirectJoinReducePlan(
+        context_a_id=context_a_id,
+        context_b_id=context_b_id,
+        join_key_a=join_key_a,
+        join_key_b=join_key_b,
+        alias_map=alias_map,
+        fields_a=fields_a,
+        fields_b=fields_b,
+        keys=keys,
+        group_by_fields=group_by_fields,
+        filter_side=filter_side,
+        filter_expr=pushed_filter_expr,
+    )
+
+
+def _direct_field_label(side: str, field_name: str, kind: str) -> str:
+    return f"{side.lower()}_{field_name}_{kind}"
+
+
+def _build_direct_join_side_source(
+    *,
+    context_id: int,
+    project_id: int,
+    side: str,
+    join_key: str,
+    fields: set[str],
+    filter_expr: Optional[str],
+    filter_alias_map: Dict[str, tuple[str, str]],
+    session,
+):
+    """Build a direct context-membership source with scalar field projections."""
+    select_columns = [
+        LogEvent.id.label("log_event_id"),
+        LogEvent.data.op("->>")(join_key).label("join_key"),
+    ]
+    for field_name in sorted(fields):
+        select_columns.append(
+            LogEvent.data.op("->>")(field_name).label(
+                _direct_field_label(side, field_name, "text"),
+            ),
+        )
+        select_columns.append(
+            LogEvent.data.op("->")(field_name).label(
+                _direct_field_label(side, field_name, "jsonb"),
+            ),
+        )
+
+    query = (
+        session.query(*select_columns)
+        .select_from(LogEventContext)
+        .join(LogEvent, LogEvent.id == LogEventContext.log_event_id)
+        .filter(
+            LogEventContext.context_id == context_id,
+            LogEvent.project_id == project_id,
+            LogEvent.data.op("->>")(join_key).isnot(None),
+        )
+    )
+    if filter_expr:
+        from orchestra.web.api.log.python2SQL.parsers import (
+            str_filter_exp_to_dict_using_ast,
+        )
+
+        local_scope = {}
+        for alias, (_side, field_name) in filter_alias_map.items():
+            local_scope[alias] = (LogEvent.data.op("->")(field_name), "Any")
+
+        filter_dict = str_filter_exp_to_dict_using_ast(filter_expr)
+        filter_condition = build_sql_query(
+            filter_dict,
+            LogEvent,
+            session=session,
+            log_event_ids=select(literal(1)).subquery("dummy_ids"),
+            is_derived=False,
+            local_scope=local_scope,
+        )
+        query = query.filter(filter_condition)
+
+    return query.subquery(side)
+
+
+def _build_grouped_result_without_raw_values(
+    rows,
+    gb_fields: list,
+    metric: str,
+    postprocess_value,
+) -> dict:
+    """Build grouped reduce output when raw arrays are not needed."""
+    result: dict = {}
+    if len(gb_fields) == 1:
+        for row in rows:
+            from orchestra.web.api.log.utils.metric_utils import normalize_group_key
+
+            result[normalize_group_key(row[0])] = {
+                "shared_value": None,
+                metric: postprocess_value(row[-1], metric, None),
+            }
+        return result
+
+    from orchestra.web.api.log.utils.metric_utils import normalize_group_key
+
+    for row in rows:
+        cur = result
+        for i in range(len(gb_fields) - 1):
+            group_key = normalize_group_key(row[i])
+            if group_key not in cur:
+                cur[group_key] = {}
+            cur = cur[group_key]
+        cur[normalize_group_key(row[len(gb_fields) - 1])] = {
+            "shared_value": None,
+            metric: postprocess_value(row[-1], metric, None),
+        }
+    return result
+
+
+def _direct_reduce_aggregate_expression(metric: str, text_value, reduction_methods):
+    agg_fn = reduction_methods[metric]
+    if metric == "count":
+        return agg_fn(text_value).label("agg_value")
+    return agg_fn(cast(text_value, Float)).label("agg_value")
+
+
+def _execute_multi_key_reduce_without_raw_values(
+    *,
+    plan: _DirectJoinReducePlan,
+    metric: str,
+    joined_from,
+    get_text,
+    get_jsonb,
+    session,
+    reduction_methods,
+    postprocess_value,
+) -> dict:
+    """Compute multi-key reductions in one pass when raw arrays are unnecessary."""
+    group_exprs = [
+        get_jsonb(group_field).label(f"group_{idx}_val")
+        for idx, group_field in enumerate(plan.group_by_fields)
+    ]
+    select_columns = list(group_exprs)
+    for idx, agg_key in enumerate(plan.keys):
+        text_value = get_text(agg_key)
+        select_columns.append(
+            _direct_reduce_aggregate_expression(
+                metric,
+                text_value,
+                reduction_methods,
+            ).label(f"agg_value_{idx}"),
+        )
+        select_columns.append(func.count(text_value).label(f"present_{idx}"))
+
+    query = select(*select_columns).select_from(joined_from)
+    if group_exprs:
+        query = query.group_by(*group_exprs)
+    rows = session.execute(query).fetchall()
+
+    if not plan.group_by_fields:
+        row = rows[0] if rows else None
+        if row is None:
+            return {
+                agg_key: postprocess_value(None, metric, None) for agg_key in plan.keys
+            }
+        return {
+            agg_key: postprocess_value(row[idx * 2], metric, None)
+            for idx, agg_key in enumerate(plan.keys)
+        }
+
+    from orchestra.web.api.log.utils.metric_utils import normalize_group_key
+
+    results = {agg_key: {} for agg_key in plan.keys}
+    gb_fields = list(plan.group_by_fields)
+    for row in rows:
+        for idx, agg_key in enumerate(plan.keys):
+            agg_offset = len(gb_fields) + idx * 2
+            agg_value = row[agg_offset]
+            present_count = row[agg_offset + 1]
+            if present_count == 0:
+                continue
+
+            target = results[agg_key]
+            for group_idx in range(len(gb_fields) - 1):
+                group_key = normalize_group_key(row[group_idx])
+                if group_key not in target:
+                    target[group_key] = {}
+                target = target[group_key]
+
+            final_group_key = normalize_group_key(row[len(gb_fields) - 1])
+            target[final_group_key] = {
+                "shared_value": None,
+                metric: postprocess_value(agg_value, metric, None),
+            }
+    return results
+
+
+def _execute_direct_join_reduce(
+    *,
+    project_id: int,
+    plan: _DirectJoinReducePlan,
+    metric: str,
+    session,
+):
+    """
+    Execute eligible reduce joins through direct context sources and scalar keys.
+
+    This mirrors the existing response shape, but avoids the generic
+    filtered-ID subqueries and JSONB join-key comparison that dominated the
+    benchmarked workloads.
+    """
+    from orchestra.web.api.log.utils.metric_utils import (
+        REDUCTION_METHODS,
+        SHARED_VALUE_SAFE_METRICS,
+        _postprocess_aggregator_value,
+        _reduce_shared_value,
+        build_grouped_result,
+    )
+
+    fields_a = {plan.join_key_a}
+    fields_b = {plan.join_key_b}
+    for alias in set(plan.keys) | set(plan.group_by_fields):
+        side, field_name = plan.alias_map[alias]
+        if side == "A":
+            fields_a.add(field_name)
+        else:
+            fields_b.add(field_name)
+
+    source_a = _build_direct_join_side_source(
+        context_id=plan.context_a_id,
+        project_id=project_id,
+        side="A",
+        join_key=plan.join_key_a,
+        fields=fields_a,
+        filter_expr=plan.filter_expr if plan.filter_side == "A" else None,
+        filter_alias_map={
+            alias: source
+            for alias, source in plan.alias_map.items()
+            if source[0] == "A"
+        },
+        session=session,
+    )
+    source_b = _build_direct_join_side_source(
+        context_id=plan.context_b_id,
+        project_id=project_id,
+        side="B",
+        join_key=plan.join_key_b,
+        fields=fields_b,
+        filter_expr=plan.filter_expr if plan.filter_side == "B" else None,
+        filter_alias_map={
+            alias: source
+            for alias, source in plan.alias_map.items()
+            if source[0] == "B"
+        },
+        session=session,
+    )
+    joined_from = source_a.join(source_b, source_a.c.join_key == source_b.c.join_key)
+
+    def get_text(alias: str):
+        side, field_name = plan.alias_map[alias]
+        source = source_a if side == "A" else source_b
+        return source.c[_direct_field_label(side, field_name, "text")]
+
+    def get_jsonb(alias: str):
+        side, field_name = plan.alias_map[alias]
+        source = source_a if side == "A" else source_b
+        return source.c[_direct_field_label(side, field_name, "jsonb")]
+
+    needs_raw_values = metric in SHARED_VALUE_SAFE_METRICS
+    if len(plan.keys) > 1 and not needs_raw_values:
+        return _execute_multi_key_reduce_without_raw_values(
+            plan=plan,
+            metric=metric,
+            joined_from=joined_from,
+            get_text=get_text,
+            get_jsonb=get_jsonb,
+            session=session,
+            reduction_methods=REDUCTION_METHODS,
+            postprocess_value=_postprocess_aggregator_value,
+        )
+
+    results = {}
+    for agg_key in plan.keys:
+        text_value = get_text(agg_key)
+        select_columns = []
+        group_exprs = [
+            get_jsonb(group_field).label(f"group_{idx}_val")
+            for idx, group_field in enumerate(plan.group_by_fields)
+        ]
+        select_columns.extend(group_exprs)
+        select_columns.append(
+            _direct_reduce_aggregate_expression(
+                metric,
+                text_value,
+                REDUCTION_METHODS,
+            ),
+        )
+        if needs_raw_values:
+            select_columns.append(
+                func.array_agg(get_jsonb(agg_key)).label("raw_values"),
+            )
+
+        query = (
+            select(*select_columns)
+            .select_from(joined_from)
+            .where(text_value.isnot(None))
+        )
+        if group_exprs:
+            query = query.group_by(*group_exprs)
+
+        rows = session.execute(query).fetchall()
+        if plan.group_by_fields:
+            gb_fields = list(plan.group_by_fields)
+            if needs_raw_values:
+                results[agg_key] = build_grouped_result(rows, gb_fields, metric)
+            else:
+                results[agg_key] = _build_grouped_result_without_raw_values(
+                    rows,
+                    gb_fields,
+                    metric,
+                    _postprocess_aggregator_value,
+                )
+            continue
+
+        row = rows[0] if rows else None
+        if row is None:
+            results[agg_key] = _postprocess_aggregator_value(None, metric, None)
+            continue
+
+        if needs_raw_values:
+            shared = _reduce_shared_value(row[-1])
+            if shared is not None:
+                results[agg_key] = shared
+            else:
+                results[agg_key] = _postprocess_aggregator_value(
+                    row[0],
+                    metric,
+                    None,
+                )
+        else:
+            results[agg_key] = _postprocess_aggregator_value(row[0], metric, None)
+
+    if len(plan.keys) == 1:
+        return results[plan.keys[0]]
+    return results
+
+
 def _build_log_subquery(
     args: Dict[str, Any],
     project_name: str,
@@ -3615,6 +4254,7 @@ def _join_query_internal(
     from orchestra.web.api.log.utils.metric_utils import (
         REDUCTION_METHODS,
         SHARED_VALUE_SAFE_METRICS,
+        AggregationMetric,
         _postprocess_aggregator_value,
         _reduce_shared_value,
         build_grouped_result,
@@ -3655,6 +4295,40 @@ def _join_query_internal(
                     c.replace(context_a, "A").replace(context_b, "B") for c in columns
                 ]
 
+        if metric is not None:
+            valid_metrics = {m.value for m in AggregationMetric}
+            if metric not in valid_metrics:
+                raise ValueError(
+                    f"Unsupported metric {metric!r}. "
+                    f"Supported: {sorted(valid_metrics)}",
+                )
+            if key is None:
+                raise ValueError("`key` is required when `metric` is provided.")
+
+        direct_reduce_plan = _classify_direct_join_reduce(
+            project_id=project_id,
+            pair_of_args=pair_of_args,
+            join_expr=join_expr,
+            mode=mode,
+            columns=columns,
+            filter_expr=filter_expr,
+            sorting=sorting,
+            limit=limit,
+            offset=offset,
+            group_by=group_by,
+            metric=metric,
+            key=key,
+            context_dao=context_dao,
+            field_type_dao=field_type_dao,
+        )
+        if direct_reduce_plan is not None:
+            return _execute_direct_join_reduce(
+                project_id=project_id,
+                plan=direct_reduce_plan,
+                metric=metric,
+                session=session,
+            )
+
         # --- Inject from_fields for TOAST avoidance ---
         # Determine whether this will be a direct-reduce query (skip_merge)
         # so we can narrow the projection to only aggregation-needed fields.
@@ -3685,13 +4359,10 @@ def _join_query_internal(
                 [group_by] if isinstance(group_by, str) else list(group_by),
             )
 
-        # Direct reduce is only safe when every agg alias is resolvable.
-        _use_direct_reduce = (
-            metric is not None
-            and not filter_expr
-            and columns is not None
-            and all(a in _alias_map for a in _agg_aliases)
-        )
+        # The vetted direct-reduce fast path above is the only path allowed
+        # to bypass JSONB merge/column validation. Declined shapes use the
+        # generic path to preserve existing behavior.
+        _use_direct_reduce = False
 
         # Join-expression keys are always needed on both sides.
         join_keys_a: set = set()
@@ -3898,17 +4569,6 @@ def _join_query_internal(
         # Reduce mode
         # -----------------------------------------------------------------
         if metric is not None:
-            from orchestra.web.api.log.utils.metric_utils import AggregationMetric
-
-            valid_metrics = {m.value for m in AggregationMetric}
-            if metric not in valid_metrics:
-                raise ValueError(
-                    f"Unsupported metric {metric!r}. "
-                    f"Supported: {sorted(valid_metrics)}",
-                )
-            if key is None:
-                raise ValueError("`key` is required when `metric` is provided.")
-
             keys = [key] if isinstance(key, str) else list(key)
 
             results = {}
