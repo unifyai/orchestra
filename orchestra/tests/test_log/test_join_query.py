@@ -201,6 +201,46 @@ def _path_join_reduce_payload(
     return payload
 
 
+def _string_join_row_payload(
+    project_name: str,
+    fact_context: str,
+    dim_context: str,
+    **overrides,
+) -> dict:
+    payload = {
+        "project_name": project_name,
+        "pair_of_args": [{"context": fact_context}, {"context": dim_context}],
+        "join_expr": "A.join_id == B.join_id",
+        "mode": "inner",
+        "columns": {
+            "A.amount": "amount",
+            "B.category": "category",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _path_join_row_payload(
+    project_name: str,
+    fact_context: str,
+    dim_context: str,
+    **overrides,
+) -> dict:
+    payload = {
+        "project_name": project_name,
+        "pair_of_args": [{"context": fact_context}, {"context": dim_context}],
+        "join_expr": "A.`_/join/key` == B.`_/join/key`",
+        "mode": "inner",
+        "columns": {
+            "A._/amount": "amount",
+            "B._/category": "category",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
 # ===================================================================
 # Reduce-mode tests
 # ===================================================================
@@ -658,6 +698,301 @@ async def test_join_query_reduce_vector_column_falls_back_to_generic_path(
 # ===================================================================
 # Row-mode tests
 # ===================================================================
+
+
+@pytest.mark.anyio
+async def test_join_query_rows_uses_direct_scalar_path_for_string_join_keys(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-row-direct-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_rows
+
+    def spy_execute_direct_join_rows(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_rows",
+        spy_execute_direct_join_rows,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_row_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            sorting=json.dumps({"amount": "ascending"}),
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["count"] == 3
+    assert result["logs"] == [
+        {"amount": 10, "category": "alpha"},
+        {"amount": 20, "category": "beta"},
+        {"amount": 30, "category": "alpha"},
+    ]
+    assert len(calls) == 1
+    assert calls[0].join_key_a == "join_id"
+    assert calls[0].join_key_b == "join_id"
+
+
+@pytest.mark.anyio
+async def test_join_query_rows_direct_path_preserves_limit_offset_and_count(
+    client: AsyncClient,
+):
+    project_name = f"join-query-row-page-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_row_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            sorting=json.dumps({"amount": "ascending"}),
+            limit=1,
+            offset=1,
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["count"] == 3
+    assert result["logs"] == [{"amount": 20, "category": "beta"}]
+
+
+@pytest.mark.anyio
+async def test_join_query_rows_direct_path_pushes_side_local_filter(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-row-filter-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_rows
+
+    def spy_execute_direct_join_rows(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_rows",
+        spy_execute_direct_join_rows,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_row_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            filter_expr="amount > 10",
+            sorting=json.dumps({"amount": "ascending"}),
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["count"] == 2
+    assert result["logs"] == [
+        {"amount": 20, "category": "beta"},
+        {"amount": 30, "category": "alpha"},
+    ]
+    assert len(calls) == 1
+    assert calls[0].filter_side == "A"
+
+
+@pytest.mark.anyio
+async def test_join_query_rows_accepts_path_like_join_fields(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-row-path-fields-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_path_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_rows
+
+    def spy_execute_direct_join_rows(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_rows",
+        spy_execute_direct_join_rows,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_path_join_row_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            sorting=json.dumps({"amount": "ascending"}),
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["count"] == 3
+    assert result["logs"] == [
+        {"amount": 10, "category": "alpha"},
+        {"amount": 20, "category": "beta"},
+        {"amount": 30, "category": "alpha"},
+    ]
+    assert len(calls) == 1
+    assert calls[0].join_key_a == "_/join/key"
+    assert calls[0].join_key_b == "_/join/key"
+
+
+@pytest.mark.anyio
+async def test_join_query_rows_compound_join_expr_falls_back(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-row-compound-fallback-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_rows
+
+    def spy_execute_direct_join_rows(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_rows",
+        spy_execute_direct_join_rows,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_row_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            join_expr="A.join_id == B.join_id and A.amount > 10",
+            sorting=json.dumps({"amount": "ascending"}),
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["count"] == 2
+    assert result["logs"] == [
+        {"amount": 20, "category": "beta"},
+        {"amount": 30, "category": "alpha"},
+    ]
+    assert calls == []
+
+
+@pytest.mark.anyio
+async def test_join_query_rows_cross_side_filter_falls_back(
+    client: AsyncClient,
+    monkeypatch,
+):
+    from orchestra.web.api.log.utils import logging_utils
+
+    project_name = f"join-query-row-cross-filter-{uuid.uuid4().hex}"
+    fact_context = "facts"
+    dim_context = "dims"
+    await _create_string_join_reduce_fixture(
+        client,
+        project_name,
+        fact_context,
+        dim_context,
+    )
+
+    calls = []
+    original = logging_utils._execute_direct_join_rows
+
+    def spy_execute_direct_join_rows(**kwargs):
+        calls.append(kwargs["plan"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        logging_utils,
+        "_execute_direct_join_rows",
+        spy_execute_direct_join_rows,
+    )
+
+    response = await client.post(
+        "/v0/logs/join_query",
+        json=_string_join_row_payload(
+            project_name,
+            fact_context,
+            dim_context,
+            filter_expr="amount > 10 and category == 'alpha'",
+            sorting=json.dumps({"amount": "ascending"}),
+        ),
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["count"] == 1
+    assert result["logs"] == [{"amount": 30, "category": "alpha"}]
+    assert calls == []
 
 
 @pytest.mark.anyio
