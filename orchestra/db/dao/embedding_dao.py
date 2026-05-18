@@ -41,18 +41,21 @@ class EmbeddingDAO:
             if not log_event_ids:
                 return 0
             result = self.session.execute(
-                text(f"""
+                text(
+                    f"""
                     UPDATE embedding_queue
                     SET status = 'cancelled',
                         error_message = :reason
                     WHERE ref_id = ANY(:ids)
                       AND status IN {ACTIVE_QUEUE_STATUSES}
-                """),
+                """,
+                ),
                 {"ids": log_event_ids, "reason": reason},
             )
         else:
             result = self.session.execute(
-                text(f"""
+                text(
+                    f"""
                     UPDATE embedding_queue eq
                     SET status = 'cancelled',
                         error_message = :reason
@@ -60,7 +63,8 @@ class EmbeddingDAO:
                     WHERE eq.ref_id = le.id
                       AND le.project_id = :project_id
                       AND eq.status IN {ACTIVE_QUEUE_STATUSES}
-                """),
+                """,
+                ),
                 {"project_id": project_id, "reason": reason},
             )
 
@@ -93,12 +97,14 @@ class EmbeddingDAO:
             for i in range(0, len(log_event_ids), batch_size):
                 chunk = log_event_ids[i : i + batch_size]
                 result = self.session.execute(
-                    text("""
+                    text(
+                        """
                         UPDATE embedding
                         SET is_deleted = true
                         WHERE ref_id = ANY(:ids)
                           AND is_deleted = false
-                    """),
+                    """,
+                    ),
                     {"ids": chunk},
                 )
                 total += result.rowcount
@@ -106,7 +112,8 @@ class EmbeddingDAO:
         else:
             while True:
                 result = self.session.execute(
-                    text("""
+                    text(
+                        """
                         WITH batch AS (
                             SELECT e.ctid FROM embedding e
                             JOIN log_event le ON e.ref_id = le.id
@@ -117,7 +124,8 @@ class EmbeddingDAO:
                         UPDATE embedding
                         SET is_deleted = true
                         WHERE ctid IN (SELECT ctid FROM batch)
-                    """),
+                    """,
+                    ),
                     {"project_id": project_id, "batch_size": batch_size},
                 )
                 updated = result.rowcount
@@ -146,22 +154,26 @@ class EmbeddingDAO:
             if not log_event_ids:
                 return 0
             result = self.session.execute(
-                text("""
+                text(
+                    """
                     UPDATE embedding
                     SET ref_id = NULL
                     WHERE ref_id = ANY(:ids)
-                """),
+                """,
+                ),
                 {"ids": log_event_ids},
             )
         else:
             result = self.session.execute(
-                text("""
+                text(
+                    """
                     UPDATE embedding e
                     SET ref_id = NULL
                     FROM log_event le
                     WHERE e.ref_id = le.id
                       AND le.project_id = :project_id
-                """),
+                """,
+                ),
                 {"project_id": project_id},
             )
 

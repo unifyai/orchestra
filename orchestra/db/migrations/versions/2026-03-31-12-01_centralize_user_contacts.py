@@ -24,7 +24,8 @@ depends_on = None
 
 def upgrade() -> None:
     # Backfill User.phone_number from phone-type contacts
-    op.execute("""
+    op.execute(
+        """
         UPDATE "user" u
         SET phone_number = sub.user_value
         FROM (
@@ -40,10 +41,12 @@ def upgrade() -> None:
         ) sub
         WHERE u.id = sub.user_id
           AND u.phone_number IS NULL
-        """)
+        """,
+    )
 
     # Backfill User.whatsapp_number from whatsapp-type contacts
-    op.execute("""
+    op.execute(
+        """
         UPDATE "user" u
         SET whatsapp_number = sub.user_value
         FROM (
@@ -59,7 +62,8 @@ def upgrade() -> None:
         ) sub
         WHERE u.id = sub.user_id
           AND u.whatsapp_number IS NULL
-        """)
+        """,
+    )
 
     op.drop_column("assistant_contacts", "user_value")
 

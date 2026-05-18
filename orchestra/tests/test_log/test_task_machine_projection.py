@@ -692,20 +692,21 @@ def test_task_outbound_operation_create_or_adopt_reports_adoption_after_upsert_r
         ),
     )
 
-    operation, created = (
-        task_machine_state_service.create_task_outbound_operation_if_absent(
-            session=fake_session,
-            project_id=1,
-            payload={
-                "operation_key": "offline:42:303:run-1:1",
-                "assistant_id": "42",
-                "task_run_key": "offline:42:303:run-1",
-                "operation_index": 1,
-                "method_name": "send_email",
-                "medium": "email",
-                "target_kind": "contact",
-            },
-        )
+    (
+        operation,
+        created,
+    ) = task_machine_state_service.create_task_outbound_operation_if_absent(
+        session=fake_session,
+        project_id=1,
+        payload={
+            "operation_key": "offline:42:303:run-1:1",
+            "assistant_id": "42",
+            "task_run_key": "offline:42:303:run-1",
+            "operation_index": 1,
+            "method_name": "send_email",
+            "medium": "email",
+            "target_kind": "contact",
+        },
     )
 
     assert operation is adopted_row

@@ -93,6 +93,7 @@ import stripe
 from sqlalchemy import func
 from sqlalchemy.orm import Session, sessionmaker
 
+from orchestra.db.models.enums import BillingMode
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
     RECHARGE_TYPE_MONTHLY_COMMIT,
@@ -107,7 +108,6 @@ from orchestra.db.models.orchestra_models import (
     User,
     WebhookLog,
 )
-from orchestra.db.models.enums import BillingMode
 from orchestra.web.lifetime import get_engine
 
 BILLING_EVENT_TYPES = frozenset(
@@ -554,7 +554,9 @@ def _flag_overdue_open_invoice(
         return  # Within normal Stripe-dunning window; nothing to flag.
 
     severity = "critical" if days_overdue >= 14 else "warning"
-    amount_pretty = f"{int(inv.get('amount_due', 0)) / 100:,.2f} {inv.get('currency', '').upper()}"
+    amount_pretty = (
+        f"{int(inv.get('amount_due', 0)) / 100:,.2f} {inv.get('currency', '').upper()}"
+    )
 
     result.discrepancies.append(
         Discrepancy(
@@ -1648,10 +1650,12 @@ def _check_plan_assignment_integrity(
 
     # 2+3+4: walk each non-NULL plan_assignment_id and validate the pointee.
     rows = session.execute(
-        BillingAccount.__table__.select().with_only_columns(
+        BillingAccount.__table__.select()
+        .with_only_columns(
             BillingAccount.id,
             BillingAccount.plan_assignment_id,
-        ).where(BillingAccount.plan_assignment_id.isnot(None)),
+        )
+        .where(BillingAccount.plan_assignment_id.isnot(None)),
     ).all()
     for ba_id, plan_id in rows:
         assignment = session.get(BillingPlanAssignment, plan_id)
@@ -1786,15 +1790,15 @@ def _check_metered_invoicing_completeness(
     # fall between max(assignment.started_at, cutoff) and today.
     for assignment, template in metered_assignments:
         period_start = max(
-            assignment.started_at.date()
-            if assignment.started_at.tzinfo
-            else assignment.started_at.date(),
+            (
+                assignment.started_at.date()
+                if assignment.started_at.tzinfo
+                else assignment.started_at.date()
+            ),
             cutoff,
         )
         end_bound = (
-            assignment.ended_at.date()
-            if assignment.ended_at is not None
-            else today_utc
+            assignment.ended_at.date() if assignment.ended_at is not None else today_utc
         )
         # Iterate first-of-month markers strictly after period_start
         # and strictly before today (a period is "closed" once we're
@@ -1813,8 +1817,7 @@ def _check_metered_invoicing_completeness(
             recharge_exists = (
                 session.query(Recharge.id)
                 .filter(
-                    Recharge.billing_account_id
-                    == assignment.billing_account_id,
+                    Recharge.billing_account_id == assignment.billing_account_id,
                     Recharge.type == RECHARGE_TYPE_MONTHLY_COMMIT,
                     Recharge.invoice_group == next_marker,
                 )
@@ -1922,9 +1925,8 @@ def _check_upfront_assignment_mid_period_termination(
         # month / time-of-day match (or, more pragmatically, both are
         # day-1 boundaries since plan changes typically occur at month
         # rollovers via AT_BOUNDARY policy).
-        elapsed_months = (
-            (ended_at.year - started_at.year) * 12
-            + (ended_at.month - started_at.month)
+        elapsed_months = (ended_at.year - started_at.year) * 12 + (
+            ended_at.month - started_at.month
         )
         # Treat day-of-month mismatch (or sub-month elapsed) as
         # mid-period. Anything > 0 months, divisible by months_per_period,
@@ -2010,7 +2012,10 @@ def _check_plan_groups_with_no_active_members(
 
     active_member_subq = (
         select(PlanGroupMember.group_id)
-        .join(BillingPlanTemplate, BillingPlanTemplate.id == PlanGroupMember.template_id)
+        .join(
+            BillingPlanTemplate,
+            BillingPlanTemplate.id == PlanGroupMember.template_id,
+        )
         .where(BillingPlanTemplate.is_active.is_(True))
         .distinct()
     )
@@ -2286,9 +2291,7 @@ def _check_cash_balance_unapplied(
         customer_id = data.get("customer") if isinstance(data, dict) else None
         net_amount = data.get("net_amount") if isinstance(data, dict) else None
         currency = data.get("currency") if isinstance(data, dict) else None
-        ending_balance = (
-            data.get("ending_balance") if isinstance(data, dict) else None
-        )
+        ending_balance = data.get("ending_balance") if isinstance(data, dict) else None
 
         ba_id = None
         if customer_id:

@@ -911,9 +911,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                 total_credits = sum(float(r.quantity) for r in recharges)
                 ba_id = recharges[0].billing_account_id
 
-                session.query(Recharge).filter_by(
-                    stripe_invoice_id=invoice_id,
-                ).update(
+                session.query(Recharge).filter_by(stripe_invoice_id=invoice_id).update(
                     {"status": RechargeStatus.DISPUTED},
                     synchronize_session=False,
                 )
@@ -1398,9 +1396,7 @@ def process_cash_balance_transaction_event(
     ending_balance = data.get("ending_balance")
 
     ba = (
-        session.query(BillingAccount)
-        .filter_by(stripe_customer_id=customer_id)
-        .first()
+        session.query(BillingAccount).filter_by(stripe_customer_id=customer_id).first()
         if customer_id
         else None
     )

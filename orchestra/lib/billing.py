@@ -18,7 +18,6 @@ billing mode (CREDITS mutates the wallet, METERED writes a ledger-only
 audit row). Feature code calls those DAO methods directly.
 """
 
-import decimal
 import logging
 import re
 from dataclasses import dataclass
@@ -834,9 +833,7 @@ def ensure_stripe_customer(
                 sync_tax_id_to_stripe,
             )
 
-            country_code = (
-                address.get("country") if address else None
-            )
+            country_code = address.get("country") if address else None
             sync_tax_id_to_stripe(
                 customer_id,
                 billing_account.tax_id,

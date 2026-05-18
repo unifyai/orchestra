@@ -2648,10 +2648,7 @@ class TestUnjustifiedSuspensions:
 def _make_metered_template(dbsession, *, name: str):
     """Cheap METERED template for reconciliation tests."""
     from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
-    from orchestra.db.models.enums import (
-        BillingMode,
-        CollectionMethod,
-    )
+    from orchestra.db.models.enums import BillingMode, CollectionMethod
 
     return BillingPlanTemplateDAO(dbsession).create_template(
         name=name,
@@ -2853,9 +2850,7 @@ class TestPlanAssignmentIntegrity:
             "plan_assignment_orphan_active_row",
             "plan_assignment_cross_account_leak",
         }
-        hits = [
-            d for d in result.discrepancies if d.category in plan_categories
-        ]
+        hits = [d for d in result.discrepancies if d.category in plan_categories]
         assert hits == []
 
 
@@ -2884,8 +2879,7 @@ class TestPlanGroupNullPointer:
 
         dbsession.execute(
             text(
-                "UPDATE billing_account "
-                "SET plan_group_id = NULL WHERE id = :id",
+                "UPDATE billing_account " "SET plan_group_id = NULL WHERE id = :id",
             ),
             {"id": ba.id},
         )
@@ -2895,8 +2889,7 @@ class TestPlanGroupNullPointer:
         hits = [
             d
             for d in result.discrepancies
-            if d.category == "plan_group_null_pointer"
-            and d.billing_account_id == ba.id
+            if d.category == "plan_group_null_pointer" and d.billing_account_id == ba.id
         ]
         assert len(hits) == 1
         assert hits[0].severity == "critical"
@@ -2933,11 +2926,12 @@ class TestMeteredInvoicingCompleteness:
     ):
         """METERED account active across a closed period without a
         MONTHLY_COMMIT Recharge for that period is flagged."""
+        from sqlalchemy import text
+
         import orchestra.routines.billing_reconciliation as recon_mod
         from orchestra.db.dao.billing_plan_assignment_dao import (
             BillingPlanAssignmentDAO,
         )
-        from sqlalchemy import text
 
         monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
 

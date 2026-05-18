@@ -33,7 +33,8 @@ def upgrade() -> None:
 
     # 1. Backfill from recharges (PAID only)
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO credit_transaction
                 (billing_account_id, at, amount, balance_after, category, description, detail)
             SELECT
@@ -59,12 +60,14 @@ def upgrade() -> None:
             FROM recharge r
             WHERE r.status = 'PAID'
             ON CONFLICT DO NOTHING
-        """),
+        """,
+        ),
     )
 
     # 2. Backfill assistant hiring costs
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO credit_transaction
                 (billing_account_id, at, amount, balance_after, category,
                  assistant_id, user_id, organization_id, description, detail)
@@ -89,13 +92,15 @@ def upgrade() -> None:
               AND a.demo_id IS NULL
               AND COALESCE(o.billing_account_id, u.billing_account_id) IS NOT NULL
             ON CONFLICT DO NOTHING
-        """),
+        """,
+        ),
         {"creation_cost": ASSISTANT_CREATION_COST},
     )
 
     # 3. Backfill contact setup (one-time) fees
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO credit_transaction
                 (billing_account_id, at, amount, balance_after, category,
                  assistant_id, user_id, organization_id, description, detail)
@@ -127,12 +132,14 @@ def upgrade() -> None:
               AND ctc.one_time_cost > 0
               AND COALESCE(o.billing_account_id, u.billing_account_id) IS NOT NULL
             ON CONFLICT DO NOTHING
-        """),
+        """,
+        ),
     )
 
     # 4. Backfill contact levies (inferred from last_billed_month)
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO credit_transaction
                 (billing_account_id, at, amount, balance_after, category,
                  assistant_id, user_id, organization_id, description, detail)
@@ -160,7 +167,8 @@ def upgrade() -> None:
               AND ac.monthly_cost > 0
               AND COALESCE(o.billing_account_id, u.billing_account_id) IS NOT NULL
             ON CONFLICT DO NOTHING
-        """),
+        """,
+        ),
     )
 
     # 5. Backfill from LLM cost events in the Assistants project.
@@ -168,7 +176,8 @@ def upgrade() -> None:
     # many-to-many join. LEFT JOIN on "user" includes org-owned projects
     # where project.user_id IS NULL.
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             INSERT INTO credit_transaction
                 (billing_account_id, at, amount, balance_after, category,
                  assistant_id, user_id, organization_id, description, detail)
@@ -200,14 +209,16 @@ def upgrade() -> None:
               AND (le.data->>'billed_cost')::numeric > 0
               AND COALESCE(o.billing_account_id, u.billing_account_id) IS NOT NULL
             ORDER BY le.id
-        """),
+        """,
+        ),
     )
 
 
 def downgrade() -> None:
     conn = op.get_bind()
     conn.execute(
-        sa.text("""
+        sa.text(
+            """
             DELETE FROM credit_transaction
             WHERE detail->>'event' IN (
                 'backfill_recharge',
@@ -217,5 +228,6 @@ def downgrade() -> None:
                 'backfill_llm',
                 'backfill_org_llm'
             )
-        """),
+        """,
+        ),
     )

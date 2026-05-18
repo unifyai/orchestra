@@ -187,7 +187,6 @@ class TestTokenResolutionResponse:
 
 
 class TestReduceBridgeRequestValidation:
-
     def test_minimal_single_key(self):
         req = ReduceBridgeRequest(
             context="proj/Logs",
@@ -253,7 +252,6 @@ class TestReduceBridgeRequestValidation:
 
 
 class TestJoinBridgeRequestValidation:
-
     def test_minimal(self):
         req = JoinBridgeRequest(
             tables=["proj/users", "proj/orders"],
@@ -331,7 +329,6 @@ class TestJoinBridgeRequestValidation:
 
 
 class TestJoinReduceBridgeRequestValidation:
-
     def test_minimal(self):
         req = JoinReduceBridgeRequest(
             tables=["proj/users", "proj/orders"],
@@ -386,7 +383,6 @@ class TestJoinReduceBridgeRequestValidation:
 
 
 class TestReduceBridgeResponse:
-
     def test_scalar_result(self):
         resp = ReduceBridgeResponse(result=42.5)
         assert resp.result == 42.5
@@ -401,7 +397,6 @@ class TestReduceBridgeResponse:
 
 
 class TestJoinBridgeResponse:
-
     def test_basic(self):
         resp = JoinBridgeResponse(
             rows=[{"name": "Alice", "amount": 100}],
@@ -416,7 +411,6 @@ class TestJoinBridgeResponse:
 
 
 class TestJoinReduceBridgeResponse:
-
     def test_scalar_result(self):
         resp = JoinReduceBridgeResponse(result=60)
         assert resp.result == 60
