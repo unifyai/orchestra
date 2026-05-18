@@ -224,7 +224,12 @@ class AssistantCreate(BaseModel):
                 raise ValueError(
                     "If providing voice information, both 'voice_id' and 'voice_provider' are required.",
                 )
-        if self.is_coordinator is not None:
+        # AssistantRead extends AssistantCreate for response shaping, so this
+        # guard must only apply to create payload validation.
+        if (
+            self.is_coordinator is not None
+            and self.__class__.__name__ == "AssistantCreate"
+        ):
             raise ValueError(
                 "'is_coordinator' is not accepted on this endpoint. "
                 "Use POST /user/{user_id}/coordinator instead.",
