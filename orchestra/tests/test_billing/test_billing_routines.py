@@ -1533,9 +1533,7 @@ def _commit_template(
         display_name=display_name,
         billing_mode=BillingMode.METERED,
         commit_amount=commit,
-        commit_period=(
-            commit_period or "MONTHLY" if is_commitment else None
-        ),
+        commit_period=(commit_period or "MONTHLY" if is_commitment else None),
         commit_schedule=commit_schedule if is_commitment else None,
         base_pricing_factor=pricing_factor,
         overage_pricing_factor=overage_pricing_factor or Decimal("1.0"),
@@ -1599,8 +1597,7 @@ def _backdate_ledger_to_period(
 
     dbsession.execute(
         text(
-            "UPDATE credit_transaction SET at = :ts "
-            "WHERE billing_account_id = :ba",
+            "UPDATE credit_transaction SET at = :ts " "WHERE billing_account_id = :ba",
         ),
         {"ts": when, "ba": billing_account_id},
     )
@@ -1612,7 +1609,9 @@ def _record_metered_usage(dbsession, ba_id, amount, *, category="llm"):
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     BillingAccountDAO(dbsession).deduct_credits(
-        ba_id, float(amount), category=category,
+        ba_id,
+        float(amount),
+        category=category,
     )
     dbsession.flush()
 
@@ -1893,9 +1892,7 @@ class TestMonthlyMeteredInvoicer:
         assert len(stripe._inv_calls) == 1
 
         recharge = (
-            dbsession.query(Recharge)
-            .filter(Recharge.billing_account_id == ba.id)
-            .one()
+            dbsession.query(Recharge).filter(Recharge.billing_account_id == ba.id).one()
         )
         assert recharge.detail["account_status_at_invoice"] == "SUSPENDED"
         assert recharge.detail["suspension_reason_at_invoice"] == "PAST_DUE"
@@ -2332,9 +2329,9 @@ class TestMonthlyMeteredInvoicer:
         # Each line description starts with the friendly display name,
         # never the internal slug.
         for ii in stripe._ii_calls:
-            assert ii["description"].startswith("Acme Enterprise — "), (
-                f"line description leaked internal slug: {ii['description']!r}"
-            )
+            assert ii["description"].startswith(
+                "Acme Enterprise — ",
+            ), f"line description leaked internal slug: {ii['description']!r}"
 
         inv = stripe._inv_calls[0]
         # Metadata exposes both names so ops can correlate by either.
@@ -2366,9 +2363,7 @@ class TestMeteredInvoicerCommitScheduleHelpers:
     """Unit tests for the date-math helpers driving the schedule logic."""
 
     def test_months_in_period(self):
-        from orchestra.routines.monthly_metered_invoicer import (
-            _months_in_period,
-        )
+        from orchestra.routines.monthly_metered_invoicer import _months_in_period
 
         assert _months_in_period("MONTHLY") == 1
         assert _months_in_period("QUARTERLY") == 3
@@ -2441,7 +2436,10 @@ class TestMeteredInvoicerCommitScheduleHelpers:
         # Anniversaries: Jan, Apr, Jul, Oct of 2026.
         for anniversary_month in (1, 4, 7, 10):
             ps = _dt.datetime(
-                2026, anniversary_month, 1, tzinfo=_dt.timezone.utc,
+                2026,
+                anniversary_month,
+                1,
+                tzinfo=_dt.timezone.utc,
             )
             assert _is_commit_billing_period(
                 started_at=started,
@@ -2450,7 +2448,10 @@ class TestMeteredInvoicerCommitScheduleHelpers:
             ), f"QUARTERLY: 2026-{anniversary_month:02d} should be anniversary"
         for non_anniversary_month in (2, 3, 5, 6, 8, 9, 11, 12):
             ps = _dt.datetime(
-                2026, non_anniversary_month, 1, tzinfo=_dt.timezone.utc,
+                2026,
+                non_anniversary_month,
+                1,
+                tzinfo=_dt.timezone.utc,
             )
             assert not _is_commit_billing_period(
                 started_at=started,
@@ -2486,9 +2487,7 @@ class TestMeteredInvoicerCommitSchedule:
         """AMORTISED + ANNUAL: every month bills $1k of a $12k contract."""
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2508,7 +2507,11 @@ class TestMeteredInvoicerCommitSchedule:
         )
         # Backdate well into the past so we're not on the first period.
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=4,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=4,
         )
         dbsession.refresh(ba)
         # Use < monthly_commit ($1000) so there's no overage.
@@ -2533,9 +2536,7 @@ class TestMeteredInvoicerCommitSchedule:
         # Recharge.detail must record both the per-month equivalent
         # and the period total so audits can re-derive either view.
         recharge = (
-            dbsession.query(Recharge)
-            .filter(Recharge.billing_account_id == ba.id)
-            .one()
+            dbsession.query(Recharge).filter(Recharge.billing_account_id == ba.id).one()
         )
         assert Decimal(recharge.detail["commit_amount"]) == Decimal("12000")
         assert Decimal(recharge.detail["monthly_commit_local"]) == Decimal("1000")
@@ -2551,9 +2552,7 @@ class TestMeteredInvoicerCommitSchedule:
         """Overage on a $12k/yr contract triggers above $1k/mo, NOT $12k."""
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2572,7 +2571,11 @@ class TestMeteredInvoicerCommitSchedule:
             commit_schedule="AMORTISED",
         )
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=4,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=4,
         )
         dbsession.refresh(ba)
         # $1500 raw usage in one month → $500 over the $1k monthly floor.
@@ -2600,9 +2603,7 @@ class TestMeteredInvoicerCommitSchedule:
         """UPFRONT + ANNUAL on the anniversary month bills the FULL $12k."""
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2622,7 +2623,11 @@ class TestMeteredInvoicerCommitSchedule:
         )
         # Assignment starts in April 2026 (the anniversary month).
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=4,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=4,
         )
         dbsession.refresh(ba)
         # No overage — $400 < $1000/mo floor.
@@ -2644,9 +2649,7 @@ class TestMeteredInvoicerCommitSchedule:
         assert "annual commitment" in line["description"].lower()
 
         recharge = (
-            dbsession.query(Recharge)
-            .filter(Recharge.billing_account_id == ba.id)
-            .one()
+            dbsession.query(Recharge).filter(Recharge.billing_account_id == ba.id).one()
         )
         assert Decimal(recharge.detail["commit_charge_local"]) == Decimal("12000")
         assert Decimal(recharge.detail["monthly_commit_local"]) == Decimal("1000")
@@ -2661,9 +2664,7 @@ class TestMeteredInvoicerCommitSchedule:
         """UPFRONT + ANNUAL non-anniversary month: overage line only, no commit."""
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2684,7 +2685,11 @@ class TestMeteredInvoicerCommitSchedule:
         # Started in April 2026; we're invoicing for July 2026
         # (3 months later → not an anniversary).
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=4,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=4,
         )
         dbsession.refresh(ba)
         # Backdate ledger into July; assignment still in force.
@@ -2707,9 +2712,7 @@ class TestMeteredInvoicerCommitSchedule:
         assert line["metadata"]["line_kind"] == "overage"
 
         recharge = (
-            dbsession.query(Recharge)
-            .filter(Recharge.billing_account_id == ba.id)
-            .one()
+            dbsession.query(Recharge).filter(Recharge.billing_account_id == ba.id).one()
         )
         assert Decimal(recharge.detail["commit_charge_local"]) == Decimal("0")
         assert Decimal(recharge.detail["overage_charge_local"]) == Decimal("500")
@@ -2724,9 +2727,7 @@ class TestMeteredInvoicerCommitSchedule:
         """UPFRONT non-anniversary + no overage = $0 invoice = skip."""
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2745,7 +2746,11 @@ class TestMeteredInvoicerCommitSchedule:
             commit_schedule="UPFRONT",
         )
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=4,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=4,
         )
         dbsession.refresh(ba)
         # Under the $1k/mo floor in a non-anniversary month → nothing to bill.
@@ -2789,9 +2794,7 @@ class TestMeteredInvoicerCommitSchedule:
         """
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2815,7 +2818,11 @@ class TestMeteredInvoicerCommitSchedule:
             overage_pricing_factor=Decimal("1.25"),
         )
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=4,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=4,
         )
         dbsession.refresh(ba)
         _record_metered_usage(dbsession, ba.id, Decimal("1500"))
@@ -2848,9 +2855,7 @@ class TestMeteredInvoicerCommitSchedule:
         """``overage_pricing_factor=1.0`` means "no uplift" — base discount applies above commit too."""
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2873,7 +2878,11 @@ class TestMeteredInvoicerCommitSchedule:
             overage_pricing_factor=Decimal("1.0"),
         )
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=4,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=4,
         )
         dbsession.refresh(ba)
         _record_metered_usage(dbsession, ba.id, Decimal("2400"))
@@ -2902,9 +2911,7 @@ class TestMeteredInvoicerCommitSchedule:
         """UPFRONT + QUARTERLY: full commit every 3 months, overage in between."""
         import datetime as _dt
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -2923,7 +2930,11 @@ class TestMeteredInvoicerCommitSchedule:
             commit_schedule="UPFRONT",
         )
         _assign_for_period(
-            dbsession, ba, tpl, period_year=2026, period_month=1,
+            dbsession,
+            ba,
+            tpl,
+            period_year=2026,
+            period_month=1,
         )
         dbsession.refresh(ba)
         # Quiet first month, anniversary — should bill $3000 commit.
@@ -2938,9 +2949,7 @@ class TestMeteredInvoicerCommitSchedule:
         assert result.accounts_invoiced == 1, result.errors
         assert len(stripe._ii_calls) == 1
         assert stripe._ii_calls[0]["amount"] == 300000  # full quarterly commit
-        assert "quarterly commitment" in (
-            stripe._ii_calls[0]["description"].lower()
-        )
+        assert "quarterly commitment" in (stripe._ii_calls[0]["description"].lower())
 
 
 # ============================================================================
@@ -2987,10 +2996,7 @@ class TestMonthlyMeteredInvoicerPaymentMethods:
         import datetime as _dt
 
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-        from orchestra.db.models.orchestra_models import (
-            CollectionMethod,
-            FxPolicy,
-        )
+        from orchestra.db.models.orchestra_models import CollectionMethod, FxPolicy
         from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
@@ -3054,7 +3060,9 @@ class TestMonthlyMeteredInvoicerPaymentMethods:
     ):
         """SEND_INVOICE_NET_30 + USD → both card and customer_balance, US rail."""
         _, inv = self._setup_account_with(
-            dbsession, monkeypatch, currency="USD",
+            dbsession,
+            monkeypatch,
+            currency="USD",
         )
         ps = inv["payment_settings"]
         assert ps["payment_method_types"] == ["card", "customer_balance"]
@@ -3074,7 +3082,9 @@ class TestMonthlyMeteredInvoicerPaymentMethods:
     ):
         """SEND_INVOICE_NET_30 + GBP → customer_balance with UK rail."""
         _, inv = self._setup_account_with(
-            dbsession, monkeypatch, currency="GBP",
+            dbsession,
+            monkeypatch,
+            currency="GBP",
         )
         ps = inv["payment_settings"]
         assert ps["payment_method_types"] == ["card", "customer_balance"]
@@ -3106,7 +3116,9 @@ class TestMonthlyMeteredInvoicerPaymentMethods:
             collection=CollectionMethod.AUTO_CARD,
         )
         assert inv["payment_settings"]["payment_method_types"] == ["card"]
-        assert "customer_balance" not in inv["payment_settings"]["payment_method_options"]
+        assert (
+            "customer_balance" not in inv["payment_settings"]["payment_method_options"]
+        )
 
     def test_customer_override_wire_only(
         self,
@@ -3289,10 +3301,7 @@ class TestMonthlyMeteredInvoicerPaymentMethods:
         override or add the rail.
         """
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-        from orchestra.db.models.orchestra_models import (
-            CollectionMethod,
-            FxPolicy,
-        )
+        from orchestra.db.models.orchestra_models import FxPolicy
         from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
@@ -3370,6 +3379,7 @@ def _patch_frankfurter(monkeypatch, payload_for_url):
     ``payload_for_url`` is a callable ``(url, params) -> dict`` returning
     the JSON the stubbed Frankfurter should reply with.
     """
+
     def _get(url, params=None, timeout=None):  # noqa: ARG001
         return _FxStubResponse(payload_for_url(url, params or {}))
 
@@ -3391,10 +3401,7 @@ def _provision_fx_account(
 
     from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
     from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
-    from orchestra.db.models.orchestra_models import (
-        BillingMode,
-        CollectionMethod,
-    )
+    from orchestra.db.models.orchestra_models import BillingMode, CollectionMethod
 
     ba = make_billing_account(
         dbsession,
@@ -4368,10 +4375,7 @@ def _make_metered_template_for_guards(
     ``commit`` produces a COMMITMENT template.
     """
     from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
-    from orchestra.db.models.orchestra_models import (
-        BillingMode,
-        CollectionMethod,
-    )
+    from orchestra.db.models.orchestra_models import BillingMode, CollectionMethod
 
     is_commitment = commit is not None and commit > 0
     return BillingPlanTemplateDAO(dbsession).create_template(
@@ -4524,11 +4528,14 @@ class TestMonthlyCreditsInvoicerMeteredFilter:
             inv_id = f"in_credits_test_{len(calls)}"
             return SimpleNamespace(id=inv_id)
 
-        return SimpleNamespace(
-            Invoice=SimpleNamespace(create=_create),
-            StripeError=Exception,
-            InvalidRequestError=Exception,
-        ), calls
+        return (
+            SimpleNamespace(
+                Invoice=SimpleNamespace(create=_create),
+                StripeError=Exception,
+                InvalidRequestError=Exception,
+            ),
+            calls,
+        )
 
     def test_pending_invoice_with_metered_plan_id_is_skipped(
         self,
@@ -4547,7 +4554,9 @@ class TestMonthlyCreditsInvoicerMeteredFilter:
 
         import orchestra.lib.billing
         import orchestra.routines.monthly_credits_invoicer as inv_mod
-        from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
+        from orchestra.db.dao.billing_plan_assignment_dao import (
+            BillingPlanAssignmentDAO,
+        )
         from orchestra.routines.monthly_credits_invoicer import invoice_month
 
         invoice_sentinel = MagicMock(
@@ -4896,9 +4905,7 @@ class TestPlanConfigurationMatrix:
         from orchestra.db.dao.billing_plan_assignment_dao import (
             BillingPlanAssignmentDAO,
         )
-        from orchestra.db.dao.billing_plan_template_dao import (
-            BillingPlanTemplateDAO,
-        )
+        from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
         from orchestra.db.models.orchestra_models import (
             RECHARGE_TYPE_MONTHLY_COMMIT,
             BillingMode,
@@ -4906,9 +4913,7 @@ class TestPlanConfigurationMatrix:
             FxPolicy,
             ProrationPolicy,
         )
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe = _metered_stripe_mock()
         _patch_metered_stripe(monkeypatch, stripe)
@@ -4992,7 +4997,9 @@ class TestPlanConfigurationMatrix:
         # in AMORTISED; full year + overage in UPFRONT-anniversary;
         # else commit-only-charge depending on schedule).
         BillingAccountDAO(dbsession).deduct_credits(
-            ba.id, 1250.0, category="llm",
+            ba.id,
+            1250.0,
+            category="llm",
         )
         _backdate_ledger_to_period(
             dbsession,
@@ -5004,9 +5011,9 @@ class TestPlanConfigurationMatrix:
         result = invoice_metered_month(2026, 4, session=dbsession)
         dbsession.commit()
 
-        assert result.accounts_invoiced == 1, (
-            f"matrix case {case!r} did not produce an invoice: {result.errors!r}"
-        )
+        assert (
+            result.accounts_invoiced == 1
+        ), f"matrix case {case!r} did not produce an invoice: {result.errors!r}"
         assert len(stripe._inv_calls) == 1
         invoice = stripe._inv_calls[0]
         wire_currency = case["currency"].lower()

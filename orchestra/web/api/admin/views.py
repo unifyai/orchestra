@@ -29,6 +29,7 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     User,
 )
+from orchestra.lib.time import month_end_utc
 from orchestra.services.assistant_cleanup_service import (
     DEFAULT_CLEANUP_TASK_BATCH_SIZE,
     MAX_CLEANUP_TASK_BATCH_SIZE,
@@ -374,19 +375,24 @@ def create_recharge_model(
     if new_recharge_object.target_month:
         try:
             year, month = map(int, new_recharge_object.target_month.split("-"))
-            target_date = datetime(year, month, 1, tzinfo=timezone.utc)
-            first_next_month = (
-                target_date.replace(day=1) + timedelta(days=32)
-            ).replace(day=1)
-            invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+            invoice_group = month_end_utc(_dt.date(year, month, 1))
         except ValueError:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid target_month format. Use 'YYYY-MM' (e.g., '2025-06')",
             )
     else:
-        first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
-        invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+        # Use month_end_utc to get the last day of the current month.
+        # The previous in-line formula (replace(day=1) + 32d → replace(day=1)
+        # → subtract 1us → .date()) did NOT zero out ``at``'s time-of-day
+        # component, so for any recharge created at non-midnight UTC the
+        # final subtraction stayed on the 1st of the next month instead of
+        # crossing back into the previous day. That produced 78+ recharges
+        # in production with first-of-next-month invoice_group values —
+        # cosmetic on PAID promo/payment rows, but a real invoicing skip
+        # for the one PENDING_INVOICE auto-recharge that ever went through
+        # this endpoint (Recharge 20934 / Nassim, reconciled 2026-05-13).
+        invoice_group = month_end_utc(at)
 
     # Set status based on recharge type
     if new_recharge_object.type in ["payment", "promo"]:
@@ -733,9 +739,7 @@ def trigger_monthly_metered_invoicing(
 ) -> dict:
     """Trigger the metered-mode invoicing routine for a period."""
     try:
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         # Resolve the requested period for the soft current/future-month
         # guard. Mirrors the routine's own default-resolution logic
@@ -764,9 +768,7 @@ def trigger_monthly_metered_invoicing(
                 ),
             )
 
-        result = invoice_metered_month(
-            resolved_year, resolved_month, session=session
-        )
+        result = invoice_metered_month(resolved_year, resolved_month, session=session)
         return {
             "status": "success",
             "period": result.period,
@@ -2073,9 +2075,7 @@ def admin_create_billing_template(
             is_active=body.is_active,
             description=body.description,
             commit_amount=(
-                _D(str(body.commit_amount))
-                if body.commit_amount is not None
-                else None
+                _D(str(body.commit_amount)) if body.commit_amount is not None else None
             ),
             currency=body.currency,
             commit_period=body.commit_period,
@@ -2511,9 +2511,7 @@ def admin_set_plan(
             "status": "noop",
             "billing_account_id": ba.id,
             "assignment": None,
-            "message": (
-                f"Account is already on template id={body.template_id}."
-            ),
+            "message": (f"Account is already on template id={body.template_id}."),
         }
     return {
         "status": "ok",
@@ -2564,7 +2562,9 @@ def admin_get_active_plan(
         )
     return {
         "billing_account_id": ba.id,
-        "active_assignment": BillingPlanAssignmentResponse.from_orm_row(active).model_dump(),
+        "active_assignment": BillingPlanAssignmentResponse.from_orm_row(
+            active,
+        ).model_dump(),
     }
 
 
@@ -2609,7 +2609,7 @@ def admin_list_plan_history(
         "``POST /admin/billing/invoice-metered-month``; this "
         "single-account endpoint is the narrow-blast-radius "
         "alternative for ops cases like \"we voided this customer's "
-        "invoice in the Stripe dashboard, please regenerate it\". "
+        'invoice in the Stripe dashboard, please regenerate it". '
         "Staging dry-runs invoke ``invoice_metered_month`` directly "
         "via the Python shell. See ``monthly_metered_invoicer`` "
         "module docstring for the full scheduling rationale."
@@ -2763,18 +2763,14 @@ def admin_list_invoices(
     session: Session = Depends(get_db_session),
 ) -> AdminInvoiceListResponse:
     """List invoices across all billing accounts (admin)."""
-    from sqlalchemy import or_, select, func as sa_func
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import or_, select
 
-    from orchestra.db.dao.billing_plan_assignment_dao import (
-        BillingPlanAssignmentDAO,
-    )
     from orchestra.db.models.orchestra_models import (
         BillingPlanAssignment,
         BillingPlanTemplate,
     )
-    from orchestra.routines.monthly_metered_invoicer import (
-        estimate_in_progress_invoice,
-    )
+    from orchestra.routines.monthly_metered_invoicer import estimate_in_progress_invoice
 
     requested_statuses: Optional[set[str]] = None
     upcoming_only = False
@@ -2802,7 +2798,14 @@ def admin_list_invoices(
     # pick whichever side resolved — exactly one will, by domain
     # invariant (a BA is owned by either a user or an org, never both).
     base_q = (
-        select(Recharge, BillingAccount, Organization, User, BillingPlanAssignment, BillingPlanTemplate)
+        select(
+            Recharge,
+            BillingAccount,
+            Organization,
+            User,
+            BillingPlanAssignment,
+            BillingPlanTemplate,
+        )
         .join(BillingAccount, BillingAccount.id == Recharge.billing_account_id)
         .outerjoin(
             Organization,
@@ -2906,7 +2909,9 @@ def admin_list_invoices(
             #   reach this code path — the stripe_invoice_id filter
             #   excludes them.)
             detail = recharge.detail or {}
-            inv_local_raw = detail.get("invoiced_local") if isinstance(detail, dict) else None
+            inv_local_raw = (
+                detail.get("invoiced_local") if isinstance(detail, dict) else None
+            )
             detail_ccy = detail.get("currency") if isinstance(detail, dict) else None
             if inv_local_raw is not None and detail_ccy:
                 try:
@@ -2925,11 +2930,12 @@ def admin_list_invoices(
                     id=recharge.id,
                     billing_account_id=ba.id,
                     recipient_kind="ORG" if org is not None else "USER",
-                    recipient_id=str(org.id) if org is not None else (user.id if user else ""),
+                    recipient_id=(
+                        str(org.id) if org is not None else (user.id if user else "")
+                    ),
                     recipient_name=(org.name if org else (user.name if user else None)),
                     recipient_email=(
-                        ba.billing_email
-                        or (user.email if user else None)
+                        ba.billing_email or (user.email if user else None)
                     ),
                     at=ts.isoformat() if ts else "",
                     invoice_group=(
@@ -2946,11 +2952,11 @@ def admin_list_invoices(
                     plan_template_id=(template.id if template else None),
                     plan_template_name=(template.name if template else None),
                     plan_template_display_name=(
-                        template.display_name if template and getattr(template, "display_name", None) else (template.name if template else None)
+                        template.display_name
+                        if template and getattr(template, "display_name", None)
+                        else (template.name if template else None)
                     ),
-                    billing_mode=(
-                        template.billing_mode if template else None
-                    ),
+                    billing_mode=(template.billing_mode if template else None),
                 ),
             )
 
@@ -2963,10 +2969,7 @@ def admin_list_invoices(
     want_upcoming = (
         include_upcoming
         and (offset == 0 or upcoming_only)
-        and (
-            requested_statuses is None
-            or "UPCOMING" in requested_statuses
-        )
+        and (requested_statuses is None or "UPCOMING" in requested_statuses)
     )
     if want_upcoming:
         # Pull active METERED assignments, joined to BA + recipient.
@@ -2978,17 +2981,32 @@ def admin_list_invoices(
         now_utc = datetime.now(timezone.utc)
         if now_utc.month == 12:
             next_month_start = now_utc.replace(
-                year=now_utc.year + 1, month=1, day=1,
-                hour=0, minute=0, second=0, microsecond=0,
+                year=now_utc.year + 1,
+                month=1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
             )
         else:
             next_month_start = now_utc.replace(
-                month=now_utc.month + 1, day=1,
-                hour=0, minute=0, second=0, microsecond=0,
+                month=now_utc.month + 1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
             )
         period_end_label = next_month_start.date() - timedelta(days=1)
         metered_q = (
-            select(BillingAccount, Organization, User, BillingPlanAssignment, BillingPlanTemplate)
+            select(
+                BillingAccount,
+                Organization,
+                User,
+                BillingPlanAssignment,
+                BillingPlanTemplate,
+            )
             .join(
                 BillingPlanAssignment,
                 BillingPlanAssignment.billing_account_id == BillingAccount.id,
@@ -3015,9 +3033,13 @@ def admin_list_invoices(
             )
         )
         if currency:
-            metered_q = metered_q.where(BillingPlanTemplate.currency == currency.upper())
+            metered_q = metered_q.where(
+                BillingPlanTemplate.currency == currency.upper(),
+            )
         if plan_template_id is not None:
-            metered_q = metered_q.where(BillingPlanAssignment.template_id == plan_template_id)
+            metered_q = metered_q.where(
+                BillingPlanAssignment.template_id == plan_template_id,
+            )
         if q:
             needle = f"%{q.strip()}%"
             mclauses = [
@@ -3035,7 +3057,9 @@ def admin_list_invoices(
         for ba, org, user, assignment, template in session.execute(metered_q).all():
             try:
                 est = estimate_in_progress_invoice(
-                    session, billing_account_id=ba.id, as_of=now_utc,
+                    session,
+                    billing_account_id=ba.id,
+                    as_of=now_utc,
                 )
             except Exception:
                 # Best-effort: a single account's projection failing
@@ -3071,11 +3095,12 @@ def admin_list_invoices(
                     id=None,
                     billing_account_id=ba.id,
                     recipient_kind="ORG" if org is not None else "USER",
-                    recipient_id=str(org.id) if org is not None else (user.id if user else ""),
+                    recipient_id=(
+                        str(org.id) if org is not None else (user.id if user else "")
+                    ),
                     recipient_name=(org.name if org else (user.name if user else None)),
                     recipient_email=(
-                        ba.billing_email
-                        or (user.email if user else None)
+                        ba.billing_email or (user.email if user else None)
                     ),
                     at=est.period_end_exclusive.isoformat(),
                     invoice_group=period_end_label.isoformat(),

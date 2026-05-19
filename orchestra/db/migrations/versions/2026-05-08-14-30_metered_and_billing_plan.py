@@ -209,8 +209,7 @@ def upgrade() -> None:
             name="ck_plan_template_commit_period",
         ),
         sa.CheckConstraint(
-            "commit_schedule IS NULL OR commit_schedule IN "
-            "('AMORTISED', 'UPFRONT')",
+            "commit_schedule IS NULL OR commit_schedule IN " "('AMORTISED', 'UPFRONT')",
             name="ck_plan_template_commit_schedule",
         ),
         sa.CheckConstraint(

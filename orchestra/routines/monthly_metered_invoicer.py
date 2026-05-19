@@ -207,11 +207,7 @@ from orchestra.db.models.orchestra_models import (
     Recharge,
     RechargeStatus,
 )
-from orchestra.lib.fx import (
-    FxProviderError,
-    fetch_period_average,
-    fetch_spot,
-)
+from orchestra.lib.fx import FxProviderError, fetch_period_average, fetch_spot
 from orchestra.lib.time import month_end_utc
 from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
 from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
@@ -260,15 +256,11 @@ class _ResolvedFxRate:
             "fx_rate": str(self.rate),
             "fx_policy": self.policy,
             "fx_provider": self.provider,
-            "fx_as_of_date": (
-                self.as_of_date.isoformat() if self.as_of_date else None
-            ),
+            "fx_as_of_date": (self.as_of_date.isoformat() if self.as_of_date else None),
             "fx_period_start": (
                 self.period_start.isoformat() if self.period_start else None
             ),
-            "fx_period_end": (
-                self.period_end.isoformat() if self.period_end else None
-            ),
+            "fx_period_end": (self.period_end.isoformat() if self.period_end else None),
             "fx_sample_dates": (
                 [d.isoformat() for d in self.sample_dates]
                 if self.sample_dates is not None
@@ -328,9 +320,8 @@ def _is_commit_billing_period(
     started — defensive for invoice replays of pre-signup periods.
     """
     months_per = _months_in_period(commit_period)
-    elapsed_months = (
-        (period_start.year - started_at.year) * 12
-        + (period_start.month - started_at.month)
+    elapsed_months = (period_start.year - started_at.year) * 12 + (
+        period_start.month - started_at.month
     )
     if elapsed_months < 0:
         return False
@@ -397,7 +388,11 @@ class _LineCalculation:
     currency: str
     fx: _ResolvedFxRate
 
-    def to_audit_dict(self, period_start: _dt.datetime, period_end: _dt.datetime) -> dict:
+    def to_audit_dict(
+        self,
+        period_start: _dt.datetime,
+        period_end: _dt.datetime,
+    ) -> dict:
         base = {
             "raw_usage_usd": str(self.raw_usage_usd),
             "grants_usd": str(self.grants_usd),
@@ -1126,10 +1121,14 @@ def _compute_invoice_line(
     fx_rate = resolved_fx.rate
 
     raw_usage_local = (
-        raw_usage_usd if currency == "USD" else (raw_usage_usd * fx_rate).quantize(Decimal("0.01"))
+        raw_usage_usd
+        if currency == "USD"
+        else (raw_usage_usd * fx_rate).quantize(Decimal("0.01"))
     )
     grants_local = (
-        grants_usd if currency == "USD" else (grants_usd * fx_rate).quantize(Decimal("0.01"))
+        grants_usd
+        if currency == "USD"
+        else (grants_usd * fx_rate).quantize(Decimal("0.01"))
     )
 
     base_factor = Decimal(str(template.base_pricing_factor))
@@ -1162,9 +1161,9 @@ def _compute_invoice_line(
         # Quantize to 2dp so monthly invoices stack to the contract total
         # without sub-cent drift (over a year a 12 × 833.333... ≈ $10000.00
         # rounds to a clean total).
-        monthly_commit_local = (
-            commit_amount_nn / Decimal(months_per_period)
-        ).quantize(Decimal("0.01"))
+        monthly_commit_local = (commit_amount_nn / Decimal(months_per_period)).quantize(
+            Decimal("0.01"),
+        )
 
         # Overage logic — identical regardless of schedule.
         # ``base_pricing_factor`` applies to ALL usage (commit-included
@@ -1209,9 +1208,7 @@ def _compute_invoice_line(
                     commit_period=template.commit_period,
                     period_start=period_start,
                 )
-            commit_charge_local = (
-                commit_amount_nn if is_anniversary else Decimal("0")
-            )
+            commit_charge_local = commit_amount_nn if is_anniversary else Decimal("0")
         else:
             # AMORTISED (or NULL → AMORTISED).
             is_anniversary = True
@@ -1329,22 +1326,16 @@ def _build_invoice_lines(
             # anniversary periods read e.g. "annual commitment"
             # (the full period dollar). The same three values cover
             # all the non-MONTHLY periods cleanly.
-            schedule = (
-                calc.commit_schedule or CommitSchedule.AMORTISED.value
-            )
+            schedule = calc.commit_schedule or CommitSchedule.AMORTISED.value
             if schedule == CommitSchedule.UPFRONT.value:
                 period_word = {
                     CommitPeriod.MONTHLY.value: "monthly",
                     CommitPeriod.QUARTERLY.value: "quarterly",
                     CommitPeriod.ANNUAL.value: "annual",
                 }.get(template.commit_period or "", "period")
-                commit_desc = (
-                    f"{label} — {period_label} ({period_word} commitment)"
-                )
+                commit_desc = f"{label} — {period_label} ({period_word} commitment)"
             else:
-                commit_desc = (
-                    f"{label} — {period_label} (monthly commitment)"
-                )
+                commit_desc = f"{label} — {period_label} (monthly commitment)"
             lines.append(
                 _InvoiceLine(
                     description=commit_desc,
@@ -1422,9 +1413,7 @@ def _create_stripe_invoice(
     silently overwrite a previously-recorded line. ``-invoice`` is
     reserved for the parent Invoice itself.
     """
-    idem_base = (
-        f"metered-ba-{billing_account.id}-{invoice_group}-asn-{assignment.id}"
-    )
+    idem_base = f"metered-ba-{billing_account.id}-{invoice_group}-asn-{assignment.id}"
 
     # 1) One pending invoice item per line. ``stripe.Invoice.create``
     #    with ``pending_invoice_items_behavior=include`` will pull all
@@ -1641,7 +1630,10 @@ def _resolve_payment_method_types(
         return list(billing_account.preferred_payment_method_types)
     if template.collection_method != CollectionMethod.SEND_INVOICE_NET_30.value:
         return [PaymentMethodType.CARD.value]
-    if _bank_transfer_options(currency=currency, billing_account=billing_account) is None:
+    if (
+        _bank_transfer_options(currency=currency, billing_account=billing_account)
+        is None
+    ):
         logger.warning(
             "customer_balance unsupported for billing_account=%s currency=%s "
             "country=%s; falling back to card-only on this invoice. Add a "
@@ -1731,8 +1723,23 @@ def _existing_metered_recharge(
 def _next_month_start(day: _dt.datetime) -> _dt.datetime:
     """Return the first instant of the month following *day* (UTC)."""
     if day.month == 12:
-        return day.replace(year=day.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    return day.replace(month=day.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return day.replace(
+            year=day.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    return day.replace(
+        month=day.month + 1,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1819,14 +1826,11 @@ def estimate_in_progress_invoice(
     if plan.billing_mode != "METERED":
         return None
 
-    template = (
-        session.execute(
-            select(BillingPlanTemplate).where(
-                BillingPlanTemplate.id == plan.template_id,
-            ),
-        )
-        .scalar_one()
-    )
+    template = session.execute(
+        select(BillingPlanTemplate).where(
+            BillingPlanTemplate.id == plan.template_id,
+        ),
+    ).scalar_one()
 
     # The active assignment carries the contract anniversary date used
     # by UPFRONT-schedule plans to decide whether this month's invoice
@@ -1848,7 +1852,10 @@ def estimate_in_progress_invoice(
     # PERIOD_AVERAGE land on a sensible mid-month rate. ``+1 day`` so
     # the existing helper's ``last_day = end - 1`` lands on today.
     fx_window_end = (now + _dt.timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
     )
     try:
         resolved_fx = _resolve_fx_rate(

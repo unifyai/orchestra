@@ -250,10 +250,9 @@ class TestAutoRechargeInvoicerFlows:
         # a uniformly-random past month so each run owns a distinct
         # idempotency key. Stripe's 24h key TTL keeps even repeated
         # randoms from accumulating.
+        import calendar
         import random
         from datetime import datetime, timezone
-
-        import calendar
 
         period_year = random.randint(2018, 2023)
         period_month = random.randint(1, 12)
@@ -272,10 +271,17 @@ class TestAutoRechargeInvoicerFlows:
             ),
             {
                 "ts": datetime(
-                    period_year, period_month, 15, 12, 0, tzinfo=timezone.utc,
+                    period_year,
+                    period_month,
+                    15,
+                    12,
+                    0,
+                    tzinfo=timezone.utc,
                 ),
                 "group": datetime(
-                    period_year, period_month, period_last_day,
+                    period_year,
+                    period_month,
+                    period_last_day,
                 ).date(),
                 "rid": recharge.id,
             },
@@ -312,7 +318,10 @@ class TestAutoRechargeInvoicerFlows:
                 # message rather than fail. The orchestration the
                 # test verifies (queue_auto_recharge → invoice creation)
                 # has already been exercised above.
-                if "additional user action" in str(exc).lower() or "3d" in str(exc).lower():
+                if (
+                    "additional user action" in str(exc).lower()
+                    or "3d" in str(exc).lower()
+                ):
                     try:
                         stripe.Invoice.void_invoice(invoice_id)
                     except Exception:
@@ -322,7 +331,7 @@ class TestAutoRechargeInvoicerFlows:
                         f"session card charge ({exc}). The webhook-"
                         f"settlement half of this flow is sandbox-"
                         f"config-dependent — disable SCA enforcement "
-                        f"in the sandbox or use a non-SCA test PM."
+                        f"in the sandbox or use a non-SCA test PM.",
                     )
                 raise
 
@@ -1059,9 +1068,7 @@ class TestMeteredBankTransferFlows:
         from orchestra.db.dao.billing_plan_assignment_dao import (
             BillingPlanAssignmentDAO,
         )
-        from orchestra.db.dao.billing_plan_template_dao import (
-            BillingPlanTemplateDAO,
-        )
+        from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
         from orchestra.db.models.orchestra_models import (
             BillingMode,
             CollectionMethod,
@@ -1093,7 +1100,10 @@ class TestMeteredBankTransferFlows:
             ),
             {
                 "ts": _dt.datetime(
-                    effective_year - 1, 1, 1, tzinfo=_dt.timezone.utc,
+                    effective_year - 1,
+                    1,
+                    1,
+                    tzinfo=_dt.timezone.utc,
                 ),
                 "ba": ba.id,
             },
@@ -1164,9 +1174,7 @@ class TestMeteredBankTransferFlows:
         """
         import stripe
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe.api_key = STRIPE_SECRET_KEY
 
@@ -1174,7 +1182,9 @@ class TestMeteredBankTransferFlows:
         email = f"e2e_metered_bank_{uuid.uuid4().hex[:8]}@test.com"
         period_year, period_month = self._pick_unique_period()
         ba, customer_id = self._build_metered_account(
-            dbsession, email=email, period=(period_year, period_month),
+            dbsession,
+            email=email,
+            period=(period_year, period_month),
         )
 
         result = invoice_metered_month(period_year, period_month, session=dbsession)
@@ -1237,9 +1247,7 @@ class TestMeteredBankTransferFlows:
         """
         import stripe
 
-        from orchestra.routines.monthly_metered_invoicer import (
-            invoice_metered_month,
-        )
+        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
 
         stripe.api_key = STRIPE_SECRET_KEY
 
@@ -1318,7 +1326,9 @@ class TestMeteredBankTransferFlows:
         email = f"e2e_metered_settle_{uuid.uuid4().hex[:8]}@test.com"
         period_year, period_month = self._pick_unique_period()
         ba, customer_id = self._build_metered_account(
-            dbsession, email=email, period=(period_year, period_month),
+            dbsession,
+            email=email,
+            period=(period_year, period_month),
         )
 
         result = invoice_metered_month(period_year, period_month, session=dbsession)
@@ -1416,7 +1426,8 @@ class TestMeteredBankTransferFlows:
         from orchestra.settings import settings as _settings
 
         probe_engine = _create_engine(
-            str(_settings.db_url), isolation_level="AUTOCOMMIT",
+            str(_settings.db_url),
+            isolation_level="AUTOCOMMIT",
         )
 
         def check_paid():
@@ -1430,11 +1441,7 @@ class TestMeteredBankTransferFlows:
         # ``invoice.payment_succeeded`` is emitted. 30s is a generous
         # ceiling that won't block CI.
         try:
-            assert wait_for_db_condition(
-                dbsession,
-                check_paid,
-                timeout=30,
-            ), (
+            assert wait_for_db_condition(dbsession, check_paid, timeout=30), (
                 "Recharge did not settle to PAID after Invoice.pay. "
                 "Check that the webhook bridge received "
                 "invoice.payment_succeeded for this customer; the "
