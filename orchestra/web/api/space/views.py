@@ -15,7 +15,6 @@ from orchestra.services.contact_membership_service import (
 )
 from orchestra.services.coordinator_service import (
     ensure_personal_coordinator_provisioned,
-    get_org_coordinator,
     get_personal_coordinator,
 )
 from orchestra.services.space_cleanup_service import (
@@ -290,35 +289,57 @@ async def create_space(
             },
         )
 
-    space = space_dao.create(
-        name=body.name,
-        description=body.description,
-        organization_id=body.organization_id,
-        owner_user_id=user_id,
-    )
+    created_personal_coordinator = False
+    created_personal_coordinator_id: int | None = None
     refresh_payloads = []
-    if body.organization_id is not None:
-        coordinator = get_org_coordinator(session, body.organization_id)
-        if (
-            coordinator is not None
-            and space_dao.get_membership(
-                space_id=space.space_id,
-                assistant_id=coordinator.agent_id,
-            )
-            is None
-        ):
-            space_dao.add_membership(
-                space=space,
-                assistant=coordinator,
-                added_by=user_id,
-            )
-            _ensure_member_space_contacts(
-                session,
-                assistant_id=coordinator.agent_id,
-                space_id=space.space_id,
-            )
-            refresh_payloads = membership_refresh_payloads(session, [coordinator])
-    session.commit()
+    try:
+        space = space_dao.create(
+            name=body.name,
+            description=body.description,
+            organization_id=body.organization_id,
+            owner_user_id=user_id,
+        )
+        if body.organization_id is not None:
+            coordinator = get_personal_coordinator(session, user_id=user_id)
+            if coordinator is None:
+                try:
+                    coordinator, created_personal_coordinator = (
+                        await ensure_personal_coordinator_provisioned(
+                            session,
+                            user_id=user_id,
+                        )
+                    )
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="personal_coordinator_provisioning_failed",
+                    ) from exc
+                created_personal_coordinator_id = coordinator.agent_id
+            if (
+                space_dao.get_membership(
+                    space_id=space.space_id,
+                    assistant_id=coordinator.agent_id,
+                )
+                is None
+            ):
+                space_dao.add_membership(
+                    space=space,
+                    assistant=coordinator,
+                    added_by=user_id,
+                )
+                _ensure_member_space_contacts(
+                    session,
+                    assistant_id=coordinator.agent_id,
+                    space_id=space.space_id,
+                )
+                refresh_payloads = membership_refresh_payloads(session, [coordinator])
+        session.commit()
+    except Exception:
+        session.rollback()
+        if created_personal_coordinator and created_personal_coordinator_id is not None:
+            await delete_pubsub_topic(str(created_personal_coordinator_id))
+        raise
+
     await publish_membership_refreshes_best_effort(refresh_payloads)
     return _space_read(space)
 

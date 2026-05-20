@@ -87,16 +87,6 @@ def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None
     )
 
 
-def get_org_coordinator(session: Session, organization_id: int) -> Assistant | None:
-    """Return the organization's Coordinator when one already exists."""
-    return session.scalar(
-        select(Assistant).where(
-            Assistant.organization_id == organization_id,
-            Assistant.is_coordinator.is_(True),
-        ),
-    )
-
-
 def pubsub_topic_response_failed(response: dict) -> bool:
     """Return whether a Comms topic-provisioning response is a failure."""
     return bool(
@@ -110,10 +100,9 @@ def create_coordinator_assistant(
     session: Session,
     *,
     owner_user_id: str,
-    organization_id: int | None,
     timezone: str | None = None,
 ) -> Assistant:
-    """Create the Coordinator assistant row for a personal or org scope."""
+    """Create the user's personal Coordinator assistant row."""
     assistant = AssistantDAO(session).create_assistant(
         user_id=owner_user_id,
         first_name="Coordinator",
@@ -131,7 +120,7 @@ def create_coordinator_assistant(
         voice_id=None,
         voice_provider=None,
         timezone=timezone,
-        organization_id=organization_id,
+        organization_id=None,
         is_local=False,
         is_coordinator=True,
         deploy_env=None,
@@ -231,25 +220,6 @@ def grant_project_access_to_org_members(
         )
 
 
-def grant_owner_access_to_assistant(
-    session: Session,
-    *,
-    assistant: Assistant,
-    owner_user_id: str,
-) -> None:
-    """Grant the owner role on an org assistant resource."""
-    owner_role = RoleDAO(session).get_by_name("Owner", organization_id=None)
-    if owner_role is None:
-        return
-    ResourceAccessDAO(session).grant_access(
-        resource_type="assistant",
-        resource_id=assistant.agent_id,
-        role_id=owner_role.id,
-        grantee_type="user",
-        grantee_id=owner_user_id,
-    )
-
-
 def _repair_existing_coordinator_state(
     session: Session,
     *,
@@ -279,7 +249,6 @@ def create_personal_coordinator(
     assistant = create_coordinator_assistant(
         session,
         owner_user_id=user_id,
-        organization_id=None,
     )
     ensure_personal_contact_memberships(
         session,
@@ -340,44 +309,6 @@ def list_user_ids_missing_personal_coordinator(
     return list(session.scalars(stmt).all())
 
 
-def create_organization_coordinator(
-    session: Session,
-    *,
-    owner_user_id: str,
-    organization_id: int,
-    timezone: str | None,
-) -> Assistant:
-    """Create or return the organization's Coordinator."""
-    existing = get_org_coordinator(session, organization_id)
-    if existing is not None:
-        _repair_existing_coordinator_state(session, coordinator=existing)
-        return existing
-
-    assistant = create_coordinator_assistant(
-        session,
-        owner_user_id=owner_user_id,
-        organization_id=organization_id,
-        timezone=timezone,
-    )
-    grant_owner_access_to_assistant(
-        session,
-        assistant=assistant,
-        owner_user_id=owner_user_id,
-    )
-    ensure_personal_contact_memberships(
-        session,
-        [assistant.agent_id],
-        repair_existing=False,
-    )
-    ensure_assistants_project(
-        session,
-        owner_user_id=owner_user_id,
-        organization_id=organization_id,
-    )
-    _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
-    return assistant
-
-
 def require_authorized_coordinator(
     session: Session,
     *,
@@ -398,38 +329,18 @@ def require_authorized_coordinator(
             status_code=status.HTTP_409_CONFLICT,
             detail="not_a_coordinator",
         )
-
-    if coordinator.organization_id is None:
-        resource_access_dao = ResourceAccessDAO(session)
-        if not resource_access_dao.check_user_permission(
-            user_id,
-            "assistant",
-            coordinator.agent_id,
-            "assistant:write",
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to modify this Coordinator.",
-            )
-        if coordinator.user_id != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to modify this Coordinator.",
-            )
-        return coordinator
-
+    if coordinator.organization_id is not None or coordinator.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify this Coordinator.",
+        )
     resource_access_dao = ResourceAccessDAO(session)
-    has_write_permission = resource_access_dao.check_user_permission(
+    if not resource_access_dao.check_user_permission(
         user_id,
         "assistant",
         coordinator.agent_id,
         "assistant:write",
-    ) or resource_access_dao.check_org_member_permission(
-        user_id,
-        coordinator.organization_id,
-        "assistant:write",
-    )
-    if not has_write_permission:
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to modify this Coordinator.",
@@ -443,7 +354,7 @@ def require_authorized_preseed_target(
     target_assistant_id: int,
     user_id: str,
 ) -> tuple[Assistant, Assistant]:
-    """Resolve the Coordinator allowed to seed rows for one colleague."""
+    """Resolve the personal Coordinator allowed to seed rows for one colleague."""
     target = AssistantDAO(session).get_assistant_by_agent_id(
         agent_id=target_assistant_id,
     )
@@ -458,15 +369,31 @@ def require_authorized_preseed_target(
             detail="cannot_preseed_coordinator",
         )
 
+    resource_access_dao = ResourceAccessDAO(session)
     if target.organization_id is None:
         if target.user_id != user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to seed this assistant.",
             )
-        coordinator = get_personal_coordinator(session, user_id)
     else:
-        coordinator = get_org_coordinator(session, target.organization_id)
+        has_target_write = resource_access_dao.check_user_permission(
+            user_id,
+            "assistant",
+            target.agent_id,
+            "assistant:write",
+        ) or resource_access_dao.check_org_member_permission(
+            user_id,
+            target.organization_id,
+            "assistant:write",
+        )
+        if not has_target_write:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to seed this assistant.",
+            )
+
+    coordinator = get_personal_coordinator(session, user_id)
 
     if coordinator is None:
         raise HTTPException(
@@ -478,11 +405,6 @@ def require_authorized_preseed_target(
         coordinator_id=coordinator.agent_id,
         user_id=user_id,
     )
-    if authorized.organization_id != target.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Coordinator cannot seed this assistant.",
-        )
     return authorized, target
 
 

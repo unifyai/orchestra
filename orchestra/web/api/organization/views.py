@@ -47,9 +47,8 @@ from orchestra.services.assistant_cleanup_service import (
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.services.coordinator_service import (
-    create_organization_coordinator,
+    ensure_personal_coordinator_provisioned,
     get_personal_coordinator,
-    pubsub_topic_response_failed,
 )
 from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
 from orchestra.services.space_cleanup_service import (
@@ -85,7 +84,6 @@ from orchestra.web.api.organization.schema import (
 )
 from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.assistant_infra import (
-    create_pubsub_topic,
     delete_pubsub_topic,
     fan_out_contact_sync_for_org,
 )
@@ -146,20 +144,20 @@ async def _run_pool_resolution_followups(
                 )
 
 
-async def _create_organization_with_coordinator(
+async def _create_organization_with_owner_coordinator(
     session: Session,
     *,
     name: str,
     owner_user_id: str,
     timezone: str | None,
 ) -> dict:
-    """Create an organization workspace with owner access and Coordinator state."""
+    """Create an organization workspace and ensure owner Coordinator readiness."""
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
 
-    created_pubsub_topic = False
+    created_personal_coordinator = False
     coordinator_id: int | None = None
     try:
         org = org_dao.create(
@@ -186,40 +184,29 @@ async def _create_organization_with_coordinator(
             organization_id=org.id,
         )
 
-        coordinator = create_organization_coordinator(
-            session,
-            owner_user_id=owner_user_id,
-            organization_id=org.id,
-            timezone=timezone,
+        coordinator, created_personal_coordinator = (
+            await ensure_personal_coordinator_provisioned(
+                session,
+                user_id=owner_user_id,
+            )
         )
         coordinator_id = coordinator.agent_id
-
-        pubsub_response = await create_pubsub_topic(
-            str(coordinator.agent_id),
-            deploy_env=coordinator.deploy_env,
-        )
-        if pubsub_topic_response_failed(pubsub_response):
-            raise ValueError(
-                f"Coordinator topic provisioning failed: {pubsub_response}",
-            )
-        created_pubsub_topic = not pubsub_response.get("skipped")
 
         org_response = OrganizationResponse.model_validate(org)
         response_data = {
             **org_response.model_dump(),
             "api_key": new_api_key,
-            "coordinator_id": str(coordinator_id),
         }
         session.commit()
         return response_data
     except Exception as e:
         session.rollback()
-        if created_pubsub_topic and coordinator_id is not None:
+        if created_personal_coordinator and coordinator_id is not None:
             try:
                 await delete_pubsub_topic(str(coordinator_id))
             except Exception:
                 logger.exception(
-                    "Failed to clean up Coordinator topic after org creation rollback",
+                    "Failed to clean up Coordinator topic after org creation rollback.",
                 )
         logger.error("Failed to create organization: %s", e, exc_info=True)
         raise HTTPException(
@@ -263,7 +250,7 @@ async def create_organization(
         owner_row = user_dao.get_by_id(user_id)
         org_timezone = owner_row[0].timezone if owner_row else None
 
-    return await _create_organization_with_coordinator(
+    return await _create_organization_with_owner_coordinator(
         session,
         name=organization.name,
         owner_user_id=user_id,
@@ -2643,7 +2630,7 @@ async def admin_create_organization(
         creator = creator_row[0]
         org_timezone = creator.timezone if creator.timezone else None
 
-    return await _create_organization_with_coordinator(
+    return await _create_organization_with_owner_coordinator(
         session,
         name=organization.name,
         owner_user_id=organization.creator_user_id,

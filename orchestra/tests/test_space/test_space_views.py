@@ -102,10 +102,6 @@ def coordinator_pubsub_mock(monkeypatch) -> AsyncMock:
         "orchestra.services.coordinator_service.create_pubsub_topic",
         mock,
     )
-    monkeypatch.setattr(
-        "orchestra.web.api.organization.views.create_pubsub_topic",
-        mock,
-    )
     return mock
 
 
@@ -611,14 +607,8 @@ async def test_create_org_space_auto_adds_coordinator_and_publishes_refresh(
     client: AsyncClient,
     dbsession: Session,
     reawaken_assistant_mock: AsyncMock,
-    monkeypatch,
 ) -> None:
-    """Organization-scoped spaces always add the Coordinator as a live member."""
-
-    monkeypatch.setattr(
-        "orchestra.web.api.organization.views.create_pubsub_topic",
-        AsyncMock(return_value={"success": True, "skipped": True}),
-    )
+    """Organization spaces add the creator's personal Coordinator as a member."""
     owner = await create_test_user(client, "space-org-coordinator-owner@test.com")
     organization = await create_test_org(client, owner, "Coordinator Space Org")
     reawaken_assistant_mock.reset_mock()
@@ -633,7 +623,8 @@ async def test_create_org_space_auto_adds_coordinator_and_publishes_refresh(
     coordinator = (
         dbsession.query(Assistant)
         .filter(
-            Assistant.organization_id == organization["id"],
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
             Assistant.is_coordinator.is_(True),
         )
         .one()

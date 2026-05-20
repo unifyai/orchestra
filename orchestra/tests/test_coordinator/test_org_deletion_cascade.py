@@ -64,15 +64,15 @@ def org_delete_boundaries(monkeypatch: pytest.MonkeyPatch) -> _CommsClient:
 
     comms_client = _CommsClient()
     monkeypatch.setattr(
-        "orchestra.web.api.organization.views.create_pubsub_topic",
-        AsyncMock(return_value={"success": True}),
-    )
-    monkeypatch.setattr(
         "orchestra.web.api.utils.assistant_infra.create_pubsub_topic",
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
         "orchestra.services.coordinator_service.create_pubsub_topic",
+        AsyncMock(return_value={"success": True}),
+    )
+    monkeypatch.setattr(
+        "orchestra.services.space_membership_refresh_service.reawaken_assistant",
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
@@ -128,7 +128,19 @@ async def _create_org(client: AsyncClient, owner: dict, suffix: str) -> dict:
         json={"name": f"Cascade Org {suffix}"},
     )
     assert response.status_code == status.HTTP_201_CREATED, response.json()
-    return response.json()
+    organization_payload = response.json()
+    coordinator_response = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert coordinator_response.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, coordinator_response.json()
+    return {
+        **organization_payload,
+        "coordinator_id": coordinator_response.json()["coordinator_id"],
+    }
 
 
 async def _create_org_space(
@@ -191,7 +203,16 @@ def _assistants_project(dbsession: Session, *, organization_id: int) -> Project:
             Project.name == "Assistants",
         ),
     )
-    assert project is not None
+    if project is None:
+        project = Project(
+            user_id=None,
+            organization_id=organization_id,
+            name="Assistants",
+            description="Project to manage and track all organization assistants.",
+            is_versioned=False,
+        )
+        dbsession.add(project)
+        dbsession.flush()
     return project
 
 
@@ -357,7 +378,7 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
     dbsession.expire_all()
     assert dbsession.get(Space, first_space_id) is None
     assert dbsession.get(Space, team_space_id) is None
-    assert dbsession.get(Assistant, coordinator_id) is None
+    assert dbsession.get(Assistant, coordinator_id) is not None
     assert dbsession.get(Assistant, team_assistant_id) is None
     assert (
         dbsession.scalar(
@@ -456,7 +477,7 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
     assert (
         _org_delete_cleanup_task_count(
             dbsession,
-            assistant_ids=[coordinator_id, team_assistant_id],
+            assistant_ids=[team_assistant_id],
         )
         == 0
     )
@@ -478,10 +499,11 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
         == 0
     )
     assert dbsession.get(Assistant, team_assistant_id) is None
+    assert dbsession.get(Assistant, coordinator_id) is not None
     assert (
         _org_delete_cleanup_task_count(
             dbsession,
-            assistant_ids=[coordinator_id, team_assistant_id],
+            assistant_ids=[team_assistant_id],
         )
-        == 2
+        == 1
     )

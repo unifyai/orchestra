@@ -980,10 +980,10 @@ async def create_organization(
     owner_timezone = owner_row[0].timezone if owner_row else None
 
     from orchestra.web.api.organization.views import (
-        _create_organization_with_coordinator,
+        _create_organization_with_owner_coordinator,
     )
 
-    await _create_organization_with_coordinator(
+    await _create_organization_with_owner_coordinator(
         session,
         name=name,
         owner_user_id=owner_id,

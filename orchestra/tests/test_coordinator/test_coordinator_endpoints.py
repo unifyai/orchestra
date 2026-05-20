@@ -51,10 +51,6 @@ def coordinator_pubsub_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=MagicMock(status_code=200, json=lambda: {})),
     )
     monkeypatch.setattr(
-        "orchestra.web.api.organization.views.create_pubsub_topic",
-        AsyncMock(return_value={"success": True}),
-    )
-    monkeypatch.setattr(
         "orchestra.web.api.organization.views.delete_pubsub_topic",
         AsyncMock(return_value={"success": True}),
     )
@@ -87,7 +83,20 @@ async def _create_org(
         headers=owner["headers"],
     )
     assert response.status_code == status.HTTP_201_CREATED, response.json()
-    return response.json()
+    organization_payload = response.json()
+    coordinator_response = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert coordinator_response.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, coordinator_response.json()
+    return {
+        **organization_payload,
+        "_organization_response": organization_payload,
+        "coordinator_id": coordinator_response.json()["coordinator_id"],
+    }
 
 
 def _assistant_context_name(coordinator: Assistant, suffix: str) -> str:
@@ -220,10 +229,17 @@ def _assert_coordinator_provisioned(
     coordinator = dbsession.get(Assistant, coordinator_id)
     assert coordinator is not None
     assert coordinator.is_coordinator is True
-    assert coordinator.organization_id == org_data["id"]
+    assert coordinator.organization_id is None
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+    org_scoped_coordinator = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.organization_id == org_data["id"],
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert org_scoped_coordinator is None
     assert {
         (membership.contact_id, membership.relationship)
         for membership in _personal_memberships(
@@ -258,6 +274,7 @@ async def test_create_organization_provisions_coordinator_without_implicit_space
     owner = await _create_user(client, "org-provision")
 
     org_data = await _create_org(client, owner, "provision")
+    assert "coordinator_id" not in org_data["_organization_response"]
 
     _assert_coordinator_provisioned(
         dbsession,
@@ -285,6 +302,16 @@ async def test_admin_create_organization_provisions_coordinator_without_implicit
 
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     org_data = response.json()
+    assert "coordinator_id" not in org_data
+    coordinator_response = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert coordinator_response.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, coordinator_response.json()
+    org_data["coordinator_id"] = coordinator_response.json()["coordinator_id"]
 
     _assert_coordinator_provisioned(
         dbsession,
@@ -396,7 +423,7 @@ async def test_assistant_list_repairs_missing_coordinator_owner_contact_row(
 
     response = await client.get(
         f"/v0/assistant?agent_id={coordinator_id}",
-        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+        headers=owner["headers"],
     )
 
     assert response.status_code == status.HTTP_200_OK, response.json()
@@ -698,11 +725,11 @@ async def test_personal_opt_in_repairs_legacy_numeric_owner_contact_id(
 
 
 @pytest.mark.anyio
-async def test_coordinator_non_delete_member_admin_parity_and_direct_delete_guard(
+async def test_personal_coordinator_requires_owner_for_lifecycle_operations(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Members/Admins share non-delete Coordinator actions; delete remains guarded."""
+    """Only the owner can mutate a personal coordinator; delete stays guarded."""
     owner = await _create_user(client, "admin-gate-owner")
     member = await _create_user(client, "admin-gate-member")
     admin = await _create_user(client, "admin-gate-admin")
@@ -712,7 +739,6 @@ async def test_coordinator_non_delete_member_admin_parity_and_direct_delete_guar
     role_dao = RoleDAO(dbsession)
     member_role = role_dao.get_by_name("Member", organization_id=None)
     admin_role = role_dao.get_by_name("Admin", organization_id=None)
-    owner_role = role_dao.get_by_name("Owner", organization_id=None)
     org_member_dao = OrganizationMemberDAO(dbsession)
     org_member_dao.create(
         organization_id=org_data["id"],
@@ -724,44 +750,50 @@ async def test_coordinator_non_delete_member_admin_parity_and_direct_delete_guar
         user_id=admin["id"],
         role_id=admin_role.id,
     )
-    ResourceAccessDAO(dbsession).grant_access(
-        resource_type="assistant",
-        resource_id=coordinator_id,
-        role_id=owner_role.id,
-        grantee_type="user",
-        grantee_id=member["id"],
-    )
     dbsession.flush()
 
     member_seed = await client.post(
         f"/v0/assistant/{coordinator_id}/transcript-seed",
-        json={"content": "Member can seed."},
+        json={"content": "Member cannot seed."},
         headers=member["headers"],
     )
-    assert member_seed.status_code == status.HTTP_200_OK, member_seed.json()
+    assert member_seed.status_code == status.HTTP_403_FORBIDDEN, member_seed.json()
 
     member_reset = await client.post(
         f"/v0/assistant/{coordinator_id}/reset",
         headers=member["headers"],
     )
-    assert member_reset.status_code == status.HTTP_200_OK, member_reset.json()
+    assert member_reset.status_code == status.HTTP_403_FORBIDDEN, member_reset.json()
 
     admin_seed = await client.post(
         f"/v0/assistant/{coordinator_id}/transcript-seed",
-        json={"content": "Admin can seed."},
+        json={"content": "Admin cannot seed."},
         headers=admin["headers"],
     )
-    assert admin_seed.status_code == status.HTTP_200_OK, admin_seed.json()
+    assert admin_seed.status_code == status.HTTP_403_FORBIDDEN, admin_seed.json()
 
     admin_reset = await client.post(
         f"/v0/assistant/{coordinator_id}/reset",
         headers=admin["headers"],
     )
-    assert admin_reset.status_code == status.HTTP_200_OK, admin_reset.json()
+    assert admin_reset.status_code == status.HTTP_403_FORBIDDEN, admin_reset.json()
+
+    owner_seed = await client.post(
+        f"/v0/assistant/{coordinator_id}/transcript-seed",
+        json={"content": "Owner can seed."},
+        headers=owner["headers"],
+    )
+    assert owner_seed.status_code == status.HTTP_200_OK, owner_seed.json()
+
+    owner_reset = await client.post(
+        f"/v0/assistant/{coordinator_id}/reset",
+        headers=owner["headers"],
+    )
+    assert owner_reset.status_code == status.HTTP_200_OK, owner_reset.json()
 
     delete = await client.delete(
         f"/v0/assistant/{coordinator_id}",
-        headers={"Authorization": f"Bearer {org_data['api_key']}"},
+        headers=owner["headers"],
     )
     assert delete.status_code == status.HTTP_409_CONFLICT, delete.json()
     assert delete.json()["detail"] == "cannot_delete_coordinator"
@@ -825,8 +857,13 @@ async def test_preseed_colleague_writes_target_owned_rows_and_task_activation(
         knowledge_context_name,
     ]
 
-    coordinator = dbsession.get(Assistant, coordinator_id)
-    project = _assistants_project(dbsession, coordinator=coordinator)
+    project = dbsession.scalar(
+        select(Project).where(
+            Project.organization_id == org_data["id"],
+            Project.name == "Assistants",
+        ),
+    )
+    assert project is not None
     tasks_context = _context(dbsession, project=project, name=tasks_context_name)
     knowledge_context = _context(
         dbsession,
@@ -893,16 +930,11 @@ async def test_preseed_rejects_shared_paths_without_partial_writes(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
-    coordinator = dbsession.get(Assistant, int(org_data["coordinator_id"]))
-    project = _assistants_project(dbsession, coordinator=coordinator)
-    assert (
-        _context(
-            dbsession,
-            project=project,
-            name=_assistant_context_name(target, "Knowledge"),
-        )
-        is None
+    target_knowledge_context = _assistant_context_name(target, "Knowledge")
+    leaked_context = dbsession.scalar(
+        select(Context).where(Context.name == target_knowledge_context),
     )
+    assert leaked_context is None
 
 
 @pytest.mark.anyio
@@ -935,4 +967,77 @@ async def test_preseed_requires_the_target_scope_coordinator(
         headers=owner["headers"],
     )
 
+    assert response.status_code == status.HTTP_403_FORBIDDEN, response.json()
+
+
+@pytest.mark.anyio
+async def test_preseed_org_target_requires_personal_coordinator(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Org preseed requires the actor's personal coordinator to exist."""
+    owner = await _create_user(client, "preseed-org-owner")
+    member = await _create_user(client, "preseed-org-member")
+    org_data = await _create_org(client, owner, "preseed-org-missing-personal")
+
+    add_member = await client.post(
+        f"/v0/organizations/{org_data['id']}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member.status_code == status.HTTP_201_CREATED, add_member.json()
+
+    target = Assistant(
+        user_id=member["id"],
+        organization_id=org_data["id"],
+        first_name="Ops",
+        surname="Target",
+    )
+    dbsession.add(target)
+    dbsession.flush()
+
+    member_coordinator = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.user_id == member["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert member_coordinator is not None
+    dbsession.delete(member_coordinator)
+    dbsession.commit()
+
+    response = await client.post(
+        f"/v0/assistant/{target.agent_id}/preseed",
+        json={"writes": [{"context": "Knowledge", "entries": [{"content": "nope"}]}]},
+        headers=member["headers"],
+    )
+    assert response.status_code == status.HTTP_404_NOT_FOUND, response.json()
+    assert response.json()["detail"] == "Coordinator not found."
+
+
+@pytest.mark.anyio
+async def test_preseed_org_target_requires_org_write_access(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Users outside the org cannot preseed org assistants."""
+    owner = await _create_user(client, "preseed-org-rbac-owner")
+    outsider = await _create_user(client, "preseed-org-rbac-outsider")
+    org_data = await _create_org(client, owner, "preseed-org-rbac")
+
+    target = Assistant(
+        user_id=owner["id"],
+        organization_id=org_data["id"],
+        first_name="Finance",
+        surname="Target",
+    )
+    dbsession.add(target)
+    dbsession.commit()
+
+    response = await client.post(
+        f"/v0/assistant/{target.agent_id}/preseed",
+        json={"writes": [{"context": "Knowledge", "entries": [{"content": "nope"}]}]},
+        headers=outsider["headers"],
+    )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.json()
