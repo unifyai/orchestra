@@ -10,6 +10,11 @@ behaviour, not a separate persona variant.
 """
 
 # Capabilities paragraph embedded into COORDINATOR_BIO via f-string at module load.
+COORDINATOR_SHORT_BIO = "Coordinates setup and shared assistant memory."
+
+# Values that should be rewritten to the canonical bio during Coordinator repair.
+COORDINATOR_BIO_REPAIR_INPUTS = frozenset({"", COORDINATOR_SHORT_BIO})
+
 COORDINATOR_CAPABILITIES_SUMMARY = """\
 What I can help with, day to day:
 - Communication: drafting and sending messages, managing email and SMS threads, joining and running voice calls, coordinating across channels.

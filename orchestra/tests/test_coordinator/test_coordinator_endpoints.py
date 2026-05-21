@@ -30,6 +30,10 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
+from orchestra.services.coordinator_personas import (
+    COORDINATOR_BIO,
+    COORDINATOR_SHORT_BIO,
+)
 from orchestra.services.task_machine_state_service import (
     build_task_activation_context_name,
 )
@@ -233,6 +237,7 @@ def _assert_coordinator_provisioned(
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+    assert coordinator.about == COORDINATOR_BIO
     org_scoped_coordinator = dbsession.scalar(
         select(Assistant).where(
             Assistant.organization_id == org_data["id"],
@@ -603,8 +608,10 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     assert coordinator is not None
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+    assert coordinator.about == COORDINATOR_BIO
     coordinator.nationality = None
     coordinator.desktop_mode = None
+    coordinator.about = COORDINATOR_SHORT_BIO
     dbsession.commit()
 
     second = await client.post(
@@ -616,6 +623,7 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     dbsession.refresh(coordinator)
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+    assert coordinator.about == COORDINATOR_BIO
 
     dbsession.execute(
         delete(ContactMembership).where(
