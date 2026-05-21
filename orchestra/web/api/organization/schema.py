@@ -84,6 +84,13 @@ class OrganizationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OrganizationMembershipResponse(OrganizationResponse):
+    """Schema for organization membership listings for the authenticated user."""
+
+    role_id: Optional[int] = None
+    role_name: Optional[str] = None
+
+
 class OrganizationMemberAdd(BaseModel):
     """Schema for adding a member to an organization."""
 

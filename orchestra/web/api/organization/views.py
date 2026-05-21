@@ -73,6 +73,7 @@ from orchestra.web.api.organization.schema import (
     OrganizationMemberAdd,
     OrganizationMemberResponse,
     OrganizationMemberRoleUpdate,
+    OrganizationMembershipResponse,
     OrganizationOwnershipTransfer,
     OrganizationResponse,
     OrganizationUpdate,
@@ -258,11 +259,11 @@ async def create_organization(
     )
 
 
-@router.get("/organizations", response_model=List[OrganizationResponse])
+@router.get("/organizations", response_model=List[OrganizationMembershipResponse])
 async def list_organizations(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
-) -> List[OrganizationResponse]:
+) -> List[OrganizationMembershipResponse]:
     """
     List all organizations the authenticated user has access to.
 
@@ -273,9 +274,9 @@ async def list_organizations(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
 
-    organizations = org_dao.get_user_organizations(user_id)
+    organizations = org_dao.get_user_organizations_with_roles(user_id)
 
-    return [OrganizationResponse.model_validate(org) for org in organizations]
+    return [OrganizationMembershipResponse.model_validate(org) for org in organizations]
 
 
 @router.get(

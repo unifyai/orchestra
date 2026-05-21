@@ -1,15 +1,15 @@
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    BillingAccount,
     Organization,
     OrganizationMember,
+    Role,
 )
 
 
@@ -173,6 +173,60 @@ class OrganizationDAO:
         )
 
         return owned_orgs + member_orgs
+
+    def get_user_organizations_with_roles(self, user_id: str) -> List[dict[str, Any]]:
+        """Return organizations visible to a user with membership role metadata."""
+        organizations = self.get_user_organizations(user_id)
+        membership_rows = self.session.execute(
+            select(
+                OrganizationMember.organization_id,
+                OrganizationMember.role_id,
+                Role.name.label("role_name"),
+            )
+            .join(Role, Role.id == OrganizationMember.role_id)
+            .where(OrganizationMember.user_id == user_id),
+        ).all()
+        memberships_by_org_id = {
+            int(row.organization_id): {
+                "role_id": int(row.role_id),
+                "role_name": row.role_name,
+            }
+            for row in membership_rows
+        }
+        owner_role = (
+            self.session.query(Role)
+            .filter(Role.name == "Owner", Role.organization_id.is_(None))
+            .first()
+        )
+        owner_role_id = int(owner_role.id) if owner_role else None
+        owner_role_name = owner_role.name if owner_role else "Owner"
+
+        org_memberships: list[dict[str, Any]] = []
+        for organization in organizations:
+            role_payload = memberships_by_org_id.get(int(organization.id))
+            if role_payload is None and organization.owner_id == user_id:
+                role_payload = {
+                    "role_id": owner_role_id,
+                    "role_name": owner_role_name,
+                }
+            org_memberships.append(
+                {
+                    "id": int(organization.id),
+                    "name": organization.name,
+                    "owner_id": organization.owner_id,
+                    "image": organization.image,
+                    "timezone": organization.timezone,
+                    "free_trial": bool(organization.free_trial),
+                    "created_at": organization.created_at,
+                    "role_id": (
+                        None if role_payload is None else role_payload["role_id"]
+                    ),
+                    "role_name": (
+                        None if role_payload is None else role_payload["role_name"]
+                    ),
+                },
+            )
+        return org_memberships
 
     def list_all(
         self,
