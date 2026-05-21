@@ -29,10 +29,7 @@ from orchestra.services.contact_membership_service import (
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
 )
-from orchestra.services.coordinator_personas import (
-    COORDINATOR_BIO,
-    COORDINATOR_BIO_REPAIR_INPUTS,
-)
+from orchestra.services.coordinator_personas import COORDINATOR_BIO
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     get_task_ids_for_log_ids,
@@ -78,13 +75,6 @@ def _ensure_coordinator_default_desktop_mode(assistant: Assistant) -> None:
     """Ensure Coordinator rows request a managed desktop when unset."""
     if not assistant.desktop_mode:
         assistant.desktop_mode = COORDINATOR_DEFAULT_DESKTOP_MODE
-
-
-def _repair_coordinator_persona(assistant: Assistant) -> None:
-    """Rewrite repairable Coordinator bios to the canonical persona text."""
-    normalized_about = (assistant.about or "").strip()
-    if normalized_about in COORDINATOR_BIO_REPAIR_INPUTS:
-        assistant.about = COORDINATOR_BIO
 
 
 def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None:
@@ -239,7 +229,6 @@ def _repair_existing_coordinator_state(
     """Repair Coordinator defaults and required owner-facing overlays."""
     _ensure_coordinator_default_nationality(coordinator)
     _ensure_coordinator_default_desktop_mode(coordinator)
-    _repair_coordinator_persona(coordinator)
     ensure_personal_contact_memberships(session, [coordinator.agent_id])
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
 
