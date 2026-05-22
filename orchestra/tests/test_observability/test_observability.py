@@ -606,7 +606,9 @@ class TestRequestTraceMiddleware:
 
     def test_safe_json_dumps_dict(self):
         """Dicts should serialize to JSON."""
-        from orchestra_core.observability.request_trace_middleware import _safe_json_dumps
+        from orchestra_core.observability.request_trace_middleware import (
+            _safe_json_dumps,
+        )
 
         result = _safe_json_dumps({"key": "value", "num": 42})
         assert '"key"' in result
@@ -615,7 +617,9 @@ class TestRequestTraceMiddleware:
 
     def test_safe_json_dumps_with_non_serializable(self):
         """Non-serializable objects should fall back to str()."""
-        from orchestra_core.observability.request_trace_middleware import _safe_json_dumps
+        from orchestra_core.observability.request_trace_middleware import (
+            _safe_json_dumps,
+        )
 
         class Custom:
             def __str__(self):

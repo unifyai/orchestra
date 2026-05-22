@@ -5,7 +5,11 @@ from typing import Optional
 
 from pydantic_settings import SettingsConfigDict
 
-from orchestra_core.settings import LogLevel, Settings as CoreSettings, UniqueValidationMode
+from orchestra_core.settings import (
+    LogLevel,
+    Settings as CoreSettings,
+    UniqueValidationMode,
+)
 
 __all__ = ["LogLevel", "Settings", "UniqueValidationMode", "settings"]
 
