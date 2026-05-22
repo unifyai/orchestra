@@ -27,7 +27,7 @@ classifiers = [
 python = "~3.12"
 # The open-source kernel. Tracked at a tagged release so platform builds
 # are reproducible; bump the rev when picking up new kernel work.
-orchestra-core = { git = "https://github.com/unifyai/orchestra-core.git", tag = "v0.1.0" }
+orchestra-core = { git = "https://github.com/unifyai/orchestra-core.git", tag = "v0.1.1" }
 fastapi = "^0.100.0"
 uvicorn = { version = "^0.22.0", extras = ["standard"] }
 pydantic = "^2"

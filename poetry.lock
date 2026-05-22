@@ -3898,8 +3898,8 @@ yarl = "^1.9.2"
 [package.source]
 type = "git"
 url = "https://github.com/unifyai/orchestra-core.git"
-reference = "v0.1.0"
-resolved_reference = "edb8ae83ad86a17532b811ebe1a6dc314417cad0"
+reference = "v0.1.1"
+resolved_reference = "f554392c7e5ce5d12e31a8ab86c191506512cc53"
 
 [[package]]
 name = "packaging"
