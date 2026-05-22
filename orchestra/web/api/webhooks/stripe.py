@@ -26,7 +26,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_PAYMENT,
     BillingAccount,
@@ -36,7 +36,7 @@ from orchestra.db.models.orchestra_models import (
     WebhookLog,
 )
 from orchestra.settings import settings
-from orchestra.web.api.utils.prometheus_middleware import (
+from orchestra_core.observability.prometheus_middleware import (
     INVOICE_FAILED_TOTAL,
     INVOICE_PAID_TOTAL,
 )

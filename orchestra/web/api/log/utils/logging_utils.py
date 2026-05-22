@@ -29,11 +29,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     Embedding,
@@ -44,7 +44,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.settings import settings
 from orchestra.web.api.log.python2SQL.operators import _create_truthiness_condition
 from orchestra.web.api.log.schema import CreateLogConfig
-from orchestra.web.api.utils.http_responses import not_found
+from orchestra_core.web.api.utils.http_responses import not_found
 
 from ..python2SQL import STR_TO_SQL_TYPES
 from ..python2SQL.core import build_sql_query
@@ -1876,7 +1876,7 @@ def _create_logs_internal(
     # Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
     # =========================================================================
     if log_data_updates:
-        from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+        from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
         session = log_event_dao.session
 

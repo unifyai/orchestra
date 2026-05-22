@@ -44,6 +44,13 @@ repos:
     language: system
     types: [python]
 
+  - id: check-core-purity
+    name: orchestra_core purity (no platform imports)
+    entry: bash scripts/check_core_purity.sh
+    language: system
+    pass_filenames: false
+    files: ^orchestra_core/.*\.py$
+
   # - id: flake8
   #   name: Check with Flake8
   #   entry: poetry run flake8

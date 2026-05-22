@@ -16,7 +16,7 @@ except ImportError:
 import requests
 
 from orchestra.settings import settings
-from orchestra.web.api.utils.observability import (
+from orchestra_core.observability.observability import (
     get_request_id,
     get_user_email,
     get_user_id,

@@ -3,7 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import Connection, create_engine
 
-from orchestra.db.meta import meta
+from orchestra_core.db.meta import meta
 from orchestra.db.models import load_all_models
 from orchestra.settings import settings
 

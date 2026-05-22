@@ -19,7 +19,7 @@ from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.trace import SpanKind
 from opentelemetry.trace.status import Status, StatusCode
 
-from orchestra.web.api.utils.file_trace_exporter import (
+from orchestra_core.observability.file_trace_exporter import (
     FileSpanExporter,
     _get_span_type,
     _span_to_dict,
@@ -589,14 +589,14 @@ class TestRequestTraceMiddleware:
 
     def test_truncate_short_string(self):
         """Short strings should not be truncated."""
-        from orchestra.web.api.utils.request_trace_middleware import _truncate
+        from orchestra_core.observability.request_trace_middleware import _truncate
 
         result = _truncate("hello", max_len=100)
         assert result == "hello"
 
     def test_truncate_long_string(self):
         """Long strings should be truncated with indicator."""
-        from orchestra.web.api.utils.request_trace_middleware import _truncate
+        from orchestra_core.observability.request_trace_middleware import _truncate
 
         long_str = "x" * 1000
         result = _truncate(long_str, max_len=100)
@@ -606,7 +606,9 @@ class TestRequestTraceMiddleware:
 
     def test_safe_json_dumps_dict(self):
         """Dicts should serialize to JSON."""
-        from orchestra.web.api.utils.request_trace_middleware import _safe_json_dumps
+        from orchestra_core.observability.request_trace_middleware import (
+            _safe_json_dumps,
+        )
 
         result = _safe_json_dumps({"key": "value", "num": 42})
         assert '"key"' in result
@@ -615,7 +617,9 @@ class TestRequestTraceMiddleware:
 
     def test_safe_json_dumps_with_non_serializable(self):
         """Non-serializable objects should fall back to str()."""
-        from orchestra.web.api.utils.request_trace_middleware import _safe_json_dumps
+        from orchestra_core.observability.request_trace_middleware import (
+            _safe_json_dumps,
+        )
 
         class Custom:
             def __str__(self):
@@ -859,7 +863,7 @@ class TestTraceBufferIncrementalLogic:
 
     def test_needs_incremental_write_first_span(self):
         """First span should trigger immediate write."""
-        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+        from orchestra_core.observability.file_trace_exporter import TraceBuffer
 
         buffer = TraceBuffer(trace_id="test")
         buffer.add_span({"name": "span1", "parent_span_id": "parent"})
@@ -868,7 +872,7 @@ class TestTraceBufferIncrementalLogic:
 
     def test_needs_incremental_write_no_new_spans(self):
         """No write needed if no new spans since last write."""
-        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+        from orchestra_core.observability.file_trace_exporter import TraceBuffer
 
         buffer = TraceBuffer(trace_id="test")
         buffer.add_span({"name": "span1", "parent_span_id": "parent"})
@@ -878,7 +882,7 @@ class TestTraceBufferIncrementalLogic:
 
     def test_needs_incremental_write_complete_trace(self):
         """Complete traces don't need incremental writes (will be flushed)."""
-        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+        from orchestra_core.observability.file_trace_exporter import TraceBuffer
 
         buffer = TraceBuffer(trace_id="test")
         # Add root HTTP span (completes the trace)
@@ -895,7 +899,7 @@ class TestTraceBufferIncrementalLogic:
 
     def test_summary_uses_request_received_when_no_root(self):
         """Summary should extract info from request_received span if no root."""
-        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+        from orchestra_core.observability.file_trace_exporter import TraceBuffer
 
         buffer = TraceBuffer(trace_id="test")
         buffer.add_span(

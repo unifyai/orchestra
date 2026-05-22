@@ -13,7 +13,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.plot_dao import PlotDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -3316,7 +3316,7 @@ async def test_update_plot_project_id_changes_with_project_name(
     dbsession,
 ):
     """Test that project_id is updated when project_name changes."""
-    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra_core.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.plot_dao import PlotDAO
     from orchestra.db.dao.project_dao import ProjectDAO

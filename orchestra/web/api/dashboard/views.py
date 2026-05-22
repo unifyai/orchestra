@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.dashboard_token_dao import DashboardTokenDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.web.api.dashboard.schema import (
     FilterBridgeRequest,
     FilterBridgeResponse,
@@ -65,8 +65,8 @@ def _resolve_tile_token(session: Session, token: str):
 
 def _bridge_daos(session: Session):
     """Instantiate the common set of DAOs used by all bridge endpoints."""
-    from orchestra.db.dao.context_dao import ContextDAO
-    from orchestra.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra_core.db.dao.context_dao import ContextDAO
+    from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
 
@@ -107,7 +107,7 @@ def register_token(
             detail=f"Token '{body.token}' already exists",
         )
 
-    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra_core.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
 

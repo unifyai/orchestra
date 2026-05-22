@@ -38,7 +38,7 @@ from sqlalchemy import (
 )
 
 from orchestra.env import get_env
-from orchestra.lib.parallel import threaded_map
+from orchestra_core.lib.parallel import threaded_map
 
 load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB, insert

@@ -26,8 +26,8 @@ from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import (
     ImmutableFieldError,
     LogEventDAO,
@@ -37,7 +37,7 @@ from orchestra.db.dao.log_event_dao import (
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
@@ -72,8 +72,8 @@ from orchestra.web.api.log.schema import (
     UpdateFieldRequest,
     UpdateLogRequest,
 )
-from orchestra.web.api.utils.helpers import CustomEncoder
-from orchestra.web.api.utils.http_responses import not_found
+from orchestra_core.web.api.utils.helpers import CustomEncoder
+from orchestra_core.web.api.utils.http_responses import not_found
 
 from .python2SQL import (
     _compute_expression,
@@ -182,7 +182,7 @@ def _sanitize_sql_error(error: Exception) -> str:
 
 
 # Import sibling context cleanup from shared module
-from orchestra.db.dao.sibling_context_cleanup import (
+from orchestra_core.db.dao.sibling_context_cleanup import (
     get_assistants_sibling_context_info as _get_assistants_sibling_context_info,
 )
 
@@ -2419,7 +2419,7 @@ def _update_logs(
     if all_flat_updates:
         # Enforce unique field constraints for updated values (JSONB mode)
         if ctx_id is not None:
-            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+            from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
             unique_fields = {
                 k
@@ -2964,7 +2964,7 @@ def _delete_logs(
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
             # Embedding cleanup before hard delete (see LogEventDAO.delete)
-            from orchestra.db.dao.embedding_dao import EmbeddingDAO
+            from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(session)
             embedding_dao.cancel_queue(
@@ -3138,7 +3138,7 @@ def _delete_logs(
             # Delete logs that don't exist in other contexts - BULK DELETE
             if logs_to_delete:
                 # Embedding cleanup before hard delete (see LogEventDAO.delete)
-                from orchestra.db.dao.embedding_dao import EmbeddingDAO
+                from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
 
                 embedding_dao = EmbeddingDAO(session)
                 embedding_dao.cancel_queue(
