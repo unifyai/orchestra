@@ -431,6 +431,7 @@ class AssistantDAO:
     def list_all_org_assistants(
         self,
         organization_id: int,
+        requesting_user_id: Optional[str] = None,
         phone: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
@@ -446,7 +447,13 @@ class AssistantDAO:
         This returns all assistants in the org, regardless of who created them.
         Should only be called after verifying the user has assistant:read permission.
 
+        When ``requesting_user_id`` is provided, org-scoped Coordinator rows are
+        visible only when owned by that user. Non-coordinator assistants remain
+        org-visible for collaborative workflows.
+
         :param organization_id: Organization ID.
+        :param requesting_user_id: Optional caller user_id for coordinator
+            visibility filtering.
         :param include_demo: If True, include demo assistants in results.
         :param demo_only: If True, only return demo assistants.
         :return: List of all assistants in the organization.
@@ -454,6 +461,13 @@ class AssistantDAO:
         stmt = select(Assistant).where(
             Assistant.organization_id == organization_id,
         )
+        if requesting_user_id is not None:
+            stmt = stmt.where(
+                or_(
+                    Assistant.is_coordinator.is_(False),
+                    Assistant.user_id == requesting_user_id,
+                ),
+            )
 
         # Demo filtering
         if demo_only:

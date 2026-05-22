@@ -608,7 +608,7 @@ async def test_create_org_space_auto_adds_coordinator_and_publishes_refresh(
     dbsession: Session,
     reawaken_assistant_mock: AsyncMock,
 ) -> None:
-    """Organization spaces add the creator's personal Coordinator as a member."""
+    """Organization spaces add the creator's workspace Coordinator as a member."""
     owner = await create_test_user(client, "space-org-coordinator-owner@test.com")
     organization = await create_test_org(client, owner, "Coordinator Space Org")
     reawaken_assistant_mock.reset_mock()
@@ -624,7 +624,7 @@ async def test_create_org_space_auto_adds_coordinator_and_publishes_refresh(
         dbsession.query(Assistant)
         .filter(
             Assistant.user_id == owner["id"],
-            Assistant.organization_id.is_(None),
+            Assistant.organization_id == organization["id"],
             Assistant.is_coordinator.is_(True),
         )
         .one()
@@ -662,6 +662,63 @@ async def test_create_org_space_auto_adds_coordinator_and_publishes_refresh(
         summary["space_id"] == created["space_id"] and summary["name"] == "Org Setup"
         for summary in json.loads(payload["space_summaries"])
     )
+
+
+@pytest.mark.anyio
+async def test_org_member_cannot_list_other_members_workspace_coordinator_spaces(
+    client: AsyncClient,
+) -> None:
+    """Workspace coordinator space listings remain owner-visible in org scope."""
+    owner = await create_test_user(client, "space-owner-coordinator-read@test.com")
+    member = await create_test_user(client, "space-member-coordinator-read@test.com")
+    organization = await create_test_org(client, owner, "Coordinator Read Guard Org")
+
+    add_member_resp = await client.post(
+        f"/v0/organizations/{organization['id']}/members",
+        headers=owner["headers"],
+        json={"user_id": member["id"]},
+    )
+    assert (
+        add_member_resp.status_code == status.HTTP_201_CREATED
+    ), add_member_resp.json()
+    member_org_headers = {
+        "Authorization": f"Bearer {add_member_resp.json()['api_key']}",
+    }
+
+    owner_coordinator_resp = await client.post(
+        f"/v0/user/{owner['id']}/coordinator?organization_id={organization['id']}",
+        headers=organization["headers"],
+    )
+    assert owner_coordinator_resp.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), owner_coordinator_resp.json()
+    owner_coordinator_id = int(owner_coordinator_resp.json()["coordinator_id"])
+
+    member_coordinator_resp = await client.post(
+        f"/v0/user/{member['id']}/coordinator?organization_id={organization['id']}",
+        headers=member_org_headers,
+    )
+    assert member_coordinator_resp.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), member_coordinator_resp.json()
+    member_coordinator_id = int(member_coordinator_resp.json()["coordinator_id"])
+
+    blocked = await client.get(
+        f"/v0/assistants/{owner_coordinator_id}/spaces",
+        headers=member_org_headers,
+    )
+    assert blocked.status_code == status.HTTP_403_FORBIDDEN, blocked.json()
+    assert (
+        blocked.json()["detail"] == "You do not have permission to view this assistant."
+    )
+
+    own_spaces = await client.get(
+        f"/v0/assistants/{member_coordinator_id}/spaces",
+        headers=member_org_headers,
+    )
+    assert own_spaces.status_code == status.HTTP_200_OK, own_spaces.json()
 
 
 @pytest.mark.anyio
@@ -816,13 +873,13 @@ async def test_cross_owner_member_add_to_personal_space_is_forbidden(
 
 
 @pytest.mark.anyio
-async def test_org_member_target_add_auto_provisions_personal_coordinator_and_is_idempotent(
+async def test_org_member_target_add_auto_provisions_workspace_coordinator_and_is_idempotent(
     client: AsyncClient,
     dbsession: Session,
     reawaken_assistant_mock: AsyncMock,
     monkeypatch,
 ) -> None:
-    """Member-target adds auto-provision personal Coordinators and stay idempotent."""
+    """Member-target adds auto-provision workspace Coordinators and stay idempotent."""
 
     create_topic_mock = AsyncMock(return_value={"success": True, "skipped": True})
     monkeypatch.setattr(
@@ -859,7 +916,7 @@ async def test_org_member_target_add_auto_provisions_personal_coordinator_and_is
         dbsession.query(Assistant)
         .filter(
             Assistant.user_id == member["id"],
-            Assistant.organization_id.is_(None),
+            Assistant.organization_id == organization["id"],
             Assistant.is_coordinator.is_(True),
         )
         .one()

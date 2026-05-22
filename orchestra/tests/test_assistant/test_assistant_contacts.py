@@ -148,20 +148,29 @@ def mock_assistant_infra_calls(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.services.bucket_service.BucketService.__init__",
-        lambda self: None,
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.services.bucket_service.BucketService.__init__",
+            lambda self: None,
+        ),
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic,
     ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
 
-        yield mock_wake_up, mock_reawaken
+        yield mock_wake_up, mock_reawaken, mock_create_pubsub_topic
 
 
 def _make_user_ba(
@@ -1030,21 +1039,27 @@ def mock_all_infra(dbsession):
     dc_delete_routes_mock = AsyncMock(return_value=0)
 
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
-        with patch(
-            "orchestra.web.api.utils.assistant_infra.assign_whatsapp_pool_number",
-            wa_pool_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
-            wa_register_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.assign_discord_pool_bot",
-            dc_pool_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.register_discord_bot",
-            dc_register_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.delete_discord_routes",
-            dc_delete_routes_mock,
+        with (
+            patch(
+                "orchestra.web.api.utils.assistant_infra.assign_whatsapp_pool_number",
+                wa_pool_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
+                wa_register_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.assign_discord_pool_bot",
+                dc_pool_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.register_discord_bot",
+                dc_register_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.delete_discord_routes",
+                dc_delete_routes_mock,
+            ),
         ):
             patches["assign_whatsapp_pool_number"] = wa_pool_mock
             patches["register_whatsapp_sender"] = wa_register_mock
@@ -1059,12 +1074,16 @@ def mock_all_infra(dbsession):
                     "orchestra.web.api.assistant.views.get_db_session",
                     side_effect=_mock_get_db_session_generator(dbsession),
                 ):
-                    with patch(
-                        "orchestra.web.api.assistant.views.asyncio.sleep",
-                        new_callable=AsyncMock,
-                    ), patch("orchestra.web.api.assistant.views.time.sleep"), patch(
-                        "orchestra.services.bucket_service.BucketService.__init__",
-                        lambda self: None,
+                    with (
+                        patch(
+                            "orchestra.web.api.assistant.views.asyncio.sleep",
+                            new_callable=AsyncMock,
+                        ),
+                        patch("orchestra.web.api.assistant.views.time.sleep"),
+                        patch(
+                            "orchestra.services.bucket_service.BucketService.__init__",
+                            lambda self: None,
+                        ),
                     ):
                         yield patches
 
@@ -1843,6 +1862,60 @@ class TestListContactsEndpoint:
             headers=HEADERS,
         )
         assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.anyio
+    async def test_org_member_cannot_list_other_members_workspace_coordinator_contacts(
+        self,
+        client: AsyncClient,
+        mock_all_infra,
+    ):
+        """Coordinator contacts remain owner-visible in organization workspaces."""
+        owner = await create_test_user(client, "contacts-owner-coordinator@test.com")
+        member = await create_test_user(client, "contacts-member-coordinator@test.com")
+        organization = await create_test_org(client, owner, "Coordinator Contacts Org")
+
+        add_member_resp = await client.post(
+            f"/v0/organizations/{organization['id']}/members",
+            json={"user_id": member["id"]},
+            headers=owner["headers"],
+        )
+        assert (
+            add_member_resp.status_code == status.HTTP_201_CREATED
+        ), add_member_resp.json()
+        member_org_headers = {
+            "Authorization": f"Bearer {add_member_resp.json()['api_key']}",
+        }
+
+        with patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic:
+            mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+            owner_coordinator_resp = await client.post(
+                f"/v0/user/{owner['id']}/coordinator?organization_id={organization['id']}",
+                headers=organization["headers"],
+            )
+        assert owner_coordinator_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), owner_coordinator_resp.json()
+        owner_coordinator_id = int(owner_coordinator_resp.json()["coordinator_id"])
+
+        blocked = await client.get(
+            f"/v0/assistant/{owner_coordinator_id}/contacts",
+            headers=member_org_headers,
+        )
+        assert blocked.status_code == status.HTTP_403_FORBIDDEN, blocked.json()
+        assert (
+            blocked.json()["detail"]
+            == "You do not have permission to view this assistant's contacts."
+        )
+
+        owner_visible = await client.get(
+            f"/v0/assistant/{owner_coordinator_id}/contacts",
+            headers=organization["headers"],
+        )
+        assert owner_visible.status_code == status.HTTP_200_OK, owner_visible.json()
 
 
 class TestUpdateContactEndpoint:
@@ -4284,14 +4357,18 @@ class TestConnectScopeReduction:
         http_calls: list[tuple[str, str, dict | None]] = []
         mock_http = _build_mock_async_client(http_calls)
 
-        with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings, patch.dict(
-            _os.environ,
-            {"UNITY_ADAPTERS_URL": "http://adapters.test"},
-        ), patch(
-            "httpx.AsyncClient",
-            return_value=mock_http,
+        with (
+            patch(
+                "orchestra.web.api.assistant.views.settings",
+            ) as mock_settings,
+            patch.dict(
+                _os.environ,
+                {"UNITY_ADAPTERS_URL": "http://adapters.test"},
+            ),
+            patch(
+                "httpx.AsyncClient",
+                return_value=mock_http,
+            ),
         ):
             mock_settings.google_oauth_client_id = "test-google-client-id"
             mock_settings.microsoft_byod_client_id = None
@@ -4359,14 +4436,18 @@ class TestConnectScopeReduction:
         http_calls: list[tuple[str, str, dict | None]] = []
         mock_http = _build_mock_async_client(http_calls)
 
-        with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings, patch.dict(
-            _os.environ,
-            {"UNITY_ADAPTERS_URL": "http://adapters.test"},
-        ), patch(
-            "httpx.AsyncClient",
-            return_value=mock_http,
+        with (
+            patch(
+                "orchestra.web.api.assistant.views.settings",
+            ) as mock_settings,
+            patch.dict(
+                _os.environ,
+                {"UNITY_ADAPTERS_URL": "http://adapters.test"},
+            ),
+            patch(
+                "httpx.AsyncClient",
+                return_value=mock_http,
+            ),
         ):
             mock_settings.google_oauth_client_id = "test-google-client-id"
             mock_settings.microsoft_byod_client_id = None
@@ -4689,17 +4770,21 @@ class TestDisconnectEndpoint:
         http_calls: list[tuple[str, str, dict | None]] = []
         mock_http = _build_mock_async_client(http_calls)
 
-        with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings, patch.dict(
-            _os.environ,
-            {
-                "UNITY_COMMS_URL": "http://comms.test",
-                "UNITY_ADAPTERS_URL": "http://adapters.test",
-            },
-        ), patch(
-            "httpx.AsyncClient",
-            return_value=mock_http,
+        with (
+            patch(
+                "orchestra.web.api.assistant.views.settings",
+            ) as mock_settings,
+            patch.dict(
+                _os.environ,
+                {
+                    "UNITY_COMMS_URL": "http://comms.test",
+                    "UNITY_ADAPTERS_URL": "http://adapters.test",
+                },
+            ),
+            patch(
+                "httpx.AsyncClient",
+                return_value=mock_http,
+            ),
         ):
             mock_settings.is_staging = True
 
@@ -4768,17 +4853,21 @@ class TestDisconnectEndpoint:
         http_calls: list[tuple[str, str, dict | None]] = []
         mock_http = _build_mock_async_client(http_calls)
 
-        with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings, patch.dict(
-            _os.environ,
-            {
-                "UNITY_COMMS_URL": "http://comms.test",
-                "UNITY_ADAPTERS_URL": "http://adapters.test",
-            },
-        ), patch(
-            "httpx.AsyncClient",
-            return_value=mock_http,
+        with (
+            patch(
+                "orchestra.web.api.assistant.views.settings",
+            ) as mock_settings,
+            patch.dict(
+                _os.environ,
+                {
+                    "UNITY_COMMS_URL": "http://comms.test",
+                    "UNITY_ADAPTERS_URL": "http://adapters.test",
+                },
+            ),
+            patch(
+                "httpx.AsyncClient",
+                return_value=mock_http,
+            ),
         ):
             mock_settings.is_staging = True
 
@@ -5042,6 +5131,88 @@ async def _setup_org_assistant_with_members(
     return owner, org, agent_id, writer_headers, reader_headers
 
 
+async def _setup_org_coordinator_with_members(
+    client: AsyncClient,
+    dbsession: Session,
+    *,
+    grant_member_write: bool = True,
+):
+    """Create org coordinator + two members (writer and reader)."""
+    from orchestra.db.dao.permission_dao import PermissionDAO
+    from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+    from orchestra.db.dao.role_dao import RoleDAO
+
+    owner = await create_test_user(client, "org-byod-coord-owner@test.com")
+    org = await create_test_org(client, owner, "BYODCoordinatorOrgTest")
+
+    coordinator_resp = await client.post(
+        f"/v0/user/{owner['id']}/coordinator?organization_id={org['id']}",
+        headers=org["headers"],
+    )
+    assert coordinator_resp.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), coordinator_resp.json()
+    coordinator_payload = coordinator_resp.json()
+    coordinator_data = coordinator_payload.get("info", coordinator_payload)
+    coordinator_id = coordinator_data.get("coordinator_id") or coordinator_data.get(
+        "agent_id",
+    )
+    if coordinator_id is None:
+        raise AssertionError(f"Unexpected coordinator response: {coordinator_payload}")
+    agent_id = int(coordinator_id)
+
+    role_dao = RoleDAO(dbsession)
+    perm_dao = PermissionDAO(dbsession)
+    ra_dao = ResourceAccessDAO(dbsession)
+
+    writer = await create_test_user(client, "org-byod-coord-writer@test.com")
+    add_resp = await client.post(
+        f"/v0/organizations/{org['id']}/members",
+        json={"user_id": writer["id"]},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == status.HTTP_201_CREATED
+    writer_headers = {"Authorization": f"Bearer {add_resp.json()['api_key']}"}
+
+    if grant_member_write:
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        ra_dao.grant_access(
+            resource_type="assistant",
+            resource_id=agent_id,
+            role_id=member_role.id,
+            grantee_type="user",
+            grantee_id=writer["id"],
+        )
+
+    reader_role = role_dao.create(
+        name="BYODCoordinatorReader",
+        organization_id=org["id"],
+    )
+    read_perm = perm_dao.get_by_name("assistant:read")
+    role_dao.add_permission(reader_role.id, read_perm.id)
+
+    reader = await create_test_user(client, "org-byod-coord-reader@test.com")
+    add_resp = await client.post(
+        f"/v0/organizations/{org['id']}/members",
+        json={"user_id": reader["id"], "role_id": reader_role.id},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == status.HTTP_201_CREATED
+    reader_headers = {"Authorization": f"Bearer {add_resp.json()['api_key']}"}
+
+    ra_dao.grant_access(
+        resource_type="assistant",
+        resource_id=agent_id,
+        role_id=reader_role.id,
+        grantee_type="user",
+        grantee_id=reader["id"],
+    )
+    dbsession.commit()
+
+    return owner, org, agent_id, writer_headers, reader_headers
+
+
 class TestConnectEndpointOrg:
     """Tests for POST /assistant/{id}/connect with org assistants."""
 
@@ -5161,6 +5332,56 @@ class TestConnectEndpointOrg:
         assert resp.status_code == status.HTTP_403_FORBIDDEN
 
     @pytest.mark.anyio
+    async def test_org_member_cannot_connect_other_members_workspace_coordinator(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, _, agent_id, writer_headers, _ = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email"]},
+                headers=writer_headers,
+            )
+
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.anyio
+    async def test_org_member_cannot_write_secret_for_other_members_workspace_coordinator(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, _, agent_id, writer_headers, _ = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={
+                "secret_name": "GOOGLE_GRANTED_SCOPES",
+                "secret_value": "https://www.googleapis.com/auth/gmail.send",
+            },
+            headers=writer_headers,
+        )
+
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.anyio
     async def test_compulsory_features_apply_for_org_microsoft(
         self,
         client: AsyncClient,
@@ -5243,17 +5464,21 @@ class TestDisconnectEndpointOrg:
         http_calls: list[tuple[str, str, dict | None]] = []
         mock_http = _build_mock_async_client(http_calls)
 
-        with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings, patch.dict(
-            _os.environ,
-            {
-                "UNITY_COMMS_URL": "http://comms.test",
-                "UNITY_ADAPTERS_URL": "http://adapters.test",
-            },
-        ), patch(
-            "httpx.AsyncClient",
-            return_value=mock_http,
+        with (
+            patch(
+                "orchestra.web.api.assistant.views.settings",
+            ) as mock_settings,
+            patch.dict(
+                _os.environ,
+                {
+                    "UNITY_COMMS_URL": "http://comms.test",
+                    "UNITY_ADAPTERS_URL": "http://adapters.test",
+                },
+            ),
+            patch(
+                "httpx.AsyncClient",
+                return_value=mock_http,
+            ),
         ):
             mock_settings.is_staging = True
 
@@ -5551,6 +5776,45 @@ class TestGrantedFeaturesEndpointOrg:
         assert data["provider"] == "microsoft"
         assert "email" in data["features"]
         assert sorted(data["required_features"]) == ["email", "teams"]
+
+    @pytest.mark.anyio
+    async def test_org_member_cannot_read_other_members_workspace_coordinator_features(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        _, org, agent_id, _, reader_headers = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.is_staging = True
+
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={
+                    "secret_name": "MICROSOFT_GRANTED_SCOPES",
+                    "secret_value": (
+                        "https://graph.microsoft.com/Mail.Read "
+                        "https://graph.microsoft.com/Mail.Send "
+                        "https://graph.microsoft.com/Mail.ReadWrite "
+                        "https://graph.microsoft.com/User.Read "
+                        "offline_access"
+                    ),
+                },
+                headers=org["headers"],
+            )
+
+            resp = await client.get(
+                f"/v0/assistant/{agent_id}/granted-features",
+                headers=reader_headers,
+            )
+
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.anyio
     async def test_org_member_no_access_cannot_read(

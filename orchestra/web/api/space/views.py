@@ -134,6 +134,11 @@ def _require_assistant_read(
 
     if assistant.user_id == user_id:
         return
+    if assistant.is_coordinator and assistant.organization_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant.",
+        )
     if (
         assistant.organization_id is not None
         and space_dao.resource_access_dao.check_org_member_permission(

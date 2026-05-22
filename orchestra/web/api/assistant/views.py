@@ -660,6 +660,19 @@ def _build_assistant_read(
     )
 
 
+def _is_hidden_workspace_coordinator_for_user(
+    assistant: Assistant,
+    *,
+    user_id: str,
+) -> bool:
+    """Return whether an org Coordinator row is hidden from this user."""
+    return (
+        assistant.is_coordinator
+        and assistant.organization_id is not None
+        and assistant.user_id != user_id
+    )
+
+
 @router.post(
     "/assistant",
     response_model=InfoResponse[AssistantRead],
@@ -1418,6 +1431,7 @@ def list_assistants(
                 )
             assistants = assistant_dao.list_all_org_assistants(
                 organization_id=organization_id,
+                requesting_user_id=user_id,
                 phone=phone,
                 email=email,
                 agent_id=agent_id,
@@ -1563,6 +1577,11 @@ async def delete_assistant_contact(
     )
 
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -1718,6 +1737,11 @@ async def create_assistant_contact(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -2122,6 +2146,11 @@ async def list_assistant_contacts(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant's contacts.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2204,7 +2233,11 @@ async def connect_assistant_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
-
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
         if not ra_dao.check_user_permission(
@@ -2360,6 +2393,11 @@ async def disconnect_assistant_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2513,6 +2551,11 @@ async def get_granted_features(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2586,6 +2629,8 @@ async def create_assistant_secret(
     )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2645,6 +2690,8 @@ async def update_assistant_secret(
     )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2702,6 +2749,8 @@ async def delete_assistant_secret(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
@@ -2766,6 +2815,11 @@ async def update_assistant_contact(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -3192,6 +3246,14 @@ async def update_assistant_config(
         organization_id=organization_id,
     )
     if not existing_assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(
+        existing_assistant,
+        user_id=user_id,
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -3715,6 +3777,11 @@ async def transfer_assistant_to_personal(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization assistant not found.",
@@ -4679,6 +4746,11 @@ async def upload_assistant_photo(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
+        if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
 
     ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
     if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
@@ -4752,6 +4824,11 @@ async def upload_assistant_video(
             organization_id=organization_id,
         )
         if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+        if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
@@ -6559,6 +6636,8 @@ async def get_assistant_spending_limit(
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     # Allow org members to view limits for any assistant in their org.
     if assistant.user_id != user_id:
@@ -6583,11 +6662,14 @@ async def get_assistant_spending_limit(
         org_member_dao = OrganizationMemberDAO(session)
 
         org = org_dao.get(assistant.organization_id)
-        member = org_member_dao.get_member(user_id, assistant.organization_id)
+        owner_member = org_member_dao.get_member(
+            assistant.user_id,
+            assistant.organization_id,
+        )
 
         parent_limits = []
-        if member and member.monthly_spending_cap is not None:
-            parent_limits.append(float(member.monthly_spending_cap))
+        if owner_member and owner_member.monthly_spending_cap is not None:
+            parent_limits.append(float(owner_member.monthly_spending_cap))
         if org and org.monthly_spending_cap is not None:
             parent_limits.append(float(org.monthly_spending_cap))
 
@@ -6634,6 +6716,8 @@ async def get_assistant_spend(
     assistant_dao = AssistantDAO(session)
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
     if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if assistant.user_id != user_id:
