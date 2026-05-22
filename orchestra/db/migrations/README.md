@@ -1,56 +1,61 @@
 # Platform alembic chain (orchestra-platform)
 
-The platform retains its full migration history. It runs as an
-**independent chain** from orchestra-core's: each is consumed by its own
-`alembic upgrade head` against its own (fresh) database.
+The platform's migration chain is now a **single squashed revision**:
 
-The chain's current head is `phase3_core_bridge` — an inert marker
-revision that documents the package-level dependency on orchestra-core
-without forcing alembic-level convergence.
+- `_platform_initial` (`down_revision = "0001_core_initial"`) — creates
+  every platform table outside the 13 kernel tables that orchestra-core's
+  `0001_core_initial` already creates, plus the two `project` foreign keys
+  back to `user` / `organization` that orchestra-core deliberately leaves
+  off.
 
-## Why two independent chains today
+The two chains are now **formally converged**: a fresh database runs
+core then platform sequentially with no `DuplicateTable` conflicts.
+`alembic upgrade head` from the platform's `alembic.ini` discovers both
+version directories (the platform's `versions/` plus orchestra-core's
+installed `versions/` — `env.py` resolves the kernel path at import time
+regardless of whether orchestra-core was installed via git URL or as a
+local path dep).
 
-The kernel tables (project / context / log_event / embedding / ...)
-are owned by orchestra-core's alembic chain (`0001_core_initial`). They
-were also created by the platform chain back in revision
-`2024-10-09-08-54_0fc27545b83d`, and every existing production database
-has them in its history accordingly. Declaring an alembic-level
-`depends_on = "0001_core_initial"` would make `upgrade head` fail with
-`DuplicateTable` on every fresh database, because the second chain to
-run would try to recreate kernel tables already created by the first.
+## Production cutover
 
-True convergence requires squashing the existing 259-revision chain
-into a single `_platform_initial` whose `down_revision =
-"0001_core_initial"` and which creates **only** platform tables. That
-is a destructive history rewrite plus a one-shot prod-DB cutover and is
-deliberately scheduled as a follow-up PR.
+Existing production databases were stamped at one of the pre-squash
+revisions (e.g. `phase3_core_bridge`). Those revision IDs no longer
+exist in the chain, so a naive `alembic upgrade head` would fail with
+`Can't locate revision identified by '...'`.
 
-## Validation gates that hold today
+The migration job handles this transparently:
+`orchestra/db/migrations/reconcile.py` runs **before every alembic
+upgrade**, detects DBs stamped at any pre-squash revision, verifies the
+expected schema is already in place (sentinel kernel + platform
+tables), and stamps `alembic_version` forward to
+`(0001_core_initial, _platform_initial)`. The reconcile is idempotent
+and a no-op on fresh DBs and already-reconciled DBs.
 
-- **Standalone orchestra-core**: empty Postgres → `alembic upgrade head`
-  on `orchestra_core/db/migrations` creates the 13 kernel tables.
-- **Standalone orchestra-platform**: empty Postgres →
-  `alembic upgrade head` on this directory creates kernel + platform
-  tables (the existing chain) and reaches `phase3_core_bridge`.
+## Schema source of truth
 
-## Future squash (separate PR)
+`_platform_initial.upgrade()` reads
+[`_platform_initial_schema.sql`](versions/_platform_initial_schema.sql)
+and executes it as a single multi-statement block. That file was
+generated verbatim from a `pg_dump --schema-only` of a fresh database
+that ran the historical 259-revision chain to its head, so every
+constraint name, index, function (`safe_cast_to_*`), and partial-unique
+definition matches production exactly.
 
-The squash converges the two chains formally:
+If a future change needs to alter the platform schema, author a new
+revision whose `down_revision = "_platform_initial"`. Do **not** edit
+the squash file directly — it's a frozen recreation of the historical
+schema.
 
-1. Author a new `2026-XX-XX_platform_initial.py` whose
-   `down_revision = "0001_core_initial"`. Its `upgrade()` creates the
-   ~56 platform-only tables (everything except the 13 kernel tables)
-   plus the FK constraints from `project.user_id` → `user.id` and
-   `project.organization_id` → `organization.id` that orchestra-core
-   deliberately does not declare.
-2. Delete the existing 259 revisions from `versions/` (they're
-   replayable from `_platform_initial`).
-3. Add `version_locations` in `alembic.ini` so the platform alembic env
-   sees orchestra-core's installed migrations directory, allowing it to
-   resolve `0001_core_initial` by name.
-4. Ship a one-shot reconcile script that, for each existing production
-   database, replaces its `alembic_version` row with
-   `('0001_core_initial', '<new_platform_initial>')` once a sanity check
-   confirms all 13 kernel tables exist with the expected schema.
-5. After the squash + reconcile, `alembic upgrade head` runs cleanly
-   on both fresh and existing databases against the merged chain.
+## Re-generating the squash from scratch
+
+If you ever need to regenerate `_platform_initial_schema.sql` (e.g. to
+fold subsequent revisions into the squash), the procedure is:
+
+1. Spin up a fresh Postgres + pgvector.
+2. Apply the full migration chain on a copy of the platform repo from
+   the relevant commit.
+3. `pg_dump --schema-only --no-owner --no-comments` excluding kernel
+   tables (`project`, `context`, `log_event`, ...), `_backup_orphan_*`
+   tables, and `alembic_version`.
+4. Strip pg_dump's `\restrict`, `SET ...`, and `Dumped by ...` preamble.
+5. Replace `_platform_initial_schema.sql`.

@@ -1,9 +1,13 @@
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
+from alembic.script.revision import RevisionMap
 from sqlalchemy import Connection, create_engine
 
+import orchestra_core.db.migrations as _core_migrations_pkg
 from orchestra_core.db.meta import meta
+from orchestra.db.migrations.reconcile import reconcile_to_new_chain
 from orchestra.db.models import load_all_models
 from orchestra.settings import settings
 
@@ -11,6 +15,31 @@ from orchestra.settings import settings
 # access to the values within the .ini file in use.
 config = context.config
 
+# Make orchestra-core's `0001_core_initial` revision discoverable so the
+# platform's `_platform_initial` (down_revision="0001_core_initial") can
+# resolve its parent. orchestra-core ships its migrations alongside its
+# package, so we resolve the path at import time regardless of whether
+# the kernel was installed from a git URL or as a local path dep.
+#
+# Alembic builds its `ScriptDirectory` from `alembic.ini`'s
+# `version_locations` BEFORE env.py runs, so `set_main_option` from here
+# is too late. We mutate the already-constructed `ScriptDirectory` on
+# the active context directly and invalidate its memoized `revision_map`
+# so the kernel directory is discovered before alembic walks revisions.
+# orchestra_core.db.migrations is a namespace package (no __init__.py),
+# so __file__ is None — resolve the directory via __path__ instead.
+_core_versions = str(Path(next(iter(_core_migrations_pkg.__path__))) / "versions")
+_platform_versions = str(Path(__file__).parent / "versions")
+_active_script = context.script
+_existing = [str(p) for p in _active_script.version_locations or []]
+_active_script.version_locations = [_platform_versions, _core_versions] + [
+    p for p in _existing if p not in (_platform_versions, _core_versions)
+]
+# revision_map is set in ScriptDirectory.__init__ as a regular attribute
+# (it captures `self._load_revisions` as a closure that reads
+# `self.version_locations` lazily). Replacing the map instance here
+# forces alembic to re-walk the freshly-extended version locations.
+_active_script.revision_map = RevisionMap(_active_script._load_revisions)
 
 load_all_models()
 # Interpret the config file for Python logging.
@@ -100,6 +129,11 @@ def run_migrations_online() -> None:
     connectable = create_engine(str(settings.db_url))
 
     with connectable.connect() as connection:
+        # One-shot stamp-forward for DBs upgraded under the pre-squash
+        # 259-revision platform chain. Idempotent + verifies the
+        # post-upgrade schema is present before mutating alembic_version.
+        reconcile_to_new_chain(connection)
+        connection.commit()
         do_run_migrations(connection)
 
 
