@@ -2872,14 +2872,23 @@ class TestPlanGroupNullPointer:
         monkeypatch.setattr(recon_mod, "stripe", _make_mock_stripe())
 
         # ``BillingAccountDAO.create`` sets plan_group_id to
-        # DEFAULT_PLAN_GROUP_ID; force the broken state with a
-        # raw UPDATE to simulate a manual SQL slip.
+        # DEFAULT_PLAN_GROUP_ID, and the schema also enforces NOT NULL,
+        # so simulating a "manual SQL slip" requires temporarily
+        # relaxing the constraint inside the test transaction. Both
+        # the DDL and the UPDATE are rolled back when the dbsession
+        # fixture tears down.
         ba = make_billing_account(dbsession, credits=0)
         from sqlalchemy import text
 
         dbsession.execute(
             text(
-                "UPDATE billing_account " "SET plan_group_id = NULL WHERE id = :id",
+                "ALTER TABLE billing_account "
+                "ALTER COLUMN plan_group_id DROP NOT NULL",
+            ),
+        )
+        dbsession.execute(
+            text(
+                "UPDATE billing_account SET plan_group_id = NULL WHERE id = :id",
             ),
             {"id": ba.id},
         )

@@ -445,17 +445,24 @@ class TestInstrumentorInstallation:
         assert FastAPIInstrumentor is not None
 
     def test_lifetime_imports_all_instrumentors(self):
-        """Verify lifetime.py imports all required instrumentors."""
-        # This test verifies the imports exist and won't fail at runtime
-        from orchestra.web.lifetime import (
+        """Verify the OTel instrumentors are reachable in their post-split locations.
+
+        After the orchestra-core split, lifetime.py owns only the
+        platform-specific OpenAI instrumentation. The HTTPX and SQLAlchemy
+        instrumentors moved to orchestra_core.observability.otel_setup,
+        which lifetime.py delegates to.
+        """
+        from orchestra.web.lifetime import OpenAIInstrumentor
+        from orchestra_core.observability.otel_setup import (
+            FastAPIInstrumentor,
             HTTPXClientInstrumentor,
-            OpenAIInstrumentor,
             SQLAlchemyInstrumentor,
         )
 
         assert HTTPXClientInstrumentor is not None
         assert OpenAIInstrumentor is not None
         assert SQLAlchemyInstrumentor is not None
+        assert FastAPIInstrumentor is not None
 
 
 # =============================================================================
