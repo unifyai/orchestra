@@ -120,7 +120,7 @@ def test_org_coordinator_unique_index_scopes_to_org_rows(
     dbsession.add(duplicate)
     with pytest.raises(
         IntegrityError,
-        match="ux_assistants_one_coordinator_per_org",
+        match="ux_assistants_one_workspace_coordinator_per_membership",
     ):
         dbsession.flush()
 

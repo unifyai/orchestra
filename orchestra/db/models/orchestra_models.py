@@ -23,7 +23,8 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import backref, relationship
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm import backref, relationship, validates
 
 from orchestra_core.db.base import Base
 
@@ -1969,6 +1970,21 @@ class Assistant(Base):
         passive_deletes=True,
     )
 
+    @validates("is_coordinator")
+    def _validate_is_coordinator_immutable(self, key, value):
+        """Once an assistant has been persisted, its coordinator-ness is fixed.
+
+        Mirrors the invariant the org/workspace partial unique indexes
+        encode: a row's coordinator status is decided at insert time and
+        downstream code should never flip it.
+        """
+        state = sa_inspect(self)
+        if state.persistent and getattr(self, key, None) != value:
+            raise ValueError(
+                "is_coordinator is immutable after the assistant has been persisted",
+            )
+        return value
+
     __table_args__ = (
         ForeignKeyConstraint(
             ["user_id", "voice_id", "voice_provider"],
@@ -1984,6 +2000,18 @@ class Assistant(Base):
             "user_id",
             unique=True,
             postgresql_where=text("is_coordinator AND organization_id IS NULL"),
+        ),
+        # Mirrors the migration `workspace_scoped_coordinators`: each
+        # (user_id, organization_id) pair allows at most one coordinator
+        # row. Declared on the model so meta.create_all-built test DBs
+        # match production schema and the test_coordinator_schema invariants
+        # actually fire.
+        Index(
+            "ux_assistants_one_workspace_coordinator_per_membership",
+            "user_id",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("is_coordinator AND organization_id IS NOT NULL"),
         ),
     )
 
