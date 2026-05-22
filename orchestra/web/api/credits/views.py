@@ -8,7 +8,7 @@ from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BillingAccount
 from orchestra.lib.billing import get_billing_entity, queue_auto_recharge
 from orchestra.web.api.credits.schema import (

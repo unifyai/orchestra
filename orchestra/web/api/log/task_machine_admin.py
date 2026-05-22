@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Project
 from orchestra.services.task_machine_state_service import (
     create_task_outbound_operation_if_absent,

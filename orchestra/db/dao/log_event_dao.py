@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.models.orchestra_models import (
     Context,
     FieldType,
@@ -796,7 +796,7 @@ class LogEventDAO:
             completed.append(ordered_row)
 
         if unique_key_columns:
-            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+            from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
             unique_dao = UniqueConstraintDAO(self.session)
 
@@ -1781,7 +1781,7 @@ class LogEventDAO:
             # (prevents worker race conditions), soft-delete embeddings (excludes
             # from HNSW search immediately), and null ref_ids (avoids per-row
             # SET NULL trigger overhead when log_event rows are deleted).
-            from orchestra.db.dao.embedding_dao import EmbeddingDAO
+            from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(self.session)
             embedding_dao.cancel_queue(log_event_ids=ids, reason="Log deleted")

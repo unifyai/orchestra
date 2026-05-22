@@ -1174,7 +1174,7 @@ class TestMonthlyInvoicer:
         import datetime as _dt
 
         from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-        from orchestra.lib.time import month_end_utc
+        from orchestra_core.lib.time import month_end_utc
 
         if invoice_group is None:
             now = _dt.datetime.now(_dt.timezone.utc)

@@ -31,7 +31,7 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-from orchestra.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -41,7 +41,7 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantCleanupTask,

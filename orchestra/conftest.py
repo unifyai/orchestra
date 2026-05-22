@@ -36,8 +36,8 @@ TIMING_RECORDS = []
 # Global to track current test info for timing records
 CURRENT_TEST_INFO = {"name": None, "mode": None}
 
-from orchestra.db.dependencies import get_db_session
-from orchestra.db.utils import create_database, drop_database
+from orchestra_core.db.dependencies import get_db_session
+from orchestra_core.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
 from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
@@ -79,7 +79,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
 
     :yield: new engine.
     """
-    from orchestra.db.meta import meta  # noqa: WPS433
+    from orchestra_core.db.meta import meta  # noqa: WPS433
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -972,7 +972,7 @@ def _engine_session(worker_id) -> Generator[Engine, None, None]:
 
     :yield: new engine.
     """
-    from orchestra.db.meta import meta  # noqa: WPS433
+    from orchestra_core.db.meta import meta  # noqa: WPS433
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -1104,8 +1104,8 @@ def large_log_dataset(_engine_session: Engine):
     Session-scoped fixture that creates a large dataset of logs for performance testing.
     :param _engine_session: SQLAlchemy database engine with session scope.
     """
-    from orchestra.db.dao.context_dao import ContextDAO
-    from orchestra.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra_core.db.dao.context_dao import ContextDAO
+    from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
@@ -1599,8 +1599,8 @@ def large_repairs_dataset(
     """
     from sqlalchemy import delete
 
-    from orchestra.db.dao.context_dao import ContextDAO
-    from orchestra.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra_core.db.dao.context_dao import ContextDAO
+    from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.models.orchestra_models import (
         Context,

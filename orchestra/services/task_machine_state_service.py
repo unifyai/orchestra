@@ -22,8 +22,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import delete_orphaned_log_events
-from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+from orchestra_core.db.dao.context_dao import delete_orphaned_log_events
+from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,

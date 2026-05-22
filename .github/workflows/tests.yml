@@ -75,6 +75,13 @@ jobs:
       with:
         options: "--check"
         version: "26.1.0"
+
+  core-purity:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: orchestra_core/ purity check
+      run: bash scripts/check_core_purity.sh
   # flake8:
   #   runs-on: ubuntu-latest
   #   steps:

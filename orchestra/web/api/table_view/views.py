@@ -10,12 +10,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.table_view_dao import TableViewDAO, TokenGenerationError
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Project, TableView
 from orchestra.settings import settings
 from orchestra.web.api.table_view.schema import (

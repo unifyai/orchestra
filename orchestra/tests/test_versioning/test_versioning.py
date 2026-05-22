@@ -1334,7 +1334,7 @@ async def test_rollback_cleans_up_active_derived_log_templates(
 @pytest.mark.anyio
 async def test_rollback_cleans_up_plots(client: AsyncClient, dbsession):
     """Tests that rollback removes Plot records created after the commit point."""
-    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra_core.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.plot_dao import PlotDAO
     from orchestra.db.dao.project_dao import ProjectDAO
@@ -1430,7 +1430,7 @@ async def test_rollback_cleans_up_plots(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_rollback_cleans_up_table_views(client: AsyncClient, dbsession):
     """Tests that rollback removes TableView records created after the commit point."""
-    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra_core.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
     from orchestra.db.dao.table_view_dao import TableViewDAO

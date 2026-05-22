@@ -482,7 +482,7 @@ class TestInvoiceSelfHealing:
         """payment_succeeded for unknown invoice_id resolves via metadata."""
         import datetime as _dt
 
-        from orchestra.lib.time import month_end_utc
+        from orchestra_core.lib.time import month_end_utc
         from orchestra.web.api.webhooks.stripe import process_invoice_event
 
         user, ba = make_user_with_billing(
@@ -540,7 +540,7 @@ class TestInvoiceSelfHealing:
         import datetime as _dt
 
         import orchestra.web.api.webhooks.stripe as wh_mod
-        from orchestra.lib.time import month_end_utc
+        from orchestra_core.lib.time import month_end_utc
         from orchestra.web.api.webhooks.stripe import process_invoice_event
 
         voided = []

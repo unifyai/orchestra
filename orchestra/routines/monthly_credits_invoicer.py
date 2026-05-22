@@ -69,9 +69,9 @@ from orchestra.db.models.orchestra_models import (
     Recharge,
     RechargeStatus,
 )
-from orchestra.lib.time import month_end_utc
+from orchestra_core.lib.time import month_end_utc
 from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
-from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
+from orchestra_core.observability.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
