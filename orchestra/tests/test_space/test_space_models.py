@@ -1,8 +1,6 @@
-"""Schema tests for shared spaces, memberships, and invitations."""
+"""Schema tests for shared spaces and memberships."""
 
 from __future__ import annotations
-
-from datetime import datetime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
@@ -14,13 +12,8 @@ from orchestra.db.models.orchestra_models import (
     AssistantSpaceMembership,
     Organization,
     Space,
-    SpaceInvite,
     User,
 )
-
-
-def _future_expiry() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(days=7)
 
 
 def _make_user(dbsession: Session, suffix: str) -> User:
@@ -81,28 +74,6 @@ def _make_space(
     dbsession.add(space)
     dbsession.flush()
     return space
-
-
-def _make_invite(
-    dbsession: Session,
-    space: Space,
-    assistant: Assistant,
-    inviter: User,
-    invited_owner: User,
-    status: str | None = None,
-) -> SpaceInvite:
-    invite = SpaceInvite(
-        space_id=space.space_id,
-        assistant_id=assistant.agent_id,
-        invited_by=inviter.id,
-        invited_owner_id=invited_owner.id,
-        expires_at=_future_expiry(),
-    )
-    if status is not None:
-        invite.status = status
-    dbsession.add(invite)
-    dbsession.flush()
-    return invite
 
 
 def test_membership_composite_pk_enforced(dbsession: Session) -> None:
@@ -206,83 +177,6 @@ def test_space_status_check_constraint_rejects_unknown_status(
         dbsession.flush()
 
 
-def test_space_invite_pending_unique_per_pair(dbsession: Session) -> None:
-    """Only one pending invite can exist for a space and assistant pair."""
-    inviter = _make_user(dbsession, "invite-unique-inviter")
-    invited_owner = _make_user(dbsession, "invite-unique-owner")
-    space = _make_space(dbsession, inviter, "invite-unique")
-    assistant = _make_assistant(dbsession, invited_owner)
-
-    _make_invite(
-        dbsession,
-        space,
-        assistant,
-        inviter,
-        invited_owner,
-        status="accepted",
-    )
-    _make_invite(dbsession, space, assistant, inviter, invited_owner)
-
-    duplicate_pending = SpaceInvite(
-        space_id=space.space_id,
-        assistant_id=assistant.agent_id,
-        invited_by=inviter.id,
-        invited_owner_id=invited_owner.id,
-        expires_at=_future_expiry(),
-    )
-    dbsession.add(duplicate_pending)
-    with pytest.raises(IntegrityError, match="ix_space_invites_pending"):
-        dbsession.flush()
-
-
-@pytest.mark.parametrize(
-    "status",
-    ["pending", "accepted", "declined", "cancelled", "expired"],
-)
-def test_space_invite_status_check_constraint_accepts_canonical_values(
-    dbsession: Session,
-    status: str,
-) -> None:
-    """Invitation rows persist every canonical state-machine status."""
-    inviter = _make_user(dbsession, f"invite-status-inviter-{status}")
-    invited_owner = _make_user(dbsession, f"invite-status-owner-{status}")
-    space = _make_space(dbsession, inviter, f"invite-status-{status}")
-    assistant = _make_assistant(dbsession, invited_owner)
-
-    invite = _make_invite(
-        dbsession,
-        space,
-        assistant,
-        inviter,
-        invited_owner,
-        status=status,
-    )
-
-    assert invite.status == status
-
-
-def test_space_invite_status_check_constraint_rejects_revoked(
-    dbsession: Session,
-) -> None:
-    """The cancel-by-inviter terminal state is named cancelled."""
-    inviter = _make_user(dbsession, "invite-status-invalid-inviter")
-    invited_owner = _make_user(dbsession, "invite-status-invalid-owner")
-    space = _make_space(dbsession, inviter, "invite-status-invalid")
-    assistant = _make_assistant(dbsession, invited_owner)
-    invite = SpaceInvite(
-        space_id=space.space_id,
-        assistant_id=assistant.agent_id,
-        invited_by=inviter.id,
-        invited_owner_id=invited_owner.id,
-        status="revoked",
-        expires_at=_future_expiry(),
-    )
-    dbsession.add(invite)
-
-    with pytest.raises(IntegrityError, match="ck_space_invites_status"):
-        dbsession.flush()
-
-
 def test_organization_delete_restricts_when_spaces_exist(
     dbsession: Session,
 ) -> None:
@@ -297,15 +191,13 @@ def test_organization_delete_restricts_when_spaces_exist(
         )
 
 
-def test_space_delete_cascades_to_memberships_and_invites(
+def test_space_delete_cascades_to_memberships(
     dbsession: Session,
 ) -> None:
-    """Deleting a space removes membership and invitation rows it owns."""
+    """Deleting a space removes membership rows it owns."""
     owner = _make_user(dbsession, "space-cascade-owner")
-    invited_owner = _make_user(dbsession, "space-cascade-invited")
     space = _make_space(dbsession, owner, "space-cascade")
     member_assistant = _make_assistant(dbsession, owner)
-    invited_assistant = _make_assistant(dbsession, invited_owner)
     dbsession.add(
         AssistantSpaceMembership(
             assistant_id=member_assistant.agent_id,
@@ -313,7 +205,6 @@ def test_space_delete_cascades_to_memberships_and_invites(
             added_by=owner.id,
         ),
     )
-    _make_invite(dbsession, space, invited_assistant, owner, invited_owner)
 
     dbsession.execute(sa.delete(Space).where(Space.space_id == space.space_id))
     dbsession.flush()
@@ -321,8 +212,4 @@ def test_space_delete_cascades_to_memberships_and_invites(
     membership_count = dbsession.scalar(
         sa.select(sa.func.count()).select_from(AssistantSpaceMembership),
     )
-    invite_count = dbsession.scalar(
-        sa.select(sa.func.count()).select_from(SpaceInvite),
-    )
     assert membership_count == 0
-    assert invite_count == 0

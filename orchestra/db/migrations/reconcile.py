@@ -35,14 +35,34 @@ from sqlalchemy.engine import Connection
 
 logger = logging.getLogger("alembic.reconcile")
 
-# Every revision that exists in the new (post-squash) chain. The
-# reconcile is a no-op if alembic_version contents are a subset of these.
-# `_platform_initial.down_revision = "0001_core_initial"`, so alembic
-# treats them as a linear chain — `alembic_version` typically only stores
-# the leaf, but a fresh DB stamped at `0001_core_initial` mid-upgrade is
-# also a valid state and should not be force-stamped forward.
-NEW_CHAIN_HEAD = "_platform_initial"
-NEW_CHAIN_REVISIONS = frozenset({"0001_core_initial", NEW_CHAIN_HEAD})
+# Every revision that exists in the converged post-split chain. The
+# reconcile is a no-op when `alembic_version` is a subset of these — DBs
+# stamped at any of these revisions can reach the head via normal
+# alembic upgrade traversal.
+#
+# Chain shape:
+#     0001_core_initial
+#         ├── _platform_initial          (platform squash leaf)
+#         └── 0002_kernel_drift_fixes    (kernel drift-fix leaf)
+#                  ↓
+#              2026_platform_drift_fixes (merge node + new head)
+NEW_CHAIN_REVISIONS = frozenset(
+    {
+        "0001_core_initial",
+        "_platform_initial",
+        "0002_kernel_drift_fixes",
+        "2026_platform_drift_fixes",
+    },
+)
+
+# Where the reconcile stamps a pre-squash DB. This is the revision whose
+# schema matches what production was running just before tonight's
+# convergence work — i.e. the schema produced by the historical 259
+# platform migrations. Stamping at this point lets alembic naturally
+# apply the kernel + platform drift-fix migrations on top, doing the
+# actual schema convergence as proper migrations rather than as a
+# silent stamp-only operation.
+RECONCILE_STAMP_TARGET = "_platform_initial"
 
 # A handful of tables we expect every post-upgrade DB to have. If any of
 # these are missing we abort rather than blindly stamping forward.
@@ -110,12 +130,13 @@ def reconcile_to_new_chain(connection: Connection) -> None:
         )
 
     logger.warning(
-        "alembic_version reconcile: stamping forward from %s to %s",
+        "alembic_version reconcile: stamping forward from %s to %s; "
+        "alembic will then apply post-squash drift-fix migrations on top",
         sorted(versions),
-        [NEW_CHAIN_HEAD],
+        [RECONCILE_STAMP_TARGET],
     )
     connection.execute(text("DELETE FROM alembic_version"))
     connection.execute(
         text("INSERT INTO alembic_version (version_num) VALUES (:v)"),
-        {"v": NEW_CHAIN_HEAD},
+        {"v": RECONCILE_STAMP_TARGET},
     )
