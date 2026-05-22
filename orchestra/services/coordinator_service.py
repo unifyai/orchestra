@@ -6,7 +6,7 @@ from typing import Any, Sequence
 from fastapi import HTTPException, status
 from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
-from sqlalchemy import and_, select, text
+from sqlalchemy import Integer, and_, literal, select, text
 from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
@@ -20,6 +20,8 @@ from orchestra.db.models.orchestra_models import (
     Context,
     LogEvent,
     LogEventContext,
+    Organization,
+    OrganizationMember,
     Project,
     User,
 )
@@ -77,12 +79,44 @@ def _ensure_coordinator_default_desktop_mode(assistant: Assistant) -> None:
         assistant.desktop_mode = COORDINATOR_DEFAULT_DESKTOP_MODE
 
 
+def get_workspace_coordinator(
+    session: Session,
+    *,
+    user_id: str,
+    organization_id: int | None,
+) -> Assistant | None:
+    """Return the Coordinator row for one workspace scope when it exists."""
+    stmt = select(Assistant).where(
+        Assistant.user_id == user_id,
+        Assistant.is_coordinator.is_(True),
+    )
+    if organization_id is None:
+        stmt = stmt.where(Assistant.organization_id.is_(None))
+    else:
+        stmt = stmt.where(Assistant.organization_id == organization_id)
+    return session.scalar(stmt)
+
+
 def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None:
     """Return the user's personal Coordinator when one already exists."""
+    return get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=None,
+    )
+
+
+def get_organization_coordinator(
+    session: Session,
+    *,
+    user_id: str,
+    organization_id: int,
+) -> Assistant | None:
+    """Return the user's organization-scoped Coordinator when one exists."""
     return session.scalar(
         select(Assistant).where(
             Assistant.user_id == user_id,
-            Assistant.organization_id.is_(None),
+            Assistant.organization_id == organization_id,
             Assistant.is_coordinator.is_(True),
         ),
     )
@@ -101,9 +135,10 @@ def create_coordinator_assistant(
     session: Session,
     *,
     owner_user_id: str,
+    organization_id: int | None,
     timezone: str | None = None,
 ) -> Assistant:
-    """Create the user's personal Coordinator assistant row."""
+    """Create a Coordinator assistant row for one workspace scope."""
     assistant = AssistantDAO(session).create_assistant(
         user_id=owner_user_id,
         first_name="Coordinator",
@@ -121,7 +156,7 @@ def create_coordinator_assistant(
         voice_id=None,
         voice_provider=None,
         timezone=timezone,
-        organization_id=None,
+        organization_id=organization_id,
         is_local=False,
         is_coordinator=True,
         deploy_env=None,
@@ -174,10 +209,15 @@ def ensure_assistants_project(
         )
         session.add(project)
         session.flush()
+        organization_owner_user_id = session.scalar(
+            select(Organization.owner_id).where(Organization.id == organization_id),
+        )
+        if organization_owner_user_id is None:
+            raise ValueError(f"Organization {organization_id} not found")
         grant_project_access_to_org_members(
             session,
             project=project,
-            owner_user_id=owner_user_id,
+            owner_user_id=organization_owner_user_id,
             organization_id=organization_id,
         )
     return project
@@ -233,16 +273,22 @@ def _repair_existing_coordinator_state(
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
 
 
-def create_personal_coordinator(
+def create_workspace_coordinator(
     session: Session,
+    *,
     user_id: str,
+    organization_id: int | None,
 ) -> tuple[Assistant, bool]:
-    """Create or return the user's personal Coordinator.
+    """Create or return the user's Coordinator for one workspace.
 
     Returns ``(assistant, created)`` where ``created`` is ``True`` only when this
     call inserted the assistant row.
     """
-    existing = get_personal_coordinator(session, user_id)
+    existing = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     if existing is not None:
         _repair_existing_coordinator_state(session, coordinator=existing)
         return existing, False
@@ -250,6 +296,7 @@ def create_personal_coordinator(
     assistant = create_coordinator_assistant(
         session,
         owner_user_id=user_id,
+        organization_id=organization_id,
     )
     ensure_personal_contact_memberships(
         session,
@@ -259,23 +306,40 @@ def create_personal_coordinator(
     ensure_assistants_project(
         session,
         owner_user_id=user_id,
-        organization_id=None,
+        organization_id=organization_id,
     )
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
     return assistant, True
 
 
-async def ensure_personal_coordinator_provisioned(
+def create_personal_coordinator(
+    session: Session,
+    user_id: str,
+) -> tuple[Assistant, bool]:
+    """Create or return the user's personal Coordinator."""
+    return create_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=None,
+    )
+
+
+async def ensure_workspace_coordinator_provisioned(
     session: Session,
     *,
     user_id: str,
+    organization_id: int | None,
 ) -> tuple[Assistant, bool]:
-    """Ensure personal Coordinator row and pubsub topic both exist.
+    """Ensure workspace Coordinator row and pubsub topic both exist.
 
     Returns ``(assistant, created)`` where ``created`` indicates whether this
     call created the Coordinator row.
     """
-    coordinator, created_coordinator = create_personal_coordinator(session, user_id)
+    coordinator, created_coordinator = create_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     pubsub_response = await create_pubsub_topic(
         str(coordinator.agent_id),
         deploy_env=coordinator.deploy_env,
@@ -283,6 +347,19 @@ async def ensure_personal_coordinator_provisioned(
     if pubsub_topic_response_failed(pubsub_response):
         raise ValueError(f"Coordinator topic provisioning failed: {pubsub_response}")
     return coordinator, created_coordinator
+
+
+async def ensure_personal_coordinator_provisioned(
+    session: Session,
+    *,
+    user_id: str,
+) -> tuple[Assistant, bool]:
+    """Ensure personal Coordinator row and pubsub topic both exist."""
+    return await ensure_workspace_coordinator_provisioned(
+        session,
+        user_id=user_id,
+        organization_id=None,
+    )
 
 
 def list_user_ids_missing_personal_coordinator(
@@ -310,6 +387,55 @@ def list_user_ids_missing_personal_coordinator(
     return list(session.scalars(stmt).all())
 
 
+def list_workspace_memberships_missing_coordinator(
+    session: Session,
+    *,
+    limit: int | None = None,
+) -> list[tuple[str, int | None]]:
+    """Return workspace memberships that do not yet have a Coordinator."""
+    personal_coordinator = aliased(Assistant)
+    personal_targets = (
+        select(
+            User.id.label("user_id"),
+            literal(None, type_=Integer).label("organization_id"),
+            User.created_at.label("created_at"),
+        )
+        .outerjoin(
+            personal_coordinator,
+            and_(
+                personal_coordinator.user_id == User.id,
+                personal_coordinator.organization_id.is_(None),
+                personal_coordinator.is_coordinator.is_(True),
+            ),
+        )
+        .where(personal_coordinator.agent_id.is_(None))
+    )
+
+    org_coordinator = aliased(Assistant)
+    org_targets = (
+        select(
+            OrganizationMember.user_id.label("user_id"),
+            OrganizationMember.organization_id.label("organization_id"),
+            OrganizationMember.created_at.label("created_at"),
+        )
+        .outerjoin(
+            org_coordinator,
+            and_(
+                org_coordinator.user_id == OrganizationMember.user_id,
+                org_coordinator.organization_id == OrganizationMember.organization_id,
+                org_coordinator.is_coordinator.is_(True),
+            ),
+        )
+        .where(org_coordinator.agent_id.is_(None))
+    )
+
+    stmt = personal_targets.union_all(org_targets).order_by(text("created_at ASC"))
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    rows = session.execute(stmt).all()
+    return [(row.user_id, row.organization_id) for row in rows]
+
+
 def require_authorized_coordinator(
     session: Session,
     *,
@@ -330,7 +456,7 @@ def require_authorized_coordinator(
             status_code=status.HTTP_409_CONFLICT,
             detail="not_a_coordinator",
         )
-    if coordinator.organization_id is not None or coordinator.user_id != user_id:
+    if coordinator.user_id != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to modify this Coordinator.",
@@ -355,7 +481,7 @@ def require_authorized_preseed_target(
     target_assistant_id: int,
     user_id: str,
 ) -> tuple[Assistant, Assistant]:
-    """Resolve the personal Coordinator allowed to seed rows for one colleague."""
+    """Resolve the workspace Coordinator allowed to seed rows for one colleague."""
     target = AssistantDAO(session).get_assistant_by_agent_id(
         agent_id=target_assistant_id,
     )
@@ -394,12 +520,16 @@ def require_authorized_preseed_target(
                 detail="You do not have permission to seed this assistant.",
             )
 
-    coordinator = get_personal_coordinator(session, user_id)
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=target.organization_id,
+    )
 
     if coordinator is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Coordinator not found.",
+            detail="Workspace Coordinator not found.",
         )
     authorized = require_authorized_coordinator(
         session,

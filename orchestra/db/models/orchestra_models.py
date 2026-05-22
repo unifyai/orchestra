@@ -1933,9 +1933,12 @@ class Assistant(Base):
             unique=True,
             postgresql_where=text("is_coordinator AND organization_id IS NULL"),
         ),
-        sa.CheckConstraint(
-            "(NOT is_coordinator) OR organization_id IS NULL",
-            name="ck_assistants_coordinator_personal_scope",
+        Index(
+            "ux_assistants_one_workspace_coordinator_per_membership",
+            "user_id",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("is_coordinator AND organization_id IS NOT NULL"),
         ),
     )
 

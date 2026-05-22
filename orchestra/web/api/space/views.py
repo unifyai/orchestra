@@ -14,8 +14,8 @@ from orchestra.services.contact_membership_service import (
     ensure_space_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
-    ensure_personal_coordinator_provisioned,
-    get_personal_coordinator,
+    ensure_workspace_coordinator_provisioned,
+    get_workspace_coordinator,
 )
 from orchestra.services.space_cleanup_service import (
     SpaceCleanupAuthError,
@@ -217,14 +217,6 @@ def _require_membership_target_allowed(
     if assistant.user_id == actor_user_id:
         return
 
-    if assistant.organization_id is None and assistant.is_coordinator:
-        if org_member_dao.get_member(assistant.user_id, space.organization_id):
-            return
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="personal_coordinator_not_org_member",
-        )
-
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="assistant_not_eligible_for_space",
@@ -289,8 +281,8 @@ async def create_space(
             },
         )
 
-    created_personal_coordinator = False
-    created_personal_coordinator_id: int | None = None
+    created_workspace_coordinator = False
+    created_workspace_coordinator_id: int | None = None
     refresh_payloads = []
     try:
         space = space_dao.create(
@@ -300,21 +292,26 @@ async def create_space(
             owner_user_id=user_id,
         )
         if body.organization_id is not None:
-            coordinator = get_personal_coordinator(session, user_id=user_id)
+            coordinator = get_workspace_coordinator(
+                session,
+                user_id=user_id,
+                organization_id=body.organization_id,
+            )
             if coordinator is None:
                 try:
-                    coordinator, created_personal_coordinator = (
-                        await ensure_personal_coordinator_provisioned(
+                    coordinator, created_workspace_coordinator = (
+                        await ensure_workspace_coordinator_provisioned(
                             session,
                             user_id=user_id,
+                            organization_id=body.organization_id,
                         )
                     )
                 except ValueError as exc:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
-                        detail="personal_coordinator_provisioning_failed",
+                        detail="workspace_coordinator_provisioning_failed",
                     ) from exc
-                created_personal_coordinator_id = coordinator.agent_id
+                created_workspace_coordinator_id = coordinator.agent_id
             if (
                 space_dao.get_membership(
                     space_id=space.space_id,
@@ -336,8 +333,11 @@ async def create_space(
         session.commit()
     except Exception:
         session.rollback()
-        if created_personal_coordinator and created_personal_coordinator_id is not None:
-            await delete_pubsub_topic(str(created_personal_coordinator_id))
+        if (
+            created_workspace_coordinator
+            and created_workspace_coordinator_id is not None
+        ):
+            await delete_pubsub_topic(str(created_workspace_coordinator_id))
         raise
 
     await publish_membership_refreshes_best_effort(refresh_payloads)
@@ -478,8 +478,8 @@ async def add_space_member(
     _require_space_mutation(space_dao, user_id, space)
     _require_active_space(space)
 
-    created_personal_coordinator = False
-    created_personal_coordinator_id: int | None = None
+    created_workspace_coordinator = False
+    created_workspace_coordinator_id: int | None = None
     try:
         if body.member_user_id:
             _require_org_member_target(
@@ -487,44 +487,46 @@ async def add_space_member(
                 space=space,
                 member_user_id=body.member_user_id,
             )
-            existing_personal_coordinator = get_personal_coordinator(
+            existing_workspace_coordinator = get_workspace_coordinator(
                 session,
-                body.member_user_id,
+                user_id=body.member_user_id,
+                organization_id=space.organization_id,
             )
-            if existing_personal_coordinator is not None:
+            if existing_workspace_coordinator is not None:
                 _require_membership_target_allowed(
                     org_member_dao,
                     actor_user_id=user_id,
                     space=space,
-                    assistant=existing_personal_coordinator,
+                    assistant=existing_workspace_coordinator,
                 )
                 if space_dao.get_membership(
                     space_id=space.space_id,
-                    assistant_id=existing_personal_coordinator.agent_id,
+                    assistant_id=existing_workspace_coordinator.agent_id,
                 ):
                     _ensure_member_space_contacts(
                         session,
-                        assistant_id=existing_personal_coordinator.agent_id,
+                        assistant_id=existing_workspace_coordinator.agent_id,
                         space_id=space.space_id,
                     )
                     response.status_code = status.HTTP_200_OK
                     return _membership_response(
-                        assistant_id=existing_personal_coordinator.agent_id,
+                        assistant_id=existing_workspace_coordinator.agent_id,
                         space_id=space.space_id,
                     )
             try:
-                assistant, created_personal_coordinator = (
-                    await ensure_personal_coordinator_provisioned(
+                assistant, created_workspace_coordinator = (
+                    await ensure_workspace_coordinator_provisioned(
                         session,
                         user_id=body.member_user_id,
+                        organization_id=space.organization_id,
                     )
                 )
             except ValueError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="personal_coordinator_provisioning_failed",
+                    detail="workspace_coordinator_provisioning_failed",
                 ) from exc
-            created_personal_coordinator_id = assistant.agent_id
+            created_workspace_coordinator_id = assistant.agent_id
         else:
             if body.assistant_id is None:
                 raise HTTPException(
@@ -568,8 +570,11 @@ async def add_space_member(
         session.commit()
     except Exception:
         session.rollback()
-        if created_personal_coordinator and created_personal_coordinator_id is not None:
-            await delete_pubsub_topic(str(created_personal_coordinator_id))
+        if (
+            created_workspace_coordinator
+            and created_workspace_coordinator_id is not None
+        ):
+            await delete_pubsub_topic(str(created_workspace_coordinator_id))
         raise
 
     await publish_membership_refreshes_best_effort(refresh_payloads)

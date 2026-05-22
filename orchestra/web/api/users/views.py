@@ -35,8 +35,9 @@ from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.coordinator_service import (
     ensure_personal_coordinator_provisioned,
-    get_personal_coordinator,
-    list_user_ids_missing_personal_coordinator,
+    ensure_workspace_coordinator_provisioned,
+    get_workspace_coordinator,
+    list_workspace_memberships_missing_coordinator,
 )
 from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
@@ -1215,9 +1216,10 @@ async def create_personal_coordinator_endpoint(
     user_id: str,
     request: Request,
     response: Response,
+    organization_id: int | None = Query(None),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    """Create or return the authenticated user's personal Coordinator."""
+    """Create or return the authenticated user's workspace Coordinator."""
     if request.state.user_id != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1228,7 +1230,30 @@ async def create_personal_coordinator_endpoint(
     if not user_dao.get_by_id(user_id):
         raise not_found("User")
 
-    existing = get_personal_coordinator(session, user_id)
+    if organization_id is not None:
+        org_dao = OrganizationDAO(session)
+        org_member_dao = OrganizationMemberDAO(session)
+        org = org_dao.get(organization_id)
+        if org is None:
+            raise not_found("Organization")
+        if (
+            org.owner_id != user_id
+            and org_member_dao.get_member(
+                user_id,
+                organization_id,
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create a Coordinator outside your workspaces.",
+            )
+
+    existing = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     response.status_code = (
         status.HTTP_200_OK if existing is not None else status.HTTP_201_CREATED
     )
@@ -1237,16 +1262,21 @@ async def create_personal_coordinator_endpoint(
     coordinator_id: int | None = None
     try:
         coordinator, created_coordinator = (
-            await ensure_personal_coordinator_provisioned(
+            await ensure_workspace_coordinator_provisioned(
                 session,
                 user_id=user_id,
+                organization_id=organization_id,
             )
         )
         coordinator_id = coordinator.agent_id
         session.commit()
     except IntegrityError as exc:
         session.rollback()
-        if "ux_assistants_one_personal_coordinator_per_user" not in str(exc.orig):
+        conflict_keys = (
+            "ux_assistants_one_personal_coordinator_per_user",
+            "ux_assistants_one_workspace_coordinator_per_membership",
+        )
+        if not any(key in str(exc.orig) for key in conflict_keys):
             if created_coordinator and coordinator_id is not None:
                 await delete_pubsub_topic(str(coordinator_id))
             raise HTTPException(
@@ -1257,7 +1287,11 @@ async def create_personal_coordinator_endpoint(
             await delete_pubsub_topic(str(coordinator_id))
             created_coordinator = False
         response.status_code = status.HTTP_200_OK
-        coordinator = get_personal_coordinator(session, user_id)
+        coordinator = get_workspace_coordinator(
+            session,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
         if coordinator is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1265,9 +1299,10 @@ async def create_personal_coordinator_endpoint(
             )
         try:
             coordinator, created_coordinator = (
-                await ensure_personal_coordinator_provisioned(
+                await ensure_workspace_coordinator_provisioned(
                     session,
                     user_id=user_id,
+                    organization_id=organization_id,
                 )
             )
             coordinator_id = coordinator.agent_id
@@ -1286,33 +1321,44 @@ async def create_personal_coordinator_endpoint(
     return {"coordinator_id": str(coordinator.agent_id)}
 
 
+@admin_router.post("/coordinator/workspace/backfill")
 @admin_router.post("/coordinator/personal/backfill")
-async def backfill_personal_coordinators(
+async def backfill_workspace_coordinators(
     limit: int = Query(500, ge=1, le=5000),
     dry_run: bool = Query(True),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    """Backfill missing personal Coordinators for existing users."""
-    target_user_ids = list_user_ids_missing_personal_coordinator(session, limit=limit)
+    """Backfill missing workspace Coordinators for existing users and memberships."""
+    target_memberships = list_workspace_memberships_missing_coordinator(
+        session,
+        limit=limit,
+    )
     if dry_run:
         return {
             "dry_run": True,
-            "target_count": len(target_user_ids),
-            "target_user_ids": target_user_ids,
+            "target_count": len(target_memberships),
+            "targets": [
+                {
+                    "user_id": user_id,
+                    "organization_id": organization_id,
+                }
+                for user_id, organization_id in target_memberships
+            ],
         }
 
     created = 0
     skipped = 0
     errors: list[dict[str, str]] = []
 
-    for user_id in target_user_ids:
+    for user_id, organization_id in target_memberships:
         created_coordinator = False
         coordinator_id: int | None = None
         try:
             coordinator, created_coordinator = (
-                await ensure_personal_coordinator_provisioned(
+                await ensure_workspace_coordinator_provisioned(
                     session,
                     user_id=user_id,
+                    organization_id=organization_id,
                 )
             )
             coordinator_id = coordinator.agent_id
@@ -1325,11 +1371,19 @@ async def backfill_personal_coordinators(
             session.rollback()
             if created_coordinator and coordinator_id is not None:
                 await delete_pubsub_topic(str(coordinator_id))
-            errors.append({"user_id": user_id, "error": str(exc)})
+            errors.append(
+                {
+                    "user_id": user_id,
+                    "organization_id": (
+                        str(organization_id) if organization_id is not None else "null"
+                    ),
+                    "error": str(exc),
+                },
+            )
 
     return {
         "dry_run": False,
-        "target_count": len(target_user_ids),
+        "target_count": len(target_memberships),
         "created": created,
         "skipped_existing": skipped,
         "failed": len(errors),

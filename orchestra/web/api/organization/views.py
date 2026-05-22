@@ -47,8 +47,8 @@ from orchestra.services.assistant_cleanup_service import (
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.services.coordinator_service import (
-    ensure_personal_coordinator_provisioned,
-    get_personal_coordinator,
+    ensure_workspace_coordinator_provisioned,
+    get_workspace_coordinator,
 )
 from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
 from orchestra.services.space_cleanup_service import (
@@ -158,8 +158,7 @@ async def _create_organization_with_owner_coordinator(
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
 
-    created_personal_coordinator = False
-    coordinator_id: int | None = None
+    created_coordinator_ids: list[int] = []
     try:
         org = org_dao.create(
             name=name,
@@ -185,13 +184,25 @@ async def _create_organization_with_owner_coordinator(
             organization_id=org.id,
         )
 
-        coordinator, created_personal_coordinator = (
-            await ensure_personal_coordinator_provisioned(
+        personal_coordinator, created_personal_coordinator = (
+            await ensure_workspace_coordinator_provisioned(
                 session,
                 user_id=owner_user_id,
+                organization_id=None,
             )
         )
-        coordinator_id = coordinator.agent_id
+        if created_personal_coordinator:
+            created_coordinator_ids.append(personal_coordinator.agent_id)
+
+        org_coordinator, created_org_coordinator = (
+            await ensure_workspace_coordinator_provisioned(
+                session,
+                user_id=owner_user_id,
+                organization_id=org.id,
+            )
+        )
+        if created_org_coordinator:
+            created_coordinator_ids.append(org_coordinator.agent_id)
 
         org_response = OrganizationResponse.model_validate(org)
         response_data = {
@@ -202,7 +213,7 @@ async def _create_organization_with_owner_coordinator(
         return response_data
     except Exception as e:
         session.rollback()
-        if created_personal_coordinator and coordinator_id is not None:
+        for coordinator_id in created_coordinator_ids:
             try:
                 await delete_pubsub_topic(str(coordinator_id))
             except Exception:
@@ -781,6 +792,8 @@ async def add_organization_member(
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
+    created_org_coordinator = False
+    created_org_coordinator_id: int | None = None
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -869,6 +882,16 @@ async def add_organization_member(
                     grantee_id=member_data.user_id,
                 )
 
+        org_coordinator, created_org_coordinator = (
+            await ensure_workspace_coordinator_provisioned(
+                session,
+                user_id=member_data.user_id,
+                organization_id=organization_id,
+            )
+        )
+        if created_org_coordinator:
+            created_org_coordinator_id = org_coordinator.agent_id
+
         # Check for shared-pool conflicts introduced by the new membership
         from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
@@ -894,6 +917,8 @@ async def add_organization_member(
         }
     except Exception as e:
         session.rollback()
+        if created_org_coordinator and created_org_coordinator_id is not None:
+            await delete_pubsub_topic(str(created_org_coordinator_id))
         logger.error(f"Failed to add organization member: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1048,10 +1073,14 @@ async def remove_organization_member(
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 
-        # 8. Remove the member's personal Coordinator from org-scoped spaces.
-        personal_coordinator = get_personal_coordinator(session, user_id=user_id)
-        if personal_coordinator is not None:
-            personal_coordinator_space_ids = [
+        # 8. Remove the member's org Coordinator from org-scoped spaces.
+        org_coordinator = get_workspace_coordinator(
+            session,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
+        if org_coordinator is not None:
+            coordinator_space_ids = [
                 int(space_id)
                 for (space_id,) in session.execute(
                     select(Space.space_id)
@@ -1061,21 +1090,21 @@ async def remove_organization_member(
                     )
                     .where(
                         AssistantSpaceMembership.assistant_id
-                        == personal_coordinator.agent_id,
+                        == org_coordinator.agent_id,
                         Space.organization_id == organization_id,
                     ),
                 ).all()
             ]
-            for space_id in personal_coordinator_space_ids:
+            for space_id in coordinator_space_ids:
                 await purge_space_member_overlay(
                     session,
-                    assistant_id=personal_coordinator.agent_id,
+                    assistant_id=org_coordinator.agent_id,
                     space_id=space_id,
                 )
-            if personal_coordinator_space_ids:
+            if coordinator_space_ids:
                 space_membership_refreshes = membership_refresh_payloads(
                     session,
-                    [personal_coordinator],
+                    [org_coordinator],
                 )
 
         # 9. Clean up shared-pool routes for the departing member
@@ -1799,6 +1828,8 @@ async def accept_invite(
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    created_org_coordinator = False
+    created_org_coordinator_id: int | None = None
 
     # Get current user
     user_row = user_dao.get_by_id(user_id)
@@ -1892,6 +1923,16 @@ async def accept_invite(
                     grantee_id=user_id,
                 )
 
+        org_coordinator, created_org_coordinator = (
+            await ensure_workspace_coordinator_provisioned(
+                session,
+                user_id=user_id,
+                organization_id=invite.organization_id,
+            )
+        )
+        if created_org_coordinator:
+            created_org_coordinator_id = org_coordinator.agent_id
+
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
 
@@ -1940,6 +1981,8 @@ async def accept_invite(
 
     except Exception as e:
         session.rollback()
+        if created_org_coordinator and created_org_coordinator_id is not None:
+            await delete_pubsub_topic(str(created_org_coordinator_id))
         logger.error(f"Failed to accept organization invite: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
