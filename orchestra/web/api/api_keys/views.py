@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.web.api.api_keys.schema import ApiKeyResponse, ApiKeysListResponse
 
 router = APIRouter()

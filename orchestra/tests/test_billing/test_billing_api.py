@@ -4762,7 +4762,7 @@ class TestBillingModel:
         from datetime import datetime, timezone
 
         from orchestra.db.models.orchestra_models import Organization
-        from orchestra.lib.time import month_end_utc
+        from orchestra_core.lib.time import month_end_utc
 
         owner_ba = BillingAccount(credits=0, account_status="ACTIVE")
         dbsession.add(owner_ba)

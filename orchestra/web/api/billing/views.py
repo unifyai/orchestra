@@ -26,7 +26,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.lib.billing import (
     COUNTRY_NAMES,
     configure_stripe,

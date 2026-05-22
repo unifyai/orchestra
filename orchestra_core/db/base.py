@@ -1,6 +1,6 @@
 from sqlalchemy.orm import DeclarativeBase
 
-from orchestra.db.meta import meta
+from orchestra_core.db.meta import meta
 
 
 class Base(DeclarativeBase):

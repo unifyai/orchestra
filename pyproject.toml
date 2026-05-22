@@ -25,6 +25,10 @@ classifiers = [
 # a Rust toolchain or unavailable system headers. Bump explicitly when those
 # deps publish 3.13 wheels.
 python = "~3.12"
+# Path dependency on the open-source kernel during phase 1 of the split.
+# Phase 2 (extraction) will swap this for a git URL pointing at the public
+# orchestra-core repository.
+orchestra-core = { path = "./orchestra_core", develop = true }
 fastapi = "^0.100.0"
 uvicorn = { version = "^0.22.0", extras = ["standard"] }
 pydantic = "^2"

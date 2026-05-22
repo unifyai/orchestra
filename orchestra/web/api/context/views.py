@@ -10,12 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Context
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
@@ -32,7 +32,7 @@ from orchestra.web.api.context.schema import (
     CopyContextRequest,
     RenameContextRequest,
 )
-from orchestra.web.api.utils.http_responses import not_found
+from orchestra_core.web.api.utils.http_responses import not_found
 
 logger = logging.getLogger(__name__)
 

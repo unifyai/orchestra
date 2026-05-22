@@ -6,8 +6,8 @@ from typing import List, Optional
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.embedding_dao import EmbeddingDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.models.orchestra_models import (
@@ -18,7 +18,7 @@ from orchestra.db.models.orchestra_models import (
     ResourceAccess,
     TeamMember,
 )
-from orchestra.db.utils import get_next_order_value
+from orchestra_core.db.utils import get_next_order_value
 
 logger = logging.getLogger(__name__)
 

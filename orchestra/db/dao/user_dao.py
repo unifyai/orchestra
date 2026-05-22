@@ -19,7 +19,7 @@ from orchestra.db.models.orchestra_models import (
     RechargeStatus,
     User,
 )
-from orchestra.web.api.utils.http_responses import not_found
+from orchestra_core.web.api.utils.http_responses import not_found
 
 if TYPE_CHECKING:
     from orchestra.db.dao.api_key_dao import ApiKeyDAO

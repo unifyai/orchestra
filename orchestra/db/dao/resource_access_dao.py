@@ -823,7 +823,7 @@ class ResourceAccessDAO:
         - GCS media cleanup
         - Orphaned log event cleanup
         """
-        from orchestra.db.dao.context_dao import ContextDAO
+        from orchestra_core.db.dao.context_dao import ContextDAO
 
         ASSISTANTS_PROJECT_NAME = "Assistants"
 

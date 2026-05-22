@@ -37,7 +37,7 @@ from orchestra.db.models.orchestra_models import (
     Recharge,
     RechargeStatus,
 )
-from orchestra.lib.time import month_end_utc
+from orchestra_core.lib.time import month_end_utc
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_dao import AuthDAO, decrypt_secret
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-from orchestra.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLinkDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
@@ -29,7 +29,7 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
@@ -63,7 +63,7 @@ from orchestra.web.api.users.schema import (
     UserSpendingLimitResponse,
     UserSpendResponse,
 )
-from orchestra.web.api.utils.http_responses import not_found
+from orchestra_core.web.api.utils.http_responses import not_found
 
 admin_router = APIRouter()
 router = APIRouter()

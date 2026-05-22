@@ -45,7 +45,6 @@ TABLE_QUERY_DURATION = Histogram(
 )
 
 
-# Helper functions for context management
 def set_user_context(
     user_id: Optional[str] = None,
     user_email: Optional[str] = None,
@@ -126,10 +125,8 @@ def record_db_query_duration(
         duration: Query execution time in seconds
         query_fingerprint: Optional fingerprint of the query for grouping similar queries
     """
-    # Create exemplar data with trace ID, user ID, and request ID
     exemplar_data: Dict[str, Any] = {}
 
-    # Get current trace ID from OpenTelemetry
     current_span = trace.get_current_span()
     if current_span and hasattr(current_span, "get_span_context"):
         span_context = current_span.get_span_context()
@@ -137,7 +134,6 @@ def record_db_query_duration(
             trace_id = format_trace_id(span_context.trace_id)
             exemplar_data["traceID"] = trace_id
 
-    # Add user ID and request ID from context
     user_id = get_user_id()
     if user_id:
         exemplar_data["userID"] = user_id
@@ -146,7 +142,6 @@ def record_db_query_duration(
     if request_id:
         exemplar_data["reqID"] = request_id
 
-    # Record in the general histogram with exemplars if available
     if exemplar_data:
         DB_QUERY_DURATION.labels(query_type=query_type, table=table).observe(
             duration,
@@ -155,7 +150,6 @@ def record_db_query_duration(
     else:
         DB_QUERY_DURATION.labels(query_type=query_type, table=table).observe(duration)
 
-    # Record in the table-specific histogram if fingerprint is provided
     if query_fingerprint:
         if exemplar_data:
             TABLE_QUERY_DURATION.labels(

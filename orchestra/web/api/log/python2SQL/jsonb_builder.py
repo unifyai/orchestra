@@ -36,7 +36,7 @@ from sqlalchemy.sql.elements import BinaryExpression, BindParameter, Cast, Claus
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.orchestra_models import Embedding, LogEvent
-from orchestra.lib.parallel import threaded_map
+from orchestra_core.lib.parallel import threaded_map
 from orchestra.services.bucket_service import BucketService
 
 from . import alias_utils

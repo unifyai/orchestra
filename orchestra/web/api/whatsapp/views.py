@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, OrganizationMember
 
 admin_router = APIRouter()
