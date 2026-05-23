@@ -608,6 +608,37 @@ class CoordinatorResetResponse(BaseModel):
     coordinator_id: str
 
 
+class CoordinatorStateUpdate(BaseModel):
+    """Request body for transitioning a Coordinator's onboarding state.
+
+    All fields are optional: a request specifying only ``mode`` flips
+    the lifecycle without touching the current step; specifying only
+    ``onboarding_step`` advances the in-flight step marker without
+    leaving ``onboarding``. Passing ``clear_onboarding_step=True``
+    resets the step (used when moving to ``working`` so a future
+    re-entry doesn't carry stale step state).
+
+    Note: the call-vs-chat picker is intentionally *not* persisted —
+    the design re-asks on every entry into the onboarding view.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Optional[Literal["onboarding", "working"]] = Field(None)
+    onboarding_step: Optional[str] = Field(None, min_length=1)
+    clear_onboarding_step: bool = Field(False)
+
+
+class CoordinatorStateResponse(BaseModel):
+    """Snapshot of the latest Coordinator/State row."""
+
+    coordinator_id: int
+    mode: Literal["onboarding", "working"]
+    onboarding_step: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+
+
 class DemoAssistantCreate(BaseModel):
     """
     Schema for creating a demo assistant.

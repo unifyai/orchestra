@@ -497,8 +497,8 @@ async def test_reset_clears_only_coordinator_contexts(
     coordinator = dbsession.get(Assistant, coordinator_id)
     project = _assistants_project(dbsession, coordinator=coordinator)
     for suffix, data in (
-        ("Coordinator/State", {"mode": "ready_to_go"}),
-        ("Coordinator/Checklist", {"title": "Connect HubSpot"}),
+        ("Coordinator/State", {"mode": "working"}),
+        ("Coordinator/Checklist", {"title": "Connect HubSpot", "mode": "ready_to_go"}),
         ("Transcripts", {"role": "assistant", "content": "Welcome."}),
         ("Exchanges", {"value": "exchange"}),
     ):
@@ -546,6 +546,281 @@ async def test_reset_clears_only_coordinator_contexts(
         headers=headers,
     )
     assert second_reset.status_code == status.HTTP_200_OK, second_reset.json()
+
+
+@pytest.mark.anyio
+async def test_coordinator_provisioning_seeds_initial_state_row(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Newly-provisioned Coordinators land in ``onboarding`` mode."""
+    owner = await _create_user(client, "state-seed-personal")
+
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    payload = response.json()["info"]
+    assert payload["coordinator_id"] == coordinator_id
+    assert payload["mode"] == "onboarding"
+    assert payload["onboarding_step"] is None
+    assert payload["started_at"] is not None
+    assert payload["ended_at"] is None
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_seed_is_idempotent_on_repair(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Repeated opt-in calls do not duplicate the ``Coordinator/State`` row."""
+    owner = await _create_user(client, "state-seed-idempotent")
+
+    first = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert first.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, first.json()
+    coordinator_id = int(first.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    assert coordinator is not None
+
+    second = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert second.status_code == status.HTTP_200_OK, second.json()
+
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    state_context = _context(
+        dbsession,
+        project=project,
+        name=_assistant_context_name(coordinator, "Coordinator/State"),
+    )
+    assert state_context is not None
+    assert len(_context_logs(dbsession, context=state_context)) == 1
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_records_onboarding_step(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Recording an onboarding step persists on the row for resumption."""
+    owner = await _create_user(client, "state-step")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    patch = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_step": "briefing"},
+        headers=owner["headers"],
+    )
+    assert patch.status_code == status.HTTP_200_OK, patch.json()
+    info = patch.json()["info"]
+    assert info["mode"] == "onboarding"
+    assert info["onboarding_step"] == "briefing"
+
+    follow_up = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
+    assert follow_up.json()["info"]["onboarding_step"] == "briefing"
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Promoting to ``working`` stamps ``ended_at`` exactly once."""
+    owner = await _create_user(client, "state-working")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    promote = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working", "clear_onboarding_step": True},
+        headers=owner["headers"],
+    )
+    assert promote.status_code == status.HTTP_200_OK, promote.json()
+    info = promote.json()["info"]
+    assert info["mode"] == "working"
+    assert info["onboarding_step"] is None
+    assert info["started_at"] is not None
+    first_ended_at = info["ended_at"]
+    assert first_ended_at is not None
+
+    # A no-op write should preserve ``ended_at`` rather than re-stamp it.
+    noop = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working"},
+        headers=owner["headers"],
+    )
+    assert noop.status_code == status.HTTP_200_OK, noop.json()
+    assert noop.json()["info"]["ended_at"] == first_ended_at
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_resume_clears_ended_at(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Resuming onboarding (working → onboarding) clears ``ended_at``.
+
+    A row in ``onboarding`` mode with a stamped ``ended_at`` is
+    semantically incoherent ("onboarding finished on X, currently
+    onboarding"). The resume path must wipe the timestamp; a
+    subsequent skip / completion re-stamps it from scratch.
+    """
+    owner = await _create_user(client, "state-resume")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    # Skip → working, ``ended_at`` is stamped.
+    skip = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working", "clear_onboarding_step": True},
+        headers=owner["headers"],
+    )
+    assert skip.status_code == status.HTTP_200_OK, skip.json()
+    first_ended_at = skip.json()["info"]["ended_at"]
+    assert first_ended_at is not None
+
+    # Resume → onboarding clears it.
+    resume = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "onboarding"},
+        headers=owner["headers"],
+    )
+    assert resume.status_code == status.HTTP_200_OK, resume.json()
+    resumed = resume.json()["info"]
+    assert resumed["mode"] == "onboarding"
+    assert resumed["ended_at"] is None
+    # ``started_at`` is sticky across the round-trip so we still
+    # know when the lifecycle began.
+    assert resumed["started_at"] is not None
+
+    # Re-skipping re-stamps a fresh ``ended_at`` (and it must be
+    # strictly after the first one, since the row clears in
+    # between).
+    re_skip = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working", "clear_onboarding_step": True},
+        headers=owner["headers"],
+    )
+    assert re_skip.status_code == status.HTTP_200_OK, re_skip.json()
+    second_ended_at = re_skip.json()["info"]["ended_at"]
+    assert second_ended_at is not None
+    assert second_ended_at >= first_ended_at
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_rejects_invalid_values(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Unknown modes and empty step strings fail validation up front."""
+    owner = await _create_user(client, "state-invalid")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    # Checklist-mode vocabulary must NOT be accepted on Coordinator/State.
+    bad_mode = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "ready_to_go"},
+        headers=owner["headers"],
+    )
+    assert bad_mode.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    legacy_mode = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "active"},
+        headers=owner["headers"],
+    )
+    assert legacy_mode.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    empty_step = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_step": ""},
+        headers=owner["headers"],
+    )
+    assert empty_step.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_forbidden_for_non_owner(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Only the owning user can read or update Coordinator/State."""
+    owner = await _create_user(client, "state-owner")
+    intruder = await _create_user(client, "state-intruder")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    read = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=intruder["headers"],
+    )
+    assert read.status_code == status.HTTP_403_FORBIDDEN
+
+    write = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working"},
+        headers=intruder["headers"],
+    )
+    assert write.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.anyio

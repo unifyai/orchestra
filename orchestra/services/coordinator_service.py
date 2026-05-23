@@ -1,8 +1,11 @@
 """Coordinator provisioning and lifecycle helpers."""
 
+import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
+import httpx
 from fastapi import HTTPException, status
 from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
@@ -40,14 +43,22 @@ from orchestra.services.task_machine_state_service import (
 )
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
-from orchestra.web.api.utils.assistant_infra import create_pubsub_topic
+from orchestra.web.api.utils.assistant_infra import (
+    ADMIN_KEY,
+    _adapters_url_for,
+    _post_unity_system_event,
+    create_pubsub_topic,
+)
+
+logger = logging.getLogger(__name__)
 
 ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
 COORDINATOR_DEFAULT_NATIONALITY = "United States"
 COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
+COORDINATOR_STATE_CONTEXT = "Coordinator/State"
 COORDINATOR_RESET_CONTEXTS = (
-    "Coordinator/State",
+    COORDINATOR_STATE_CONTEXT,
     "Coordinator/Checklist",
     "Transcripts",
     "Exchanges",
@@ -56,6 +67,24 @@ COORDINATOR_TRANSCRIPTS_CONTEXT = "Transcripts"
 COORDINATOR_EXCHANGES_CONTEXT = "Exchanges"
 COORDINATOR_CHAT_MEDIUM = "unify_message"
 COORDINATOR_OPENER_SOURCE = "coordinator_opener"
+
+# Coordinator state machine on the ``Coordinator/State`` context: a
+# freshly-provisioned Coordinator starts in ``onboarding`` and the
+# assistants surface renders the guided call-or-chat view until it
+# transitions to ``working`` (either by the user clicking
+# "Skip onboarding" or by the conversation completing in some other
+# backend-driven way).
+#
+# We deliberately avoid the word ``active`` here because the
+# ``Coordinator/Checklist`` context exposes its own ``mode`` field
+# with ``active`` / ``ready_to_go`` values for a different purpose.
+# Keeping the two vocabularies distinct makes it obvious which row
+# any given piece of code is dealing with — Coordinator/State is the
+# onboarding lifecycle, Coordinator/Checklist is the setup punch
+# list.
+COORDINATOR_MODE_ONBOARDING = "onboarding"
+COORDINATOR_MODE_WORKING = "working"
+COORDINATOR_MODES = frozenset({COORDINATOR_MODE_ONBOARDING, COORDINATOR_MODE_WORKING})
 PRESEED_SHARED_CONTEXT_PREFIX = "Spaces"
 PRESEED_SERVER_FIELDS = frozenset(
     {"_user_id", "_assistant_id", "authoring_assistant_id"},
@@ -271,6 +300,12 @@ def _repair_existing_coordinator_state(
     _ensure_coordinator_default_desktop_mode(coordinator)
     ensure_personal_contact_memberships(session, [coordinator.agent_id])
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
+    # Backfill the state row for Coordinators provisioned before the
+    # onboarding-mode flow shipped. New rows arrive via the create path
+    # below; this branch picks up the long tail of pre-existing
+    # Coordinators on their next visit. Idempotent — no-op when a state
+    # row already exists.
+    seed_initial_coordinator_state(session, coordinator=coordinator)
 
 
 def create_workspace_coordinator(
@@ -309,6 +344,11 @@ def create_workspace_coordinator(
         organization_id=organization_id,
     )
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
+    # Seed the starting Coordinator/State row so the assistants page can
+    # decide between the onboarding view and the regular view from a
+    # single read. Freshly-created Coordinators land in
+    # ``onboarding`` mode with no picker choice made yet.
+    seed_initial_coordinator_state(session, coordinator=assistant)
     return assistant, True
 
 
@@ -989,3 +1029,669 @@ def reset_coordinator_state(session: Session, *, coordinator: Assistant) -> None
         )
         if context is not None:
             context_dao.delete(context.id, skip_embedding_cleanup=True)
+
+
+# ─── Coordinator/State (onboarding mode + step) ─────────────────────────────
+
+
+def _latest_coordinator_state_row(
+    session: Session,
+    *,
+    project: Project,
+    state_context_name: str,
+) -> dict[str, Any] | None:
+    """Return the most recent ``Coordinator/State`` row, if any.
+
+    The state context is append-only — every transition inserts a new
+    log row. The frontend reads with ``limit: 1`` ordered by
+    ``timestamp`` descending, so we mirror the same selection here
+    when computing the "current" state for merges.
+    """
+    context = _get_context(
+        session,
+        project_id=project.id,
+        context_name=state_context_name,
+    )
+    if context is None:
+        return None
+    log = session.scalar(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(LogEventContext.context_id == context.id)
+        .order_by(LogEvent.id.desc())
+        .limit(1),
+    )
+    if log is None:
+        return None
+    data = log.data or {}
+    if isinstance(data, dict):
+        return dict(data)
+    return None
+
+
+def _coordinator_state_entry(
+    *,
+    mode: str,
+    onboarding_step: str | None,
+    previous: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a fully-formed ``Coordinator/State`` row.
+
+    ``started_at`` is sticky across transitions (captured the first
+    time we ever write a row, regardless of mode, so we always know
+    when the lifecycle began).
+
+    ``ended_at`` tracks the *current* working-mode entry: it's
+    stamped the moment we cross into ``working`` (and stays put
+    while we remain there), but cleared the moment a Resume flips
+    the row back to ``onboarding`` — otherwise an
+    ``onboarding``-mode row would carry a stale "ended" timestamp,
+    which is semantically nonsense. A subsequent skip / completion
+    re-stamps ``ended_at`` to the new transition time, so the
+    frontend always sees a coherent (started, ended) pair while in
+    ``working``.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    started_at = (previous or {}).get("started_at") if previous else None
+    if not started_at:
+        started_at = now
+    previous_ended_at = (previous or {}).get("ended_at") if previous else None
+    if mode == COORDINATOR_MODE_WORKING:
+        ended_at = previous_ended_at or now
+    else:
+        # Resume / initial-seed paths both land here; either way the
+        # row is currently in onboarding so ``ended_at`` has no
+        # meaning until we transition out again.
+        ended_at = None
+    return {
+        "mode": mode,
+        "onboarding_step": onboarding_step,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "timestamp": now,
+    }
+
+
+def _write_coordinator_state_row(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    entry: dict[str, Any],
+) -> int:
+    """Persist one ``Coordinator/State`` row and return its log event id."""
+    project = _project_for_coordinator(session, coordinator)
+    context_name = _coordinator_context_name(
+        coordinator,
+        COORDINATOR_STATE_CONTEXT,
+    )
+    context = _ensure_context(
+        session,
+        project_id=project.id,
+        context_name=context_name,
+    )
+    result = _create_coordinator_log_entry(
+        session,
+        project=project,
+        context=context,
+        context_name=context_name,
+        entries=entry,
+    )
+    return result["log_event_ids"][0]
+
+
+def get_coordinator_state(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> dict[str, Any]:
+    """Return the latest ``Coordinator/State`` row, normalised.
+
+    Falls back to a synthetic ``onboarding`` snapshot when no row has
+    been written yet — the create/repair paths seed an initial row,
+    but the endpoint stays well-behaved even if a Coordinator slipped
+    through without one (e.g. inserted directly via seed scripts).
+    """
+    project = _project_for_coordinator(session, coordinator)
+    state_context_name = _coordinator_context_name(
+        coordinator,
+        COORDINATOR_STATE_CONTEXT,
+    )
+    row = _latest_coordinator_state_row(
+        session,
+        project=project,
+        state_context_name=state_context_name,
+    )
+    if row is None:
+        return {
+            "mode": COORDINATOR_MODE_ONBOARDING,
+            "onboarding_step": None,
+            "started_at": None,
+            "ended_at": None,
+        }
+    mode = row.get("mode")
+    if mode not in COORDINATOR_MODES:
+        mode = COORDINATOR_MODE_ONBOARDING
+    onboarding_step = row.get("onboarding_step")
+    if onboarding_step is not None and not isinstance(onboarding_step, str):
+        onboarding_step = None
+    return {
+        "mode": mode,
+        "onboarding_step": onboarding_step,
+        "started_at": row.get("started_at"),
+        "ended_at": row.get("ended_at"),
+    }
+
+
+def seed_initial_coordinator_state(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> int | None:
+    """Ensure a freshly-provisioned Coordinator has a starting state row.
+
+    Idempotent: a no-op when any state row already exists, so this is
+    safe to call from both the create path and the repair path. Returns
+    the new row's log event id when one is written, else ``None``.
+    """
+    _lock_coordinator_context(
+        session,
+        coordinator=coordinator,
+        suffix=COORDINATOR_STATE_CONTEXT,
+    )
+    project = _project_for_coordinator(session, coordinator)
+    state_context_name = _coordinator_context_name(
+        coordinator,
+        COORDINATOR_STATE_CONTEXT,
+    )
+    existing = _latest_coordinator_state_row(
+        session,
+        project=project,
+        state_context_name=state_context_name,
+    )
+    if existing is not None:
+        return None
+    entry = _coordinator_state_entry(
+        mode=COORDINATOR_MODE_ONBOARDING,
+        onboarding_step=None,
+        previous=None,
+    )
+    log_event_id = _write_coordinator_state_row(
+        session,
+        coordinator=coordinator,
+        entry=entry,
+    )
+    session.flush()
+    return log_event_id
+
+
+def set_coordinator_state(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    mode: str | None = None,
+    onboarding_step: str | None = None,
+    clear_onboarding_step: bool = False,
+) -> dict[str, Any]:
+    """Append a new ``Coordinator/State`` row by merging with the latest.
+
+    Only the fields explicitly supplied are touched — everything else
+    is carried forward from the previous row so the frontend can rely
+    on a single read returning the full picture.
+
+    ``clear_onboarding_step=True`` resets the step back to ``None``
+    (used when transitioning to ``working`` — the in-flight step no
+    longer applies). Callers should not pass both ``onboarding_step``
+    and ``clear_onboarding_step``; the explicit value wins if they do.
+
+    The user-facing picker (call vs chat) is *not* persisted here on
+    purpose: the design treats the picker as a per-session affordance
+    so a resumed onboarding always re-asks rather than locking the
+    user into a previously-chosen surface.
+    """
+    if mode is not None and mode not in COORDINATOR_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid_coordinator_mode: {mode}",
+        )
+    if onboarding_step is not None and (
+        not isinstance(onboarding_step, str) or not onboarding_step.strip()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_onboarding_step",
+        )
+    _lock_coordinator_context(
+        session,
+        coordinator=coordinator,
+        suffix=COORDINATOR_STATE_CONTEXT,
+    )
+    project = _project_for_coordinator(session, coordinator)
+    state_context_name = _coordinator_context_name(
+        coordinator,
+        COORDINATOR_STATE_CONTEXT,
+    )
+    previous = _latest_coordinator_state_row(
+        session,
+        project=project,
+        state_context_name=state_context_name,
+    )
+    next_mode = mode or (previous or {}).get("mode") or COORDINATOR_MODE_ONBOARDING
+    if onboarding_step is not None:
+        next_step: str | None = onboarding_step
+    elif clear_onboarding_step:
+        next_step = None
+    else:
+        next_step = (previous or {}).get("onboarding_step")
+    entry = _coordinator_state_entry(
+        mode=next_mode,
+        onboarding_step=next_step,
+        previous=previous,
+    )
+    _write_coordinator_state_row(
+        session,
+        coordinator=coordinator,
+        entry=entry,
+    )
+    session.flush()
+    return entry
+
+
+# =========================================================================
+# Reactive narration for the Coordinator onboarding flow
+# =========================================================================
+#
+# Helpers that fire a ``unity_system_event`` to a Coordinator's Unity
+# session whenever the user takes a real, observable action during
+# onboarding — a workspace OAuth lands, an integration secret is
+# saved, a task is created, an action starts running, or a specialist
+# is hired. Unity uses the event to drop a one-line narration into
+# the ongoing chat / voice call ("nice, Slack is connected — next
+# up: assign a task") so the Coordinator feels reactive instead of
+# mute.
+#
+# Two design choices baked in here:
+#
+# * **Gated on mode**: every emission first checks
+#   ``Coordinator/State.mode == 'onboarding'`` so day-to-day work
+#   (post-onboarding integration tweaks, ongoing task creation,
+#   etc.) stays silent. The same trigger sites are still useful
+#   then but the narration becomes noise, so the helper is the
+#   bottleneck.
+# * **Event-direct, not checklist-mirrored**: we don't persist a
+#   separate "checklist item N is done" log row just to power the
+#   narration — Unity reacts to the live event payload and the
+#   console-side checklist state remains the source of truth for
+#   the UI. The trade-off is that a missed event (e.g. Unity wasn't
+#   awake) is lost; resume-recap flows would need their own state.
+
+# Single ``event_type`` for every onboarding narration trigger. The
+# subtype lives on ``extra_event_fields.subtype`` so Unity-side
+# dispatch only has to register one handler and can branch on the
+# subtype if it ever wants per-event behaviour.
+COORDINATOR_ONBOARDING_EVENT_TYPE = "coordinator_onboarding_event"
+
+# Subtype vocabulary — the "real action just landed" signals the
+# onboarding checklist tracks. Keep these strings stable: they are
+# referenced by Unity's prompt copy + handler dispatch, and by the
+# orchestra unit tests.
+#
+# Deliberately narrow: we only narrate events that have *no other*
+# user-visible feedback channel. Specifically excluded are:
+#  - specialist hires: the console immediately swaps the active
+#    assistant to the new specialist and the Coordinator leaves
+#    onboarding mode, so an ack would land in a chat the user has
+#    already moved away from.
+#  - task creation: the Coordinator (or the assigned assistant)
+#    naturally replies with the task output, which is feedback
+#    enough — a meta "you just created a task" line on top would
+#    just add noise.
+#  - action start: the action surfaces in the Actions panel of the
+#    console the moment it begins; the panel is the feedback
+#    channel, so narrating it again in chat is redundant.
+SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
+SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
+
+COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
+    {
+        SUBTYPE_WORKSPACE_CONNECTED,
+        SUBTYPE_INTEGRATION_CONNECTED,
+    },
+)
+
+# Secret-name prefixes that signal the underlying credential came
+# from a workspace OAuth handshake (Google / Microsoft adapters
+# ``store_*_tokens``). The narration helper uses these to split the
+# secret-create signal into ``workspace_connected`` vs. the generic
+# ``integration_connected`` subtype — same emission path, two
+# different narration cues on the Unity side.
+_WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_")
+
+
+def _is_coordinator_in_onboarding(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> bool:
+    """Return ``True`` only when the Coordinator is still in onboarding.
+
+    Pulled out as a tiny helper because both the per-coordinator and
+    the via-sibling-assistant entry points share the gate, and
+    because swallowing read failures here keeps every emission
+    strictly best-effort — if state lookup blows up we'd rather stay
+    silent than crash the user-facing endpoint that wrapped the
+    call.
+    """
+    try:
+        state = get_coordinator_state(session, coordinator=coordinator)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Skipping coordinator onboarding event: state lookup failed for %s: %s",
+            getattr(coordinator, "agent_id", None),
+            exc,
+        )
+        return False
+    return state.get("mode") == COORDINATOR_MODE_ONBOARDING
+
+
+def _resolve_target_coordinator(
+    session: Session,
+    *,
+    assistant: Assistant,
+) -> Assistant | None:
+    """Find the Coordinator we should narrate the event to.
+
+    The event always lands on the Coordinator's pub/sub topic, but
+    some trigger sites fire on a *sibling* assistant — e.g. a
+    specialist's first integration secret landing should still
+    narrate on the workspace Coordinator's session. For those we
+    look up the workspace's Coordinator by
+    ``(user_id, organization_id)``. When the triggering assistant
+    *is* itself the Coordinator (the common case during onboarding)
+    we just return it directly.
+
+    Returns ``None`` when no Coordinator exists for the scope, which
+    short-circuits the emission — no Coordinator means no onboarding
+    flow to narrate.
+    """
+    if assistant.is_coordinator:
+        return assistant
+    return get_workspace_coordinator(
+        session,
+        user_id=assistant.user_id,
+        organization_id=assistant.organization_id,
+    )
+
+
+def _build_onboarding_event_payload(
+    *,
+    coordinator: Assistant,
+    subtype: str,
+    message: str,
+    details: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Assemble the ``unity_system_event`` payload for one emission.
+
+    Kept as a pure function so unit tests can pin down the wire
+    shape without spinning up the adapters HTTP client. The dict
+    matches the contract the adapters webhook expects: top-level
+    ``assistant_id`` + ``event_type`` + ``message``, with
+    ``extra_event_fields`` carrying our subtype-aware payload.
+    """
+    extra_event_fields: dict[str, Any] = {"subtype": subtype}
+    if details:
+        # Strip ``None`` so the published payload is compact and
+        # downstream JSON serialisation never trips on bare ``None``
+        # values that aren't meaningful.
+        compact_details = {k: v for k, v in details.items() if v is not None}
+        if compact_details:
+            extra_event_fields["details"] = compact_details
+    return {
+        "assistant_id": coordinator.agent_id,
+        "event_type": COORDINATOR_ONBOARDING_EVENT_TYPE,
+        "message": message,
+        "extra_event_fields": extra_event_fields,
+    }
+
+
+def _fire_and_forget_onboarding_event(
+    payload: dict[str, Any],
+    *,
+    deploy_env: str | None,
+) -> None:
+    """Best-effort sync POST used by non-async trigger sites.
+
+    Spawns a daemon thread that fires the HTTP request and walks
+    away. We deliberately don't ``join`` — narration is decorative,
+    not load-bearing, and blocking the caller (e.g. ``create_logs``)
+    on a remote service round-trip would be a regression. Exceptions
+    are caught + logged on the worker thread so a transient adapters
+    outage never reaches the user.
+    """
+    url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
+    headers = {
+        "Authorization": f"Bearer {ADMIN_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    def _worker() -> None:
+        try:
+            with httpx.Client(timeout=20.0) as client:
+                response = client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+        except Exception as exc:
+            logger.warning(
+                "Coordinator onboarding event POST failed (subtype=%s, "
+                "assistant_id=%s): %s",
+                payload.get("extra_event_fields", {}).get("subtype"),
+                payload.get("assistant_id"),
+                exc,
+            )
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+async def notify_coordinator_onboarding_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    subtype: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    deploy_env: str | None = None,
+) -> bool:
+    """Emit one onboarding narration event for the Coordinator.
+
+    Returns ``True`` when the event was dispatched, ``False`` when
+    suppressed by the onboarding-mode gate or by an unknown subtype.
+    Failures during the HTTP call are swallowed (logged only); see
+    the section docstring above on why narration is strictly
+    best-effort.
+
+    Async variant — use this from async views (e.g.
+    ``create_assistant_secret``) where ``await`` is natural. Sync
+    callers (``create_logs``) should use
+    :func:`notify_coordinator_onboarding_event_safe_sync` instead.
+    """
+    if subtype not in COORDINATOR_ONBOARDING_SUBTYPES:
+        logger.warning("Ignoring unknown coordinator onboarding subtype: %s", subtype)
+        return False
+    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
+        return False
+    payload = _build_onboarding_event_payload(
+        coordinator=coordinator,
+        subtype=subtype,
+        message=message,
+        details=details,
+    )
+    try:
+        await _post_unity_system_event(
+            assistant_id=payload["assistant_id"],
+            event_type=payload["event_type"],
+            message=payload["message"],
+            extra_event_fields=payload["extra_event_fields"],
+            deploy_env=deploy_env,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Coordinator onboarding event POST failed (subtype=%s, "
+            "assistant_id=%s): %s",
+            subtype,
+            coordinator.agent_id,
+            exc,
+        )
+        return False
+    return True
+
+
+def notify_coordinator_onboarding_event_safe_sync(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    subtype: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    deploy_env: str | None = None,
+) -> bool:
+    """Sync wrapper around :func:`notify_coordinator_onboarding_event`.
+
+    Same gating semantics, but the actual HTTP POST runs on a daemon
+    thread so the caller (a sync view like ``create_logs`` dispatched
+    by FastAPI's threadpool) never blocks on a network round-trip.
+    Returns ``True`` when the thread was kicked off, ``False`` when
+    the gate suppressed the emission.
+    """
+    if subtype not in COORDINATOR_ONBOARDING_SUBTYPES:
+        logger.warning("Ignoring unknown coordinator onboarding subtype: %s", subtype)
+        return False
+    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
+        return False
+    payload = _build_onboarding_event_payload(
+        coordinator=coordinator,
+        subtype=subtype,
+        message=message,
+        details=details,
+    )
+    _fire_and_forget_onboarding_event(payload, deploy_env=deploy_env)
+    return True
+
+
+async def maybe_notify_for_assistant_async(
+    session: Session,
+    *,
+    assistant: Assistant,
+    subtype: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    deploy_env: str | None = None,
+) -> bool:
+    """Resolve the target Coordinator from ``assistant`` then emit (async).
+
+    Convenience wrapper for trigger sites that have a sibling
+    assistant in hand and need to land the narration on the
+    workspace's Coordinator rather than the triggering assistant
+    itself. Returns ``False`` when no Coordinator is found for the
+    scope, when the Coordinator isn't in onboarding, or when the
+    subtype is unknown.
+    """
+    coordinator = _resolve_target_coordinator(session, assistant=assistant)
+    if coordinator is None:
+        return False
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=subtype,
+        message=message,
+        details=details,
+        deploy_env=deploy_env,
+    )
+
+
+def maybe_notify_for_assistant_sync(
+    session: Session,
+    *,
+    assistant: Assistant,
+    subtype: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    deploy_env: str | None = None,
+) -> bool:
+    """Resolve target Coordinator + emit, sync flavour.
+
+    Mirror of :func:`maybe_notify_for_assistant_async` for trigger
+    sites stuck in a sync view (``create_logs`` is the main one
+    today). Same gating; the underlying POST is dispatched on a
+    daemon thread.
+    """
+    coordinator = _resolve_target_coordinator(session, assistant=assistant)
+    if coordinator is None:
+        return False
+    return notify_coordinator_onboarding_event_safe_sync(
+        session,
+        coordinator=coordinator,
+        subtype=subtype,
+        message=message,
+        details=details,
+        deploy_env=deploy_env,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Trigger-site domain helper: secret writes.
+#
+# Keeps ``create_assistant_secret`` / ``update_assistant_secret``
+# free of onboarding-narration trivia by hiding the secret-name
+# classification inside this module. Best-effort + mirrors the
+# gating semantics above; named so the view-side call reads as a
+# single side effect.
+# ---------------------------------------------------------------------------
+
+
+def _classify_secret_for_onboarding(secret_name: str) -> tuple[str, str]:
+    """Return ``(subtype, narration_message)`` for one secret write.
+
+    Splits the workspace OAuth case out of the generic integration
+    case using the name prefix; the narration message embeds the
+    secret name (or provider, for workspace) so Unity can refer to
+    it by hand in the acknowledgement turn without needing a second
+    lookup.
+    """
+    upper = secret_name.upper()
+    for prefix in _WORKSPACE_SECRET_PREFIXES:
+        if upper.startswith(prefix):
+            provider = "Google" if prefix == "GOOGLE_" else "Microsoft"
+            return (
+                SUBTYPE_WORKSPACE_CONNECTED,
+                f"User just connected their {provider} workspace to you.",
+            )
+    return (
+        SUBTYPE_INTEGRATION_CONNECTED,
+        f"User just connected the '{secret_name}' integration to you.",
+    )
+
+
+async def emit_secret_landed_event(
+    session: Session,
+    *,
+    assistant: Assistant,
+    secret_name: str,
+) -> None:
+    """Fire the onboarding narration for one secret write.
+
+    Wraps :func:`maybe_notify_for_assistant_async` so the secret
+    CRUD endpoints stay focused on the user-facing contract — the
+    helper figures out the right Coordinator (this assistant if
+    it's the Coordinator, otherwise the workspace's), gates on
+    onboarding mode, and swallows transport errors so a transient
+    adapters outage can't fail the surrounding request.
+    """
+    subtype, message = _classify_secret_for_onboarding(secret_name)
+    await maybe_notify_for_assistant_async(
+        session,
+        assistant=assistant,
+        subtype=subtype,
+        message=message,
+        details={"secret_name": secret_name},
+        deploy_env=getattr(assistant, "deploy_env", None),
+    )
+
+

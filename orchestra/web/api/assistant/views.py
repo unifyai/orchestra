@@ -83,11 +83,13 @@ from orchestra.services.contact_membership_service import (
 )
 from orchestra.services.coordinator_service import (
     ensure_coordinator_owner_contact_rows,
+    get_coordinator_state,
     preseed_colleague_contexts,
     require_authorized_coordinator,
     require_authorized_preseed_target,
     reset_coordinator_state,
     seed_coordinator_transcript,
+    set_coordinator_state,
 )
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
@@ -128,6 +130,8 @@ from orchestra.web.api.assistant.schema import (
     CoordinatorPreseedResponse,
     CoordinatorPreseedWriteResponse,
     CoordinatorResetResponse,
+    CoordinatorStateResponse,
+    CoordinatorStateUpdate,
     CoordinatorTranscriptSeed,
     CoordinatorTranscriptSeedResponse,
     DemoAssistantCreate,
@@ -156,6 +160,9 @@ from orchestra.web.api.utils.assistant_infra import (
     reawaken_assistant,
     trigger_contact_sync_safe,
     wake_up_assistant,
+)
+from orchestra.services.coordinator_service import (
+    emit_secret_landed_event,
 )
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
@@ -1209,6 +1216,12 @@ async def create_assistant(
                 f"Failed to log pre-hire chat for assistant {assistant.agent_id} via webhook. Error: {str(e_log)}",
             )
 
+    # No onboarding narration on specialist hire: the console
+    # immediately swaps the active assistant to the freshly-hired
+    # specialist (which ends onboarding mode on the Coordinator), so
+    # any acknowledgement from the Coordinator would land in a chat
+    # the user has already moved away from.
+
     # Phase 4: Prepare and return response
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
@@ -1268,6 +1281,76 @@ async def reset_coordinator_endpoint(
     session.commit()
     return InfoResponse(
         info=CoordinatorResetResponse(coordinator_id=str(coordinator.agent_id)),
+    )
+
+
+@router.get(
+    "/assistant/{coordinator_id}/state",
+    response_model=InfoResponse[CoordinatorStateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Read the Coordinator's onboarding state",
+    tags=["Assistant Management"],
+)
+async def get_coordinator_state_endpoint(
+    coordinator_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorStateResponse]:
+    """Return the latest Coordinator/State snapshot for this workspace."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    state = get_coordinator_state(session, coordinator=coordinator)
+    return InfoResponse(
+        info=CoordinatorStateResponse(
+            coordinator_id=coordinator.agent_id,
+            **state,
+        ),
+    )
+
+
+@router.patch(
+    "/assistant/{coordinator_id}/state",
+    response_model=InfoResponse[CoordinatorStateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Update the Coordinator's onboarding state",
+    tags=["Assistant Management"],
+)
+async def update_coordinator_state_endpoint(
+    coordinator_id: int,
+    update: CoordinatorStateUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorStateResponse]:
+    """Transition the Coordinator between ``onboarding`` and ``working``.
+
+    Used by the assistants page when the user finishes or skips
+    onboarding (writes ``mode='working'``), when the user re-enters
+    the guided view from a menu (writes ``mode='onboarding'``), and
+    when the coordinator-driven conversation advances to a new step
+    (writes ``onboarding_step``).
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    set_coordinator_state(
+        session,
+        coordinator=coordinator,
+        mode=update.mode,
+        onboarding_step=update.onboarding_step,
+        clear_onboarding_step=update.clear_onboarding_step,
+    )
+    session.commit()
+    state = get_coordinator_state(session, coordinator=coordinator)
+    return InfoResponse(
+        info=CoordinatorStateResponse(
+            coordinator_id=coordinator.agent_id,
+            **state,
+        ),
     )
 
 
@@ -2659,6 +2742,17 @@ async def create_assistant_secret(
         body.secret_value,
     )
     session.commit()
+    # Reactive narration: fire-and-forget tell the Coordinator a
+    # secret just landed so it can comment in-conversation. The
+    # helper gates on the Coordinator's onboarding mode and resolves
+    # workspace OAuth (GOOGLE_*/MICROSOFT_* prefixes) vs. generic
+    # integration based on the secret name. Failures are swallowed
+    # inside the helper so user-facing requests never regress.
+    await emit_secret_landed_event(
+        session,
+        assistant=assistant,
+        secret_name=body.secret_name,
+    )
     return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
 
 
@@ -2720,6 +2814,14 @@ async def update_assistant_secret(
         body.secret_value,
     )
     session.commit()
+    # See sibling note on the POST handler — same narration emit, same
+    # gating semantics. Updates also count because the workspace OAuth
+    # refresh path overwrites the existing token row.
+    await emit_secret_landed_event(
+        session,
+        assistant=assistant,
+        secret_name=secret_name,
+    )
     return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
 
 

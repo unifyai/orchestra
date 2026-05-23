@@ -1749,6 +1749,50 @@ async def _trigger_contact_sync(
     return response.json()
 
 
+async def _post_unity_system_event(
+    *,
+    assistant_id: int | str,
+    event_type: str,
+    message: str,
+    extra_event_fields: dict | None = None,
+    deploy_env: str | None = None,
+) -> None:
+    """Post a generic ``unity_system_event`` to the Adapters webhook.
+
+    Thin generalisation of :func:`_trigger_contact_sync` so other
+    services (e.g. coordinator onboarding narration) can wake the
+    target assistant's Unity session with their own ``event_type`` +
+    structured payload. ``extra_event_fields`` lands on the Pub/Sub
+    event under the same top-level dict the adapter publishes (see
+    ``_publish_unity_system_event`` in
+    ``communication/adapters/main.py``) so Unity-side handlers can
+    pluck out subtype / details without re-parsing the message body.
+
+    Internal helper. User-facing endpoints should wrap callers in a
+    try/except (or use a ``_safe`` wrapper) so a transient Adapters
+    outage cannot break the surrounding request.
+    """
+    url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
+    client = get_async_client()
+    payload: dict[str, Any] = {
+        "assistant_id": assistant_id,
+        "event_type": event_type,
+        "message": message,
+    }
+    if extra_event_fields:
+        payload["extra_event_fields"] = extra_event_fields
+    response = await client.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    response.raise_for_status()
+
+
 async def trigger_contact_sync_safe(
     assistant_id: int,
     deploy_env: str | None = None,
