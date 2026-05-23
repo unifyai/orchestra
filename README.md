@@ -1,21 +1,40 @@
-# Orchestra
+# Orchestra (orchestra-platform)
 
-Orchestra is the open-source backend API and persistence layer behind the Unify stack. It exposes the REST API used by `unify`, `unity`, `console`, and the communication services, and stores the durable state those systems depend on.
+This repository is **`orchestra-platform`** — the multi-tenant, hosted backend that powers `api.unify.ai/v0`. It contains every account, billing, organization, and assistant feature that the hosted product needs.
+
+Single-user kernel functionality (projects, contexts, log events, embeddings) lives in a separate **public** repository, [`orchestra-core`](https://github.com/unifyai/orchestra-core), which `orchestra-platform` consumes as a Python dependency. **`orchestra-platform` is the private superset; `orchestra-core` is the public kernel.** All persistent data — kernel and platform — lives in the same Postgres database; the package boundary is purely about which code is open-sourced.
 
 If Unity is the runtime brain, Orchestra is the durable substrate: projects, contexts, logs, assistants, storage metadata, auth, and the other stateful APIs that make long-lived assistants possible.
 
 > **Start here:** [API Endpoints README](./orchestra/web/api/README.md) • [Database README](./orchestra/db/README.md) • [Observability](./orchestra/observability/README.md) • [Contributing](CONTRIBUTING.md) • [Security](SECURITY.md)
 
+## Where do my changes go?
+
+The split is a **one-way dependency**: `orchestra-platform` imports from `orchestra-core`, never the other way around. CI enforces this via `scripts/check_core_purity.sh`.
+
+| You're changing… | Repo |
+|---|---|
+| `project`, `context`, `log_event`, `field_type`, `embedding`, `embedding_queue`, or any other kernel table | [`orchestra-core`](https://github.com/unifyai/orchestra-core) |
+| Kernel-only DAO / service / endpoint that operates on the tables above without account/tenant context | [`orchestra-core`](https://github.com/unifyai/orchestra-core) |
+| Anything tenant-aware: `user`, `organization`, `billing_*`, `assistants`, `api_key`, `voices`, `space`, `team`, etc. | this repo |
+| Any code that reads `user_id` / `organization_id` / `assistant_id` for access control | this repo |
+| Stripe, Twilio, ElevenLabs, Cartesia, Deepgram, Vertex AI integrations | this repo |
+| Console-facing UI state: `interface`, `tile`, `tab`, `dashboard_token` | this repo |
+| Adding/changing an alembic migration | depends on which tables it touches; see [migrations README](./orchestra/db/migrations/README.md) |
+
+When unsure, ask: "Could this run in a fully local, single-user, no-billing context?" If yes, it belongs in `orchestra-core`. Otherwise, here.
+
 ## What This Repo Contains
 
-- FastAPI application and API routers
-- SQLAlchemy models, DAOs, and Alembic migrations
+- FastAPI application and API routers (the hosted superset)
+- SQLAlchemy models, DAOs, and Alembic migrations for tenant-aware tables
 - background routines for billing, cleanup, notifications, and storage workflows
 - observability and deployment configs for managed environments
 - API, database, and service tests
 
 ## Related Repositories
 
+- [orchestra-core](https://github.com/unifyai/orchestra-core) — public kernel package; consumed by this repo as a Git URL dependency
 - [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
 - [Console](https://github.com/unifyai/console) — Web UI that reads and writes Orchestra data
 - [Unity](https://github.com/unifyai/unity) — AI assistant runtime that persists state through Unify
