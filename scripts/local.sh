@@ -10,9 +10,10 @@
 # This eliminates network latency and staging server bottlenecks during testing.
 #
 # Usage:
-#   ./local_orchestra.sh start    # Start and wait for ready
-#   ./local_orchestra.sh stop     # Stop local orchestra
-#   ./local_orchestra.sh restart  # Stop then start (wipes database)
+#   ./local_orchestra.sh start    # Start and wait for ready (preserves data)
+#   ./local_orchestra.sh stop     # Stop local orchestra (preserves data)
+#   ./local_orchestra.sh restart  # Stop then start (preserves data)
+#   ./local_orchestra.sh purge    # Destroy container + named volume (wipes data)
 #   ./local_orchestra.sh check    # Check if already running
 #   ./local_orchestra.sh status   # Show status
 #
@@ -56,6 +57,7 @@ ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-60
 
 # Derived names using prefix
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
+ORCHESTRA_DB_VOLUME="${ORCHESTRA_PREFIX}-local-db-data"
 ORCHESTRA_SERVER_PIDFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.pid"
 ORCHESTRA_SERVER_LOGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.log"
 ORCHESTRA_SERVER_CONFIGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.config"
@@ -254,47 +256,68 @@ start_db_container() {
     return 0
   fi
 
-  # Remove any existing container (stopped or in other states)
+  # If a stopped container already exists, restart it rather than re-creating.
+  # This preserves anonymous volumes from pre-named-volume installs and avoids
+  # unnecessary churn on the install-and-live path.
   if is_db_container_exists; then
-    log_info "Removing existing container..."
-    if ! remove_db_container; then
+    log_info "Reusing existing container '$ORCHESTRA_DB_CONTAINER' (data preserved)..."
+    if ! docker start "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1; then
+      log_error "Failed to start existing container '$ORCHESTRA_DB_CONTAINER'"
+      log_info "If the container is in a bad state, run: $0 purge && $0 start"
       return 1
     fi
-  fi
-
-  # Check if port is already in use by something else
-  if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then
-    log_error "Port $ORCHESTRA_DB_PORT is already in use by another process"
-    log_info "Stop the conflicting service or use ORCHESTRA_DB_PORT=5433"
-    return 1
-  fi
-
-  # Calculate max_connections based on CPU cores
-  local num_cores
-  if [[ "$(uname)" == "Darwin" ]]; then
-    num_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
   else
-    num_cores=$(nproc 2>/dev/null || echo 4)
-  fi
-  local max_connections=$((num_cores * 100))
-  log_info "Setting PostgreSQL max_connections=$max_connections (${num_cores} cores × 100)"
+    # Fresh start: create the container with a named volume + restart policy
+    # so it survives reboots and `unity stop` / `unity restart` cycles.
 
-  local pg_flags=(
-    "-c" "max_connections=$max_connections"
-    "-c" "statement_timeout=120s"
-    "-c" "deadlock_timeout=1s"
-  )
+    # Check if port is already in use by something else
+    if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then
+      log_error "Port $ORCHESTRA_DB_PORT is already in use by another process"
+      log_info "Stop the conflicting service or use ORCHESTRA_DB_PORT=5433"
+      return 1
+    fi
 
-  if ! docker run -d \
-    --name "$ORCHESTRA_DB_CONTAINER" \
-    -p "${ORCHESTRA_DB_PORT}:5432" \
-    -e POSTGRES_PASSWORD=orchestra \
-    -e POSTGRES_USER=orchestra \
-    -e POSTGRES_DB=orchestra \
-    pgvector/pgvector:pg15 \
-    postgres "${pg_flags[@]}" >/dev/null; then
-    log_error "Failed to start PostgreSQL container"
-    return 1
+    # Ensure the named volume exists. `docker volume create` is idempotent.
+    if ! docker volume create "$ORCHESTRA_DB_VOLUME" >/dev/null 2>&1; then
+      log_error "Failed to create Docker volume '$ORCHESTRA_DB_VOLUME'"
+      return 1
+    fi
+
+    # Calculate max_connections based on CPU cores
+    local num_cores
+    if [[ "$(uname)" == "Darwin" ]]; then
+      num_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    else
+      num_cores=$(nproc 2>/dev/null || echo 4)
+    fi
+    local max_connections=$((num_cores * 100))
+    log_info "Setting PostgreSQL max_connections=$max_connections (${num_cores} cores × 100)"
+
+    local pg_flags=(
+      "-c" "max_connections=$max_connections"
+      "-c" "statement_timeout=120s"
+      "-c" "deadlock_timeout=1s"
+    )
+
+    # --restart unless-stopped  → container auto-starts when Docker comes back
+    #                              (e.g. after a reboot), but stays stopped if
+    #                              the user explicitly stopped it.
+    # -v <volume>:/var/lib/postgresql/data  → data lives in a named volume,
+    #                              so it survives container removal and is
+    #                              re-attached on the next `docker run`.
+    if ! docker run -d \
+      --name "$ORCHESTRA_DB_CONTAINER" \
+      --restart unless-stopped \
+      -v "${ORCHESTRA_DB_VOLUME}:/var/lib/postgresql/data" \
+      -p "${ORCHESTRA_DB_PORT}:5432" \
+      -e POSTGRES_PASSWORD=orchestra \
+      -e POSTGRES_USER=orchestra \
+      -e POSTGRES_DB=orchestra \
+      pgvector/pgvector:pg15 \
+      postgres "${pg_flags[@]}" >/dev/null; then
+      log_error "Failed to start PostgreSQL container"
+      return 1
+    fi
   fi
 
   log_info "Waiting for PostgreSQL to be ready..."
@@ -315,22 +338,47 @@ start_db_container() {
 }
 
 stop_db_container() {
-  if is_db_container_exists; then
-    local was_running=false
-    if is_db_container_running; then
-      was_running=true
-    fi
-
-    log_info "Removing PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
-    if remove_db_container; then
-      if [[ "$was_running" == "true" ]]; then
-        log_success "PostgreSQL container stopped and removed"
-      else
-        log_success "PostgreSQL container removed (was not running)"
-      fi
-    fi
-  else
+  # Preserve the container (and its named volume) so the next `start` is a
+  # cheap restart and data survives. Use `purge_db_container` for the
+  # destructive path.
+  if ! is_db_container_exists; then
     log_info "No PostgreSQL container to stop (container: $ORCHESTRA_DB_CONTAINER)"
+    return 0
+  fi
+  if ! is_db_container_running; then
+    log_info "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' already stopped"
+    return 0
+  fi
+
+  log_info "Stopping PostgreSQL container '$ORCHESTRA_DB_CONTAINER' (data preserved)..."
+  if docker stop "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1; then
+    log_success "PostgreSQL container stopped"
+  else
+    log_error "Failed to stop container '$ORCHESTRA_DB_CONTAINER'"
+    return 1
+  fi
+}
+
+# Destructive: stop, remove the container, and delete the named volume so all
+# data is wiped. Used by tests for inter-run isolation and by users who want
+# to start from a clean slate.
+purge_db_container() {
+  if is_db_container_exists; then
+    log_info "Removing PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
+    if ! remove_db_container; then
+      log_error "Failed to remove container; aborting purge"
+      return 1
+    fi
+  fi
+
+  # Remove the named volume if it exists. Idempotent.
+  if docker volume inspect "$ORCHESTRA_DB_VOLUME" >/dev/null 2>&1; then
+    log_info "Removing PostgreSQL data volume '$ORCHESTRA_DB_VOLUME'..."
+    if ! docker volume rm "$ORCHESTRA_DB_VOLUME" >/dev/null 2>&1; then
+      log_warn "Could not remove volume '$ORCHESTRA_DB_VOLUME' (in use?). Data may be retained."
+    else
+      log_success "Data volume removed"
+    fi
   fi
 }
 
@@ -720,13 +768,24 @@ cmd_stop() {
   stop_db_container
 
   echo ""
-  log_success "Local Orchestra stopped"
+  log_success "Local Orchestra stopped (data preserved; \`$0 start\` resumes from here)"
 }
 
 cmd_restart() {
   cmd_stop
   echo ""
   cmd_start
+}
+
+cmd_purge() {
+  echo "Purging Local Orchestra (destroys all local data)..."
+  echo ""
+
+  stop_orchestra_server
+  purge_db_container
+
+  echo ""
+  log_success "Local Orchestra purged. Next \`$0 start\` will create a fresh database."
 }
 
 cmd_status() {
@@ -810,6 +869,7 @@ main() {
         case "$1" in
           --stop) cmd="stop"; shift ;;
           --restart) cmd="restart"; shift ;;
+          --purge) cmd="purge"; shift ;;
           --status) cmd="status"; shift ;;
           --check) cmd="check"; shift ;;
           --env) cmd="env"; shift ;;
@@ -841,6 +901,9 @@ main() {
     restart)
       cmd_restart
       ;;
+    purge)
+      cmd_purge
+      ;;
     status)
       cmd_status
       ;;
@@ -854,9 +917,10 @@ main() {
       echo "Usage: $0 [command]"
       echo ""
       echo "Commands:"
-      echo "  start    Start local orchestra (default)"
-      echo "  stop     Stop local orchestra"
-      echo "  restart  Stop then start (wipes database)"
+      echo "  start    Start local orchestra (default; preserves data)"
+      echo "  stop     Stop local orchestra (preserves data)"
+      echo "  restart  Stop then start (preserves data)"
+      echo "  purge    Destroy container + named data volume (wipes all data)"
       echo "  status   Show status"
       echo "  check    Quick check if running (returns URL or exits 1)"
       echo "  env      Output environment variables for shell eval"
