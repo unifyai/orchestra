@@ -31,9 +31,6 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.services.coordinator_personas import COORDINATOR_BIO
-from orchestra.services.task_machine_state_service import (
-    build_task_activation_context_name,
-)
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
@@ -1080,14 +1077,14 @@ async def test_personal_coordinator_requires_owner_for_lifecycle_operations(
 
 
 @pytest.mark.anyio
-async def test_preseed_colleague_writes_target_owned_rows_and_task_activation(
+async def test_delegate_to_colleague_dispatches_without_target_owned_rows(
     client: AsyncClient,
     dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Coordinator preseed writes rows under the target colleague root."""
-    owner = await _create_user(client, "preseed-owner")
-    org_data = await _create_org(client, owner, "preseed")
-    coordinator_id = int(org_data["coordinator_id"])
+    """Coordinator delegation dispatches a wake reason without direct row writes."""
+    owner = await _create_user(client, "delegate-owner")
+    org_data = await _create_org(client, owner, "delegate")
     target = Assistant(
         user_id=owner["id"],
         organization_id=org_data["id"],
@@ -1096,98 +1093,71 @@ async def test_preseed_colleague_writes_target_owned_rows_and_task_activation(
     )
     dbsession.add(target)
     dbsession.flush()
-    tasks_context_name = _assistant_context_name(target, "Tasks")
-    knowledge_context_name = _assistant_context_name(target, "Knowledge")
+    coordinator = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.organization_id == org_data["id"],
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert coordinator is not None
+    delegate_runtime = AsyncMock(
+        return_value={"status": "attached_to_startup", "activation_id": "act-1"},
+    )
+    monkeypatch.setattr(
+        "orchestra.web.api.assistant.views.delegate_to_colleague_runtime",
+        delegate_runtime,
+    )
 
     response = await client.post(
-        f"/v0/assistant/{target.agent_id}/preseed",
+        f"/v0/assistant/{target.agent_id}/delegate",
         json={
-            "writes": [
-                {
-                    "context": "Tasks",
-                    "entries": [
-                        {
-                            "task_id": 701,
-                            "instance_id": 0,
-                            "status": "scheduled",
-                            "name": "Morning renewal risk summary",
-                            "schedule": {"start_at": "2026-05-07T08:00:00+00:00"},
-                            "repeat": [{"unit": "day", "count": 1}],
-                        },
-                    ],
-                },
-                {
-                    "context": "Knowledge",
-                    "entries": [
-                        {"topic": "Renewals", "content": "Check blockers first."},
-                    ],
-                },
-            ],
+            "instruction": "Schedule the renewal risk summary tomorrow morning.",
+            "intent": "schedule_task",
+            "dedupe_key": "renewal-risk-42",
+            "related_context": {"source": "coordinator"},
         },
         headers={"Authorization": f"Bearer {org_data['api_key']}"},
     )
 
     assert response.status_code == status.HTTP_200_OK, response.json()
     payload = response.json()["info"]
-    assert payload["coordinator_id"] == coordinator_id
-    assert payload["target_assistant_id"] == target.agent_id
-    assert [write["context"] for write in payload["writes"]] == [
-        tasks_context_name,
-        knowledge_context_name,
-    ]
-
-    project = dbsession.scalar(
-        select(Project).where(
-            Project.organization_id == org_data["id"],
-            Project.name == "Assistants",
-        ),
-    )
-    assert project is not None
-    tasks_context = _context(dbsession, project=project, name=tasks_context_name)
-    knowledge_context = _context(
-        dbsession,
-        project=project,
-        name=knowledge_context_name,
-    )
-    assert tasks_context is not None
-    assert knowledge_context is not None
-
-    task_rows = _context_logs(dbsession, context=tasks_context)
-    assert len(task_rows) == 1
-    task_data = task_rows[0].data
-    assert task_data["authoring_assistant_id"] == coordinator_id
-    assert task_data["_user_id"] == owner["id"]
-    assert task_data["_assistant_id"] == str(target.agent_id)
-
-    knowledge_rows = _context_logs(dbsession, context=knowledge_context)
-    assert len(knowledge_rows) == 1
-    assert knowledge_rows[0].data == {
-        "topic": "Renewals",
-        "content": "Check blockers first.",
-        "authoring_assistant_id": coordinator_id,
+    assert payload == {
+        "coordinator_id": coordinator.agent_id,
+        "target_assistant_id": target.agent_id,
+        "status": "attached_to_startup",
+        "activation_id": "act-1",
     }
-
-    activation_context = _context(
-        dbsession,
-        project=project,
-        name=build_task_activation_context_name(tasks_context_name),
+    delegate_runtime.assert_awaited_once_with(
+        assistant_id=target.agent_id,
+        requested_by_assistant_id=coordinator.agent_id,
+        instruction="Schedule the renewal risk summary tomorrow morning.",
+        intent="schedule_task",
+        dedupe_key="renewal-risk-42",
+        related_context={"source": "coordinator"},
+        deploy_env=target.deploy_env,
     )
-    assert activation_context is not None
-    activation_rows = _context_logs(dbsession, context=activation_context)
-    assert len(activation_rows) == 1
-    assert activation_rows[0].data["assistant_id"] == str(target.agent_id)
-    assert activation_rows[0].data["task_id"] == 701
-    assert activation_rows[0].data["source_task_log_id"] == task_rows[0].id
+    leaked_contexts = dbsession.scalars(
+        select(Context).where(
+            Context.name.in_(
+                [
+                    _assistant_context_name(target, "Tasks"),
+                    _assistant_context_name(target, "Knowledge"),
+                ],
+            ),
+        ),
+    ).all()
+    assert leaked_contexts == []
 
 
 @pytest.mark.anyio
-async def test_preseed_rejects_shared_paths_without_partial_writes(
+async def test_delegate_rejects_blank_instruction_before_dispatch(
     client: AsyncClient,
     dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Preseed is only for target colleague roots and rejects partial batches."""
-    owner = await _create_user(client, "preseed-atomic")
-    org_data = await _create_org(client, owner, "preseed-atomic")
+    """Delegation requires a meaningful assignment."""
+    owner = await _create_user(client, "delegate-blank")
+    org_data = await _create_org(client, owner, "delegate-blank")
     target = Assistant(
         user_id=owner["id"],
         organization_id=org_data["id"],
@@ -1196,34 +1166,30 @@ async def test_preseed_rejects_shared_paths_without_partial_writes(
     )
     dbsession.add(target)
     dbsession.flush()
+    delegate_runtime = AsyncMock()
+    monkeypatch.setattr(
+        "orchestra.web.api.assistant.views.delegate_to_colleague_runtime",
+        delegate_runtime,
+    )
 
     response = await client.post(
-        f"/v0/assistant/{target.agent_id}/preseed",
-        json={
-            "writes": [
-                {"context": "Knowledge", "entries": [{"content": "safe"}]},
-                {"context": "Spaces/999/Knowledge", "entries": [{"content": "shared"}]},
-            ],
-        },
+        f"/v0/assistant/{target.agent_id}/delegate",
+        json={"instruction": "  ", "intent": "add_knowledge"},
         headers={"Authorization": f"Bearer {org_data['api_key']}"},
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
-    target_knowledge_context = _assistant_context_name(target, "Knowledge")
-    leaked_context = dbsession.scalar(
-        select(Context).where(Context.name == target_knowledge_context),
-    )
-    assert leaked_context is None
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, response.json()
+    delegate_runtime.assert_not_awaited()
 
 
 @pytest.mark.anyio
-async def test_preseed_requires_the_target_scope_coordinator(
+async def test_delegate_requires_the_target_scope_coordinator(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Personal Coordinators cannot preseed another user's colleague."""
-    owner = await _create_user(client, "preseed-personal-owner")
-    other = await _create_user(client, "preseed-personal-other")
+    """Personal Coordinators cannot delegate to another user's colleague."""
+    owner = await _create_user(client, "delegate-personal-owner")
+    other = await _create_user(client, "delegate-personal-other")
     coordinator_response = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
         headers=owner["headers"],
@@ -1241,8 +1207,8 @@ async def test_preseed_requires_the_target_scope_coordinator(
     dbsession.flush()
 
     response = await client.post(
-        f"/v0/assistant/{target.agent_id}/preseed",
-        json={"writes": [{"context": "Knowledge", "entries": [{"content": "nope"}]}]},
+        f"/v0/assistant/{target.agent_id}/delegate",
+        json={"instruction": "Remember that renewal blockers come first."},
         headers=owner["headers"],
     )
 
@@ -1250,14 +1216,15 @@ async def test_preseed_requires_the_target_scope_coordinator(
 
 
 @pytest.mark.anyio
-async def test_preseed_org_target_requires_personal_coordinator(
+async def test_delegate_org_target_resolves_authorized_coordinator(
     client: AsyncClient,
     dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Org preseed requires the actor's personal coordinator to exist."""
-    owner = await _create_user(client, "preseed-org-owner")
-    member = await _create_user(client, "preseed-org-member")
-    org_data = await _create_org(client, owner, "preseed-org-missing-personal")
+    """Org delegation resolves an authorized Coordinator after workspace checks."""
+    owner = await _create_user(client, "delegate-org-owner")
+    member = await _create_user(client, "delegate-org-member")
+    org_data = await _create_org(client, owner, "delegate-org-missing-personal")
 
     add_member = await client.post(
         f"/v0/organizations/{org_data['id']}/members",
@@ -1285,25 +1252,35 @@ async def test_preseed_org_target_requires_personal_coordinator(
     assert member_coordinator is not None
     dbsession.delete(member_coordinator)
     dbsession.commit()
+    delegate_runtime = AsyncMock(return_value={"status": "published_to_active_session"})
+    monkeypatch.setattr(
+        "orchestra.web.api.assistant.views.delegate_to_colleague_runtime",
+        delegate_runtime,
+    )
 
     response = await client.post(
-        f"/v0/assistant/{target.agent_id}/preseed",
-        json={"writes": [{"context": "Knowledge", "entries": [{"content": "nope"}]}]},
+        f"/v0/assistant/{target.agent_id}/delegate",
+        json={"instruction": "Remember that renewal blockers come first."},
         headers=member["headers"],
     )
-    assert response.status_code == status.HTTP_404_NOT_FOUND, response.json()
-    assert response.json()["detail"] == "Coordinator not found."
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    coordinator_id = response.json()["info"]["coordinator_id"]
+    delegate_runtime.assert_awaited_once()
+    assert (
+        delegate_runtime.await_args.kwargs["requested_by_assistant_id"]
+        == coordinator_id
+    )
 
 
 @pytest.mark.anyio
-async def test_preseed_org_target_requires_org_write_access(
+async def test_delegate_org_target_requires_org_write_access(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Users outside the org cannot preseed org assistants."""
-    owner = await _create_user(client, "preseed-org-rbac-owner")
-    outsider = await _create_user(client, "preseed-org-rbac-outsider")
-    org_data = await _create_org(client, owner, "preseed-org-rbac")
+    """Users outside the org cannot delegate to org assistants."""
+    owner = await _create_user(client, "delegate-org-rbac-owner")
+    outsider = await _create_user(client, "delegate-org-rbac-outsider")
+    org_data = await _create_org(client, owner, "delegate-org-rbac")
 
     target = Assistant(
         user_id=owner["id"],
@@ -1315,8 +1292,8 @@ async def test_preseed_org_target_requires_org_write_access(
     dbsession.commit()
 
     response = await client.post(
-        f"/v0/assistant/{target.agent_id}/preseed",
-        json={"writes": [{"context": "Knowledge", "entries": [{"content": "nope"}]}]},
+        f"/v0/assistant/{target.agent_id}/delegate",
+        json={"instruction": "Remember that renewal blockers come first."},
         headers=outsider["headers"],
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.json()

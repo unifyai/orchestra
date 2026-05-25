@@ -568,38 +568,42 @@ class CoordinatorTranscriptSeedResponse(BaseModel):
     log_event_id: int
 
 
-class CoordinatorPreseedWrite(BaseModel):
-    """One batch of rows to write into a colleague-owned context."""
+class CoordinatorDelegateRequest(BaseModel):
+    """Request body for assigning asynchronous work to a colleague."""
 
     model_config = ConfigDict(extra="forbid")
 
-    context: str = Field(..., min_length=1)
-    entries: List[Dict[str, Any]] = Field(..., min_length=1)
+    instruction: str = Field(..., min_length=1)
+    intent: str = Field("general", min_length=1)
+    dedupe_key: Optional[str] = Field(None, min_length=1)
+    related_context: Optional[Dict[str, Any]] = None
+
+    @field_validator("instruction", "intent")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must contain non-whitespace text")
+        return stripped
+
+    @field_validator("dedupe_key")
+    @classmethod
+    def _strip_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must contain non-whitespace text")
+        return stripped
 
 
-class CoordinatorPreseedRequest(BaseModel):
-    """Request body for seeding a colleague's own working memory."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    writes: List[CoordinatorPreseedWrite] = Field(..., min_length=1)
-
-
-class CoordinatorPreseedWriteResponse(BaseModel):
-    """Result for one seeded colleague context."""
-
-    context: str
-    log_event_ids: List[int]
-    row_ids: Dict[str, Any]
-    auto_counting: Dict[str, List[Any]]
-
-
-class CoordinatorPreseedResponse(BaseModel):
-    """Response returned after colleague context rows are written."""
+class CoordinatorDelegateResponse(BaseModel):
+    """Response returned after a colleague delegation is dispatched."""
 
     coordinator_id: int
     target_assistant_id: int
-    writes: List[CoordinatorPreseedWriteResponse]
+    status: str
+    activation_id: Optional[str] = None
 
 
 class CoordinatorResetResponse(BaseModel):

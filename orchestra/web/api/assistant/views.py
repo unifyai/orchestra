@@ -82,11 +82,11 @@ from orchestra.services.contact_membership_service import (
     ensure_space_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
+    emit_secret_landed_event,
     ensure_coordinator_owner_contact_rows,
     get_coordinator_state,
-    preseed_colleague_contexts,
     require_authorized_coordinator,
-    require_authorized_preseed_target,
+    require_authorized_delegate_target,
     reset_coordinator_state,
     seed_coordinator_transcript,
     set_coordinator_state,
@@ -126,9 +126,8 @@ from orchestra.web.api.assistant.schema import (
     ContactMembershipDeleteResponse,
     ContactMembershipRead,
     ContactMembershipUpsertResponse,
-    CoordinatorPreseedRequest,
-    CoordinatorPreseedResponse,
-    CoordinatorPreseedWriteResponse,
+    CoordinatorDelegateRequest,
+    CoordinatorDelegateResponse,
     CoordinatorResetResponse,
     CoordinatorStateResponse,
     CoordinatorStateUpdate,
@@ -153,6 +152,7 @@ from orchestra.web.api.assistant.schema import (
 from orchestra.web.api.utils.assistant_infra import (
     create_phone_number,
     create_pubsub_topic,
+    delegate_to_colleague_runtime,
     delete_phone_number,
     delete_pubsub_topic,
     get_runtime_status,
@@ -160,9 +160,6 @@ from orchestra.web.api.utils.assistant_infra import (
     reawaken_assistant,
     trigger_contact_sync_safe,
     wake_up_assistant,
-)
-from orchestra.services.coordinator_service import (
-    emit_secret_landed_event,
 )
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
@@ -1355,39 +1352,39 @@ async def update_coordinator_state_endpoint(
 
 
 @router.post(
-    "/assistant/{target_assistant_id}/preseed",
-    response_model=InfoResponse[CoordinatorPreseedResponse],
+    "/assistant/{target_assistant_id}/delegate",
+    response_model=InfoResponse[CoordinatorDelegateResponse],
     status_code=status.HTTP_200_OK,
-    summary="Seed a colleague assistant's own contexts",
+    summary="Assign asynchronous work to a colleague assistant",
     tags=["Assistant Management"],
 )
-async def preseed_colleague_endpoint(
+async def delegate_to_colleague_endpoint(
     target_assistant_id: int,
-    request_body: CoordinatorPreseedRequest,
+    request_body: CoordinatorDelegateRequest,
     request: Request,
     session: Session = Depends(get_db_session),
-) -> InfoResponse[CoordinatorPreseedResponse]:
-    """Write Coordinator-authored rows into the target colleague's root."""
-    coordinator, target = require_authorized_preseed_target(
+) -> InfoResponse[CoordinatorDelegateResponse]:
+    """Dispatch a Coordinator assignment to the target colleague runtime."""
+    coordinator, target = require_authorized_delegate_target(
         session,
         target_assistant_id=target_assistant_id,
         user_id=request.state.user_id,
     )
-    writes = preseed_colleague_contexts(
-        session,
-        coordinator=coordinator,
-        target=target,
-        writes=request_body.writes,
+    delivery = await delegate_to_colleague_runtime(
+        assistant_id=target.agent_id,
+        requested_by_assistant_id=coordinator.agent_id,
+        instruction=request_body.instruction,
+        intent=request_body.intent,
+        dedupe_key=request_body.dedupe_key,
+        related_context=request_body.related_context,
+        deploy_env=target.deploy_env,
     )
-    session.commit()
     return InfoResponse(
-        info=CoordinatorPreseedResponse(
+        info=CoordinatorDelegateResponse(
             coordinator_id=coordinator.agent_id,
             target_assistant_id=target.agent_id,
-            writes=[
-                CoordinatorPreseedWriteResponse(**write_result)
-                for write_result in writes
-            ],
+            status=str(delivery.get("status") or "accepted"),
+            activation_id=delivery.get("activation_id"),
         ),
     )
 

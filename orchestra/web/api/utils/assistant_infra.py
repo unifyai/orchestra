@@ -1689,6 +1689,44 @@ async def reawaken_assistant(
     return response.json()
 
 
+async def delegate_to_colleague_runtime(
+    *,
+    assistant_id: int | str,
+    requested_by_assistant_id: int | str,
+    instruction: str,
+    intent: str = "general",
+    dedupe_key: str | None = None,
+    related_context: dict | None = None,
+    deploy_env: str | None = None,
+) -> dict:
+    """Ask Adapters to deliver a Coordinator delegation wake reason."""
+
+    url = f"{_adapters_url_for(deploy_env)}/assistant/coordinator-delegate"
+    payload: dict[str, Any] = {
+        "assistant_id": str(assistant_id),
+        "requested_by_assistant_id": str(requested_by_assistant_id),
+        "instruction": instruction,
+        "intent": intent,
+    }
+    if dedupe_key is not None:
+        payload["dedupe_key"] = dedupe_key
+    if related_context is not None:
+        payload["related_context"] = related_context
+
+    client = get_async_client()
+    response = await client.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=40,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 async def log_pre_hire_chat(
     assistant_id: str,
     messages: list,
