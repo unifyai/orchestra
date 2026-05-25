@@ -1155,11 +1155,36 @@ COORDINATOR_ONBOARDING_EVENT_TYPE = "coordinator_onboarding_event"
 #    channel, so narrating it again in chat is redundant.
 SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
 SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
+# Fired by Console the moment the onboarding picker resolves —
+# i.e. the user picked "I'd rather chat for now" or "Start Call".
+# Unity uses it to open the session with the right kind of message:
+# an introduction when no prior Coordinator messages exist in the
+# transcript, or a brief recap of progress otherwise. Unlike the
+# other subtypes this one is *session-bound*, not action-bound — it
+# fires once per picker resolution and represents "the user is now
+# in front of the Coordinator and waiting for it to speak first".
+SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
+
+# Mediums recognised on the ``onboarding_session_started`` event.
+# ``call`` is currently routed through Unity's voice-prompt
+# augmentation (the call's own opening greeting handles the
+# generation) rather than the chat narration handler, so the event
+# is informational on that branch — Console still fires it so we
+# have a single audit trail of picker resolutions.
+ONBOARDING_SESSION_MEDIUM_CHAT = "chat"
+ONBOARDING_SESSION_MEDIUM_CALL = "call"
+ONBOARDING_SESSION_MEDIUMS = frozenset(
+    {
+        ONBOARDING_SESSION_MEDIUM_CHAT,
+        ONBOARDING_SESSION_MEDIUM_CALL,
+    },
+)
 
 COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
     {
         SUBTYPE_WORKSPACE_CONNECTED,
         SUBTYPE_INTEGRATION_CONNECTED,
+        SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
 
@@ -1497,4 +1522,62 @@ async def emit_secret_landed_event(
         message=message,
         details={"secret_name": secret_name},
         deploy_env=getattr(assistant, "deploy_env", None),
+    )
+
+
+async def emit_onboarding_session_started_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    medium: str,
+    completed_step_ids: list[str] | None = None,
+) -> bool:
+    """Notify Unity that the user just resolved the onboarding picker.
+
+    Console fires this exactly once per picker resolution (chat or
+    call). On the chat branch the event drives Unity's reactive
+    handler, which pushes a notification and triggers an LLM run —
+    Unity then either introduces itself (when the transcript is
+    empty) or opens with a brief recap of progress (when prior
+    Coordinator messages exist). On the call branch the event is
+    informational: the actual call greeting is produced by the
+    voice-agent's own sidecar LLM, which reads
+    ``Coordinator/State.mode`` and the call's chat-history snapshot
+    to pick between intro and recap. We still fire it on call so
+    we have a single auditable signal of "the user just engaged
+    the Coordinator" regardless of medium.
+
+    ``completed_step_ids`` is a best-effort, lightweight client
+    snapshot of the checklist-step keys the console considers done
+    at picker time (e.g. ``["meet", "workspace"]``). It piggybacks
+    on the existing ``details`` channel so Unity can mention it
+    explicitly when narrating the recap path without needing to
+    join against ``Coordinator/Checklist`` rows itself.
+
+    Gated on ``Coordinator/State.mode == 'onboarding'`` like the
+    other onboarding events; emissions outside onboarding are
+    silently dropped (returns ``False``).
+    """
+    if medium not in ONBOARDING_SESSION_MEDIUMS:
+        logger.warning(
+            "Ignoring unknown onboarding session medium: %s",
+            medium,
+        )
+        return False
+    details: dict[str, Any] = {"medium": medium}
+    if completed_step_ids:
+        details["completed_step_ids"] = list(completed_step_ids)
+    message = (
+        "User just opened the onboarding chat with you — "
+        "respond with one short opening turn."
+        if medium == ONBOARDING_SESSION_MEDIUM_CHAT
+        else "User just started an onboarding voice call with you."
+    )
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_SESSION_STARTED,
+        message=message,
+        details=details,
+        deploy_env=getattr(coordinator, "deploy_env", None),
     )

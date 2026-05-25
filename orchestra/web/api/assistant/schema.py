@@ -568,6 +568,37 @@ class CoordinatorTranscriptSeedResponse(BaseModel):
     log_event_id: int
 
 
+class OnboardingSessionStarted(BaseModel):
+    """Request body for the picker-resolution onboarding event.
+
+    Console POSTs this the moment the user picks "I'd rather chat"
+    or "Start Call" in the Coordinator onboarding picker. The body
+    is intentionally tiny — Unity reads ``Coordinator/State`` and
+    the chat-history snapshot itself when generating the opener,
+    and only needs a hint about which medium and a best-effort
+    snapshot of the client-side checklist progress to lean on when
+    narrating the recap path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    medium: Literal["chat", "call"]
+    completed_step_ids: Optional[List[str]] = Field(default=None)
+
+
+class OnboardingSessionStartedResponse(BaseModel):
+    """Acknowledgement returned to Console.
+
+    ``emitted`` reports whether the event actually went out — it'll
+    be ``False`` when the Coordinator is no longer in onboarding
+    mode (e.g. the user already finished or skipped), in which case
+    we silently drop the event server-side.
+    """
+
+    coordinator_id: str
+    emitted: bool
+
+
 class CoordinatorDelegateRequest(BaseModel):
     """Request body for assigning asynchronous work to a colleague."""
 

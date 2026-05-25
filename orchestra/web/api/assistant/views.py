@@ -82,6 +82,7 @@ from orchestra.services.contact_membership_service import (
     ensure_space_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
+    emit_onboarding_session_started_event,
     emit_secret_landed_event,
     ensure_coordinator_owner_contact_rows,
     get_coordinator_state,
@@ -133,6 +134,8 @@ from orchestra.web.api.assistant.schema import (
     CoordinatorStateUpdate,
     CoordinatorTranscriptSeed,
     CoordinatorTranscriptSeedResponse,
+    OnboardingSessionStarted,
+    OnboardingSessionStartedResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
@@ -1347,6 +1350,47 @@ async def update_coordinator_state_endpoint(
         info=CoordinatorStateResponse(
             coordinator_id=coordinator.agent_id,
             **state,
+        ),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/onboarding-session-started",
+    response_model=InfoResponse[OnboardingSessionStartedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Notify the Coordinator that the onboarding picker just resolved",
+    tags=["Assistant Management"],
+)
+async def notify_onboarding_session_started_endpoint(
+    coordinator_id: int,
+    body: OnboardingSessionStarted,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[OnboardingSessionStartedResponse]:
+    """Fire the picker-resolution event so Unity opens the session.
+
+    Best-effort: the emission is gated server-side on
+    ``Coordinator/State.mode == 'onboarding'``, so a stale picker
+    submit (e.g. the user already skipped onboarding in another
+    tab) silently no-ops. The endpoint always returns 200; the
+    response body carries an ``emitted`` flag the client can use
+    for telemetry but doesn't need for correctness.
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    emitted = await emit_onboarding_session_started_event(
+        session,
+        coordinator=coordinator,
+        medium=body.medium,
+        completed_step_ids=body.completed_step_ids,
+    )
+    return InfoResponse(
+        info=OnboardingSessionStartedResponse(
+            coordinator_id=str(coordinator.agent_id),
+            emitted=emitted,
         ),
     )
 
