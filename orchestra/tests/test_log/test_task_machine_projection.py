@@ -303,10 +303,11 @@ async def test_task_update_clears_activation_when_row_stops_being_armed(
 
 
 @pytest.mark.anyio
-async def test_task_create_rejects_offline_row_without_integer_entrypoint(
+async def test_task_create_projects_offline_agentic_activation(
     client: AsyncClient,
+    materialization_calls,
 ):
-    """Offline task rows must supply an integer entrypoint before projection."""
+    """Offline delivery should not require a symbolic function entrypoint."""
 
     await _ensure_task_machine_project(client)
     response = await _create_log(
@@ -315,8 +316,17 @@ async def test_task_create_rejects_offline_row_without_integer_entrypoint(
         context=TASKS_CONTEXT,
         entries=_offline_task_entries(task_id=250, entrypoint=None),
     )
-    assert response.status_code == 400
-    assert "Offline tasks require an integer entrypoint" in response.json()["detail"]
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    matching = [
+        log["entries"] for log in activations if log["entries"]["task_id"] == 250
+    ]
+    assert len(matching) == 1
+    activation = matching[0]
+    assert activation["execution_mode"] == "offline"
+    assert activation["entrypoint"] is None
+    assert materialization_calls == [(None, activation)]
 
 
 @pytest.mark.anyio
@@ -343,6 +353,107 @@ async def test_task_delete_clears_activation(client: AsyncClient):
 
     activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
     assert all(log["entries"]["task_id"] != 303 for log in activations)
+
+
+@pytest.mark.anyio
+async def test_admin_reproject_restores_missing_scheduled_activation(
+    client: AsyncClient,
+    materialization_calls,
+):
+    """Reprojection should rebuild an activation row from the current Tasks row."""
+
+    await _ensure_task_machine_project(client)
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=350),
+    )
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    activation_log = next(
+        log for log in activations if log["entries"]["task_id"] == 350
+    )
+    delete_response = await _delete_logs(
+        client,
+        [(activation_log["id"], None)],
+        project_name=TASK_MACHINE_PROJECT_NAME,
+        context=TASK_ACTIVATIONS_CONTEXT,
+    )
+    assert delete_response.status_code == 200, delete_response.json()
+    materialization_calls.clear()
+
+    reproject_response = await client.post(
+        "/v0/admin/task-activation/reproject",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 350,
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert reproject_response.status_code == 200, reproject_response.json()
+    body = reproject_response.json()
+    assert body["upserted"] == 1
+    assert body["deleted"] == 0
+    assert body["activation"]["task_id"] == 350
+    assert body["activation"]["activation_kind"] == "scheduled"
+    assert materialization_calls == [(None, body["activation"])]
+
+    second_response = await client.post(
+        "/v0/admin/task-activation/reproject",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 350,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert second_response.status_code == 200, second_response.json()
+    activations_after_second = await _get_context_logs(
+        client,
+        context_name=TASK_ACTIVATIONS_CONTEXT,
+    )
+    matching = [
+        log for log in activations_after_second if log["entries"]["task_id"] == 350
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.anyio
+async def test_admin_reproject_is_noop_for_non_head_scheduled_row(
+    client: AsyncClient,
+):
+    """Queue tails should remain unarmed after explicit reprojection."""
+
+    await _ensure_task_machine_project(client)
+    entries = _scheduled_task_entries(task_id=351)
+    entries["schedule"]["prev_task"] = 350
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    reproject_response = await client.post(
+        "/v0/admin/task-activation/reproject",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 351,
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert reproject_response.status_code == 200, reproject_response.json()
+    body = reproject_response.json()
+    assert body["upserted"] == 0
+    assert body["deleted"] == 0
+    assert body["activation"] is None
 
 
 @pytest.mark.anyio

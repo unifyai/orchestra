@@ -957,6 +957,28 @@ class TaskActivationLookupResponse(BaseModel):
     )
 
 
+class TaskActivationReprojectRequest(BaseModel):
+    """Reproject one task row into its current machine activation state."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(description="Assistant identifier that owns the task.")
+    task_id: int = Field(description="Logical task identifier to reproject.")
+
+
+class TaskActivationReprojectResponse(BaseModel):
+    """Result of reprojecting one task's activation state."""
+
+    upserted: int = Field(description="Number of activation rows upserted.")
+    deleted: int = Field(description="Number of activation rows deleted.")
+    activation: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="The activation payload after reprojection, or null when unarmed.",
+    )
+
+
 class TaskRunCreateOrAdoptRequest(BaseModel):
     """Create a task run by run_key if absent, or adopt the existing row."""
 

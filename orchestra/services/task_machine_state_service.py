@@ -18,12 +18,12 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 import httpx
+from orchestra_core.db.dao.context_dao import delete_orphaned_log_events
+from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import delete_orphaned_log_events
-from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
@@ -1313,8 +1313,6 @@ def _project_activation_payload(
     )
     execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
     entrypoint = _coerce_int(row.data.get("entrypoint"))
-    if execution_mode == "offline" and entrypoint is None:
-        raise ValueError("Offline tasks require an integer entrypoint.")
     payload = {
         "assistant_id": assistant_id,
         "activation_key": _build_activation_key(
@@ -1498,7 +1496,13 @@ def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None
             json=dict(body),
             timeout=_TASK_ACTIVATION_SYNC_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                "Task activation materialization failed via Communication "
+                f"{path}: HTTP {response.status_code} {response.text}",
+            ) from exc
 
 
 def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
