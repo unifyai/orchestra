@@ -1126,6 +1126,14 @@ async def test_delegate_to_colleague_dispatches_without_target_owned_rows(
         "target_assistant_id": target.agent_id,
         "status": "attached_to_startup",
         "activation_id": "act-1",
+        "accepted": True,
+        "completion_status": "pending_async",
+        "receipt_type": "async_delegation_receipt",
+        "message": (
+            "The colleague has been woken or notified with the assignment. "
+            "This does not mean the colleague has already created durable artifacts "
+            "or completed the work."
+        ),
     }
     delegate_runtime.assert_awaited_once_with(
         assistant_id=target.agent_id,

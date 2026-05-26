@@ -1429,6 +1429,17 @@ async def delegate_to_colleague_endpoint(
             target_assistant_id=target.agent_id,
             status=str(delivery.get("status") or "accepted"),
             activation_id=delivery.get("activation_id"),
+            accepted=bool(delivery.get("accepted", True)),
+            completion_status=str(
+                delivery.get("completion_status") or "pending_async",
+            ),
+            receipt_type=str(
+                delivery.get("receipt_type") or "async_delegation_receipt",
+            ),
+            message=str(
+                delivery.get("message")
+                or CoordinatorDelegateResponse.model_fields["message"].default,
+            ),
         ),
     )
 

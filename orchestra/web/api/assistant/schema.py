@@ -635,6 +635,14 @@ class CoordinatorDelegateResponse(BaseModel):
     target_assistant_id: int
     status: str
     activation_id: Optional[str] = None
+    accepted: bool = True
+    completion_status: str = "pending_async"
+    receipt_type: str = "async_delegation_receipt"
+    message: str = (
+        "The colleague has been woken or notified with the assignment. "
+        "This does not mean the colleague has already created durable artifacts "
+        "or completed the work."
+    )
 
 
 class CoordinatorResetResponse(BaseModel):
