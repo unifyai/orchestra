@@ -473,6 +473,16 @@ BEGIN
     INSERT INTO api_key (user_id, key)
     VALUES ('$test_user_id', '$test_api_key')
     ON CONFLICT (key) DO NOTHING;
+
+    -- Seed the default "_" project. The unify Python client's
+    -- _get_project(required=True) falls back to "_" when no project is
+    -- active (see unify/utils/helpers.py), so any test or script that
+    -- doesn't explicitly activate a project hits POST /v0/project/_/*.
+    -- Production users get this row implicitly when they first use the
+    -- SDK; local/test DBs need it seeded.
+    INSERT INTO project (user_id, name)
+    VALUES ('$test_user_id', '_')
+    ON CONFLICT (user_id, name) DO NOTHING;
   END IF;
 END
 \$\$;
