@@ -445,6 +445,19 @@ DO \$\$
 DECLARE
   _ba_id integer;
 BEGIN
+  -- Seed the default plan_group that billing_account.plan_group_id points
+  -- at by default (bigint DEFAULT 1 NOT NULL + FK). Production DBs have
+  -- this row pre-existing as part of platform bootstrap; a fresh local DB
+  -- doesn't, and the FK fires when we INSERT into billing_account below.
+  -- Idempotent: ON CONFLICT skips if a previous run already seeded it.
+  INSERT INTO plan_group (id, name, display_name, description, is_active)
+  VALUES (1, 'default', 'Default', 'Default plan group for local dev / test users', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  -- Advance the sequence past the seeded id so future plan_group inserts
+  -- (e.g. from tests creating their own groups) don't collide on id=1.
+  PERFORM setval('plan_group_id_seq', GREATEST((SELECT MAX(id) FROM plan_group), 1));
+
   -- Only seed if user doesn't already exist
   IF NOT EXISTS (SELECT 1 FROM \"user\" WHERE id = '$test_user_id') THEN
     -- Create a billing_account for the test user
