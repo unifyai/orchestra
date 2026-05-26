@@ -3,29 +3,6 @@ from datetime import datetime
 from enum import Enum  # noqa: F401  — re-exported below
 
 import sqlalchemy as sa
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import (
-    TIMESTAMP,
-    BigInteger,
-    Boolean,
-    Column,
-    Date,
-    Float,
-    ForeignKey,
-    ForeignKeyConstraint,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    Text,
-    UniqueConstraint,
-    func,
-    text,
-)
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.orm import backref, relationship, validates
-
 from orchestra_core.db.base import Base
 
 # Kernel models live in orchestra-core. Re-exported here so platform
@@ -46,6 +23,27 @@ from orchestra_core.db.models.core_models import (  # noqa: E402, F401
     Project,
     ProjectVersion,
 )
+from sqlalchemy import (
+    TIMESTAMP,
+    BigInteger,
+    Boolean,
+    Column,
+    Date,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.orm import backref, relationship, validates
 
 # Billing-domain enums + sentinel constants live in their own module so
 # non-ORM consumers (lib, routines, web/api) can import them without
@@ -3316,4 +3314,154 @@ class DashboardToken(Base):
     __table_args__ = (
         Index("idx_dashboard_token_project_id", "project_id"),
         Index("idx_dashboard_token_user_id", "user_id"),
+    )
+
+
+# Sentinel `thread_ts` value used by ``SlackThreadRoute`` rows that represent
+# the *root* of a direct-message conversation. Slack DMs do not carry a real
+# thread timestamp; this lets a single unique index cover both channel threads
+# and DM roots.
+DM_ROOT_SENTINEL = "__dm_root__"
+
+
+class SlackInstall(Base):
+    """Per-workspace Slack OAuth install.
+
+    One row per ``(organization_id, slack_team_id)`` — every assistant in the
+    organization shares this install (and thus the bot's identity and token).
+    Enterprise Grid installs additionally carry ``enterprise_id``; the
+    ``slack_team_id`` is still the unit of routing because messages always
+    arrive on a workspace.
+    """
+
+    __tablename__ = "slack_installs"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    slack_team_id = Column(String, nullable=False)
+    slack_team_name = Column(String, nullable=True)
+    slack_app_id = Column(String, nullable=False)
+    enterprise_id = Column(String, nullable=True)
+    bot_user_id = Column(String, nullable=False)
+    bot_access_token = Column(Text, nullable=False)
+    installer_user_id = Column(String, nullable=True)
+    scopes = Column(Text, nullable=True)
+    installed_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    revoked_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "slack_team_id",
+            name="uq_slack_install_org_team",
+        ),
+        Index("ix_slack_installs_team_id", "slack_team_id"),
+    )
+
+
+class SlackChannelBinding(Base):
+    """Default assistant for a Slack channel.
+
+    Created when an assistant is explicitly invited to a channel (or via
+    admin endpoint). Sets the default recipient for untokened mentions in
+    that channel. Coordinators do not need bindings — they are the
+    organization-wide fallback.
+    """
+
+    __tablename__ = "slack_channel_bindings"
+
+    id = Column(Integer, primary_key=True)
+    install_id = Column(
+        Integer,
+        ForeignKey("slack_installs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel_id = Column(String, nullable=False)
+    channel_name = Column(String, nullable=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    bound_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    install = relationship("SlackInstall")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "install_id",
+            "channel_id",
+            name="uq_slack_channel_binding",
+        ),
+    )
+
+
+class SlackThreadRoute(Base):
+    """Sticky routing for a single Slack conversation.
+
+    Carries two distinct kinds of rows, distinguished only by ``thread_ts``:
+
+    * **Channel threads** — ``thread_ts`` is the Slack root timestamp of the
+      thread (``"1709315643.123456"``). Inserted on the first explicit
+      ``<@app> <token>`` mention inside a thread *or* on the first outbound
+      reply the assistant sends. All subsequent un-tokened messages in the
+      thread inherit the assistant.
+
+    * **DM roots** — ``thread_ts`` is :data:`DM_ROOT_SENTINEL`. One row per
+      ``(install, dm_channel)``. Inserted on first assistant-initiated DM or
+      first explicit token-in-DM by the user; re-routes the whole DM
+      thereafter.
+
+    Rows expire after a configurable TTL (default 14 days, refreshed on
+    every send/receive that hits the route).
+    """
+
+    __tablename__ = "slack_thread_routes"
+
+    id = Column(Integer, primary_key=True)
+    install_id = Column(
+        Integer,
+        ForeignKey("slack_installs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel_id = Column(String, nullable=False)
+    thread_ts = Column(String, nullable=False)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_used_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+    )
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+
+    install = relationship("SlackInstall")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "install_id",
+            "channel_id",
+            "thread_ts",
+            name="uq_slack_thread_route",
+        ),
+        Index("ix_slack_thread_routes_expires", "expires_at"),
     )

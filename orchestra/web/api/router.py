@@ -38,6 +38,7 @@ from orchestra.web.api.organization import admin_router as organization_admin_ro
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
 from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
+from orchestra.web.api.slack import admin_router as slack_admin_router
 from orchestra.web.api.table_view.views import admin_router as table_view_admin_router
 from orchestra.web.api.table_view.views import router as table_view_router
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
@@ -187,6 +188,13 @@ api_router.include_router(
     discord_admin_router,
     prefix="/admin",
     tags=["Discord"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    slack_admin_router,
+    prefix="/admin",
+    tags=["Slack"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

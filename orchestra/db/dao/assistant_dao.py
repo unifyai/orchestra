@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from zoneinfo import available_timezones
 
+import sqlalchemy as sa
 from fastapi import HTTPException, status
 from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.orm import Session
@@ -156,6 +157,48 @@ class AssistantDAO:
         stmt = select(Assistant).where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
+
+    def coordinator_for_org(self, organization_id: int) -> Optional[Assistant]:
+        """Return the Coordinator assistant for an organization, if any.
+
+        The Coordinator handles cross-assistant administrative traffic
+        (Slack DMs to unknown contacts, ambiguous ``@app <token>`` mentions,
+        org-wide announcements). Exactly one row is allowed per org
+        thanks to ``ux_assistants_one_workspace_coordinator_per_membership``.
+        """
+        stmt = select(Assistant).where(
+            Assistant.organization_id == organization_id,
+            Assistant.is_coordinator.is_(True),
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def resolve_token(
+        self,
+        organization_id: int,
+        token: str,
+    ) -> list[Assistant]:
+        """Find org assistants whose first name matches ``token`` (case-insensitive).
+
+        Used by the Slack dispatcher to interpret ``@<app> <token> ...``
+        addressing. The caller decides the next step based on the
+        result-list length:
+
+        * 0 → unknown token, route to coordinator with a hint.
+        * 1 → unambiguous, route to that assistant.
+        * >1 → ambiguous, route to coordinator with a disambiguation hint.
+        """
+        token = (token or "").strip()
+        if not token:
+            return []
+        stmt = (
+            select(Assistant)
+            .where(
+                Assistant.organization_id == organization_id,
+                sa.func.lower(Assistant.first_name) == token.lower(),
+            )
+            .order_by(Assistant.agent_id.asc())
+        )
+        return list(self.session.execute(stmt).scalars().all())
 
     def list_assistants_for_user(
         self,
