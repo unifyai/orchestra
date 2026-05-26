@@ -1,12 +1,12 @@
 from logging.config import fileConfig
 from pathlib import Path
 
+import orchestra_core.db.migrations as _core_migrations_pkg
 from alembic import context
 from alembic.script.revision import RevisionMap
+from orchestra_core.db.meta import meta
 from sqlalchemy import Connection, create_engine
 
-import orchestra_core.db.migrations as _core_migrations_pkg
-from orchestra_core.db.meta import meta
 from orchestra.db.migrations.reconcile import reconcile_to_new_chain
 from orchestra.db.models import load_all_models
 from orchestra.settings import settings
@@ -132,7 +132,7 @@ def run_migrations_online() -> None:
         # One-shot stamp-forward for DBs upgraded under the pre-squash
         # 259-revision platform chain. Idempotent + verifies the
         # post-upgrade schema is present before mutating alembic_version.
-        reconcile_to_new_chain(connection)
+        reconcile_to_new_chain(connection, _active_script)
         connection.commit()
         do_run_migrations(connection)
 
