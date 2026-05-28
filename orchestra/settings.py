@@ -110,7 +110,7 @@ class Settings(CoreSettings):
     max_promo_amount: float = 100.0
 
     signup_credit_grant: float = float(
-        os.environ.get("SIGNUP_CREDIT_GRANT", "50"),
+        os.environ.get("SIGNUP_CREDIT_GRANT", "100"),
     )
 
     assistant_creation_cost: float = 10.0
