@@ -3325,10 +3325,29 @@ DM_ROOT_SENTINEL = "__dm_root__"
 
 
 class SlackInstall(Base):
-    """Per-workspace Slack OAuth install.
+    """Per-workspace Slack OAuth install owned by a Unify org *or* user.
 
-    One row per ``(organization_id, slack_team_id)`` — every assistant in the
-    organization shares this install (and thus the bot's identity and token).
+    The owner is polymorphic — exactly one of ``organization_id`` or
+    ``user_id`` is set on every row (enforced by
+    ``ck_slack_install_one_owner``). This mirrors how :class:`Assistant`
+    itself works: assistants are either personal (``user_id`` set,
+    ``organization_id`` NULL) or organizational (``organization_id`` set).
+    A personal Slack install routes to the user's personal assistants;
+    an organizational install routes to the org's assistants. The two
+    populations never mix.
+
+    Uniqueness:
+
+    * ``ux_slack_install_org_team`` — at most one row per
+      ``(organization_id, slack_team_id)`` (org installs only).
+    * ``ux_slack_install_user_team`` — at most one row per
+      ``(user_id, slack_team_id)`` (personal installs only).
+    * ``ux_slack_install_active_team`` — at most one *active* (non-revoked)
+      row per ``slack_team_id``. A Slack workspace can only carry one bot
+      identity at a time, so two different owners cannot both hold the same
+      workspace live. Revoked rows are kept as an audit trail and don't
+      block a different owner from claiming the workspace afterwards.
+
     Enterprise Grid installs additionally carry ``enterprise_id``; the
     ``slack_team_id`` is still the unit of routing because messages always
     arrive on a workspace.
@@ -3340,7 +3359,13 @@ class SlackInstall(Base):
     organization_id = Column(
         Integer,
         ForeignKey("organization.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     slack_team_id = Column(String, nullable=False)
@@ -3360,10 +3385,29 @@ class SlackInstall(Base):
     revoked_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint(
+        sa.CheckConstraint(
+            "(organization_id IS NULL) <> (user_id IS NULL)",
+            name="ck_slack_install_one_owner",
+        ),
+        Index(
+            "ux_slack_install_org_team",
             "organization_id",
             "slack_team_id",
-            name="uq_slack_install_org_team",
+            unique=True,
+            postgresql_where=text("organization_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_slack_install_user_team",
+            "user_id",
+            "slack_team_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_slack_install_active_team",
+            "slack_team_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
         ),
         Index("ix_slack_installs_team_id", "slack_team_id"),
     )

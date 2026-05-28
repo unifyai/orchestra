@@ -36,7 +36,15 @@ logger = logging.getLogger(__name__)
 
 
 class InstallUpsertRequest(BaseModel):
-    organization_id: int
+    """Body for the install upsert endpoint.
+
+    Exactly one of ``organization_id`` or ``user_id`` must be set —
+    the install is owned by either a Unify organization or a personal
+    Unify user, never both.
+    """
+
+    organization_id: Optional[int] = None
+    user_id: Optional[str] = None
     slack_team_id: str
     slack_app_id: str
     bot_user_id: str
@@ -49,7 +57,8 @@ class InstallUpsertRequest(BaseModel):
 
 class InstallResponse(BaseModel):
     id: int
-    organization_id: int
+    organization_id: Optional[int] = None
+    user_id: Optional[str] = None
     slack_team_id: str
     slack_team_name: Optional[str] = None
     slack_app_id: str
@@ -91,6 +100,7 @@ class DispatchResponse(BaseModel):
     )
     install_id: Optional[int] = None
     organization_id: Optional[int] = None
+    user_id: Optional[str] = None
     assistant_id: Optional[int] = None
     bot_user_id: Optional[str] = None
     thread_ts_for_route: Optional[str] = None
@@ -149,6 +159,7 @@ def _install_to_response(
     return InstallResponse(
         id=install.id,
         organization_id=install.organization_id,
+        user_id=install.user_id,
         slack_team_id=install.slack_team_id,
         slack_team_name=install.slack_team_name,
         slack_app_id=install.slack_app_id,
@@ -161,6 +172,24 @@ def _install_to_response(
     )
 
 
+def _require_owner_xor(
+    organization_id: Optional[int],
+    user_id: Optional[str],
+) -> None:
+    """Validate at the HTTP boundary so we return a clean 400."""
+    has_org = organization_id is not None
+    has_user = user_id is not None
+    if has_org == has_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Provide exactly one of organization_id or user_id "
+                "(got organization_id="
+                f"{organization_id!r}, user_id={user_id!r})."
+            ),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Installs
 # ---------------------------------------------------------------------------
@@ -171,16 +200,17 @@ def upsert_install(
     body: InstallUpsertRequest,
     session: Session = Depends(get_db_session),
 ) -> InstallResponse:
-    """Create or refresh a Slack install for an organization.
+    """Create or refresh a Slack install for an owner (org or user).
 
     Called by the gateway after the OAuth callback exchanges the code
-    for a bot token. Idempotent on ``(organization_id, slack_team_id)``;
-    a re-install replaces the bot token and clears any prior
-    ``revoked_at``.
+    for a bot token. Idempotent on ``(owner, slack_team_id)``; a
+    re-install replaces the bot token and clears any prior ``revoked_at``.
     """
+    _require_owner_xor(body.organization_id, body.user_id)
     dao = SlackDAO(session)
     install = dao.upsert_install(
         organization_id=body.organization_id,
+        user_id=body.user_id,
         slack_team_id=body.slack_team_id,
         slack_app_id=body.slack_app_id,
         bot_user_id=body.bot_user_id,
@@ -204,23 +234,38 @@ def get_install(
         None,
         description="Resolve install by Unify organization id.",
     ),
+    user_id: Optional[str] = Query(
+        None,
+        description="Resolve install by personal Unify user id.",
+    ),
     include_token: bool = Query(
         False,
         description="Include the bot access token (admin-auth gated).",
     ),
     session: Session = Depends(get_db_session),
 ) -> InstallResponse:
-    """Look up a Slack install by team id or organization id."""
-    if not slack_team_id and organization_id is None:
+    """Look up a Slack install by workspace, org, or personal user."""
+    selectors = [
+        ("slack_team_id", slack_team_id),
+        ("organization_id", organization_id),
+        ("user_id", user_id),
+    ]
+    populated = [name for name, val in selectors if val is not None]
+    if len(populated) != 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Provide either slack_team_id or organization_id.",
+            detail=(
+                "Provide exactly one of slack_team_id, organization_id, "
+                f"or user_id (got {populated})."
+            ),
         )
     dao = SlackDAO(session)
-    if slack_team_id:
+    if slack_team_id is not None:
         install = dao.get_install_by_team(slack_team_id)
+    elif organization_id is not None:
+        install = dao.get_install_for_org(organization_id)
     else:
-        install = dao.get_install_for_org(organization_id)  # type: ignore[arg-type]
+        install = dao.get_install_for_user(user_id)  # type: ignore[arg-type]
     if install is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -282,6 +327,7 @@ def dispatch_inbound(
         handled=True,
         install_id=resolution.install.id,
         organization_id=resolution.install.organization_id,
+        user_id=resolution.install.user_id,
         assistant_id=resolution.assistant_id,
         bot_user_id=resolution.install.bot_user_id,
         thread_ts_for_route=resolution.thread_ts_for_route,

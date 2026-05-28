@@ -1,14 +1,18 @@
 """Slack integration tables: per-workspace install, channel bindings, thread routes.
 
-Adds three tables that together let an organization run Slack through a
-single OAuth-installed app that fans out to many assistants:
+Adds three tables that together let an org *or* a personal Unify user run
+Slack through a single OAuth-installed app that fans out to many
+assistants:
 
-* ``slack_installs`` — one row per ``(organization_id, slack_team_id)``.
-  Holds the bot user id, bot access token, and granted scopes.
+* ``slack_installs`` — one row per ``(owner, slack_team_id)`` where
+  ``owner`` is either a Unify organization or a Unify user (exactly one
+  is set, enforced by ``ck_slack_install_one_owner``). Holds the bot
+  user id, bot access token, and granted scopes. At most one *active*
+  (non-revoked) row may exist per Slack workspace.
 
 * ``slack_channel_bindings`` — pins a Slack channel to one default
-  assistant in the org. Used to resolve un-tokened mentions in channels
-  the assistant has been invited to.
+  assistant in the install's owner scope. Used to resolve un-tokened
+  mentions in channels the assistant has been invited to.
 
 * ``slack_thread_routes`` — sticky routing for a single conversation.
   ``thread_ts`` is either the Slack thread root timestamp (channel
@@ -16,8 +20,9 @@ single OAuth-installed app that fans out to many assistants:
   via ``expires_at`` (default 14 days, refreshed on use).
 
 The kernel models in orchestra-core are untouched. Constraint names match
-what ``sa.ForeignKey`` / ``UniqueConstraint(name=...)`` produce via
-``meta.create_all`` so fresh test DBs and migrated production DBs agree.
+what ``sa.ForeignKey`` / ``UniqueConstraint(name=...)`` / partial-unique
+``Index(..., postgresql_where=...)`` produce via ``meta.create_all`` so
+fresh test DBs and migrated production DBs agree.
 
 Revision ID: 2026_slack_integration
 Revises: 2026_platform_drift_fixes
@@ -43,7 +48,13 @@ def upgrade() -> None:
             "organization_id",
             sa.Integer(),
             sa.ForeignKey("organization.id", ondelete="CASCADE"),
-            nullable=False,
+            nullable=True,
+        ),
+        sa.Column(
+            "user_id",
+            sa.String(),
+            sa.ForeignKey("user.id", ondelete="CASCADE"),
+            nullable=True,
         ),
         sa.Column("slack_team_id", sa.String(), nullable=False),
         sa.Column("slack_team_name", sa.String(), nullable=True),
@@ -64,10 +75,9 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
         sa.Column("revoked_at", sa.TIMESTAMP(timezone=True), nullable=True),
-        sa.UniqueConstraint(
-            "organization_id",
-            "slack_team_id",
-            name="uq_slack_install_org_team",
+        sa.CheckConstraint(
+            "(organization_id IS NULL) <> (user_id IS NULL)",
+            name="ck_slack_install_one_owner",
         ),
     )
     op.create_index(
@@ -76,9 +86,40 @@ def upgrade() -> None:
         ["organization_id"],
     )
     op.create_index(
+        "ix_slack_installs_user_id",
+        "slack_installs",
+        ["user_id"],
+    )
+    op.create_index(
         "ix_slack_installs_team_id",
         "slack_installs",
         ["slack_team_id"],
+    )
+    # One row per (org, workspace) for org installs.
+    op.create_index(
+        "ux_slack_install_org_team",
+        "slack_installs",
+        ["organization_id", "slack_team_id"],
+        unique=True,
+        postgresql_where=sa.text("organization_id IS NOT NULL"),
+    )
+    # One row per (user, workspace) for personal installs.
+    op.create_index(
+        "ux_slack_install_user_team",
+        "slack_installs",
+        ["user_id", "slack_team_id"],
+        unique=True,
+        postgresql_where=sa.text("user_id IS NOT NULL"),
+    )
+    # A Slack workspace can carry at most one live bot identity at a time.
+    # Revoked rows are kept (audit) but free up the workspace for a
+    # different owner to install fresh.
+    op.create_index(
+        "ux_slack_install_active_team",
+        "slack_installs",
+        ["slack_team_id"],
+        unique=True,
+        postgresql_where=sa.text("revoked_at IS NULL"),
     )
 
     op.create_table(
@@ -198,7 +239,23 @@ def downgrade() -> None:
     op.drop_table("slack_channel_bindings")
 
     op.drop_index(
+        "ux_slack_install_active_team",
+        table_name="slack_installs",
+    )
+    op.drop_index(
+        "ux_slack_install_user_team",
+        table_name="slack_installs",
+    )
+    op.drop_index(
+        "ux_slack_install_org_team",
+        table_name="slack_installs",
+    )
+    op.drop_index(
         "ix_slack_installs_team_id",
+        table_name="slack_installs",
+    )
+    op.drop_index(
+        "ix_slack_installs_user_id",
         table_name="slack_installs",
     )
     op.drop_index(

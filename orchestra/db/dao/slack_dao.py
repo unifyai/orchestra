@@ -27,6 +27,25 @@ logger = logging.getLogger(__name__)
 DEFAULT_THREAD_ROUTE_TTL_DAYS = 14
 
 
+def _require_one_owner(
+    organization_id: Optional[int],
+    user_id: Optional[str],
+) -> None:
+    """Enforce the SlackInstall owner XOR at the DAO layer.
+
+    The DB CHECK constraint catches it too, but rejecting in Python gives
+    a clearer error message (and avoids a round-trip on misuse).
+    """
+    has_org = organization_id is not None
+    has_user = user_id is not None
+    if has_org == has_user:
+        raise ValueError(
+            "SlackInstall owner must be exactly one of "
+            "organization_id or user_id (got "
+            f"organization_id={organization_id!r}, user_id={user_id!r}).",
+        )
+
+
 class SlackDAO:
     """Reads and writes Slack install state for one orchestra session."""
 
@@ -41,8 +60,8 @@ class SlackDAO:
         """Find the active install for a Slack workspace.
 
         Slack events carry ``team_id``; we resolve to the install row that
-        owns the bot token and organization scope. Revoked installs are
-        ignored.
+        owns the bot token and owner scope (org or user). Revoked
+        installs are ignored.
         """
         return (
             self.session.query(SlackInstall)
@@ -64,35 +83,57 @@ class SlackDAO:
             .first()
         )
 
+    def get_install_for_user(self, user_id: str) -> Optional[SlackInstall]:
+        """Find the active install scoped to a personal Unify user, if any."""
+        return (
+            self.session.query(SlackInstall)
+            .filter(
+                SlackInstall.user_id == user_id,
+                SlackInstall.organization_id.is_(None),
+                SlackInstall.revoked_at.is_(None),
+            )
+            .first()
+        )
+
     def list_installs(self) -> list[SlackInstall]:
         return self.session.query(SlackInstall).order_by(SlackInstall.id).all()
 
     def upsert_install(
         self,
         *,
-        organization_id: int,
         slack_team_id: str,
         slack_app_id: str,
         bot_user_id: str,
         bot_access_token: str,
+        organization_id: Optional[int] = None,
+        user_id: Optional[str] = None,
         slack_team_name: Optional[str] = None,
         enterprise_id: Optional[str] = None,
         installer_user_id: Optional[str] = None,
         scopes: Optional[str] = None,
     ) -> SlackInstall:
-        """Create or refresh an install for ``(org, team)``.
+        """Create or refresh an install for ``(owner, team)``.
 
-        Re-installs replace the bot token (Slack rotates tokens on
-        re-auth) and clear ``revoked_at`` so the install is live again.
+        Exactly one of ``organization_id`` or ``user_id`` must be set —
+        the install is owned by either a Unify organization or a personal
+        Unify user, never both. Re-installs replace the bot token (Slack
+        rotates tokens on re-auth) and clear ``revoked_at`` so the
+        install is live again.
+
+        Will raise (via the DB) if a *different* owner already holds an
+        active install for the same Slack workspace.
         """
-        existing = (
-            self.session.query(SlackInstall)
-            .filter(
-                SlackInstall.organization_id == organization_id,
-                SlackInstall.slack_team_id == slack_team_id,
-            )
-            .first()
+        _require_one_owner(organization_id, user_id)
+
+        query = self.session.query(SlackInstall).filter(
+            SlackInstall.slack_team_id == slack_team_id,
         )
+        if organization_id is not None:
+            query = query.filter(SlackInstall.organization_id == organization_id)
+        else:
+            query = query.filter(SlackInstall.user_id == user_id)
+        existing = query.first()
+
         if existing is not None:
             existing.slack_app_id = slack_app_id
             existing.bot_user_id = bot_user_id
@@ -107,6 +148,7 @@ class SlackDAO:
 
         install = SlackInstall(
             organization_id=organization_id,
+            user_id=user_id,
             slack_team_id=slack_team_id,
             slack_team_name=slack_team_name,
             slack_app_id=slack_app_id,

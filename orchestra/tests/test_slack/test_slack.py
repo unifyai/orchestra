@@ -2,11 +2,16 @@
 
 Covers:
 
-* Install/binding/route schema constraints and lifecycle (DAO).
+* Install/binding/route schema constraints and lifecycle (DAO), in both
+  organizational and personal (user-owned) install modes.
+* The polymorphic ownership invariants on ``SlackInstall``: XOR between
+  ``organization_id`` and ``user_id`` and the active-team uniqueness
+  that prevents two owners from holding the same Slack workspace live.
 * The full dispatcher routing tree — DM vs channel, token addressing
   (unique / unknown / ambiguous), thread inheritance, channel binding
-  fallback, bot-echo suppression.
-* ``AssistantDAO`` additions (``coordinator_for_org``, ``resolve_token``).
+  fallback, bot-echo suppression — for both owner kinds.
+* ``AssistantDAO`` additions (``coordinator``, ``resolve_token``) scoped
+  by either organization or personal user.
 * The admin HTTP surface end-to-end through the FastAPI client.
 """
 
@@ -14,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import pytest
 from fastapi import status
@@ -68,12 +74,17 @@ def _make_assistant(
     owner: User,
     *,
     first_name: str,
-    organization: Organization,
+    organization: Optional[Organization] = None,
     is_coordinator: bool = False,
 ) -> Assistant:
+    """Create an assistant.
+
+    Pass ``organization=None`` for a personal assistant
+    (``organization_id IS NULL``); pass an org for an organizational one.
+    """
     assistant = Assistant(
         user_id=owner.id,
-        organization_id=organization.id,
+        organization_id=organization.id if organization is not None else None,
         first_name=first_name,
         surname="Bot",
         is_coordinator=is_coordinator,
@@ -85,14 +96,19 @@ def _make_assistant(
 
 def _make_install(
     dbsession: Session,
-    organization: Organization,
     *,
+    organization: Optional[Organization] = None,
+    user: Optional[User] = None,
     slack_team_id: str = "T01TEAM",
     bot_user_id: str = "U01BOT",
     bot_access_token: str = "xoxb-test",
 ) -> SlackInstall:
+    """Create an install owned by either an org or a personal user."""
+    if (organization is None) == (user is None):
+        raise ValueError("Provide exactly one of organization or user.")
     install = SlackInstall(
-        organization_id=organization.id,
+        organization_id=organization.id if organization is not None else None,
+        user_id=user.id if user is not None else None,
         slack_team_id=slack_team_id,
         slack_team_name="Test Workspace",
         slack_app_id="A01APP",
@@ -130,10 +146,45 @@ def slack_world(dbsession: Session):
         first_name="Sara",
         organization=org,
     )
-    install = _make_install(dbsession, org)
+    install = _make_install(dbsession, organization=org)
     return {
         "owner": owner,
         "org": org,
+        "coordinator": coordinator,
+        "alex": alex,
+        "sara": sara,
+        "install": install,
+    }
+
+
+@pytest.fixture
+def personal_slack_world(dbsession: Session):
+    """Personal-mode world: one user with personal coordinator + assistants + install.
+
+    Mirrors :func:`slack_world` but with ``organization_id IS NULL`` on
+    the assistants and a personal-user-owned ``SlackInstall``. The Slack
+    workspace id is deliberately distinct so personal and org worlds
+    coexist in the same test DB without colliding on
+    ``ux_slack_install_active_team``.
+    """
+    user = _make_user(dbsession, "personal-owner")
+    coordinator = _make_assistant(
+        dbsession,
+        user,
+        first_name="Coordinator",
+        organization=None,
+        is_coordinator=True,
+    )
+    alex = _make_assistant(dbsession, user, first_name="Alex", organization=None)
+    sara = _make_assistant(dbsession, user, first_name="Sara", organization=None)
+    install = _make_install(
+        dbsession,
+        user=user,
+        slack_team_id="T02PERSONAL",
+        bot_user_id="U02BOT",
+    )
+    return {
+        "user": user,
         "coordinator": coordinator,
         "alex": alex,
         "sara": sara,
@@ -149,11 +200,67 @@ def slack_world(dbsession: Session):
 class TestSchema:
     """Direct schema-level invariants — unique constraints, cascade behavior."""
 
-    def test_install_unique_per_org_team(
+    def test_install_unique_per_org_team_against_revoked_row(
         self,
         dbsession: Session,
         slack_world: dict,
     ) -> None:
+        """The per-owner partial unique catches duplicates even after revoke.
+
+        Revoking the prior install frees up the active-team uniqueness
+        (``ux_slack_install_active_team``) but the per-owner uniqueness
+        (``ux_slack_install_org_team``) still prevents the same owner
+        from owning two rows for the same workspace.
+        """
+        install = slack_world["install"]
+        org = slack_world["org"]
+        install.revoked_at = datetime.now(timezone.utc)
+        dbsession.flush()
+
+        duplicate = SlackInstall(
+            organization_id=org.id,
+            slack_team_id="T01TEAM",
+            slack_app_id="A01APP",
+            bot_user_id="U01BOT2",
+            bot_access_token="xoxb-dup",
+        )
+        dbsession.add(duplicate)
+        with pytest.raises(IntegrityError, match="ux_slack_install_org_team"):
+            dbsession.flush()
+
+    def test_install_unique_per_user_team_against_revoked_row(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+    ) -> None:
+        """Same per-owner uniqueness invariant, personal-mode variant."""
+        install = personal_slack_world["install"]
+        user = personal_slack_world["user"]
+        install.revoked_at = datetime.now(timezone.utc)
+        dbsession.flush()
+
+        duplicate = SlackInstall(
+            user_id=user.id,
+            slack_team_id="T02PERSONAL",
+            slack_app_id="A02APP",
+            bot_user_id="U02BOT2",
+            bot_access_token="xoxb-dup",
+        )
+        dbsession.add(duplicate)
+        with pytest.raises(IntegrityError, match="ux_slack_install_user_team"):
+            dbsession.flush()
+
+    def test_install_active_duplicate_for_same_owner_is_rejected(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """Two active installs for the same (owner, workspace) is impossible.
+
+        Both the per-owner and the active-team partial uniques apply; we
+        only care that *some* uniqueness violation fires, not which one
+        the DB happens to catch first.
+        """
         org = slack_world["org"]
         duplicate = SlackInstall(
             organization_id=org.id,
@@ -163,8 +270,95 @@ class TestSchema:
             bot_access_token="xoxb-dup",
         )
         dbsession.add(duplicate)
-        with pytest.raises(IntegrityError, match="uq_slack_install_org_team"):
+        with pytest.raises(IntegrityError):
             dbsession.flush()
+
+    def test_install_rejects_both_owners(self, dbsession: Session) -> None:
+        """A row with both ``organization_id`` and ``user_id`` set must be rejected."""
+        user = _make_user(dbsession, "both-owners")
+        org = _make_org(dbsession, user, "both-owners")
+        bad = SlackInstall(
+            organization_id=org.id,
+            user_id=user.id,
+            slack_team_id="T_BOTH",
+            slack_app_id="A_BOTH",
+            bot_user_id="U_BOTH",
+            bot_access_token="xoxb-bad",
+        )
+        dbsession.add(bad)
+        with pytest.raises(IntegrityError, match="ck_slack_install_one_owner"):
+            dbsession.flush()
+
+    def test_install_rejects_no_owner(self, dbsession: Session) -> None:
+        """A row with neither ``organization_id`` nor ``user_id`` must be rejected."""
+        bad = SlackInstall(
+            organization_id=None,
+            user_id=None,
+            slack_team_id="T_NONE",
+            slack_app_id="A_NONE",
+            bot_user_id="U_NONE",
+            bot_access_token="xoxb-bad",
+        )
+        dbsession.add(bad)
+        with pytest.raises(IntegrityError, match="ck_slack_install_one_owner"):
+            dbsession.flush()
+
+    def test_active_team_uniqueness_across_owners(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Two distinct owners cannot both hold the same workspace live.
+
+        A Slack workspace has a single bot identity at a time, so the
+        ``ux_slack_install_active_team`` partial unique index rejects a
+        second active install for the same ``slack_team_id`` regardless
+        of who tries to claim it.
+        """
+        user_a = _make_user(dbsession, "active-a")
+        org = _make_org(dbsession, user_a, "active-a")
+        _make_install(
+            dbsession,
+            organization=org,
+            slack_team_id="T_SHARED",
+            bot_user_id="U_A",
+            bot_access_token="xoxb-a",
+        )
+        user_b = _make_user(dbsession, "active-b")
+        conflict = SlackInstall(
+            user_id=user_b.id,
+            slack_team_id="T_SHARED",
+            slack_app_id="A_B",
+            bot_user_id="U_B",
+            bot_access_token="xoxb-b",
+        )
+        dbsession.add(conflict)
+        with pytest.raises(IntegrityError, match="ux_slack_install_active_team"):
+            dbsession.flush()
+
+    def test_active_team_uniqueness_allows_reinstall_after_revoke(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A different owner can install the workspace after the prior install is revoked."""
+        user_a = _make_user(dbsession, "after-revoke-a")
+        org = _make_org(dbsession, user_a, "after-revoke-a")
+        first = _make_install(
+            dbsession,
+            organization=org,
+            slack_team_id="T_HANDOFF",
+            bot_user_id="U_A",
+        )
+        first.revoked_at = datetime.now(timezone.utc)
+        dbsession.flush()
+
+        user_b = _make_user(dbsession, "after-revoke-b")
+        second = _make_install(
+            dbsession,
+            user=user_b,
+            slack_team_id="T_HANDOFF",
+            bot_user_id="U_B",
+        )
+        assert second.id != first.id
 
     def test_channel_binding_unique_per_install_channel(
         self,
@@ -501,6 +695,107 @@ class TestSlackDAO:
         dao.revoke_install(slack_world["install"].id)
         assert dao.get_install_for_org(org_id) is None
 
+    def test_get_install_for_user_ignores_revoked(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+    ) -> None:
+        dao = SlackDAO(dbsession)
+        user_id = personal_slack_world["user"].id
+        assert dao.get_install_for_user(user_id) is not None
+        dao.revoke_install(personal_slack_world["install"].id)
+        assert dao.get_install_for_user(user_id) is None
+
+    def test_get_install_for_user_does_not_match_org_installs(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """``get_install_for_user`` must scope to personal-owned installs only.
+
+        The owner of the org-mode install also has a ``user_id`` on the
+        org row's owner, but that user has *no* personal install — the
+        lookup must return ``None``.
+        """
+        dao = SlackDAO(dbsession)
+        owner_user_id = slack_world["owner"].id
+        assert dao.get_install_for_user(owner_user_id) is None
+
+    def test_upsert_install_personal_creates_then_refreshes(
+        self,
+        dbsession: Session,
+    ) -> None:
+        user = _make_user(dbsession, "upsert-personal")
+        dao = SlackDAO(dbsession)
+        created = dao.upsert_install(
+            user_id=user.id,
+            slack_team_id="T_UPSERT_PERSONAL",
+            slack_app_id="A_UPSERT",
+            bot_user_id="U_UPSERT",
+            bot_access_token="xoxb-old",
+        )
+        assert created.id is not None
+        assert created.user_id == user.id
+        assert created.organization_id is None
+
+        refreshed = dao.upsert_install(
+            user_id=user.id,
+            slack_team_id="T_UPSERT_PERSONAL",
+            slack_app_id="A_UPSERT",
+            bot_user_id="U_UPSERT",
+            bot_access_token="xoxb-new",
+        )
+        assert refreshed.id == created.id
+        assert refreshed.bot_access_token == "xoxb-new"
+
+    def test_upsert_install_requires_owner_xor(
+        self,
+        dbsession: Session,
+    ) -> None:
+        dao = SlackDAO(dbsession)
+        with pytest.raises(ValueError):
+            dao.upsert_install(
+                slack_team_id="T_X",
+                slack_app_id="A_X",
+                bot_user_id="U_X",
+                bot_access_token="xoxb-x",
+            )
+        with pytest.raises(ValueError):
+            dao.upsert_install(
+                organization_id=1,
+                user_id="some-user",
+                slack_team_id="T_X",
+                slack_app_id="A_X",
+                bot_user_id="U_X",
+                bot_access_token="xoxb-x",
+            )
+
+    def test_upsert_install_org_and_user_keep_distinct_rows(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Distinct owners on distinct workspaces yield distinct installs."""
+        user = _make_user(dbsession, "distinct-owners")
+        org = _make_org(dbsession, user, "distinct-owners")
+        dao = SlackDAO(dbsession)
+        org_install = dao.upsert_install(
+            organization_id=org.id,
+            slack_team_id="T_ORG",
+            slack_app_id="A_ORG",
+            bot_user_id="U_ORG",
+            bot_access_token="xoxb-org",
+        )
+        user_install = dao.upsert_install(
+            user_id=user.id,
+            slack_team_id="T_USER",
+            slack_app_id="A_USER",
+            bot_user_id="U_USER",
+            bot_access_token="xoxb-user",
+        )
+        assert org_install.id != user_install.id
+        assert dao.get_install_for_org(org.id).id == org_install.id
+        assert dao.get_install_for_user(user.id).id == user_install.id
+
     def test_revoke_install_missing_returns_none(self, dbsession: Session) -> None:
         assert SlackDAO(dbsession).revoke_install(999999) is None
 
@@ -555,11 +850,22 @@ class TestCoordinatorAndTokenResolution:
         dbsession: Session,
         slack_world: dict,
     ) -> None:
-        coordinator = AssistantDAO(dbsession).coordinator_for_org(
-            slack_world["org"].id,
+        coordinator = AssistantDAO(dbsession).coordinator(
+            organization_id=slack_world["org"].id,
         )
         assert coordinator is not None
         assert coordinator.agent_id == slack_world["coordinator"].agent_id
+
+    def test_coordinator_for_user_returns_the_personal_coordinator(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+    ) -> None:
+        coordinator = AssistantDAO(dbsession).coordinator(
+            user_id=personal_slack_world["user"].id,
+        )
+        assert coordinator is not None
+        assert coordinator.agent_id == personal_slack_world["coordinator"].agent_id
 
     def test_coordinator_for_org_returns_none_when_none_exists(
         self,
@@ -568,7 +874,22 @@ class TestCoordinatorAndTokenResolution:
         owner = _make_user(dbsession, "no-coord")
         org = _make_org(dbsession, owner, "no-coord")
         _make_assistant(dbsession, owner, first_name="Solo", organization=org)
-        assert AssistantDAO(dbsession).coordinator_for_org(org.id) is None
+        assert AssistantDAO(dbsession).coordinator(organization_id=org.id) is None
+
+    def test_coordinator_for_user_returns_none_when_none_exists(
+        self,
+        dbsession: Session,
+    ) -> None:
+        user = _make_user(dbsession, "no-personal-coord")
+        _make_assistant(dbsession, user, first_name="Solo", organization=None)
+        assert AssistantDAO(dbsession).coordinator(user_id=user.id) is None
+
+    def test_coordinator_requires_owner_xor(self, dbsession: Session) -> None:
+        dao = AssistantDAO(dbsession)
+        with pytest.raises(ValueError):
+            dao.coordinator()  # neither
+        with pytest.raises(ValueError):
+            dao.coordinator(organization_id=1, user_id="x")  # both
 
     def test_resolve_token_unique_case_insensitive(
         self,
@@ -577,7 +898,10 @@ class TestCoordinatorAndTokenResolution:
     ) -> None:
         dao = AssistantDAO(dbsession)
         for token in ("Alex", "alex", "ALEX", "  alex  "):
-            matches = dao.resolve_token(slack_world["org"].id, token)
+            matches = dao.resolve_token(
+                token,
+                organization_id=slack_world["org"].id,
+            )
             assert len(matches) == 1
             assert matches[0].agent_id == slack_world["alex"].agent_id
 
@@ -587,8 +911,8 @@ class TestCoordinatorAndTokenResolution:
         slack_world: dict,
     ) -> None:
         matches = AssistantDAO(dbsession).resolve_token(
-            slack_world["org"].id,
             "nonexistent",
+            organization_id=slack_world["org"].id,
         )
         assert matches == []
 
@@ -608,7 +932,10 @@ class TestCoordinatorAndTokenResolution:
             organization=org,
         )
 
-        matches = AssistantDAO(dbsession).resolve_token(org.id, "Sara")
+        matches = AssistantDAO(dbsession).resolve_token(
+            "Sara",
+            organization_id=org.id,
+        )
         assert len(matches) == 2
 
     def test_resolve_token_empty_string_returns_empty(
@@ -616,7 +943,13 @@ class TestCoordinatorAndTokenResolution:
         dbsession: Session,
         slack_world: dict,
     ) -> None:
-        assert AssistantDAO(dbsession).resolve_token(slack_world["org"].id, "") == []
+        assert (
+            AssistantDAO(dbsession).resolve_token(
+                "",
+                organization_id=slack_world["org"].id,
+            )
+            == []
+        )
 
     def test_resolve_token_none_returns_empty(
         self,
@@ -625,7 +958,10 @@ class TestCoordinatorAndTokenResolution:
     ) -> None:
         """Defensive: callers may pass through a missing-token sentinel."""
         assert (
-            AssistantDAO(dbsession).resolve_token(slack_world["org"].id, None)  # type: ignore[arg-type]
+            AssistantDAO(dbsession).resolve_token(
+                None,  # type: ignore[arg-type]
+                organization_id=slack_world["org"].id,
+            )
             == []
         )
 
@@ -644,16 +980,64 @@ class TestCoordinatorAndTokenResolution:
             organization=other_org,
         )
 
-        matches_here = AssistantDAO(dbsession).resolve_token(
-            slack_world["org"].id,
-            "Alex",
-        )
+        dao = AssistantDAO(dbsession)
+        matches_here = dao.resolve_token("Alex", organization_id=slack_world["org"].id)
         assert len(matches_here) == 1
         assert matches_here[0].agent_id == slack_world["alex"].agent_id
 
-        matches_there = AssistantDAO(dbsession).resolve_token(other_org.id, "Alex")
+        matches_there = dao.resolve_token("Alex", organization_id=other_org.id)
         assert len(matches_there) == 1
         assert matches_there[0].organization_id == other_org.id
+
+    def test_resolve_token_for_user_finds_only_personal_assistants(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+        slack_world: dict,
+    ) -> None:
+        """Personal-mode resolution must not pick up org assistants.
+
+        ``slack_world`` populates an org with an "Alex"; the personal
+        resolution scope (``user_id`` + ``organization_id IS NULL``)
+        must see only the personal "Alex" from ``personal_slack_world``.
+        """
+        user = personal_slack_world["user"]
+        matches = AssistantDAO(dbsession).resolve_token("Alex", user_id=user.id)
+        assert len(matches) == 1
+        assert matches[0].agent_id == personal_slack_world["alex"].agent_id
+        assert matches[0].organization_id is None
+        assert matches[0].user_id == user.id
+
+    def test_resolve_token_isolates_personal_users(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+    ) -> None:
+        """Two personal users can both have an 'Alex' without collision."""
+        other_user = _make_user(dbsession, "other-personal")
+        other_alex = _make_assistant(
+            dbsession,
+            other_user,
+            first_name="Alex",
+            organization=None,
+        )
+
+        dao = AssistantDAO(dbsession)
+        mine = dao.resolve_token("Alex", user_id=personal_slack_world["user"].id)
+        assert [a.agent_id for a in mine] == [personal_slack_world["alex"].agent_id]
+
+        theirs = dao.resolve_token("Alex", user_id=other_user.id)
+        assert [a.agent_id for a in theirs] == [other_alex.agent_id]
+
+    def test_resolve_token_requires_owner_xor(
+        self,
+        dbsession: Session,
+    ) -> None:
+        dao = AssistantDAO(dbsession)
+        with pytest.raises(ValueError):
+            dao.resolve_token("alex")  # neither
+        with pytest.raises(ValueError):
+            dao.resolve_token("alex", organization_id=1, user_id="x")  # both
 
 
 # ============================================================================
@@ -945,6 +1329,99 @@ class TestDispatcherDM:
         names = {c["first_name"] for c in meta["candidates"]}
         assert names == {"Alex"}
         assert len(meta["candidates"]) == 2
+
+
+class TestDispatcherPersonalInstall:
+    """Personal-mode dispatcher: routing scoped to a single Unify user.
+
+    Mirrors the org-mode DM tests but the bot identity (``U02BOT``) and
+    workspace (``T02PERSONAL``) come from the personal install fixture.
+    The dispatcher must derive ``user_id`` scope from the install and
+    only route to personal assistants of that user.
+    """
+
+    def test_initial_dm_routes_to_personal_coordinator(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+    ) -> None:
+        resolution = _dispatch(
+            dbsession,
+            team_id="T02PERSONAL",
+            channel="D02HUMAN",
+            channel_type="im",
+            text="hey",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == personal_slack_world["coordinator"].agent_id
+        assert resolution.routing_metadata["reason"] == "initial_dm"
+        assert resolution.install.user_id == personal_slack_world["user"].id
+        assert resolution.install.organization_id is None
+
+    def test_dm_token_routes_to_personal_assistant(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+    ) -> None:
+        resolution = _dispatch(
+            dbsession,
+            team_id="T02PERSONAL",
+            channel="D02HUMAN",
+            channel_type="im",
+            text="<@U02BOT> alex hi",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == personal_slack_world["alex"].agent_id
+        assert resolution.thread_ts_for_route == DM_ROOT_SENTINEL
+
+        # Subsequent un-tokened DM stays with Alex via the pinned route.
+        follow_up = _dispatch(
+            dbsession,
+            team_id="T02PERSONAL",
+            channel="D02HUMAN",
+            channel_type="im",
+            text="follow up",
+        )
+        assert follow_up is not None
+        assert follow_up.assistant_id == personal_slack_world["alex"].agent_id
+
+    def test_personal_dm_does_not_resolve_org_token(
+        self,
+        dbsession: Session,
+        personal_slack_world: dict,
+        slack_world: dict,
+    ) -> None:
+        """Token resolution must not leak across owner scopes.
+
+        ``slack_world`` adds an "Alex" inside an org. The personal-mode
+        dispatcher must not see it — only the user's personal Alex. We
+        verify by adding a third assistant in the org that doesn't exist
+        in the personal world ("Sara") and confirming the personal
+        dispatch falls back to the personal coordinator with an
+        unknown-token hint.
+        """
+        # Sanity: there *is* a personal Sara; we want a token that exists
+        # only in the org, so use a fresh name.
+        owner_user = slack_world["owner"]
+        _make_assistant(
+            dbsession,
+            owner_user,
+            first_name="Onlyorg",
+            organization=slack_world["org"],
+        )
+        resolution = _dispatch(
+            dbsession,
+            team_id="T02PERSONAL",
+            channel="D02HUMAN",
+            channel_type="im",
+            text="<@U02BOT> onlyorg please",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == personal_slack_world["coordinator"].agent_id
+        assert resolution.routing_metadata == {
+            "reason": "unknown_token",
+            "token": "onlyorg",
+        }
 
 
 # ============================================================================
@@ -1284,11 +1761,98 @@ class TestAdminEndpoints:
         )
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
-    async def test_install_get_requires_one_of_team_or_org(
+    async def test_install_get_requires_exactly_one_selector(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        dbsession.commit()
+
+        no_args = await client.get("/v0/admin/slack/install", headers=ADMIN_HEADERS)
+        assert no_args.status_code == status.HTTP_400_BAD_REQUEST
+
+        two_args = await client.get(
+            "/v0/admin/slack/install",
+            params={
+                "slack_team_id": "T01TEAM",
+                "organization_id": slack_world["org"].id,
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert two_args.status_code == status.HTTP_400_BAD_REQUEST
+
+    async def test_install_upsert_personal_and_get_by_user(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        user = _make_user(dbsession, "http-personal")
+        dbsession.commit()
+
+        payload = {
+            "user_id": user.id,
+            "slack_team_id": "T_PERSONAL_HTTP",
+            "slack_app_id": "A_HTTP",
+            "bot_user_id": "U_HTTP_BOT",
+            "bot_access_token": "xoxb-personal",
+            "slack_team_name": "Personal Workspace",
+        }
+        upsert = await client.post(
+            "/v0/admin/slack/install",
+            json=payload,
+            headers=ADMIN_HEADERS,
+        )
+        assert upsert.status_code == status.HTTP_200_OK
+        body = upsert.json()
+        assert body["user_id"] == user.id
+        assert body["organization_id"] is None
+
+        by_user = await client.get(
+            "/v0/admin/slack/install",
+            params={"user_id": user.id, "include_token": True},
+            headers=ADMIN_HEADERS,
+        )
+        assert by_user.status_code == status.HTTP_200_OK
+        assert by_user.json()["bot_access_token"] == "xoxb-personal"
+
+    async def test_install_upsert_rejects_both_owners(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        user = _make_user(dbsession, "http-both")
+        org = _make_org(dbsession, user, "http-both")
+        dbsession.commit()
+
+        resp = await client.post(
+            "/v0/admin/slack/install",
+            json={
+                "organization_id": org.id,
+                "user_id": user.id,
+                "slack_team_id": "T_BOTH_HTTP",
+                "slack_app_id": "A_HTTP",
+                "bot_user_id": "U_HTTP",
+                "bot_access_token": "xoxb-both",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    async def test_install_upsert_rejects_no_owner(
         self,
         client: AsyncClient,
     ) -> None:
-        resp = await client.get("/v0/admin/slack/install", headers=ADMIN_HEADERS)
+        resp = await client.post(
+            "/v0/admin/slack/install",
+            json={
+                "slack_team_id": "T_NONE_HTTP",
+                "slack_app_id": "A_HTTP",
+                "bot_user_id": "U_HTTP",
+                "bot_access_token": "xoxb-none",
+            },
+            headers=ADMIN_HEADERS,
+        )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
 
     async def test_revoke_install(
@@ -1362,6 +1926,7 @@ class TestAdminEndpoints:
             "handled": False,
             "install_id": None,
             "organization_id": None,
+            "user_id": None,
             "assistant_id": None,
             "bot_user_id": None,
             "thread_ts_for_route": None,

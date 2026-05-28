@@ -24,6 +24,26 @@ class AssistantSpendingCapResult:
 VALID_TIMEZONES = available_timezones()
 
 
+def _require_assistant_scope(
+    organization_id: Optional[int],
+    user_id: Optional[str],
+) -> None:
+    """Enforce XOR on owner-scoped assistant lookups.
+
+    Used by routing-oriented APIs (``coordinator``, ``resolve_token``)
+    that operate on either an organization or a personal user but never
+    both at once. Mirrors the polymorphic owner contract that
+    :class:`~orchestra.db.models.orchestra_models.SlackInstall` carries.
+    """
+    has_org = organization_id is not None
+    has_user = user_id is not None
+    if has_org == has_user:
+        raise ValueError(
+            "Provide exactly one of organization_id or user_id "
+            f"(got organization_id={organization_id!r}, user_id={user_id!r}).",
+        )
+
+
 class AssistantDAO:
     """
     Data access object for Assistant operations.
@@ -158,46 +178,73 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
 
-    def coordinator_for_org(self, organization_id: int) -> Optional[Assistant]:
-        """Return the Coordinator assistant for an organization, if any.
+    def coordinator(
+        self,
+        *,
+        organization_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Assistant]:
+        """Return the Coordinator assistant for an owner scope, if any.
 
         The Coordinator handles cross-assistant administrative traffic
-        (Slack DMs to unknown contacts, ambiguous ``@app <token>`` mentions,
-        org-wide announcements). Exactly one row is allowed per org
-        thanks to ``ux_assistants_one_workspace_coordinator_per_membership``.
+        (Slack DMs to unknown contacts, ambiguous ``@app <token>``
+        mentions, org-wide announcements). Exactly one of
+        ``organization_id`` or ``user_id`` must be supplied:
+
+        * ``organization_id`` — the org's coordinator (one per org
+          thanks to ``ux_assistants_one_workspace_coordinator_per_membership``).
+        * ``user_id`` — the user's personal coordinator (one per user
+          among assistants with ``organization_id IS NULL``).
         """
-        stmt = select(Assistant).where(
-            Assistant.organization_id == organization_id,
-            Assistant.is_coordinator.is_(True),
-        )
+        _require_assistant_scope(organization_id, user_id)
+        stmt = select(Assistant).where(Assistant.is_coordinator.is_(True))
+        if organization_id is not None:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+        else:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+            )
         return self.session.execute(stmt).scalar_one_or_none()
 
     def resolve_token(
         self,
-        organization_id: int,
         token: str,
+        *,
+        organization_id: Optional[int] = None,
+        user_id: Optional[str] = None,
     ) -> list[Assistant]:
-        """Find org assistants whose first name matches ``token`` (case-insensitive).
+        """Find assistants whose first name matches ``token`` (case-insensitive).
 
         Used by the Slack dispatcher to interpret ``@<app> <token> ...``
-        addressing. The caller decides the next step based on the
-        result-list length:
+        addressing. Exactly one of ``organization_id`` or ``user_id``
+        must be supplied:
+
+        * ``organization_id`` — search the org's assistants.
+        * ``user_id`` — search the user's personal assistants
+          (``organization_id IS NULL``).
+
+        The caller decides the next step based on the result-list length:
 
         * 0 → unknown token, route to coordinator with a hint.
         * 1 → unambiguous, route to that assistant.
         * >1 → ambiguous, route to coordinator with a disambiguation hint.
         """
+        _require_assistant_scope(organization_id, user_id)
         token = (token or "").strip()
         if not token:
             return []
-        stmt = (
-            select(Assistant)
-            .where(
-                Assistant.organization_id == organization_id,
-                sa.func.lower(Assistant.first_name) == token.lower(),
-            )
-            .order_by(Assistant.agent_id.asc())
+        stmt = select(Assistant).where(
+            sa.func.lower(Assistant.first_name) == token.lower(),
         )
+        if organization_id is not None:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+        else:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+            )
+        stmt = stmt.order_by(Assistant.agent_id.asc())
         return list(self.session.execute(stmt).scalars().all())
 
     def list_assistants_for_user(

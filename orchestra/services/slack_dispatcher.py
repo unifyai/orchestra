@@ -112,6 +112,19 @@ def _assistant_label(assistant: Assistant) -> dict[str, Any]:
     }
 
 
+def _scope_kwargs(install: SlackInstall) -> dict[str, Any]:
+    """Translate an install's polymorphic owner into AssistantDAO kwargs.
+
+    ``SlackInstall`` always has exactly one of ``organization_id`` /
+    ``user_id`` set (enforced by ``ck_slack_install_one_owner``). The
+    assistant DAO accepts the same XOR, so we just forward whichever
+    field is populated.
+    """
+    if install.organization_id is not None:
+        return {"organization_id": install.organization_id}
+    return {"user_id": install.user_id}
+
+
 def resolve_inbound(
     session: Session,
     *,
@@ -172,15 +185,20 @@ def _coordinator_or_fail(
     session: Session,
     install: SlackInstall,
 ) -> Assistant:
-    coordinator = AssistantDAO(session).coordinator_for_org(install.organization_id)
+    coordinator = AssistantDAO(session).coordinator(**_scope_kwargs(install))
     if coordinator is None:
-        # The install was provisioned without an org coordinator. The
-        # OAuth flow is responsible for ensuring one exists; if it
+        # The install was provisioned without an owner-scope coordinator.
+        # The OAuth flow is responsible for ensuring one exists; if it
         # doesn't, the dispatcher cannot route untokened or ambiguous
         # traffic and we should fail loudly.
+        owner = (
+            f"org {install.organization_id}"
+            if install.organization_id is not None
+            else f"user {install.user_id!r}"
+        )
         raise RuntimeError(
-            f"Slack install {install.id} (org {install.organization_id}) "
-            "has no Coordinator assistant; cannot route ambiguous traffic.",
+            f"Slack install {install.id} ({owner}) has no Coordinator "
+            "assistant; cannot route ambiguous traffic.",
         )
     return coordinator
 
@@ -195,8 +213,8 @@ def _resolve_dm(
 ) -> SlackInboundResolution:
     if token is not None:
         candidates = AssistantDAO(session).resolve_token(
-            install.organization_id,
             token,
+            **_scope_kwargs(install),
         )
         if len(candidates) == 1:
             assistant = candidates[0]
@@ -262,8 +280,8 @@ def _resolve_channel(
 
     if token is not None:
         candidates = AssistantDAO(session).resolve_token(
-            install.organization_id,
             token,
+            **_scope_kwargs(install),
         )
         if len(candidates) == 1:
             assistant = candidates[0]
