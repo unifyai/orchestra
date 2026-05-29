@@ -1507,6 +1507,55 @@ class TestDispatcherDM:
             "token": "alex",
         }
 
+    def test_dm_first_name_with_trailing_comma_resolves(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """Punctuation attached to the token (``@app alex, …``) is stripped."""
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="<@U01BOT> alex, can you help",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == slack_world["alex"].agent_id
+        assert resolution.routing_metadata == {
+            "reason": "token_addressed",
+            "token": "alex",
+        }
+
+    def test_dm_full_name_with_trailing_comma_resolves(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """``@app First Last, …`` resolves despite the comma after the surname."""
+        org = slack_world["org"]
+        another_owner = _make_user(dbsession, "alex-jones-comma-dm")
+        alex_jones = Assistant(
+            user_id=another_owner.id,
+            organization_id=org.id,
+            first_name="Alex",
+            surname="Jones",
+        )
+        dbsession.add(alex_jones)
+        dbsession.flush()
+
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="<@U01BOT> Alex Jones, please help",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == alex_jones.agent_id
+        assert resolution.routing_metadata == {
+            "reason": "token_addressed",
+            "token": "Alex Jones",
+        }
+
 
 class TestDispatcherPersonalInstall:
     """Personal-mode dispatcher: routing scoped to a single Unify user.
