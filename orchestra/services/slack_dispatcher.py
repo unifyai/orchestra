@@ -48,6 +48,17 @@ _BOT_MENTION_RE = re.compile(
     re.DOTALL,
 )
 
+# Punctuation commonly attached to an addressing token when a boss types
+# naturally, e.g. ``@app Lily, …`` or ``@app Lily: …``. Stripped from each
+# word's edges before token resolution. Hyphen/apostrophe are intentionally
+# excluded so names like ``Mary-Jane`` and ``O'Brien`` survive.
+_TOKEN_EDGE_PUNCT = ',.;:!?"`()[]{}<>'
+
+
+def _clean_word(word: str) -> str:
+    """Strip surrounding punctuation from a single addressing word."""
+    return word.strip(_TOKEN_EDGE_PUNCT)
+
 
 @dataclass
 class SlackInboundResolution:
@@ -122,7 +133,7 @@ def _resolve_addressing(
     """
     dao = AssistantDAO(session)
     scope = _scope_kwargs(install)
-    words = rest.split()
+    words = [cleaned for cleaned in (_clean_word(w) for w in rest.split()) if cleaned]
     if not words:
         return [], ""
     if len(words) >= 2:
