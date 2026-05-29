@@ -40,14 +40,13 @@ from orchestra.db.models.orchestra_models import (
 logger = logging.getLogger(__name__)
 
 
-# ``<@U01ABC123>`` followed by optional whitespace then optional token word.
-# Token must start the *user-visible* message after the mention, so we
-# anchor at the start of the trimmed text.
+# ``<@U01ABC123>`` followed by optional whitespace then the user-visible
+# remainder of the message. The mention must start the trimmed text, so we
+# anchor at the start.
 _BOT_MENTION_RE = re.compile(
     r"^\s*<@(?P<user_id>[UW][A-Z0-9]+)>\s*(?P<rest>.*)$",
     re.DOTALL,
 )
-_TOKEN_RE = re.compile(r"^(?P<token>\S+)")
 
 
 @dataclass
@@ -80,12 +79,12 @@ class SlackInboundResolution:
     """
 
 
-def _extract_token(text: str, bot_user_id: str) -> Optional[str]:
-    """Return the token word in ``<@bot> <token> ...`` or None.
+def _extract_rest(text: str, bot_user_id: str) -> Optional[str]:
+    """Return the message text following ``<@bot> ...`` or None.
 
     The mention must be the first non-whitespace element of the message,
     must reference *this* install's bot, and must be followed by a
-    non-empty word.
+    non-empty remainder.
     """
     if not text:
         return None
@@ -97,10 +96,42 @@ def _extract_token(text: str, bot_user_id: str) -> Optional[str]:
     rest = m.group("rest").strip()
     if not rest:
         return None
-    tok_match = _TOKEN_RE.match(rest)
-    if tok_match is None:
-        return None
-    return tok_match.group("token")
+    return rest
+
+
+def _resolve_addressing(
+    session: Session,
+    install: SlackInstall,
+    rest: str,
+) -> tuple[list[Assistant], str]:
+    """Resolve the words after a bot mention to candidate assistants.
+
+    Addressing escalates from most- to least-specific so first-name
+    collisions are still routable:
+
+    1. **Full name** — the leading two words (``"first surname"``) are
+       tried first; an unambiguous full-name hit wins immediately. This
+       is the canonical dedup form when several assistants share a first
+       name.
+    2. **Leading word** — otherwise the single first word is resolved,
+       which :meth:`AssistantDAO.resolve_token` matches against the
+       numeric agent id or the first name.
+
+    Returns the candidate list together with the token string that
+    produced it (surfaced in ``routing_metadata``).
+    """
+    dao = AssistantDAO(session)
+    scope = _scope_kwargs(install)
+    words = rest.split()
+    if not words:
+        return [], ""
+    if len(words) >= 2:
+        full = f"{words[0]} {words[1]}"
+        candidates = dao.resolve_token(full, **scope)
+        if len(candidates) == 1:
+            return candidates, full
+    leading = words[0]
+    return dao.resolve_token(leading, **scope), leading
 
 
 def _assistant_label(assistant: Assistant) -> dict[str, Any]:
@@ -159,7 +190,7 @@ def resolve_inbound(
         return None
 
     is_dm = channel_type == "im"
-    token = _extract_token(text, install.bot_user_id)
+    rest = _extract_rest(text, install.bot_user_id)
 
     if is_dm:
         return _resolve_dm(
@@ -167,7 +198,7 @@ def resolve_inbound(
             slack_dao=slack_dao,
             install=install,
             channel_id=channel_id,
-            token=token,
+            rest=rest,
         )
 
     return _resolve_channel(
@@ -175,7 +206,7 @@ def resolve_inbound(
         slack_dao=slack_dao,
         install=install,
         channel_id=channel_id,
-        token=token,
+        rest=rest,
         thread_ts=thread_ts,
         event_ts=event_ts,
     )
@@ -209,13 +240,10 @@ def _resolve_dm(
     slack_dao: SlackDAO,
     install: SlackInstall,
     channel_id: str,
-    token: Optional[str],
+    rest: Optional[str],
 ) -> SlackInboundResolution:
-    if token is not None:
-        candidates = AssistantDAO(session).resolve_token(
-            token,
-            **_scope_kwargs(install),
-        )
+    if rest is not None:
+        candidates, token = _resolve_addressing(session, install, rest)
         if len(candidates) == 1:
             assistant = candidates[0]
             slack_dao.upsert_dm_route(install.id, channel_id, assistant.agent_id)
@@ -268,7 +296,7 @@ def _resolve_channel(
     slack_dao: SlackDAO,
     install: SlackInstall,
     channel_id: str,
-    token: Optional[str],
+    rest: Optional[str],
     thread_ts: Optional[str],
     event_ts: str,
 ) -> Optional[SlackInboundResolution]:
@@ -278,11 +306,8 @@ def _resolve_channel(
     # downstream replies will carry ``thread_ts == event_ts``.
     route_key = thread_ts or event_ts
 
-    if token is not None:
-        candidates = AssistantDAO(session).resolve_token(
-            token,
-            **_scope_kwargs(install),
-        )
+    if rest is not None:
+        candidates, token = _resolve_addressing(session, install, rest)
         if len(candidates) == 1:
             assistant = candidates[0]
             slack_dao.upsert_thread_route(

@@ -214,15 +214,29 @@ class AssistantDAO:
         organization_id: Optional[int] = None,
         user_id: Optional[str] = None,
     ) -> list[Assistant]:
-        """Find assistants whose first name matches ``token`` (case-insensitive).
+        """Resolve a Slack ``@<app> <token>`` addressing token to assistants.
 
-        Used by the Slack dispatcher to interpret ``@<app> <token> ...``
-        addressing. Exactly one of ``organization_id`` or ``user_id``
-        must be supplied:
+        A token matches an assistant by any of three forms (all
+        case-insensitive, owner-scoped):
+
+        * **agent id** — when ``token`` is all digits, the numeric
+          ``agent_id``. Globally unique, so it is the guaranteed
+          disambiguator.
+        * **first name** — ``first_name`` on its own (convenient when
+          unique within the owner scope).
+        * **full name** — ``"first surname"`` (trimmed), the canonical
+          dedup form when two assistants share a first name.
+
+        Exactly one of ``organization_id`` or ``user_id`` must be
+        supplied:
 
         * ``organization_id`` — search the org's assistants.
         * ``user_id`` — search the user's personal assistants
           (``organization_id IS NULL``).
+
+        An id match stays owner-scoped: an id belonging to a different
+        organization or user does not resolve, preserving cross-scope
+        isolation.
 
         The caller decides the next step based on the result-list length:
 
@@ -234,9 +248,21 @@ class AssistantDAO:
         token = (token or "").strip()
         if not token:
             return []
-        stmt = select(Assistant).where(
-            sa.func.lower(Assistant.first_name) == token.lower(),
+        normalized = token.lower()
+        full_name = sa.func.trim(
+            sa.func.concat(
+                Assistant.first_name,
+                " ",
+                sa.func.coalesce(Assistant.surname, ""),
+            ),
         )
+        match_conditions = [
+            sa.func.lower(Assistant.first_name) == normalized,
+            sa.func.lower(full_name) == normalized,
+        ]
+        if token.isdigit():
+            match_conditions.append(Assistant.agent_id == int(token))
+        stmt = select(Assistant).where(or_(*match_conditions))
         if organization_id is not None:
             stmt = stmt.where(Assistant.organization_id == organization_id)
         else:
