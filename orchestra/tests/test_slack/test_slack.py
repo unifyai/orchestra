@@ -1039,6 +1039,110 @@ class TestCoordinatorAndTokenResolution:
         with pytest.raises(ValueError):
             dao.resolve_token("alex", organization_id=1, user_id="x")  # both
 
+    def test_resolve_token_by_agent_id(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """A numeric token resolves by ``agent_id`` (always unique)."""
+        alex = slack_world["alex"]
+        matches = AssistantDAO(dbsession).resolve_token(
+            str(alex.agent_id),
+            organization_id=slack_world["org"].id,
+        )
+        assert [a.agent_id for a in matches] == [alex.agent_id]
+
+    def test_resolve_token_by_full_name(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """``"first surname"`` (case-insensitive) resolves by full name.
+
+        The fixture gives every assistant the surname ``"Bot"``.
+        """
+        dao = AssistantDAO(dbsession)
+        # Case-insensitive, and surrounding whitespace is trimmed. The
+        # matched form is the single-spaced ``"first surname"`` the
+        # dispatcher constructs from the two leading words.
+        for token in ("Alex Bot", "alex bot", "  ALEX BOT  "):
+            matches = dao.resolve_token(token, organization_id=slack_world["org"].id)
+            assert [a.agent_id for a in matches] == [slack_world["alex"].agent_id]
+
+    def test_resolve_token_full_name_disambiguates_shared_first_name(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """Two assistants share a first name; the full name picks exactly one."""
+        org = slack_world["org"]
+        another_owner = _make_user(dbsession, "alex-jones")
+        alex_jones = Assistant(
+            user_id=another_owner.id,
+            organization_id=org.id,
+            first_name="Alex",
+            surname="Jones",
+        )
+        dbsession.add(alex_jones)
+        dbsession.flush()
+
+        dao = AssistantDAO(dbsession)
+        # First name alone is now ambiguous …
+        assert len(dao.resolve_token("Alex", organization_id=org.id)) == 2
+        # … but the full names disambiguate.
+        assert [
+            a.agent_id for a in dao.resolve_token("Alex Bot", organization_id=org.id)
+        ] == [
+            slack_world["alex"].agent_id,
+        ]
+        assert [
+            a.agent_id for a in dao.resolve_token("Alex Jones", organization_id=org.id)
+        ] == [
+            alex_jones.agent_id,
+        ]
+
+    def test_resolve_token_by_agent_id_is_owner_scoped(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """An agent id from another org must not resolve in this org's scope."""
+        other_owner = _make_user(dbsession, "other-id-org")
+        other_org = _make_org(dbsession, other_owner, "other-id")
+        foreign = _make_assistant(
+            dbsession,
+            other_owner,
+            first_name="Foreign",
+            organization=other_org,
+        )
+
+        matches = AssistantDAO(dbsession).resolve_token(
+            str(foreign.agent_id),
+            organization_id=slack_world["org"].id,
+        )
+        assert matches == []
+
+    def test_resolve_token_numeric_first_name_still_matches_by_name(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """A digit-only first name resolves by name as well as colliding ids.
+
+        ``isdigit()`` tokens additionally try ``agent_id``, but the name
+        match must still fire so an assistant literally named ``"007"`` is
+        reachable by that token.
+        """
+        org = slack_world["org"]
+        agent_007 = _make_assistant(
+            dbsession,
+            slack_world["owner"],
+            first_name="007",
+            organization=org,
+        )
+        matches = AssistantDAO(dbsession).resolve_token("007", organization_id=org.id)
+        assert agent_007.agent_id in {a.agent_id for a in matches}
+
 
 # ============================================================================
 # Dispatcher — DMs
@@ -1329,6 +1433,79 @@ class TestDispatcherDM:
         names = {c["first_name"] for c in meta["candidates"]}
         assert names == {"Alex"}
         assert len(meta["candidates"]) == 2
+
+    def test_dm_full_name_resolves_when_first_name_is_ambiguous(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """``@app First Last`` routes to one assistant even when first names clash."""
+        org = slack_world["org"]
+        another_owner = _make_user(dbsession, "alex-jones-dm")
+        alex_jones = Assistant(
+            user_id=another_owner.id,
+            organization_id=org.id,
+            first_name="Alex",
+            surname="Jones",
+        )
+        dbsession.add(alex_jones)
+        dbsession.flush()
+
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="<@U01BOT> Alex Jones please help",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == alex_jones.agent_id
+        assert resolution.routing_metadata == {
+            "reason": "token_addressed",
+            "token": "Alex Jones",
+        }
+
+    def test_dm_agent_id_addresses_assistant(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """``@app <agent_id>`` routes by numeric id (the guaranteed disambiguator)."""
+        alex = slack_world["alex"]
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text=f"<@U01BOT> {alex.agent_id} hello there",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == alex.agent_id
+        assert resolution.routing_metadata == {
+            "reason": "token_addressed",
+            "token": str(alex.agent_id),
+        }
+
+    def test_dm_full_name_falls_back_to_first_name_when_no_surname_match(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """A trailing word that isn't the surname is treated as message text.
+
+        ``@app alex hello`` has two words but ``"alex hello"`` is not a
+        full name, so resolution falls back to the leading first-name word.
+        """
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="<@U01BOT> alex hello",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == slack_world["alex"].agent_id
+        assert resolution.routing_metadata == {
+            "reason": "token_addressed",
+            "token": "alex",
+        }
 
 
 class TestDispatcherPersonalInstall:
