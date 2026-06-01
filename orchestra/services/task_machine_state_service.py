@@ -1360,6 +1360,10 @@ def _reconcile_scheduled_activation_materialization(
     current_upsert_body = _scheduled_activation_upsert_body(current_activation)
     previous_delete_body = _scheduled_activation_delete_body(previous_activation)
     if current_upsert_body is not None:
+        if previous_delete_body is not None and _scheduled_activation_delivery_identity(
+            previous_delete_body,
+        ) == _scheduled_activation_delivery_identity(current_upsert_body):
+            return
         if previous_delete_body is not None:
             current_upsert_body["previous_activation_revision"] = previous_delete_body[
                 "activation_revision"
@@ -1380,6 +1384,28 @@ def _reconcile_scheduled_activation_materialization(
             path=_TASK_ACTIVATION_DELETE_PATH,
             body=previous_delete_body,
         )
+
+
+def _scheduled_activation_delivery_identity(
+    body: Mapping[str, Any] | None,
+) -> tuple[str, int, str, str, str] | None:
+    """Return the external delivery identity for one scheduled activation body."""
+
+    if not isinstance(body, Mapping):
+        return None
+    assistant_id = _coerce_optional_str(body.get("assistant_id"))
+    task_id = _coerce_int(body.get("task_id"))
+    activation_revision = _coerce_optional_str(body.get("activation_revision"))
+    scheduled_for = _coerce_datetime_string(body.get("scheduled_for"))
+    execution_mode = _coerce_optional_str(body.get("execution_mode")) or "live"
+    if (
+        not assistant_id
+        or task_id is None
+        or not activation_revision
+        or not scheduled_for
+    ):
+        return None
+    return (assistant_id, task_id, activation_revision, scheduled_for, execution_mode)
 
 
 def _scheduled_activation_snapshot(

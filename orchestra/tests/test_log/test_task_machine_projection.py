@@ -35,6 +35,9 @@ TASK_OUTBOUND_OPERATIONS_CONTEXT = (
     )
 )
 SECONDARY_USER_ID = "seconday_user"
+_ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION = (
+    task_machine_state_service._reconcile_scheduled_activation_materialization
+)
 
 
 async def _ensure_task_machine_project(client: AsyncClient) -> None:
@@ -202,6 +205,112 @@ def test_scheduled_activation_upsert_body_includes_wake_context():
     )
     assert body["visibility_policy"] == "silent_by_default"
     assert body["recurrence_hint"] == "recurring"
+
+
+def _scheduled_activation_payload(
+    *,
+    revision: str = "rev-1",
+    next_due_at: str = "2026-04-10T09:00:00+00:00",
+    execution_mode: str = "offline",
+    source_task_log_id: int = 555,
+) -> dict:
+    return {
+        "assistant_id": "42",
+        "task_id": 101,
+        "source_task_log_id": source_task_log_id,
+        "activation_kind": "scheduled",
+        "execution_mode": execution_mode,
+        "activation_revision": revision,
+        "next_due_at": next_due_at,
+        "task_name": "Morning briefing",
+        "task_description": "Prepare the morning update before the user checks in.",
+    }
+
+
+def test_reconcile_skips_unchanged_scheduled_delivery_identity(monkeypatch):
+    """Repeated projection of the same delivery must not rematerialize."""
+
+    posts = []
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_reconcile_scheduled_activation_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_post_task_activation_request",
+        lambda **kwargs: posts.append(kwargs),
+    )
+
+    previous = _scheduled_activation_payload(source_task_log_id=555)
+    current = {**_scheduled_activation_payload(source_task_log_id=555)}
+    current["last_materialized_at"] = "2026-04-10T08:00:00+00:00"
+
+    task_machine_state_service._reconcile_scheduled_activation_materialization(
+        previous_activation=previous,
+        current_activation=current,
+    )
+
+    assert posts == []
+
+
+def test_reconcile_upserts_changed_scheduled_delivery_identity(monkeypatch):
+    """Changed due time should rematerialize and include stale cleanup fields."""
+
+    posts = []
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_reconcile_scheduled_activation_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_post_task_activation_request",
+        lambda **kwargs: posts.append(kwargs),
+    )
+
+    task_machine_state_service._reconcile_scheduled_activation_materialization(
+        previous_activation=_scheduled_activation_payload(
+            next_due_at="2026-04-10T09:00:00+00:00",
+        ),
+        current_activation=_scheduled_activation_payload(
+            revision="rev-2",
+            next_due_at="2026-04-10T09:30:00+00:00",
+        ),
+    )
+
+    assert len(posts) == 1
+    assert posts[0]["path"] == task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH
+    body = posts[0]["body"]
+    assert body["activation_revision"] == "rev-2"
+    assert body["scheduled_for"] == "2026-04-10T09:30:00+00:00"
+    assert body["previous_activation_revision"] == "rev-1"
+    assert body["previous_scheduled_for"] == "2026-04-10T09:00:00+00:00"
+
+
+def test_reconcile_deletes_unarmed_scheduled_delivery(monkeypatch):
+    """Dropping an armed activation should still delete its Cloud Task."""
+
+    posts = []
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_reconcile_scheduled_activation_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_post_task_activation_request",
+        lambda **kwargs: posts.append(kwargs),
+    )
+
+    task_machine_state_service._reconcile_scheduled_activation_materialization(
+        previous_activation=_scheduled_activation_payload(),
+        current_activation=None,
+    )
+
+    assert len(posts) == 1
+    assert posts[0]["path"] == task_machine_state_service._TASK_ACTIVATION_DELETE_PATH
+    assert posts[0]["body"]["activation_revision"] == "rev-1"
 
 
 @pytest.mark.anyio
