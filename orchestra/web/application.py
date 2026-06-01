@@ -20,6 +20,11 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from orchestra.pii_scrub import (
+    install_log_redaction,
+    scrub_sentry_breadcrumb,
+    scrub_sentry_event,
+)
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
 from orchestra_core.observability.prometheus_middleware import metrics
@@ -37,6 +42,11 @@ def get_app() -> FastAPI:
     middleware (rate limiting, staging gate) and mounts the platform router.
     """
     import os
+
+    # Enforce pseudonymisation at the observability periphery before anything
+    # can emit a log line: scrub email/phone-shaped PII from every log record
+    # process-wide (covers Cloud Logging via stdout). Idempotent.
+    install_log_redaction()
 
     cloud_project = os.environ.get("GCP_PROJECT_ID", settings.gcp_project)
     managed_project = os.environ.get("ORCHESTRA_MANAGED_GCP_PROJECT", "gcp-project-saas")
@@ -62,6 +72,12 @@ def get_app() -> FastAPI:
             dsn=settings.sentry_dsn,
             traces_sample_rate=settings.sentry_sample_rate,
             environment=settings.environment,
+            # Pseudonymisation procedure: never let the SDK attach default PII
+            # (request bodies, cookies, user IP), and run every event /
+            # breadcrumb through the PII scrubber before transmission.
+            send_default_pii=False,
+            before_send=scrub_sentry_event,
+            before_breadcrumb=scrub_sentry_breadcrumb,
             integrations=[
                 FastApiIntegration(transaction_style="endpoint"),
                 LoggingIntegration(
