@@ -16,6 +16,7 @@ that it can be (a) imported anywhere in the platform without import-order
 concerns, and (b) loaded by path by the compliance evidence generator, which
 exercises the real redaction logic rather than re-implementing it.
 """
+
 from __future__ import annotations
 
 import logging
