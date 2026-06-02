@@ -4,6 +4,8 @@ from zoneinfo import available_timezones
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel, OptionalSafeText
+
 VALID_TIMEZONES = available_timezones()
 
 
@@ -11,10 +13,10 @@ class UserRequest(BaseModel):
     email: Optional[str] = None
     user_id: Optional[str] = None
     image: Optional[str] = None
-    name: Optional[str] = None
-    last_name: Optional[str] = None
-    job_title: Optional[str] = None
-    bio: Optional[str] = None
+    name: OptionalSafeLabel = None
+    last_name: OptionalSafeLabel = None
+    job_title: OptionalSafeLabel = None
+    bio: OptionalSafeText = None
     timezone: Optional[str] = None
     phone_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
@@ -139,7 +141,7 @@ class CreditGrantLinkCreateRequest(BaseModel):
     expires_in_days: int = 7
     credit_amount: Optional[float] = None  # Defaults to assistant_creation_cost
     max_claims: Optional[int] = 1  # None = unlimited
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
 
 
 class CreditGrantLinkClaimDetail(BaseModel):

@@ -5,19 +5,25 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
+from orchestra.web.api.utils.safe_text import (
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+)
+
 
 class TeamCreate(BaseModel):
     """Schema for creating a team."""
 
-    name: str
-    description: Optional[str] = None
+    name: SafeLabel
+    description: OptionalSafeText = None
 
 
 class TeamUpdate(BaseModel):
     """Schema for updating a team."""
 
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: OptionalSafeLabel = None
+    description: OptionalSafeText = None
 
 
 class TeamMemberAdd(BaseModel):

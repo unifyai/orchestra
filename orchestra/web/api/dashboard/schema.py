@@ -4,6 +4,8 @@ from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel, SafeLabel
+
 
 class RegisterTokenRequest(BaseModel):
     """Request body for POST /dashboards/tokens."""
@@ -266,10 +268,10 @@ class DashboardActionRecord(BaseModel):
     """Action metadata stored in the Dashboards/Actions context."""
 
     tile_token: str
-    action_name: str
+    action_name: SafeLabel
     function_id: int
     request: str = ""
-    label: str = ""
+    label: OptionalSafeLabel = ""
     icon: Optional[str] = None
     scope: str = "dashboard"
 

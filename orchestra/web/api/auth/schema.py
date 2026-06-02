@@ -5,6 +5,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel
+
 # ---------------------------------------------------------------------------
 # Shared password validation
 # ---------------------------------------------------------------------------
@@ -52,8 +54,8 @@ class EmailRegisterRequest(BaseModel):
     """Request to register a new user with email/password."""
 
     email: EmailStr
-    name: Optional[str] = None
-    last_name: Optional[str] = None
+    name: OptionalSafeLabel = None
+    last_name: OptionalSafeLabel = None
     password: str = Field(
         ...,
         min_length=_PASSWORD_MIN_LENGTH,

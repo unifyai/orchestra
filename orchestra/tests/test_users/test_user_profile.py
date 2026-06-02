@@ -713,3 +713,60 @@ async def test_explicit_null_does_clear_field(client: AsyncClient):
     assert data["bio"] is None  # explicitly cleared
     assert data["name"] == "Diana"  # preserved
     assert data["last_name"] == "Prince"  # preserved
+
+
+# ============================================================================
+# XSS / HTML-injection Tests (identity fields)
+# ============================================================================
+
+_XSS_PAYLOAD = "<script>alert(document.domain)</script>"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("field", ["name", "last_name", "job_title", "bio"])
+async def test_create_user_rejects_html_in_identity_fields(
+    client: AsyncClient,
+    field: str,
+):
+    """Profile identity fields must reject HTML markup (stored-XSS guard)."""
+    url = "/v0/admin/user"
+    params = {"email": f"xss_profile_{field}@example.com", field: _XSS_PAYLOAD}
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 422, response.json()
+    assert field in response.json()["detail"][0]["loc"]
+
+
+@pytest.mark.anyio
+async def test_update_user_rejects_html_in_name(client: AsyncClient):
+    """Updating a profile name to an HTML payload must be rejected."""
+    create = await client.post(
+        "/v0/admin/user",
+        json={"email": "xss_profile_update@example.com", "name": "Clark"},
+        headers=HEADERS,
+    )
+    user_id = create.json()["id"]
+
+    response = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "name": "<img src=x onerror=alert(1)>"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 422, response.json()
+
+
+@pytest.mark.anyio
+async def test_create_user_accepts_normal_identity_fields(client: AsyncClient):
+    """Ordinary punctuation in identity fields must still be accepted."""
+    url = "/v0/admin/user"
+    params = {
+        "email": "legit_profile@example.com",
+        "name": "Renée",
+        "last_name": "O'Brien-Smith",
+        "job_title": "VP, R&D (EMEA)",
+        "bio": "Builder of things.\nLoves coffee & code.",
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["last_name"] == "O'Brien-Smith"
+    assert data["job_title"] == "VP, R&D (EMEA)"

@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel
+
 if TYPE_CHECKING:
     from orchestra.db.dao.billing_plan_assignment_dao import EffectivePlan
 
@@ -387,7 +389,7 @@ class BillingProfileUpdate(BaseModel):
     """
 
     billing_email: Optional[str] = None
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
     tax_id: Optional[str] = None
     tax_id_type: Optional[str] = None
     billing_address: Optional[BillingAddress] = None

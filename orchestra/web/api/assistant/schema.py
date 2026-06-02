@@ -5,6 +5,15 @@ from zoneinfo import available_timezones
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from pydantic.generics import GenericModel
 
+from orchestra.web.api.utils.safe_text import (
+    MAX_LABEL_LENGTH,
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+    SafeText,
+    validate_safe_text,
+)
+
 T = TypeVar("T")
 
 VALID_TIMEZONES = available_timezones()
@@ -25,7 +34,10 @@ def _normalize_job_title(v: Optional[str]) -> Optional[str]:
     if v is None:
         return None
     trimmed = v.strip()
-    return trimmed or None
+    if not trimmed:
+        return None
+    # Block HTML/script injection in the (displayed) job title.
+    return validate_safe_text(trimmed, max_length=MAX_LABEL_LENGTH)
 
 
 class InfoResponse(GenericModel, Generic[T]):
@@ -70,12 +82,12 @@ class AssistantCreate(BaseModel):
     ``organization_id`` and org RBAC, not by rewriting ``user_id``.
     """
 
-    first_name: Optional[str] = Field(
+    first_name: OptionalSafeLabel = Field(
         None,
         description="First name of the assistant",
         example="Ada",
     )
-    surname: Optional[str] = Field(
+    surname: OptionalSafeLabel = Field(
         None,
         description="Surname of the assistant",
         example="Lovelace",
@@ -134,7 +146,7 @@ class AssistantCreate(BaseModel):
         description="Whether to enable filesystem sync with user's desktop",
         example=False,
     )
-    about: Optional[str] = Field(
+    about: OptionalSafeText = Field(
         None,
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
@@ -461,17 +473,17 @@ class DemoAssistantCreate(BaseModel):
         description="ID of the assistant to clone configuration from",
         example=12345,
     )
-    label: str = Field(
+    label: SafeLabel = Field(
         ...,
         description="Human-readable label for this demo (e.g., 'Richard Branson demo')",
         example="Richard Branson demo",
     )
-    first_name: str = Field(
+    first_name: SafeLabel = Field(
         ...,
         description="First name of the demo assistant",
         example="Lucy",
     )
-    surname: str = Field(
+    surname: SafeLabel = Field(
         ...,
         description="Surname of the demo assistant",
         example="Branson-Demo",
@@ -494,12 +506,12 @@ class DemoAssistantCreate(BaseModel):
         example="US",
     )
     # Optional prospect details - if provided, Unity will pre-populate the boss contact
-    prospect_first_name: Optional[str] = Field(
+    prospect_first_name: OptionalSafeLabel = Field(
         None,
         description="Prospect's first name (optional, for pre-populating boss contact in Unity)",
         example="Richard",
     )
-    prospect_surname: Optional[str] = Field(
+    prospect_surname: OptionalSafeLabel = Field(
         None,
         description="Prospect's surname (optional, for pre-populating boss contact in Unity)",
         example="Branson",
@@ -607,12 +619,12 @@ class AssistantUpdate(BaseModel):
     Only includes fields that can be updated.
     """
 
-    first_name: Optional[str] = Field(
+    first_name: OptionalSafeLabel = Field(
         None,
         description="First name of the assistant",
         example="Ada",
     )
-    surname: Optional[str] = Field(
+    surname: OptionalSafeLabel = Field(
         None,
         description="Surname of the assistant",
         example="Lovelace",
@@ -672,7 +684,7 @@ class AssistantUpdate(BaseModel):
         description="Whether to enable filesystem sync with user's desktop",
         example=False,
     )
-    about: Optional[str] = Field(
+    about: OptionalSafeText = Field(
         None,
         description="Brief description about the assistant",
         example="Award-winning mathematician specializing in algorithm development",
@@ -861,12 +873,12 @@ class VoiceCreate(BaseModel):
         description="Provider Voice ID",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
-    name: str = Field(
+    name: SafeLabel = Field(
         ...,
         description="User-given name for the voice",
         example="English Woman Calm 1",
     )
-    description: str = Field(
+    description: SafeText = Field(
         ...,
         description="Description of the voice",
         example="Calm and relaxing voice of an english-speaking woman",
@@ -928,9 +940,9 @@ class VoiceRead(VoiceCreate):
 
 
 class VoiceCloneRequestData(BaseModel):
-    name: str = Field(..., description="Name for the new cloned voice")
+    name: SafeLabel = Field(..., description="Name for the new cloned voice")
     language: str = Field(..., description="Language of the audio clip (e.g., 'en')")
-    description: Optional[str] = Field(
+    description: OptionalSafeText = Field(
         None,
         description="Optional description for the voice",
     )
@@ -1025,13 +1037,13 @@ class VoiceGenerateRequest(BaseModel):
 
 
 class VoiceDesignGeneratePreviewsRequest(BaseModel):
-    voice_description: Optional[str] = Field(
+    voice_description: OptionalSafeText = Field(
         None,
         min_length=20,
         max_length=1000,
         description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). If `bio` is provided, this field can be used to add more specific voice instructions. At least one of bio or voice_description should be provided.",
     )
-    bio: Optional[str] = Field(
+    bio: OptionalSafeText = Field(
         None,
         description="A biography or background of the character to generate a voice description from. Used with `voice_description` to generate a richer prompt for the TTS provider. At least one of bio or voice_description should be provided.",
     )
@@ -1097,11 +1109,11 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
         ...,
         description="The 'generated_voice_id' obtained from the '/design/preview'.",
     )
-    voice_name: str = Field(
+    voice_name: SafeLabel = Field(
         ...,
         description="Name for the new voice.",
     )
-    voice_description: str = Field(
+    voice_description: SafeText = Field(
         ...,
         description="Description for the new voice.",
     )
@@ -1511,7 +1523,7 @@ class GrantedFeaturesResponse(BaseModel):
 class SecretCreate(BaseModel):
     """Request body for ``POST /assistant/{id}/secret``."""
 
-    secret_name: str = Field(..., description="Unique name for the secret.")
+    secret_name: SafeLabel = Field(..., description="Unique name for the secret.")
     secret_value: str = Field(..., description="Secret payload (token, key, etc.).")
 
 
@@ -1618,7 +1630,7 @@ class AdminUpdateUserByAssistant(BaseModel):
         description="Timezone to set for the user in IANA format.",
         example="America/New_York",
     )
-    bio: Optional[str] = Field(
+    bio: OptionalSafeText = Field(
         None,
         description="Bio/description to set for the user.",
         example="Software engineer focused on AI systems.",
@@ -1655,7 +1667,7 @@ class AdminUpdateAssistant(BaseModel):
         description="Timezone to set for the assistant in IANA format.",
         example="Europe/London",
     )
-    about: Optional[str] = Field(
+    about: OptionalSafeText = Field(
         None,
         description="About/description to set for the assistant.",
         example="AI assistant specializing in customer support.",

@@ -3,9 +3,11 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel, SafeLabel
+
 
 class DesktopCreate(BaseModel):
-    name: str = Field(
+    name: SafeLabel = Field(
         ...,
         description="Human-readable label for the desktop",
         example="Julia's MacBook Pro",
@@ -23,7 +25,7 @@ class DesktopCreate(BaseModel):
 
 
 class DesktopUpdate(BaseModel):
-    name: Optional[str] = Field(
+    name: OptionalSafeLabel = Field(
         None,
         description="Human-readable label for the desktop",
         example="Julia's MacBook Pro",

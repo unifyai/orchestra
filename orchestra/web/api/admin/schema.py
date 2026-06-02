@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING, Annotated, Optional
 
 from pydantic import BaseModel, PlainSerializer
 
+from orchestra.web.api.utils.safe_text import (
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+)
+
 if TYPE_CHECKING:
     from orchestra.db.models.orchestra_models import (
         BillingPlanAssignment,
@@ -196,13 +202,13 @@ class BillingPlanTemplateCreate(BaseModel):
     so those fields are absent too.
     """
 
-    name: str
+    name: SafeLabel
     # Optional customer-facing label; falls back to ``name`` when omitted.
     # This is what gets printed on Stripe invoice line items and dashboard
     # plan summaries — keep it short, capitalised, no internal jargon.
-    display_name: Optional[str] = None
+    display_name: OptionalSafeLabel = None
     billing_mode: str  # BillingMode: CREDITS | METERED
-    description: Optional[str] = None
+    description: OptionalSafeText = None
     # Catalog placement — two orthogonal booleans (replaces the legacy
     # ``availability`` enum). ``is_custom=True`` hides from the public
     # catalog (per-customer bespoke contract). ``is_active=False``
@@ -470,7 +476,7 @@ class BillingProfileUpdateRequest(BaseModel):
     user_id: Optional[str] = None
     organization_id: Optional[int] = None
     billing_email: Optional[str] = None
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
     tax_id: Optional[str] = None
     tax_id_type: Optional[str] = None
     billing_address: Optional[dict] = None
@@ -545,9 +551,9 @@ class PlanGroupCreateRequest(BaseModel):
     a starter group, then add templates via the membership endpoints.
     """
 
-    name: str
-    display_name: Optional[str] = None
-    description: Optional[str] = None
+    name: SafeLabel
+    display_name: OptionalSafeLabel = None
+    description: OptionalSafeText = None
     is_active: bool = True
     created_by_user_id: Optional[str] = None
 
@@ -561,8 +567,8 @@ class PlanGroupUpdateRequest(BaseModel):
     documented "unset" shape).
     """
 
-    display_name: Optional[str] = None
-    description: Optional[str] = None
+    display_name: OptionalSafeLabel = None
+    description: OptionalSafeText = None
     is_active: Optional[bool] = None
 
 

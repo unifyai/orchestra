@@ -705,6 +705,15 @@ def create_api_key(
     custom_key: Optional[str] = None,
     session: Session = Depends(get_db_session),
 ):
+    from orchestra.web.api.utils.safe_text import validate_safe_text
+
+    try:
+        name = validate_safe_text(name, max_length=255, allow_empty=True)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid API key name: {exc}",
+        )
     api_key_dao = ApiKeyDAO(session)
     existing_api_key = api_key_dao.filter(
         user_id=user_id,
@@ -829,6 +838,15 @@ def create_organization_api_key(
         custom_key: Optional custom API key value. If not provided, a random key
                     will be generated. Must be unique across all API keys.
     """
+    from orchestra.web.api.utils.safe_text import validate_safe_text
+
+    try:
+        name = validate_safe_text(name, max_length=255, allow_empty=True)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid API key name: {exc}",
+        )
     api_key_dao = ApiKeyDAO(session)
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
@@ -906,6 +924,19 @@ def create_organization(
     owner_id: Optional[str] = None,
     session: Session = Depends(get_db_session),
 ):
+    # This legacy endpoint takes ``name`` as a query param, so it bypasses the
+    # Pydantic body validation used elsewhere. Validate it explicitly to block
+    # HTML/script injection in stored organization names (defense-in-depth).
+    from orchestra.web.api.utils.safe_text import validate_safe_text
+
+    try:
+        name = validate_safe_text(name, max_length=255)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid organization name: {exc}",
+        )
+
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)

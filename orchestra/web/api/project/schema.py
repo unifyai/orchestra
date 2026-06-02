@@ -4,6 +4,11 @@ from pydantic import BaseModel, Field
 
 # Import the template schemas from interface module
 from orchestra.web.api.interface.schema import ProjectTemplateSchema
+from orchestra.web.api.utils.safe_text import (
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+)
 
 
 class FavoriteProjectIn(BaseModel):
@@ -53,7 +58,7 @@ class ProjectConfig(BaseModel):
         None,
         description="Position/order of the project in list",
     )
-    description: Optional[str] = Field(
+    description: OptionalSafeText = Field(
         None,
         description="Optional description of the project",
         max_length=256,
@@ -88,7 +93,7 @@ class ProjectUpdate(BaseModel):
         None,
         description="Position/order of the project in list",
     )
-    description: Optional[str] = Field(
+    description: OptionalSafeText = Field(
         None,
         description="Optional description of the project",
         max_length=256,
@@ -129,11 +134,11 @@ class DuplicateProjectRequest(BaseModel):
     from_user_id: str
     from_project_name: str
     to_user_id: str
-    new_project_name: str
+    new_project_name: SafeLabel
 
 
 class ProjectCommitRequest(BaseModel):
-    commit_message: Optional[str] = None
+    commit_message: OptionalSafeText = None
 
 
 class ProjectRollbackRequest(BaseModel):
@@ -156,9 +161,9 @@ class ExportProjectTemplateRequest(BaseModel):
     checkpoint: bool = False
     # Common template fields
     include_metadata: bool = True
-    description: Optional[str] = None
-    tags: List[str] = []
-    template_name: Optional[str] = None
+    description: OptionalSafeText = None
+    tags: List[SafeLabel] = []
+    template_name: OptionalSafeLabel = None
 
 
 class ImportProjectTemplateRequest(BaseModel):
