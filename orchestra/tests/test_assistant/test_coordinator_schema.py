@@ -141,23 +141,29 @@ def test_personal_coordinator_unique_index_scopes_to_personal_rows(
         dbsession.flush()
 
 
-def test_coordinator_rows_must_be_personal_scope(
+def test_org_coordinator_unique_index_scopes_to_org_rows(
     dbsession: Session,
 ) -> None:
-    """Coordinator rows cannot be organization-scoped."""
+    """Each organization can have one Coordinator while other scopes remain valid."""
     owner = _make_user(dbsession, "org-coordinator-unique")
     organization = _make_organization(dbsession, owner, "org-coordinator-unique")
-    invalid = Assistant(
+    other_org = _make_organization(dbsession, owner, "org-coordinator-other")
+    _make_assistant(dbsession, owner, organization=organization, is_coordinator=True)
+    _make_assistant(dbsession, owner, organization=organization)
+    _make_assistant(dbsession, owner, organization=other_org, is_coordinator=True)
+    _make_assistant(dbsession, owner, is_coordinator=True)
+
+    duplicate = Assistant(
         user_id=owner.id,
         organization_id=organization.id,
-        first_name="Org",
+        first_name="Duplicate",
         surname="Coordinator",
         is_coordinator=True,
     )
-    dbsession.add(invalid)
+    dbsession.add(duplicate)
     with pytest.raises(
         IntegrityError,
-        match="ck_assistants_coordinator_personal_scope",
+        match="ux_assistants_one_workspace_coordinator_per_membership",
     ):
         dbsession.flush()
 
