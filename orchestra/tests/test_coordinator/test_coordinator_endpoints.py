@@ -238,7 +238,18 @@ def _assert_coordinator_provisioned(
             Assistant.is_coordinator.is_(True),
         ),
     )
-    assert org_scoped_coordinator is None
+    assert org_scoped_coordinator is not None
+    assert org_scoped_coordinator.agent_id != coordinator.agent_id
+    assert org_scoped_coordinator.is_coordinator is True
+    assert org_scoped_coordinator.organization_id == org_data["id"]
+    assert org_scoped_coordinator.user_id == owner_user_id
+    assert (
+        org_scoped_coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
+    )
+    assert (
+        org_scoped_coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+    )
+    assert org_scoped_coordinator.about == COORDINATOR_BIO
     assert {
         (membership.contact_id, membership.relationship)
         for membership in _personal_memberships(
@@ -257,9 +268,20 @@ def _assert_coordinator_provisioned(
         coordinator.agent_id,
         "assistant:write",
     )
+    assert resource_access_dao.check_user_permission(
+        owner_user_id,
+        "assistant",
+        org_scoped_coordinator.agent_id,
+        "assistant:write",
+    )
     _assert_owner_contact_row(
         dbsession,
         coordinator=coordinator,
+        owner_user_id=owner_user_id,
+    )
+    _assert_owner_contact_row(
+        dbsession,
+        coordinator=org_scoped_coordinator,
         owner_user_id=owner_user_id,
     )
 

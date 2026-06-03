@@ -322,6 +322,14 @@ class AssistantRead(AssistantCreate):
     owner and ``organization_id`` is the org access scope.
     """
 
+    about: Optional[str] = Field(
+        None,
+        description=(
+            "Description of the assistant. Read responses may include longer "
+            "system-authored bios, such as the canonical Coordinator persona."
+        ),
+    )
+
     user_desktop_url: Optional[str] = Field(
         None,
         description="Resolved URL of the assigned user desktop (from device registry)",
