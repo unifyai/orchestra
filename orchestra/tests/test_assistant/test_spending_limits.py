@@ -27,14 +27,18 @@ def mock_assistant_infra_calls(request):
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
         "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings:
+    ) as mock_settings, patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_create_pubsub_topic:
 
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
         # Patch is_staging to skip credit/billing checks during assistant creation
         mock_settings.is_staging = True
 
-        yield mock_wake_up, mock_reawaken
+        yield mock_wake_up, mock_reawaken, mock_create_pubsub_topic
 
 
 async def _create_assistant(
@@ -1816,8 +1820,8 @@ async def test_spend_endpoint_requires_month_parameter(client: AsyncClient):
 async def test_org_member_can_get_other_members_assistant_spend(client: AsyncClient):
     """Test that an org member can view spend for an assistant created by another member.
 
-    The spend endpoint should allow any org member to view spend data for any
-    assistant in the org, not just assistants they personally created.
+    The spend endpoint should allow org-wide access for regular assistants while
+    keeping other users' workspace coordinators private.
     """
     # Owner creates org
     owner = await create_test_user(client, "spend_org_owner@example.com")
@@ -1873,12 +1877,34 @@ async def test_org_member_can_get_other_members_assistant_spend(client: AsyncCli
     data = response.json()
     assert str(data["agent_id"]) == str(agent_id)
 
+    with patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_create_pubsub_topic:
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+        owner_coordinator_resp = await client.post(
+            f"/v0/user/{owner['id']}/coordinator?organization_id={org_id}",
+            headers=owner_org_headers,
+        )
+    assert owner_coordinator_resp.status_code in [
+        200,
+        201,
+    ], owner_coordinator_resp.json()
+    owner_coordinator_id = int(owner_coordinator_resp.json()["coordinator_id"])
+
+    hidden = await client.get(
+        f"/v0/assistant/{owner_coordinator_id}/spend?month=2026-01",
+        headers=member_org_headers,
+    )
+    assert hidden.status_code == 404, hidden.json()
+    assert hidden.json()["detail"] == "Assistant not found."
+
 
 @pytest.mark.anyio
 async def test_org_member_can_get_other_members_assistant_spending_limit(
     client: AsyncClient,
 ):
-    """Test that an org member can view spending limit for another member's assistant."""
+    """Org members can view regular assistant limits but not other coordinators."""
     # Owner creates org
     owner = await create_test_user(client, "limit_org_owner@example.com")
     response = await _create_organization(
@@ -1911,6 +1937,19 @@ async def test_org_member_can_get_other_members_assistant_spending_limit(
         "Content-Type": "application/json",
     }
 
+    owner_member_limit = await client.put(
+        f"/v0/organizations/{org_id}/members/{owner['id']}/spending-limit",
+        json={"monthly_spending_cap": 80.00},
+        headers=owner_org_headers,
+    )
+    assert owner_member_limit.status_code == 200, owner_member_limit.json()
+    requester_member_limit = await client.put(
+        f"/v0/organizations/{org_id}/members/{member['id']}/spending-limit",
+        json={"monthly_spending_cap": 200.00},
+        headers=owner_org_headers,
+    )
+    assert requester_member_limit.status_code == 200, requester_member_limit.json()
+
     # Owner creates an assistant in the org
     response = await _create_assistant(
         client,
@@ -1932,6 +1971,30 @@ async def test_org_member_can_get_other_members_assistant_spending_limit(
     )
     data = response.json()
     assert str(data["agent_id"]) == str(agent_id)
+    assert data["monthly_spending_cap"] is None
+    assert data["effective_limit"] == 80.00
+
+    with patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_create_pubsub_topic:
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+        owner_coordinator_resp = await client.post(
+            f"/v0/user/{owner['id']}/coordinator?organization_id={org_id}",
+            headers=owner_org_headers,
+        )
+    assert owner_coordinator_resp.status_code in [
+        200,
+        201,
+    ], owner_coordinator_resp.json()
+    owner_coordinator_id = int(owner_coordinator_resp.json()["coordinator_id"])
+
+    hidden = await client.get(
+        f"/v0/assistant/{owner_coordinator_id}/spending-limit",
+        headers=member_org_headers,
+    )
+    assert hidden.status_code == 404, hidden.json()
+    assert hidden.json()["detail"] == "Assistant not found."
 
 
 @pytest.mark.anyio

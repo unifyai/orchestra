@@ -576,44 +576,118 @@ class CoordinatorTranscriptSeedResponse(BaseModel):
     log_event_id: int
 
 
-class CoordinatorPreseedWrite(BaseModel):
-    """One batch of rows to write into a colleague-owned context."""
+class OnboardingSessionStarted(BaseModel):
+    """Request body for the picker-resolution onboarding event.
+
+    Console POSTs this the moment the user picks "I'd rather chat"
+    or "Start Call" in the Coordinator onboarding picker. The body
+    is intentionally tiny — Unity reads ``Coordinator/State`` and
+    the chat-history snapshot itself when generating the opener,
+    and only needs a hint about which medium and a best-effort
+    snapshot of the client-side checklist progress to lean on when
+    narrating the recap path.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    context: str = Field(..., min_length=1)
-    entries: List[Dict[str, Any]] = Field(..., min_length=1)
+    medium: Literal["chat", "call"]
+    completed_step_ids: Optional[List[str]] = Field(default=None)
 
 
-class CoordinatorPreseedRequest(BaseModel):
-    """Request body for seeding a colleague's own working memory."""
+class OnboardingSessionStartedResponse(BaseModel):
+    """Acknowledgement returned to Console.
+
+    ``emitted`` reports whether the event actually went out — it'll
+    be ``False`` when the Coordinator is no longer in onboarding
+    mode (e.g. the user already finished or skipped), in which case
+    we silently drop the event server-side.
+    """
+
+    coordinator_id: str
+    emitted: bool
+
+
+class CoordinatorDelegateRequest(BaseModel):
+    """Request body for assigning asynchronous work to a colleague."""
 
     model_config = ConfigDict(extra="forbid")
 
-    writes: List[CoordinatorPreseedWrite] = Field(..., min_length=1)
+    instruction: str = Field(..., min_length=1)
+    intent: str = Field("general", min_length=1)
+    dedupe_key: Optional[str] = Field(None, min_length=1)
+    related_context: Optional[Dict[str, Any]] = None
+
+    @field_validator("instruction", "intent")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must contain non-whitespace text")
+        return stripped
+
+    @field_validator("dedupe_key")
+    @classmethod
+    def _strip_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must contain non-whitespace text")
+        return stripped
 
 
-class CoordinatorPreseedWriteResponse(BaseModel):
-    """Result for one seeded colleague context."""
-
-    context: str
-    log_event_ids: List[int]
-    row_ids: Dict[str, Any]
-    auto_counting: Dict[str, List[Any]]
-
-
-class CoordinatorPreseedResponse(BaseModel):
-    """Response returned after colleague context rows are written."""
+class CoordinatorDelegateResponse(BaseModel):
+    """Response returned after a colleague delegation is dispatched."""
 
     coordinator_id: int
     target_assistant_id: int
-    writes: List[CoordinatorPreseedWriteResponse]
+    status: str
+    activation_id: Optional[str] = None
+    accepted: bool = True
+    completion_status: str = "pending_async"
+    receipt_type: str = "async_delegation_receipt"
+    message: str = (
+        "The colleague has been woken or notified with the assignment. "
+        "This does not mean the colleague has already created durable artifacts "
+        "or completed the work."
+    )
 
 
 class CoordinatorResetResponse(BaseModel):
     """Response returned after Coordinator-owned conversation state is reset."""
 
     coordinator_id: str
+
+
+class CoordinatorStateUpdate(BaseModel):
+    """Request body for transitioning a Coordinator's onboarding state.
+
+    All fields are optional: a request specifying only ``mode`` flips
+    the lifecycle without touching the current step; specifying only
+    ``onboarding_step`` advances the in-flight step marker without
+    leaving ``onboarding``. Passing ``clear_onboarding_step=True``
+    resets the step (used when moving to ``working`` so a future
+    re-entry doesn't carry stale step state).
+
+    Note: the call-vs-chat picker is intentionally *not* persisted —
+    the design re-asks on every entry into the onboarding view.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Optional[Literal["onboarding", "working"]] = Field(None)
+    onboarding_step: Optional[str] = Field(None, min_length=1)
+    clear_onboarding_step: bool = Field(False)
+
+
+class CoordinatorStateResponse(BaseModel):
+    """Snapshot of the latest Coordinator/State row."""
+
+    coordinator_id: int
+    mode: Literal["onboarding", "working"]
+    onboarding_step: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
 
 
 class DemoAssistantCreate(BaseModel):

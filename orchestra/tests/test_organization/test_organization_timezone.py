@@ -158,6 +158,8 @@ async def test_list_organizations_returns_timezone(client: AsyncClient):
     our_org = next((org for org in orgs if org["name"] == "List TZ Test Org"), None)
     assert our_org is not None
     assert our_org["timezone"] == "Asia/Tokyo"
+    assert isinstance(our_org["role_id"], int)
+    assert our_org["role_name"] == "Owner"
 
 
 @pytest.mark.anyio

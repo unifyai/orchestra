@@ -22,31 +22,45 @@ def mock_assistant_infra_calls(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_cleanup_tasks, patch(
-        "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings, patch(
-        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
-        0.0,
-    ), patch(
-        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
-        0.0,
-    ), patch(
-        "orchestra.web.api.assistant.views.BucketService",
-    ) as mock_bucket_cls, patch(
-        "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
-        new_callable=AsyncMock,
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_cleanup_tasks,
+        patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings,
+        patch(
+            "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
+            0.0,
+        ),
+        patch(
+            "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
+            0.0,
+        ),
+        patch(
+            "orchestra.web.api.assistant.views.BucketService",
+        ) as mock_bucket_cls,
+        patch(
+            "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
+            new_callable=AsyncMock,
+        ) as _mock_trigger_contact_sync_safe,
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic,
     ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
         mock_cleanup_tasks.return_value = {
             "processed": 1,
             "completed": 1,
@@ -447,7 +461,7 @@ async def test_org_assistant_list_own_only(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_org_assistant_list_all_org(client: AsyncClient, dbsession):
-    """Test that list_all_org=True returns all org assistants."""
+    """Org list_all_org keeps coordinators self-visible while preserving shared assistants."""
     owner = await create_test_user(
         client,
         "org_listall_owner@test.com",
@@ -478,28 +492,73 @@ async def test_org_assistant_list_all_org(client: AsyncClient, dbsession):
     }
 
     # Both create assistants
-    await client.post(
+    owner_assistant_resp = await client.post(
         "/v0/assistant",
         json={"first_name": "OwnerAll", "surname": "Asst", "create_infra": False},
         headers=owner_org_headers,
     )
-    await client.post(
+    assert owner_assistant_resp.status_code == 200
+    owner_assistant_id = int(owner_assistant_resp.json()["info"]["agent_id"])
+    member_assistant_resp = await client.post(
         "/v0/assistant",
         json={"first_name": "MemberAll", "surname": "Asst", "create_infra": False},
         headers=member_org_headers,
     )
+    assert member_assistant_resp.status_code == 200
+    member_assistant_id = int(member_assistant_resp.json()["info"]["agent_id"])
 
-    # Member lists with list_all_org=True - should see all
-    list_resp = await client.get(
+    with patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_create_pubsub_topic:
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+        owner_coordinator_resp = await client.post(
+            f"/v0/user/{owner['id']}/coordinator?organization_id={org_id}",
+            headers=owner_org_headers,
+        )
+        assert owner_coordinator_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), owner_coordinator_resp.json()
+        owner_coordinator_id = int(owner_coordinator_resp.json()["coordinator_id"])
+
+        member_coordinator_resp = await client.post(
+            f"/v0/user/{member['id']}/coordinator?organization_id={org_id}",
+            headers=member_org_headers,
+        )
+        assert member_coordinator_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), member_coordinator_resp.json()
+        member_coordinator_id = int(member_coordinator_resp.json()["coordinator_id"])
+
+    # Member list_all_org keeps shared assistants but hides other members' coordinators.
+    member_list_resp = await client.get(
         "/v0/assistant?list_all_org=true",
         headers=member_org_headers,
     )
-    assert list_resp.status_code == 200
-    assistants = list_resp.json()["info"]
-    assert len(assistants) == 2
-    names = {a["first_name"] for a in assistants}
-    assert "OwnerAll" in names
-    assert "MemberAll" in names
+    assert member_list_resp.status_code == 200
+    member_visible_ids = {
+        int(assistant["agent_id"]) for assistant in member_list_resp.json()["info"]
+    }
+    assert owner_assistant_id in member_visible_ids
+    assert member_assistant_id in member_visible_ids
+    assert member_coordinator_id in member_visible_ids
+    assert owner_coordinator_id not in member_visible_ids
+
+    # Owner sees their own coordinator but not member-owned coordinator.
+    owner_list_resp = await client.get(
+        "/v0/assistant?list_all_org=true",
+        headers=owner_org_headers,
+    )
+    assert owner_list_resp.status_code == 200
+    owner_visible_ids = {
+        int(assistant["agent_id"]) for assistant in owner_list_resp.json()["info"]
+    }
+    assert owner_assistant_id in owner_visible_ids
+    assert member_assistant_id in owner_visible_ids
+    assert owner_coordinator_id in owner_visible_ids
+    assert member_coordinator_id not in owner_visible_ids
 
 
 @pytest.mark.anyio

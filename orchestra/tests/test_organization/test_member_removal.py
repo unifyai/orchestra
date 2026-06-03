@@ -60,10 +60,7 @@ def mock_assistant_infra_calls(request):
     ), patch(
         "orchestra.services.coordinator_service.create_pubsub_topic",
         new_callable=AsyncMock,
-    ) as mock_personal_coordinator_topic, patch(
-        "orchestra.web.api.organization.views.create_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as mock_org_coordinator_topic:
+    ) as mock_personal_coordinator_topic:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_assistant_cleanup.return_value = {
@@ -81,7 +78,6 @@ def mock_assistant_infra_calls(request):
             "errors": [],
         }
         mock_personal_coordinator_topic.return_value = {"success": True}
-        mock_org_coordinator_topic.return_value = {"success": True}
         mock_settings.is_staging = True
 
         mock_bucket_instance = MagicMock()

@@ -119,10 +119,13 @@ def test_personal_coordinator_unique_index_scopes_to_personal_rows(
 ) -> None:
     """A user can have one personal Coordinator while regular assistants remain allowed."""
     owner = _make_user(dbsession, "personal-unique")
-    organization = _make_organization(dbsession, owner, "personal-unique")
     _make_assistant(dbsession, owner, is_coordinator=True)
     _make_assistant(dbsession, owner)
-    _make_assistant(dbsession, owner, organization=organization, is_coordinator=True)
+    _make_assistant(
+        dbsession,
+        owner,
+        organization=_make_organization(dbsession, owner, "personal-unique"),
+    )
 
     duplicate = Assistant(
         user_id=owner.id,

@@ -82,12 +82,15 @@ from orchestra.services.contact_membership_service import (
     ensure_space_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
+    emit_onboarding_session_started_event,
+    emit_secret_landed_event,
     ensure_coordinator_owner_contact_rows,
-    preseed_colleague_contexts,
+    get_coordinator_state,
     require_authorized_coordinator,
-    require_authorized_preseed_target,
+    require_authorized_delegate_target,
     reset_coordinator_state,
     seed_coordinator_transcript,
+    set_coordinator_state,
 )
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
@@ -124,12 +127,15 @@ from orchestra.web.api.assistant.schema import (
     ContactMembershipDeleteResponse,
     ContactMembershipRead,
     ContactMembershipUpsertResponse,
-    CoordinatorPreseedRequest,
-    CoordinatorPreseedResponse,
-    CoordinatorPreseedWriteResponse,
+    CoordinatorDelegateRequest,
+    CoordinatorDelegateResponse,
     CoordinatorResetResponse,
+    CoordinatorStateResponse,
+    CoordinatorStateUpdate,
     CoordinatorTranscriptSeed,
     CoordinatorTranscriptSeedResponse,
+    OnboardingSessionStarted,
+    OnboardingSessionStartedResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
@@ -149,6 +155,7 @@ from orchestra.web.api.assistant.schema import (
 from orchestra.web.api.utils.assistant_infra import (
     create_phone_number,
     create_pubsub_topic,
+    delegate_to_colleague_runtime,
     delete_phone_number,
     delete_pubsub_topic,
     get_runtime_status,
@@ -657,6 +664,19 @@ def _build_assistant_read(
         contact_identity_roots=contact_identity_roots,
         secrets=secrets,
         console_config=_build_console_config_read(a.console_config),
+    )
+
+
+def _is_hidden_workspace_coordinator_for_user(
+    assistant: Assistant,
+    *,
+    user_id: str,
+) -> bool:
+    """Return whether an org Coordinator row is hidden from this user."""
+    return (
+        assistant.is_coordinator
+        and assistant.organization_id is not None
+        and assistant.user_id != user_id
     )
 
 
@@ -1196,6 +1216,12 @@ async def create_assistant(
                 f"Failed to log pre-hire chat for assistant {assistant.agent_id} via webhook. Error: {str(e_log)}",
             )
 
+    # No onboarding narration on specialist hire: the console
+    # immediately swaps the active assistant to the freshly-hired
+    # specialist (which ends onboarding mode on the Coordinator), so
+    # any acknowledgement from the Coordinator would land in a chat
+    # the user has already moved away from.
+
     # Phase 4: Prepare and return response
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
@@ -1258,40 +1284,162 @@ async def reset_coordinator_endpoint(
     )
 
 
-@router.post(
-    "/assistant/{target_assistant_id}/preseed",
-    response_model=InfoResponse[CoordinatorPreseedResponse],
+@router.get(
+    "/assistant/{coordinator_id}/state",
+    response_model=InfoResponse[CoordinatorStateResponse],
     status_code=status.HTTP_200_OK,
-    summary="Seed a colleague assistant's own contexts",
+    summary="Read the Coordinator's onboarding state",
     tags=["Assistant Management"],
 )
-async def preseed_colleague_endpoint(
-    target_assistant_id: int,
-    request_body: CoordinatorPreseedRequest,
+async def get_coordinator_state_endpoint(
+    coordinator_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
-) -> InfoResponse[CoordinatorPreseedResponse]:
-    """Write Coordinator-authored rows into the target colleague's root."""
-    coordinator, target = require_authorized_preseed_target(
+) -> InfoResponse[CoordinatorStateResponse]:
+    """Return the latest Coordinator/State snapshot for this workspace."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    state = get_coordinator_state(session, coordinator=coordinator)
+    return InfoResponse(
+        info=CoordinatorStateResponse(
+            coordinator_id=coordinator.agent_id,
+            **state,
+        ),
+    )
+
+
+@router.patch(
+    "/assistant/{coordinator_id}/state",
+    response_model=InfoResponse[CoordinatorStateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Update the Coordinator's onboarding state",
+    tags=["Assistant Management"],
+)
+async def update_coordinator_state_endpoint(
+    coordinator_id: int,
+    update: CoordinatorStateUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorStateResponse]:
+    """Transition the Coordinator between ``onboarding`` and ``working``.
+
+    Used by the assistants page when the user finishes or skips
+    onboarding (writes ``mode='working'``), when the user re-enters
+    the guided view from a menu (writes ``mode='onboarding'``), and
+    when the coordinator-driven conversation advances to a new step
+    (writes ``onboarding_step``).
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    set_coordinator_state(
+        session,
+        coordinator=coordinator,
+        mode=update.mode,
+        onboarding_step=update.onboarding_step,
+        clear_onboarding_step=update.clear_onboarding_step,
+    )
+    session.commit()
+    state = get_coordinator_state(session, coordinator=coordinator)
+    return InfoResponse(
+        info=CoordinatorStateResponse(
+            coordinator_id=coordinator.agent_id,
+            **state,
+        ),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/onboarding-session-started",
+    response_model=InfoResponse[OnboardingSessionStartedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Notify the Coordinator that the onboarding picker just resolved",
+    tags=["Assistant Management"],
+)
+async def notify_onboarding_session_started_endpoint(
+    coordinator_id: int,
+    body: OnboardingSessionStarted,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[OnboardingSessionStartedResponse]:
+    """Fire the picker-resolution event so Unity opens the session.
+
+    Best-effort: the emission is gated server-side on
+    ``Coordinator/State.mode == 'onboarding'``, so a stale picker
+    submit (e.g. the user already skipped onboarding in another
+    tab) silently no-ops. The endpoint always returns 200; the
+    response body carries an ``emitted`` flag the client can use
+    for telemetry but doesn't need for correctness.
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    emitted = await emit_onboarding_session_started_event(
+        session,
+        coordinator=coordinator,
+        medium=body.medium,
+        completed_step_ids=body.completed_step_ids,
+    )
+    return InfoResponse(
+        info=OnboardingSessionStartedResponse(
+            coordinator_id=str(coordinator.agent_id),
+            emitted=emitted,
+        ),
+    )
+
+
+@router.post(
+    "/assistant/{target_assistant_id}/delegate",
+    response_model=InfoResponse[CoordinatorDelegateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Assign asynchronous work to a colleague assistant",
+    tags=["Assistant Management"],
+)
+async def delegate_to_colleague_endpoint(
+    target_assistant_id: int,
+    request_body: CoordinatorDelegateRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorDelegateResponse]:
+    """Dispatch a Coordinator assignment to the target colleague runtime."""
+    coordinator, target = require_authorized_delegate_target(
         session,
         target_assistant_id=target_assistant_id,
         user_id=request.state.user_id,
     )
-    writes = preseed_colleague_contexts(
-        session,
-        coordinator=coordinator,
-        target=target,
-        writes=request_body.writes,
+    delivery = await delegate_to_colleague_runtime(
+        assistant_id=target.agent_id,
+        requested_by_assistant_id=coordinator.agent_id,
+        instruction=request_body.instruction,
+        intent=request_body.intent,
+        dedupe_key=request_body.dedupe_key,
+        related_context=request_body.related_context,
+        deploy_env=target.deploy_env,
     )
-    session.commit()
     return InfoResponse(
-        info=CoordinatorPreseedResponse(
+        info=CoordinatorDelegateResponse(
             coordinator_id=coordinator.agent_id,
             target_assistant_id=target.agent_id,
-            writes=[
-                CoordinatorPreseedWriteResponse(**write_result)
-                for write_result in writes
-            ],
+            status=str(delivery.get("status") or "accepted"),
+            activation_id=delivery.get("activation_id"),
+            accepted=bool(delivery.get("accepted", True)),
+            completion_status=str(
+                delivery.get("completion_status") or "pending_async",
+            ),
+            receipt_type=str(
+                delivery.get("receipt_type") or "async_delegation_receipt",
+            ),
+            message=str(
+                delivery.get("message")
+                or CoordinatorDelegateResponse.model_fields["message"].default,
+            ),
         ),
     )
 
@@ -1418,6 +1566,7 @@ def list_assistants(
                 )
             assistants = assistant_dao.list_all_org_assistants(
                 organization_id=organization_id,
+                requesting_user_id=user_id,
                 phone=phone,
                 email=email,
                 agent_id=agent_id,
@@ -1563,6 +1712,11 @@ async def delete_assistant_contact(
     )
 
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -1718,6 +1872,11 @@ async def create_assistant_contact(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -2122,6 +2281,11 @@ async def list_assistant_contacts(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant's contacts.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2204,7 +2368,11 @@ async def connect_assistant_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
-
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
         if not ra_dao.check_user_permission(
@@ -2360,6 +2528,11 @@ async def disconnect_assistant_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2513,6 +2686,11 @@ async def get_granted_features(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2586,6 +2764,8 @@ async def create_assistant_secret(
     )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2614,6 +2794,17 @@ async def create_assistant_secret(
         body.secret_value,
     )
     session.commit()
+    # Reactive narration: fire-and-forget tell the Coordinator a
+    # secret just landed so it can comment in-conversation. The
+    # helper gates on the Coordinator's onboarding mode and resolves
+    # workspace OAuth (GOOGLE_*/MICROSOFT_* prefixes) vs. generic
+    # integration based on the secret name. Failures are swallowed
+    # inside the helper so user-facing requests never regress.
+    await emit_secret_landed_event(
+        session,
+        assistant=assistant,
+        secret_name=body.secret_name,
+    )
     return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
 
 
@@ -2645,6 +2836,8 @@ async def update_assistant_secret(
     )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2673,6 +2866,14 @@ async def update_assistant_secret(
         body.secret_value,
     )
     session.commit()
+    # See sibling note on the POST handler — same narration emit, same
+    # gating semantics. Updates also count because the workspace OAuth
+    # refresh path overwrites the existing token row.
+    await emit_secret_landed_event(
+        session,
+        assistant=assistant,
+        secret_name=secret_name,
+    )
     return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
 
 
@@ -2702,6 +2903,8 @@ async def delete_assistant_secret(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
@@ -2766,6 +2969,11 @@ async def update_assistant_contact(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -3192,6 +3400,14 @@ async def update_assistant_config(
         organization_id=organization_id,
     )
     if not existing_assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(
+        existing_assistant,
+        user_id=user_id,
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -3715,6 +3931,11 @@ async def transfer_assistant_to_personal(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization assistant not found.",
@@ -4679,6 +4900,11 @@ async def upload_assistant_photo(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
+        if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
 
     ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
     if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
@@ -4752,6 +4978,11 @@ async def upload_assistant_video(
             organization_id=organization_id,
         )
         if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+        if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
@@ -6559,6 +6790,8 @@ async def get_assistant_spending_limit(
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     # Allow org members to view limits for any assistant in their org.
     if assistant.user_id != user_id:
@@ -6583,11 +6816,14 @@ async def get_assistant_spending_limit(
         org_member_dao = OrganizationMemberDAO(session)
 
         org = org_dao.get(assistant.organization_id)
-        member = org_member_dao.get_member(user_id, assistant.organization_id)
+        owner_member = org_member_dao.get_member(
+            assistant.user_id,
+            assistant.organization_id,
+        )
 
         parent_limits = []
-        if member and member.monthly_spending_cap is not None:
-            parent_limits.append(float(member.monthly_spending_cap))
+        if owner_member and owner_member.monthly_spending_cap is not None:
+            parent_limits.append(float(owner_member.monthly_spending_cap))
         if org and org.monthly_spending_cap is not None:
             parent_limits.append(float(org.monthly_spending_cap))
 
@@ -6634,6 +6870,8 @@ async def get_assistant_spend(
     assistant_dao = AssistantDAO(session)
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
     if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if assistant.user_id != user_id:

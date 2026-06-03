@@ -1933,11 +1933,6 @@ class Assistant(Base):
             unique=True,
             postgresql_where=text("is_coordinator AND organization_id IS NULL"),
         ),
-        # Mirrors the migration `workspace_scoped_coordinators`: each
-        # (user_id, organization_id) pair allows at most one coordinator
-        # row. Declared on the model so meta.create_all-built test DBs
-        # match production schema and the test_coordinator_schema invariants
-        # actually fire.
         Index(
             "ux_assistants_one_workspace_coordinator_per_membership",
             "user_id",
