@@ -19,7 +19,11 @@ from orchestra.db.models.orchestra_models import (
     ContactMembership,
 )
 from orchestra.services.contact_sync_service import ContactSyncService
-from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
+from orchestra.tests.utils import (
+    ADMIN_HEADERS,
+    create_test_user,
+    ensure_assistants_project,
+)
 
 # =============================================================================
 # FIXTURES
@@ -80,13 +84,7 @@ async def test_user_timezone_sync_updates_contact_log(
     # Create user
     user = await create_test_user(client, "tz_sync_user@test.com")
 
-    # Create Assistants project
-    project_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
-    assert project_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create a Contact log with email_address and is_system=True
     log_payload = {
@@ -140,11 +138,7 @@ async def test_user_timezone_sync_to_multiple_projects(
     user = await create_test_user(client, "multi_proj_tz@test.com")
 
     # Create personal Assistants project with Contact log
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -173,11 +167,7 @@ async def test_user_timezone_sync_to_multiple_projects(
     org_api_key = org_resp.json()["api_key"]
     org_headers = {"Authorization": f"Bearer {org_api_key}"}
 
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
     await client.post(
         "/v0/logs",
         json={
@@ -253,11 +243,7 @@ async def test_user_timezone_sync_no_matching_logs(
     user = await create_test_user(client, "no_match_tz@test.com")
 
     # Create Assistants project with Contact log for different user (different email)
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -311,11 +297,7 @@ async def test_user_bio_sync_updates_contact_log(
     user = await create_test_user(client, "bio_sync_user@test.com")
 
     # Create Assistants project and Contact log
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -365,11 +347,7 @@ async def test_user_bio_and_timezone_sync_together(
     user = await create_test_user(client, "both_sync_user@test.com")
 
     # Create Assistants project and Contact log
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -723,13 +701,7 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
     org_id = org_data["id"]
     org_headers = {"Authorization": f"Bearer {org_data['api_key']}"}
 
-    # Explicitly create Assistants project for org (needed for log access)
-    project_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert project_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create org assistant using org API key
     # (middleware sets organization_id from the API key)
@@ -842,13 +814,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
     )
     assert add_c_resp.status_code == status.HTTP_201_CREATED
 
-    # Explicitly create Assistants project for org (needed for log access)
-    project_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert project_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # A creates an org assistant
     assistant_resp = await client.post(
