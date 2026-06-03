@@ -1076,7 +1076,10 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
     assert resp1.status_code == 200
     aid1 = resp1.json()["info"]["agent_id"]
 
-    # Do not create assistant for user2; expect no assistants for user2
+    # Do not create assistant for user2; expect no user-created assistants
+
+    def non_coordinator_assistants(rows):
+        return [row for row in rows if not row.get("is_coordinator")]
 
     # Verify admin endpoint returns only user1's assistants
     res1 = await client.get(
@@ -1084,17 +1087,16 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
         headers=ADMIN_HEADERS,
     )
     assert res1.status_code == 200
-    info1 = res1.json()["info"]
+    info1 = non_coordinator_assistants(res1.json()["info"])
     assert len(info1) == 1 and info1[0]["agent_id"] == aid1
 
-    # Verify admin endpoint returns no assistants for user2
+    # Verify admin endpoint returns no user-created assistants for user2
     res2 = await client.get(
         f"/v0/admin/assistant/user/{user2['id']}",
         headers=ADMIN_HEADERS,
     )
     assert res2.status_code == 200
-    info2 = res2.json()["info"]
-    assert isinstance(info2, list)
+    info2 = non_coordinator_assistants(res2.json()["info"])
     assert len(info2) == 0
 
 
