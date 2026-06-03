@@ -159,7 +159,11 @@ async def test_async_notify_for_assistant_resolves_workspace_coordinator() -> No
     specialist = _fake_specialist(agent_id=99)
     coordinator = _fake_coordinator(agent_id=7)
     with (
-        patch.object(svc, "get_workspace_coordinator", return_value=coordinator) as resolve,
+        patch.object(
+            svc,
+            "get_workspace_coordinator",
+            return_value=coordinator,
+        ) as resolve,
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
