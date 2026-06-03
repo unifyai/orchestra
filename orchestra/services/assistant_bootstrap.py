@@ -4,11 +4,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
+from orchestra_core.db.dao.context_dao import ContextDAO
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
