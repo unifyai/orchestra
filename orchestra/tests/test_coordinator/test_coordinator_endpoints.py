@@ -37,6 +37,7 @@ from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
 EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
+EXPECTED_COORDINATOR_ABOUT = "Coordinates setup and shared assistant memory."
 
 
 @pytest.fixture(autouse=True)
@@ -224,6 +225,7 @@ def _assert_coordinator_provisioned(
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
+    assert coordinator.about == EXPECTED_COORDINATOR_ABOUT
     assert {
         (membership.contact_id, membership.relationship)
         for membership in _personal_memberships(
