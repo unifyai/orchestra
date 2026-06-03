@@ -78,6 +78,8 @@ jobs:
 
   core-purity:
     runs-on: ubuntu-latest
+    env:
+      POETRY_VIRTUALENVS_CREATE: "false"
     steps:
     - uses: actions/checkout@v4
     - name: No platform kernel forks
@@ -135,6 +137,7 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     env:
       LOGS_DIR: ${{ github.workspace }}/logs
+      POETRY_VIRTUALENVS_CREATE: "false"
     services:
       orchestra-db:
         image: pgvector/pgvector:pg15
