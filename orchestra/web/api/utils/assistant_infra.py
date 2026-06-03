@@ -1657,7 +1657,12 @@ async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
     )
 
 
-async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
+async def reawaken_assistant(
+    assistant_id: str,
+    deploy_env: str | None = None,
+    *,
+    data: dict | None = None,
+):
     """
     Trigger the assistant update webhook to reawaken or sync the assistant.
 
@@ -1667,14 +1672,16 @@ async def reawaken_assistant(assistant_id: str, deploy_env: str | None = None):
     Args:
         assistant_id (str): The ID of the assistant to reawaken.
         deploy_env: Reserved for future use; currently ignored.
+        data: Optional form payload for specialized update requests.
     Returns:
         The JSON response from the webhook.
     """
     reawaken_url = _adapters_url_for(deploy_env) + "/assistant/update"
     client = get_async_client()
+    payload = data or {"assistant_id": assistant_id}
     response = await client.post(
         reawaken_url,
-        data={"assistant_id": assistant_id},
+        data=payload,
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         timeout=20,
     )

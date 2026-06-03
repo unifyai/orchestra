@@ -40,40 +40,78 @@ SCHEMA_CASES = [
     ("surname", lambda: AssistantUpdate(surname=PAYLOAD)),
     ("about", lambda: AssistantUpdate(about=PAYLOAD)),
     ("job_title", lambda: AssistantUpdate(job_title=PAYLOAD)),
-    ("label", lambda: DemoAssistantCreate(
-        source_assistant_id=1,
-        label=PAYLOAD,
-        first_name="Lucy",
-        surname="Demo",
-        demoer_phone="+14155559999",
-    )),
-    ("name", lambda: VoiceCreate(
-        voice_id="v1", name=PAYLOAD, description="ok", language="en",
-    )),
-    ("description", lambda: VoiceCreate(
-        voice_id="v1", name="ok", description=PAYLOAD, language="en",
-    )),
+    (
+        "label",
+        lambda: DemoAssistantCreate(
+            source_assistant_id=1,
+            label=PAYLOAD,
+            first_name="Lucy",
+            surname="Demo",
+            demoer_phone="+14155559999",
+        ),
+    ),
+    (
+        "name",
+        lambda: VoiceCreate(
+            voice_id="v1",
+            name=PAYLOAD,
+            description="ok",
+            language="en",
+        ),
+    ),
+    (
+        "description",
+        lambda: VoiceCreate(
+            voice_id="v1",
+            name="ok",
+            description=PAYLOAD,
+            language="en",
+        ),
+    ),
     ("name", lambda: UpdateTileRequest(name=PAYLOAD)),
     ("name", lambda: UpdateTabRequest(name=PAYLOAD)),
     ("name", lambda: UpdateInterfaceRequest(name=PAYLOAD)),
     ("title", lambda: UpdatePlotRequest(title=PAYLOAD)),
     ("title", lambda: UpdateTableViewRequest(title=PAYLOAD)),
-    ("action_name", lambda: DashboardActionRecord(
-        tile_token="t", action_name=PAYLOAD, function_id=1,
-    )),
-    ("label", lambda: DashboardActionRecord(
-        tile_token="t", action_name="ok", function_id=1, label=PAYLOAD,
-    )),
+    (
+        "action_name",
+        lambda: DashboardActionRecord(
+            tile_token="t",
+            action_name=PAYLOAD,
+            function_id=1,
+        ),
+    ),
+    (
+        "label",
+        lambda: DashboardActionRecord(
+            tile_token="t",
+            action_name="ok",
+            function_id=1,
+            label=PAYLOAD,
+        ),
+    ),
     ("name", lambda: PlanGroupCreateRequest(name=PAYLOAD)),
-    ("display_name", lambda: PlanGroupCreateRequest(
-        name="ok", display_name=PAYLOAD,
-    )),
-    ("description", lambda: PlanGroupCreateRequest(
-        name="ok", description=PAYLOAD,
-    )),
-    ("name", lambda: BillingPlanTemplateCreate(
-        name=PAYLOAD, billing_mode="CREDITS",
-    )),
+    (
+        "display_name",
+        lambda: PlanGroupCreateRequest(
+            name="ok",
+            display_name=PAYLOAD,
+        ),
+    ),
+    (
+        "description",
+        lambda: PlanGroupCreateRequest(
+            name="ok",
+            description=PAYLOAD,
+        ),
+    ),
+    (
+        "name",
+        lambda: BillingPlanTemplateCreate(
+            name=PAYLOAD,
+            billing_mode="CREDITS",
+        ),
+    ),
 ]
 
 
@@ -91,11 +129,20 @@ def test_request_schemas_reject_xss(field, factory):
 
 def test_legitimate_values_still_accepted():
     # Sanity: the hardening does not reject ordinary, punctuation-rich input.
-    assert AssistantUpdate(first_name="Ada", about="Mathematician & writer").first_name == "Ada"
-    assert VoiceCreate(
-        voice_id="v1",
-        name="English Woman — Calm #1",
-        description="Calm, relaxing voice (100% natural)",
-        language="en",
-    ).name == "English Woman — Calm #1"
-    assert UpdateInterfaceRequest(name="Q3 O'Brien Dashboard").name == "Q3 O'Brien Dashboard"
+    assert (
+        AssistantUpdate(first_name="Ada", about="Mathematician & writer").first_name
+        == "Ada"
+    )
+    assert (
+        VoiceCreate(
+            voice_id="v1",
+            name="English Woman — Calm #1",
+            description="Calm, relaxing voice (100% natural)",
+            language="en",
+        ).name
+        == "English Woman — Calm #1"
+    )
+    assert (
+        UpdateInterfaceRequest(name="Q3 O'Brien Dashboard").name
+        == "Q3 O'Brien Dashboard"
+    )

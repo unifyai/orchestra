@@ -122,6 +122,22 @@ async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_
 
 
 @pytest.mark.anyio
+async def test_create_assistant_ignores_unknown_fields(client: AsyncClient):
+    payload = {
+        "first_name": "Desktop",
+        "surname": "Flow",
+        "is_user_desktop": True,
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    data = resp.json()["info"]
+    assert data["first_name"] == "Desktop"
+    assert data["surname"] == "Flow"
+    assert data["is_local"] is False
+
+
+@pytest.mark.anyio
 async def test_create_assistant_rejects_deploy_env(client: AsyncClient):
     payload = {
         "first_name": "Rejected",
@@ -146,6 +162,37 @@ async def test_create_assistant_missing_field(client: AsyncClient):
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_create_assistant_conflicts_on_normalized_name_in_same_scope(
+    client: AsyncClient,
+):
+    first = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Casey",
+            "surname": "Recruiter",
+            "create_infra": False,
+        },
+        headers=HEADERS,
+    )
+    assert first.status_code == 200, first.json()
+    existing_id = int(first.json()["info"]["agent_id"])
+
+    duplicate = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "  casey ",
+            "surname": " recruiter  ",
+            "create_infra": False,
+        },
+        headers=HEADERS,
+    )
+    assert duplicate.status_code == status.HTTP_409_CONFLICT, duplicate.json()
+    detail = duplicate.json()["detail"]
+    assert detail["error"] == "assistant_already_exists"
+    assert detail["existing_id"] == existing_id
 
 
 @pytest.mark.anyio
@@ -1186,12 +1233,33 @@ async def test_create_assistant_creates_assistants_project(
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == 200
+    assistant_id = resp.json()["info"]["agent_id"]
 
     # Verify that the "Assistants" project now exists
     projects_resp = await client.get("/v0/projects", headers=HEADERS)
     assert projects_resp.status_code == 200
     projects = projects_resp.json()
     assert "Assistants" in projects
+
+    # Owner contact bootstrap should create a root Contacts row for chat lookup.
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    assert credits_resp.status_code == 200
+    owner_user_id = credits_resp.json()["id"]
+    contact_context = f"{owner_user_id}/{assistant_id}/Contacts"
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={contact_context}",
+        headers=HEADERS,
+    )
+    assert logs_resp.status_code == 200
+    owner_contact_logs = [
+        log for log in logs_resp.json()["logs"] if log["entries"].get("contact_id") == 1
+    ]
+    assert len(owner_contact_logs) == 1
+    owner_contact = owner_contact_logs[0]["entries"]
+    assert owner_contact["email_address"]
+    assert owner_contact["is_system"] is True
+    assert owner_contact["should_respond"] is True
+    assert owner_contact["response_policy"]
 
 
 @pytest.mark.anyio

@@ -15,6 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -29,7 +30,13 @@ from orchestra.db.dao.shared_pool_dao import ConflictResolution
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra_core.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Assistant, Recharge, RechargeStatus
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    AssistantSpaceMembership,
+    Recharge,
+    RechargeStatus,
+    Space,
+)
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_specs_for_assistants,
@@ -39,6 +46,19 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.contact_sync_service import ContactSyncService
+from orchestra.services.coordinator_service import (
+    create_organization_coordinator,
+    get_personal_coordinator,
+    pubsub_topic_response_failed,
+)
+from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
+from orchestra.services.space_cleanup_service import (
+    purge_assistant_overlay as purge_space_member_overlay,
+)
+from orchestra.services.space_membership_refresh_service import (
+    membership_refresh_payloads,
+    publish_membership_refreshes_best_effort,
+)
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     AdminOrganizationCreate,
@@ -64,7 +84,11 @@ from orchestra.web.api.organization.schema import (
     OrgSpendResponse,
 )
 from orchestra.web.api.users.views import generate_key
-from orchestra.web.api.utils.assistant_infra import fan_out_contact_sync_for_org
+from orchestra.web.api.utils.assistant_infra import (
+    create_pubsub_topic,
+    delete_pubsub_topic,
+    fan_out_contact_sync_for_org,
+)
 from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
 
@@ -122,6 +146,88 @@ async def _run_pool_resolution_followups(
                 )
 
 
+async def _create_organization_with_coordinator(
+    session: Session,
+    *,
+    name: str,
+    owner_user_id: str,
+    timezone: str | None,
+) -> dict:
+    """Create an organization workspace with owner access and Coordinator state."""
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    role_dao = RoleDAO(session)
+
+    created_pubsub_topic = False
+    coordinator_id: int | None = None
+    try:
+        org = org_dao.create(
+            name=name,
+            owner_id=owner_user_id,
+            timezone=timezone,
+        )
+
+        owner_role = role_dao.get_by_name("Owner", organization_id=None)
+        if not owner_role:
+            raise ValueError("Owner system role not found")
+
+        org_member_dao.create(
+            organization_id=org.id,
+            user_id=owner_user_id,
+            role_id=owner_role.id,
+        )
+
+        new_api_key = generate_key()
+        api_key_dao.create(
+            key=new_api_key,
+            name=f"org_{org.name}",
+            user_id=owner_user_id,
+            organization_id=org.id,
+        )
+
+        coordinator = create_organization_coordinator(
+            session,
+            owner_user_id=owner_user_id,
+            organization_id=org.id,
+            timezone=timezone,
+        )
+        coordinator_id = coordinator.agent_id
+
+        pubsub_response = await create_pubsub_topic(
+            str(coordinator.agent_id),
+            deploy_env=coordinator.deploy_env,
+        )
+        if pubsub_topic_response_failed(pubsub_response):
+            raise ValueError(
+                f"Coordinator topic provisioning failed: {pubsub_response}",
+            )
+        created_pubsub_topic = not pubsub_response.get("skipped")
+
+        org_response = OrganizationResponse.model_validate(org)
+        response_data = {
+            **org_response.model_dump(),
+            "api_key": new_api_key,
+            "coordinator_id": str(coordinator_id),
+        }
+        session.commit()
+        return response_data
+    except Exception as e:
+        session.rollback()
+        if created_pubsub_topic and coordinator_id is not None:
+            try:
+                await delete_pubsub_topic(str(coordinator_id))
+            except Exception:
+                logger.exception(
+                    "Failed to clean up Coordinator topic after org creation rollback",
+                )
+        logger.error("Failed to create organization: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create organization",
+        )
+
+
 @router.post(
     "/organizations",
     status_code=status.HTTP_201_CREATED,
@@ -140,9 +246,6 @@ async def create_organization(
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    role_dao = RoleDAO(session)
     user_dao = UserDAO(session)
 
     # Check if organization name already exists
@@ -160,50 +263,12 @@ async def create_organization(
         owner_row = user_dao.get_by_id(user_id)
         org_timezone = owner_row[0].timezone if owner_row else None
 
-    # Create organization
-    try:
-        # timezone: provided > owner's timezone > None (runtime defaults to UTC)
-        org = org_dao.create(
-            name=organization.name,
-            owner_id=user_id,
-            timezone=org_timezone,
-        )
-
-        # Get Owner system role
-        owner_role = role_dao.get_by_name("Owner", organization_id=None)
-        if not owner_role:
-            raise ValueError("Owner system role not found")
-
-        # Add creator as owner member with Owner role
-        org_member_dao.create(
-            organization_id=org.id,
-            user_id=user_id,
-            role_id=owner_role.id,
-        )
-
-        # Create organization API key for the owner
-        new_api_key = generate_key()
-        api_key_dao.create(
-            key=new_api_key,
-            name=f"org_{org.name}",
-            user_id=user_id,
-            organization_id=org.id,
-        )
-
-        session.commit()
-
-        org_response = OrganizationResponse.model_validate(org)
-        return {
-            **org_response.model_dump(),
-            "api_key": new_api_key,
-        }
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Failed to create organization: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create organization",
-        )
+    return await _create_organization_with_coordinator(
+        session,
+        name=organization.name,
+        owner_user_id=user_id,
+        timezone=org_timezone,
+    )
 
 
 @router.get("/organizations", response_model=List[OrganizationResponse])
@@ -502,9 +567,10 @@ async def delete_organization(
     """
     Delete an organization and enqueue durable runtime cleanup for its assistants.
 
-    The database deletion happens in one transaction. Runtime/contact cleanup is
-    attempted immediately after commit and retried later from the cleanup queue
-    if any external step times out or fails.
+    Space cleanup may commit partial progress before the organization row is
+    dropped. If a later cleanup step fails, the next delete retry resumes from
+    the remaining spaces. Runtime/contact cleanup is attempted after the space
+    cascade and retried later from the cleanup queue if external teardown fails.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
@@ -582,46 +648,59 @@ async def delete_organization(
     # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
 
-    org_assistants = (
-        session.query(Assistant)
-        .filter(Assistant.organization_id == organization_id)
-        .all()
-    )
-    org_cleanup_specs = build_cleanup_specs_for_assistants(session, org_assistants)
     cleanup_task_ids: list[int] = []
-
-    if org_cleanup_specs:
-        try:
-            contact_result = await deprovision_assistant_contacts(
-                session,
-                org_cleanup_specs,
-                soft_delete_successes=True,
-            )
-            if contact_result["errors"]:
-                logger.error(
-                    "Contact deprovision issues while deleting org %s: %s",
-                    organization_id,
-                    contact_result["errors"],
-                )
-        except Exception as e:
-            logger.error(
-                "Failed to deprovision contacts for org %s before deletion: %s",
-                organization_id,
-                e,
-                exc_info=True,
-            )
-
-        cleanup_task_ids = [
-            task.id
-            for task in enqueue_cleanup_tasks(
-                session,
-                org_cleanup_specs,
-                source_flow=CleanupSource.ORGANIZATION_DELETE,
-            )
-        ]
 
     # Delete organization (cascades to related tables)
     try:
+        org_space_ids = session.scalars(
+            select(Space.space_id)
+            .where(Space.organization_id == organization_id)
+            .order_by(Space.space_id.asc()),
+        ).all()
+        for space_id in org_space_ids:
+            await run_space_cleanup(
+                session,
+                space_id=space_id,
+                user_id=request_fastapi.state.user_id,
+            )
+
+        org_assistants = (
+            session.query(Assistant)
+            .filter(Assistant.organization_id == organization_id)
+            .all()
+        )
+        org_cleanup_specs = build_cleanup_specs_for_assistants(session, org_assistants)
+
+        if org_cleanup_specs:
+            try:
+                contact_result = await deprovision_assistant_contacts(
+                    session,
+                    org_cleanup_specs,
+                    soft_delete_successes=True,
+                )
+                if contact_result["errors"]:
+                    logger.error(
+                        "Contact deprovision issues while deleting org %s: %s",
+                        organization_id,
+                        contact_result["errors"],
+                    )
+            except Exception as e:
+                logger.error(
+                    "Failed to deprovision contacts for org %s before deletion: %s",
+                    organization_id,
+                    e,
+                    exc_info=True,
+                )
+
+            cleanup_task_ids = [
+                task.id
+                for task in enqueue_cleanup_tasks(
+                    session,
+                    org_cleanup_specs,
+                    source_flow=CleanupSource.ORGANIZATION_DELETE,
+                )
+            ]
+
         org_dao.delete(organization_id)
         session.commit()
     except Exception as e:
@@ -905,6 +984,7 @@ async def remove_organization_member(
         )
 
     cleanup_task_ids: list[int] = []
+    space_membership_refreshes = []
 
     # Remove member and clean up all associated data
     try:
@@ -980,7 +1060,37 @@ async def remove_organization_member(
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 
-        # 8. Clean up shared-pool routes for the departing member
+        # 8. Remove the member's personal Coordinator from org-scoped spaces.
+        personal_coordinator = get_personal_coordinator(session, user_id=user_id)
+        if personal_coordinator is not None:
+            personal_coordinator_space_ids = [
+                int(space_id)
+                for (space_id,) in session.execute(
+                    select(Space.space_id)
+                    .join(
+                        AssistantSpaceMembership,
+                        AssistantSpaceMembership.space_id == Space.space_id,
+                    )
+                    .where(
+                        AssistantSpaceMembership.assistant_id
+                        == personal_coordinator.agent_id,
+                        Space.organization_id == organization_id,
+                    ),
+                ).all()
+            ]
+            for space_id in personal_coordinator_space_ids:
+                await purge_space_member_overlay(
+                    session,
+                    assistant_id=personal_coordinator.agent_id,
+                    space_id=space_id,
+                )
+            if personal_coordinator_space_ids:
+                space_membership_refreshes = membership_refresh_payloads(
+                    session,
+                    [personal_coordinator],
+                )
+
+        # 9. Clean up shared-pool routes for the departing member
         from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
         pool_dao = SharedPoolDAO(session)
@@ -994,6 +1104,9 @@ async def remove_organization_member(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to remove member",
         )
+
+    if space_membership_refreshes:
+        await publish_membership_refreshes_best_effort(space_membership_refreshes)
 
     await fan_out_contact_sync_for_org(organization_id, session)
 
@@ -2492,7 +2605,7 @@ def admin_disable_free_trial(
     "/organizations",
     status_code=status.HTTP_201_CREATED,
 )
-def admin_create_organization(
+async def admin_create_organization(
     organization: AdminOrganizationCreate,
     session: Session = Depends(get_db_session),
 ) -> dict:
@@ -2505,9 +2618,6 @@ def admin_create_organization(
     (logo, invites, etc.), and later transfers ownership to the client.
     """
     org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    role_dao = RoleDAO(session)
     user_dao = UserDAO(session)
 
     # Validate creator exists
@@ -2533,37 +2643,12 @@ def admin_create_organization(
         creator = creator_row[0]
         org_timezone = creator.timezone if creator.timezone else None
 
-    org = org_dao.create(
+    return await _create_organization_with_coordinator(
+        session,
         name=organization.name,
-        owner_id=organization.creator_user_id,
+        owner_user_id=organization.creator_user_id,
         timezone=org_timezone,
     )
-
-    owner_role = role_dao.get_by_name("Owner", organization_id=None)
-    if not owner_role:
-        raise ValueError("Owner system role not found")
-
-    org_member_dao.create(
-        organization_id=org.id,
-        user_id=organization.creator_user_id,
-        role_id=owner_role.id,
-    )
-
-    new_api_key = generate_key()
-    api_key_dao.create(
-        key=new_api_key,
-        name=f"org_{org.name}",
-        user_id=organization.creator_user_id,
-        organization_id=org.id,
-    )
-
-    session.commit()
-
-    org_response = OrganizationResponse.model_validate(org)
-    return {
-        **org_response.model_dump(),
-        "api_key": new_api_key,
-    }
 
 
 # =============================================================================

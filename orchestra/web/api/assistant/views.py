@@ -6,7 +6,7 @@ import math
 import time
 import urllib.request
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, List, Literal, NamedTuple, Optional
 
 import mutagen
 from fastapi import (
@@ -23,7 +23,8 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select, tuple_
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -38,14 +39,21 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.space_dao import SpaceDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    CONTACT_MEMBERSHIP_SCOPE_SPACE,
     Assistant,
     AssistantCleanupTask,
     AssistantConsoleConfig,
+    AssistantSpaceMembership,
+    ContactMembership,
     Context,
     DemoAssistantMeta,
     LogEvent,
@@ -53,9 +61,11 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
+    Space,
     User,
 )
 from orchestra.lib.billing import get_billing_entity
+from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_spec_from_assistant,
@@ -65,10 +75,25 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.contact_membership_service import (
+    PERSONAL_BOSS_CONTACT_ID,
+    PERSONAL_SELF_CONTACT_ID,
+    ensure_personal_contact_memberships,
+    ensure_space_contact_memberships,
+)
+from orchestra.services.coordinator_service import (
+    ensure_coordinator_owner_contact_rows,
+    preseed_colleague_contexts,
+    require_authorized_coordinator,
+    require_authorized_preseed_target,
+    reset_coordinator_state,
+    seed_coordinator_transcript,
+)
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
+from orchestra.services.space_cleanup_service import purge_assistant_memberships
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AdminUpdateAssistant,
@@ -76,6 +101,7 @@ from orchestra.web.api.assistant.schema import (
     AdminUpdateUserByAssistant,
     AdminUpdateUserByAssistantResponse,
     AssistantContactCreate,
+    AssistantContactIdentityRoot,
     AssistantContactRead,
     AssistantContactRemoval,
     AssistantContactUpdate,
@@ -94,6 +120,16 @@ from orchestra.web.api.assistant.schema import (
     ConnectResponse,
     ConsoleConfigRead,
     Contact,
+    ContactMembershipCreate,
+    ContactMembershipDeleteResponse,
+    ContactMembershipRead,
+    ContactMembershipUpsertResponse,
+    CoordinatorPreseedRequest,
+    CoordinatorPreseedResponse,
+    CoordinatorPreseedWriteResponse,
+    CoordinatorResetResponse,
+    CoordinatorTranscriptSeed,
+    CoordinatorTranscriptSeedResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
@@ -124,6 +160,13 @@ from orchestra.web.api.utils.assistant_infra import (
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
 ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
+
+
+class ResolvedContactIds(NamedTuple):
+    """Resolved self and boss contact ids for one assistant."""
+
+    self_contact_id: int
+    boss_contact_id: int
 
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
@@ -210,6 +253,246 @@ def _build_console_config_read(
     )
 
 
+def _resolved_contact_ids_for_assistants(
+    session: Session,
+    assistant_ids: list[int],
+) -> dict[int, ResolvedContactIds]:
+    """Resolve assistant-self and boss contact ids for AssistantRead payloads."""
+
+    if not assistant_ids:
+        return {}
+
+    ensure_personal_contact_memberships(session, assistant_ids)
+    ensure_coordinator_owner_contact_rows(session, assistant_ids)
+
+    relationship_values = {
+        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    }
+    rows = (
+        session.query(
+            ContactMembership.id,
+            ContactMembership.assistant_id,
+            ContactMembership.contact_id,
+            ContactMembership.relationship,
+        )
+        .filter(
+            ContactMembership.assistant_id.in_(assistant_ids),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            ContactMembership.relationship.in_(relationship_values),
+        )
+        .order_by(
+            ContactMembership.assistant_id,
+            ContactMembership.relationship,
+            ContactMembership.id,
+        )
+        .all()
+    )
+
+    resolved: dict[int, dict[str, int]] = {
+        assistant_id: {} for assistant_id in assistant_ids
+    }
+    seen: set[tuple[int, str]] = set()
+    for _, assistant_id, contact_id, relationship_name in rows:
+        key = (assistant_id, relationship_name)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
+            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_SELF] = contact_id
+        elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
+            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS] = contact_id
+
+    missing_assistant_ids = [
+        assistant_id
+        for assistant_id, contact_ids in resolved.items()
+        if CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
+        or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
+    ]
+    if missing_assistant_ids:
+        logging.error(
+            "Missing personal contact overlays for assistants: %s",
+            missing_assistant_ids,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="missing_contact_overlay",
+        )
+
+    return {
+        assistant_id: ResolvedContactIds(
+            self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
+            boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
+        )
+        for assistant_id, contact_ids in resolved.items()
+    }
+
+
+def _resolved_contact_identity_roots_for_assistants(
+    session: Session,
+    assistant_ids: list[int],
+    *,
+    space_ids_by_assistant: dict[int, list[int]] | None = None,
+    personal_ids_by_assistant: dict[int, ResolvedContactIds] | None = None,
+) -> dict[int, list[AssistantContactIdentityRoot]]:
+    """Resolve self/boss contact ids for every readable assistant root."""
+
+    if not assistant_ids:
+        return {}
+
+    if space_ids_by_assistant is None:
+        space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
+            assistant_ids,
+        )
+
+    if personal_ids_by_assistant is None:
+        personal_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            assistant_ids,
+        )
+    roots_by_assistant: dict[int, list[AssistantContactIdentityRoot]] = {}
+    for assistant_id in assistant_ids:
+        personal_ids = personal_ids_by_assistant[assistant_id]
+        roots_by_assistant[assistant_id] = [
+            AssistantContactIdentityRoot(
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                target_space_id=None,
+                self_contact_id=personal_ids.self_contact_id,
+                boss_contact_id=personal_ids.boss_contact_id,
+            ),
+        ]
+
+    active_space_ids_by_assistant = {
+        assistant_id: set(space_ids_by_assistant.get(assistant_id, []))
+        for assistant_id in assistant_ids
+    }
+    active_space_ids = {
+        space_id
+        for space_ids in active_space_ids_by_assistant.values()
+        for space_id in space_ids
+    }
+    if not active_space_ids:
+        return roots_by_assistant
+
+    relationship_values = {
+        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    }
+
+    def _fetch_space_identity_rows(
+        *,
+        pairs: set[tuple[int, int]] | None = None,
+    ) -> list[tuple[int, int, int | None, int, str]]:
+        query = session.query(
+            ContactMembership.id,
+            ContactMembership.assistant_id,
+            ContactMembership.target_space_id,
+            ContactMembership.contact_id,
+            ContactMembership.relationship,
+        ).filter(
+            ContactMembership.assistant_id.in_(assistant_ids),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
+            ContactMembership.target_space_id.in_(active_space_ids),
+            ContactMembership.relationship.in_(relationship_values),
+        )
+        if pairs:
+            query = query.filter(
+                tuple_(
+                    ContactMembership.assistant_id,
+                    ContactMembership.target_space_id,
+                ).in_(sorted(pairs)),
+            )
+        return query.order_by(
+            ContactMembership.assistant_id,
+            ContactMembership.target_space_id,
+            ContactMembership.relationship,
+            ContactMembership.id,
+        ).all()
+
+    def _collect_ids_by_root(
+        rows: list[tuple[int, int, int | None, int, str]],
+    ) -> dict[tuple[int, int], dict[str, int]]:
+        ids: dict[tuple[int, int], dict[str, int]] = {}
+        seen: set[tuple[int, int, str]] = set()
+        for _, assistant_id, target_space_id, contact_id, relationship_name in rows:
+            if target_space_id is None:
+                continue
+            if target_space_id not in active_space_ids_by_assistant[assistant_id]:
+                continue
+
+            key = (assistant_id, target_space_id, relationship_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            ids.setdefault((assistant_id, target_space_id), {})[
+                relationship_name
+            ] = contact_id
+        return ids
+
+    ids_by_root = _collect_ids_by_root(_fetch_space_identity_rows())
+    missing_pairs = {
+        (assistant_id, space_id)
+        for assistant_id in assistant_ids
+        for space_id in active_space_ids_by_assistant[assistant_id]
+        if (
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF
+            not in ids_by_root.get((assistant_id, space_id), {})
+            or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS
+            not in ids_by_root.get((assistant_id, space_id), {})
+        )
+    }
+    if missing_pairs:
+        ensure_space_contact_memberships(session, sorted(missing_pairs))
+        ids_by_root.update(
+            _collect_ids_by_root(_fetch_space_identity_rows(pairs=missing_pairs)),
+        )
+
+    for assistant_id in assistant_ids:
+        for space_id in sorted(active_space_ids_by_assistant[assistant_id]):
+            contact_ids = ids_by_root.get((assistant_id, space_id), {})
+            if (
+                CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
+                or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
+            ):
+                logging.warning(
+                    "Missing space contact identity for assistant %s in space %s",
+                    assistant_id,
+                    space_id,
+                )
+                continue
+
+            roots_by_assistant[assistant_id].append(
+                AssistantContactIdentityRoot(
+                    target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
+                    target_space_id=space_id,
+                    self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
+                    boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
+                ),
+            )
+
+    return roots_by_assistant
+
+
+def _contact_id_pair(
+    contact_ids_by_assistant: dict[int, ResolvedContactIds],
+    assistant_id: int,
+) -> ResolvedContactIds:
+    """Return resolved contact ids for an assistant."""
+
+    try:
+        return contact_ids_by_assistant[assistant_id]
+    except KeyError:
+        logging.error(
+            "Missing personal contact overlays for assistant %s",
+            assistant_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="missing_contact_overlay",
+        )
+
+
 def _build_assistant_read(
     a: Assistant,
     session: Session,
@@ -221,6 +504,11 @@ def _build_assistant_read(
     user_image: Optional[str] = None,
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
+    space_ids: Optional[List[int]] = None,
+    space_summaries: Optional[list[dict[str, Any]]] = None,
+    self_contact_id: Optional[int] = None,
+    boss_contact_id: Optional[int] = None,
+    contact_identity_roots: Optional[list[AssistantContactIdentityRoot]] = None,
     contacts: Optional[list] = None,
     secrets: Optional[dict] = None,
     include_internal: bool = False,
@@ -257,6 +545,34 @@ def _build_assistant_read(
             team_ids = [t.id for t in teams]
         else:
             team_ids = []
+
+    if space_ids is None:
+        space_ids = SpaceDAO(session).space_ids_for_assistant(a.agent_id)
+    if space_summaries is None:
+        space_summaries = SpaceDAO(session).space_summaries_for_assistant(a.agent_id)
+
+    if self_contact_id is None or boss_contact_id is None:
+        resolved_contact_ids = _resolved_contact_ids_for_assistants(
+            session,
+            [a.agent_id],
+        )[a.agent_id]
+        if self_contact_id is None:
+            self_contact_id = resolved_contact_ids.self_contact_id
+        if boss_contact_id is None:
+            boss_contact_id = resolved_contact_ids.boss_contact_id
+
+    if contact_identity_roots is None:
+        contact_identity_roots = _resolved_contact_identity_roots_for_assistants(
+            session,
+            [a.agent_id],
+            space_ids_by_assistant={a.agent_id: space_ids},
+            personal_ids_by_assistant={
+                a.agent_id: ResolvedContactIds(
+                    self_contact_id=self_contact_id,
+                    boss_contact_id=boss_contact_id,
+                ),
+            },
+        )[a.agent_id]
 
     # Resolve contact fields from AssistantContact rows
     if contacts is None:
@@ -334,6 +650,11 @@ def _build_assistant_read(
         user_email=user_email,
         user_image=user_image,
         team_ids=team_ids,
+        space_ids=space_ids,
+        space_summaries=space_summaries,
+        self_contact_id=self_contact_id,
+        boss_contact_id=boss_contact_id,
+        contact_identity_roots=contact_identity_roots,
         secrets=secrets,
         console_config=_build_console_config_read(a.console_config),
     )
@@ -376,6 +697,20 @@ def _build_assistant_read(
                 "application/json": {
                     "example": {
                         "detail": "Insufficient credits to create an assistant.",
+                    },
+                },
+            },
+        },
+        409: {
+            "description": "Assistant already exists for this scope and name key.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error": "assistant_already_exists",
+                            "message": "Assistant with this name already exists in this scope.",
+                            "existing_id": 123,
+                        },
                     },
                 },
             },
@@ -467,6 +802,27 @@ async def create_assistant(
                     detail="Insufficient credits to create an assistant.",
                 )
 
+        existing_assistant = assistant_dao.find_by_natural_key(
+            user_id=user_id,
+            organization_id=organization_id,
+            first_name=assistant_in.first_name,
+            surname=assistant_in.surname,
+        )
+        if existing_assistant is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "assistant_already_exists",
+                    "message": (
+                        "Assistant with this name already exists in this scope."
+                    ),
+                    "existing_id": existing_assistant.agent_id,
+                    "first_name": assistant_in.first_name,
+                    "surname": assistant_in.surname,
+                    "organization_id": organization_id,
+                },
+            )
+
         parsed_weekly_limit = (
             Decimal(assistant_in.weekly_limit)
             if assistant_in.weekly_limit is not None
@@ -495,6 +851,11 @@ async def create_assistant(
             deploy_env=assistant_in.deploy_env,
             job_title=assistant_in.job_title,
         )
+        ensure_personal_contact_memberships(
+            session,
+            [assistant.agent_id],
+            repair_existing=False,
+        )
 
         # Org assistants retain the creator in `user_id`; org access is granted
         # separately through resource access so other members can collaborate.
@@ -511,6 +872,7 @@ async def create_assistant(
 
         # Create "Assistants" project if it doesn't exist (for logging purposes)
         ASSISTANTS_PROJECT_NAME = "Assistants"
+        assistants_project: Project | None
 
         if organization_id is not None:
             # For org context, check if project exists in org (not user-access based)
@@ -601,6 +963,23 @@ async def create_assistant(
                     description="Project to manage and track all your assistants.",
                     is_versioned=False,
                 )
+                session.flush()
+                assistants_project = project_dao.get_by_user_and_name(
+                    user_id=user_id,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    organization_id=None,
+                )
+
+        if assistants_project is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="assistants_project_missing",
+            )
+        ensure_owner_contact_row(
+            session,
+            assistant=assistant,
+            project=assistants_project,
+        )
 
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
@@ -823,6 +1202,100 @@ async def create_assistant(
     )
 
 
+@router.post(
+    "/assistant/{coordinator_id}/transcript-seed",
+    response_model=InfoResponse[CoordinatorTranscriptSeedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Seed a Coordinator transcript opener",
+    tags=["Assistant Management"],
+)
+async def seed_coordinator_transcript_endpoint(
+    coordinator_id: int,
+    seed: CoordinatorTranscriptSeed,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorTranscriptSeedResponse]:
+    """Persist the Coordinator opener transcript once."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    log_event_id = seed_coordinator_transcript(
+        session,
+        coordinator=coordinator,
+        content=seed.content,
+        source_assistant_id=seed.source_assistant_id,
+    )
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorTranscriptSeedResponse(log_event_id=log_event_id),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/reset",
+    response_model=InfoResponse[CoordinatorResetResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Reset Coordinator-owned state",
+    tags=["Assistant Management"],
+)
+async def reset_coordinator_endpoint(
+    coordinator_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorResetResponse]:
+    """Clear the Coordinator's state, checklist, transcript, and exchange contexts."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    reset_coordinator_state(session, coordinator=coordinator)
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorResetResponse(coordinator_id=str(coordinator.agent_id)),
+    )
+
+
+@router.post(
+    "/assistant/{target_assistant_id}/preseed",
+    response_model=InfoResponse[CoordinatorPreseedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Seed a colleague assistant's own contexts",
+    tags=["Assistant Management"],
+)
+async def preseed_colleague_endpoint(
+    target_assistant_id: int,
+    request_body: CoordinatorPreseedRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorPreseedResponse]:
+    """Write Coordinator-authored rows into the target colleague's root."""
+    coordinator, target = require_authorized_preseed_target(
+        session,
+        target_assistant_id=target_assistant_id,
+        user_id=request.state.user_id,
+    )
+    writes = preseed_colleague_contexts(
+        session,
+        coordinator=coordinator,
+        target=target,
+        writes=request_body.writes,
+    )
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorPreseedResponse(
+            coordinator_id=coordinator.agent_id,
+            target_assistant_id=target.agent_id,
+            writes=[
+                CoordinatorPreseedWriteResponse(**write_result)
+                for write_result in writes
+            ],
+        ),
+    )
+
+
 @router.get(
     "/assistant",
     response_model=InfoResponse[List[AssistantRead]],
@@ -895,6 +1368,10 @@ def list_assistants(
         None,
         description="Only return assistants whose email address matches this value.",
     ),
+    agent_id: Optional[int] = Query(
+        None,
+        description="Only return assistants whose agent_id matches this value.",
+    ),
     list_all_org: bool = Query(
         False,
         description="If True and using an org API key, list ALL assistants in the organization (not just those created by the current user). Requires assistant:read permission.",
@@ -943,6 +1420,7 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                agent_id=agent_id,
                 include_demo=demo,
                 demo_only=demo_only,
             )
@@ -953,6 +1431,7 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                agent_id=agent_id,
                 include_demo=demo,
                 demo_only=demo_only,
             )
@@ -969,6 +1448,27 @@ def list_assistants(
         contacts_by_assistant: dict[int, list] = {}
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
+
+        space_dao = SpaceDAO(session)
+        assistant_ids = [a.agent_id for a in assistants]
+        space_ids_by_assistant = space_dao.space_ids_for_assistants(
+            assistant_ids,
+        )
+        space_summaries_by_assistant = space_dao.space_summaries_for_assistants(
+            assistant_ids,
+        )
+        contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            assistant_ids,
+        )
+        contact_identity_roots_by_assistant = (
+            _resolved_contact_identity_roots_for_assistants(
+                session,
+                assistant_ids,
+                space_ids_by_assistant=space_ids_by_assistant,
+                personal_ids_by_assistant=contact_ids_by_assistant,
+            )
+        )
 
         return InfoResponse(
             info=[
@@ -989,6 +1489,23 @@ def list_assistants(
                         else None
                     ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    space_ids=space_ids_by_assistant.get(a.agent_id, []),
+                    space_summaries=space_summaries_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
+                    self_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id,
+                    boss_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id,
+                    contact_identity_roots=contact_identity_roots_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
                 )
                 for a in assistants
             ],
@@ -1355,9 +1872,14 @@ async def create_assistant_contact(
             organization_id=organization_id,
         )
         try:
-            return InfoResponse(
+            response = InfoResponse(
                 info=_build_assistant_read(assistant, refreshed_session),
             )
+            refreshed_session.commit()
+            return response
+        except Exception:
+            refreshed_session.rollback()
+            raise
         finally:
             refreshed_session.close()
 
@@ -1551,9 +2073,14 @@ async def create_assistant_contact(
         organization_id=organization_id,
     )
     try:
-        return InfoResponse(
+        response = InfoResponse(
             info=_build_assistant_read(assistant, refreshed_session),
         )
+        refreshed_session.commit()
+        return response
+    except Exception:
+        refreshed_session.rollback()
+        raise
     finally:
         refreshed_session.close()
 
@@ -2426,6 +2953,12 @@ async def delete_assistant(
                 detail="Assistant not found.",
             )
 
+        if assistant.is_coordinator:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cannot_delete_coordinator",
+            )
+
         if organization_id is not None:
             resource_access_dao = ResourceAccessDAO(session)
             has_permission = resource_access_dao.check_user_permission(
@@ -2439,6 +2972,8 @@ async def delete_assistant(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="You do not have permission to delete this assistant.",
                 )
+
+        await purge_assistant_memberships(session, assistant=assistant)
 
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
@@ -4923,6 +5458,201 @@ async def admin_get_assistant_status(
         )
 
 
+def _contact_membership_read(row: ContactMembership) -> ContactMembershipRead:
+    """Serialize a contact-membership ORM row for admin responses."""
+
+    return ContactMembershipRead(
+        id=int(row.id),
+        assistant_id=int(row.assistant_id),
+        authoring_assistant_id=(
+            int(row.authoring_assistant_id)
+            if row.authoring_assistant_id is not None
+            else None
+        ),
+        contact_id=int(row.contact_id),
+        target_scope=str(row.target_scope),
+        target_space_id=(
+            int(row.target_space_id) if row.target_space_id is not None else None
+        ),
+        relationship=str(row.relationship),
+        should_respond=bool(row.should_respond),
+        response_policy=str(row.response_policy),
+        can_edit=bool(row.can_edit),
+        created_at=row.created_at,
+    )
+
+
+def _select_contact_membership(
+    session: Session,
+    *,
+    assistant_id: int,
+    contact_id: int,
+    target_scope: str,
+    target_space_id: int | None,
+) -> ContactMembership | None:
+    query = session.query(ContactMembership).filter(
+        ContactMembership.assistant_id == assistant_id,
+        ContactMembership.contact_id == contact_id,
+        ContactMembership.target_scope == target_scope,
+    )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        query = query.filter(ContactMembership.target_space_id.is_(None))
+    else:
+        query = query.filter(ContactMembership.target_space_id == target_space_id)
+    return query.order_by(ContactMembership.id).first()
+
+
+@admin_router.post(
+    "/assistant/{assistant_id}/contact-memberships",
+    response_model=InfoResponse[ContactMembershipUpsertResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: create contact membership",
+    tags=["Assistants", "Admin"],
+)
+def admin_create_contact_membership(
+    assistant_id: int,
+    request_body: ContactMembershipCreate,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ContactMembershipUpsertResponse]:
+    """Create an assistant-owned contact relationship overlay idempotently."""
+
+    assistant = session.get(Assistant, assistant_id)
+    if assistant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE:
+        membership = (
+            session.query(AssistantSpaceMembership)
+            .join(Space, Space.space_id == AssistantSpaceMembership.space_id)
+            .filter(
+                AssistantSpaceMembership.assistant_id == assistant_id,
+                AssistantSpaceMembership.space_id == request_body.target_space_id,
+                Space.status == "active",
+            )
+            .first()
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant is not a live member of the target space.",
+            )
+
+    values = {
+        "assistant_id": assistant_id,
+        "authoring_assistant_id": assistant_id,
+        "contact_id": request_body.contact_id,
+        "target_scope": request_body.target_scope,
+        "target_space_id": request_body.target_space_id,
+        "relationship": request_body.relationship,
+        "should_respond": request_body.should_respond,
+        "response_policy": request_body.response_policy,
+        "can_edit": request_body.can_edit,
+    }
+    insert_stmt = postgres_insert(ContactMembership).values(**values)
+    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=[
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+            ],
+            index_where=(
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
+            ),
+        )
+    else:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=[
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+                ContactMembership.target_space_id,
+            ],
+            index_where=(
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE
+            ),
+        )
+    inserted_id = session.execute(
+        insert_stmt.returning(ContactMembership.id),
+    ).scalar_one_or_none()
+    session.flush()
+
+    row = None
+    created = inserted_id is not None
+    if inserted_id is not None:
+        row = session.get(ContactMembership, inserted_id)
+    if row is None:
+        row = _select_contact_membership(
+            session,
+            assistant_id=assistant_id,
+            contact_id=request_body.contact_id,
+            target_scope=request_body.target_scope,
+            target_space_id=request_body.target_space_id,
+        )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Contact membership could not be resolved after insert.",
+        )
+    session.commit()
+    return InfoResponse(
+        info=ContactMembershipUpsertResponse(
+            membership=_contact_membership_read(row),
+            created=created,
+        ),
+    )
+
+
+@admin_router.delete(
+    "/assistant/{assistant_id}/contact-memberships/{contact_id}",
+    response_model=InfoResponse[ContactMembershipDeleteResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: delete contact memberships",
+    tags=["Assistants", "Admin"],
+)
+def admin_delete_contact_memberships(
+    assistant_id: int,
+    contact_id: int,
+    target_scope: Literal["personal", "space"] = Query(...),
+    target_space_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ContactMembershipDeleteResponse]:
+    """Delete the relationship overlay for one assistant/contact target."""
+
+    if (
+        target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
+        and target_space_id is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="personal contact memberships cannot include target_space_id",
+        )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE and target_space_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="space contact memberships require target_space_id",
+        )
+
+    stmt = delete(ContactMembership).where(
+        ContactMembership.assistant_id == assistant_id,
+        ContactMembership.contact_id == contact_id,
+        ContactMembership.target_scope == target_scope,
+    )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        stmt = stmt.where(ContactMembership.target_space_id.is_(None))
+    else:
+        stmt = stmt.where(ContactMembership.target_space_id == target_space_id)
+
+    result = session.execute(
+        stmt,
+    )
+    session.commit()
+    return InfoResponse(
+        info=ContactMembershipDeleteResponse(deleted=int(result.rowcount or 0)),
+    )
+
+
 @admin_router.post(
     "/assistant/update-user",
     response_model=AdminUpdateUserByAssistantResponse,
@@ -5304,6 +6034,19 @@ def admin_list_all_assistants(
         )
 
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
+        skip_space_ids = (
+            requested_fields is not None and "space_ids" not in requested_fields
+        )
+        skip_space_summaries = (
+            requested_fields is not None and "space_summaries" not in requested_fields
+        )
+        skip_contact_ids = requested_fields is not None and not (
+            {"self_contact_id", "boss_contact_id"} & requested_fields
+        )
+        skip_contact_identity_roots = (
+            requested_fields is not None
+            and "contact_identity_roots" not in requested_fields
+        )
 
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
@@ -5334,6 +6077,40 @@ def admin_list_all_assistants(
                         s.secret_name
                     ] = s.secret_value
 
+        space_ids_by_assistant = {}
+        space_summaries_by_assistant = {}
+        space_dao = SpaceDAO(session)
+        agent_ids = [a.agent_id for a in assistants]
+        if not skip_space_ids:
+            space_ids_by_assistant = space_dao.space_ids_for_assistants(agent_ids)
+        if not skip_space_summaries:
+            space_summaries_by_assistant = space_dao.space_summaries_for_assistants(
+                agent_ids,
+            )
+        contact_ids_by_assistant = {}
+        if not skip_contact_ids:
+            contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+                session,
+                agent_ids,
+            )
+        contact_identity_roots_by_assistant = {}
+        if not skip_contact_identity_roots:
+            identity_space_ids_by_assistant = space_ids_by_assistant
+            if skip_space_ids:
+                identity_space_ids_by_assistant = space_dao.space_ids_for_assistants(
+                    agent_ids,
+                )
+            contact_identity_roots_by_assistant = (
+                _resolved_contact_identity_roots_for_assistants(
+                    session,
+                    agent_ids,
+                    space_ids_by_assistant=identity_space_ids_by_assistant,
+                    personal_ids_by_assistant=(
+                        contact_ids_by_assistant if not skip_contact_ids else None
+                    ),
+                )
+            )
+
         # Build AssistantRead objects
         assistant_reads = [
             _build_assistant_read(
@@ -5346,6 +6123,35 @@ def admin_list_all_assistants(
                 user_image=users[i].image if users else None,
                 user_whatsapp_number=(users[i].whatsapp_number if users else None),
                 team_ids=[] if skip_teams else None,
+                space_ids=(
+                    [] if skip_space_ids else space_ids_by_assistant.get(a.agent_id, [])
+                ),
+                space_summaries=(
+                    []
+                    if skip_space_summaries
+                    else space_summaries_by_assistant.get(a.agent_id, [])
+                ),
+                self_contact_id=(
+                    PERSONAL_SELF_CONTACT_ID
+                    if skip_contact_ids
+                    else _contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id
+                ),
+                boss_contact_id=(
+                    PERSONAL_BOSS_CONTACT_ID
+                    if skip_contact_ids
+                    else _contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id
+                ),
+                contact_identity_roots=(
+                    []
+                    if skip_contact_identity_roots
+                    else contact_identity_roots_by_assistant.get(a.agent_id, [])
+                ),
                 contacts=contacts_by_assistant.get(a.agent_id, []),
                 secrets=(
                     secrets_by_assistant.get(a.agent_id, {})
@@ -5365,6 +6171,8 @@ def admin_list_all_assistants(
         # No from_fields parameter - return full AssistantRead objects
         return InfoResponse(info=assistant_reads)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=400,
@@ -5557,6 +6365,25 @@ def admin_list_assistants_for_user(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        space_dao = SpaceDAO(session)
+        assistant_ids = [a.agent_id for a in assistants]
+        space_ids_by_assistant = space_dao.space_ids_for_assistants(assistant_ids)
+        space_summaries_by_assistant = space_dao.space_summaries_for_assistants(
+            assistant_ids,
+        )
+        contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            assistant_ids,
+        )
+        contact_identity_roots_by_assistant = (
+            _resolved_contact_identity_roots_for_assistants(
+                session,
+                assistant_ids,
+                space_ids_by_assistant=space_ids_by_assistant,
+                personal_ids_by_assistant=contact_ids_by_assistant,
+            )
+        )
+
         return InfoResponse(
             info=[
                 _build_assistant_read(
@@ -5564,11 +6391,30 @@ def admin_list_assistants_for_user(
                     session,
                     api_key=api_keys[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    space_ids=space_ids_by_assistant.get(a.agent_id, []),
+                    space_summaries=space_summaries_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
+                    self_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id,
+                    boss_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id,
+                    contact_identity_roots=contact_identity_roots_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
                     include_internal=True,
                 )
                 for i, a in enumerate(assistants)
             ],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=400,

@@ -6,7 +6,7 @@ from zoneinfo import available_timezones
 
 import sqlalchemy as sa
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
@@ -60,6 +60,14 @@ class AssistantDAO:
     def __init__(self, session: Session):
         self.session = session
 
+    @staticmethod
+    def _normalize_name_part(value: Optional[str]) -> Optional[str]:
+        """Normalize optional name text for case-insensitive matching."""
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized or None
+
     def create_assistant(
         self,
         user_id: str,
@@ -80,6 +88,7 @@ class AssistantDAO:
         timezone: Optional[str] = None,
         organization_id: Optional[int] = None,
         is_local: bool = False,
+        is_coordinator: bool = False,
         deploy_env: str | None = None,
         job_title: Optional[str] = None,
     ) -> Assistant:
@@ -119,11 +128,52 @@ class AssistantDAO:
             voice_provider=voice_provider,
             timezone=timezone,
             is_local=is_local,
+            is_coordinator=is_coordinator,
             deploy_env=deploy_env,
         )
         self.session.add(assistant)
         self.session.flush()
         return assistant
+
+    def find_by_natural_key(
+        self,
+        *,
+        user_id: str,
+        organization_id: Optional[int],
+        first_name: Optional[str],
+        surname: Optional[str],
+    ) -> Optional[Assistant]:
+        """Return an assistant with the same normalized natural-name key.
+
+        Organization scope:
+            ``organization_id + first_name + surname``
+
+        Personal scope:
+            ``user_id + first_name + surname`` with ``organization_id`` NULL
+        """
+        normalized_first_name = self._normalize_name_part(first_name)
+        if normalized_first_name is None:
+            return None
+        normalized_surname = self._normalize_name_part(surname) or ""
+
+        stmt = select(Assistant).where(
+            func.lower(func.trim(func.coalesce(Assistant.first_name, "")))
+            == normalized_first_name,
+            func.lower(func.trim(func.coalesce(Assistant.surname, "")))
+            == normalized_surname,
+        )
+        if organization_id is None:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+            )
+        else:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+
+        rows = self.session.execute(
+            stmt.order_by(Assistant.created_at.asc(), Assistant.agent_id.asc()),
+        ).scalars()
+        return rows.first()
 
     def get_assistant_by_id(
         self,
@@ -282,6 +332,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        agent_id: Optional[int] = None,
         include_demo: bool = False,
         demo_only: bool = False,
     ) -> List[Assistant]:
@@ -372,6 +423,8 @@ class AssistantDAO:
                     ),
                 ),
             )
+        if agent_id is not None:
+            stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
 
@@ -383,6 +436,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        agent_id: Optional[int] = None,
         include_demo: bool = False,
         demo_only: bool = False,
     ) -> List[Assistant]:
@@ -458,6 +512,8 @@ class AssistantDAO:
                     ),
                 ),
             )
+        if agent_id is not None:
+            stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
 

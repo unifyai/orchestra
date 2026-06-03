@@ -24,7 +24,7 @@ except ImportError:
     plt = None
 from fastapi import FastAPI
 from google.cloud import storage
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,6 +38,7 @@ CURRENT_TEST_INFO = {"name": None, "mode": None}
 
 from orchestra_core.db.dependencies import get_db_session
 from orchestra_core.db.utils import create_database, drop_database
+
 from orchestra.settings import settings
 from orchestra.web.application import get_app
 from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
@@ -80,6 +81,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     :yield: new engine.
     """
     from orchestra_core.db.meta import meta  # noqa: WPS433
+
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -372,7 +374,7 @@ async def client_concurrent(
     """
     test_name = request.node.nodeid
     async with TestAwareAsyncClient(
-        app=fastapi_app_concurrent,
+        transport=ASGITransport(app=fastapi_app_concurrent),
         base_url="http://test",
         test_name=test_name,
     ) as ac:
@@ -456,7 +458,7 @@ async def client(
     """
     test_name = request.node.nodeid
     async with TestAwareAsyncClient(
-        app=fastapi_app,
+        transport=ASGITransport(app=fastapi_app),
         base_url="http://test",
         test_name=test_name,
     ) as ac:
@@ -973,6 +975,7 @@ def _engine_session(worker_id) -> Generator[Engine, None, None]:
     :yield: new engine.
     """
     from orchestra_core.db.meta import meta  # noqa: WPS433
+
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -1106,6 +1109,7 @@ def large_log_dataset(_engine_session: Engine):
     """
     from orchestra_core.db.dao.context_dao import ContextDAO
     from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
@@ -1597,10 +1601,10 @@ def large_repairs_dataset(
     :param repairs_context: Context name (path) for the RepairsDemo context.
     :yield: Nothing (data is available in database during test session)
     """
-    from sqlalchemy import delete
-
     from orchestra_core.db.dao.context_dao import ContextDAO
     from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+    from sqlalchemy import delete
+
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.models.orchestra_models import (
         Context,

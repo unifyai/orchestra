@@ -2,7 +2,14 @@ from datetime import datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 from zoneinfo import available_timezones
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 from pydantic.generics import GenericModel
 
 from orchestra.web.api.utils.safe_text import (
@@ -176,6 +183,14 @@ class AssistantCreate(BaseModel):
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
     )
+    is_coordinator: Optional[bool] = Field(
+        None,
+        description=(
+            "Reserved for coordinator bootstrap endpoints. "
+            "Generic assistant creation must not include this field."
+        ),
+        exclude=True,
+    )
     deploy_env: Optional[str] = Field(
         None,
         description="Deprecated. Must be null.",
@@ -221,11 +236,21 @@ class AssistantCreate(BaseModel):
                 raise ValueError(
                     "If providing voice information, both 'voice_id' and 'voice_provider' are required.",
                 )
+        # AssistantRead extends AssistantCreate for response shaping, so this
+        # guard must only apply to create payload validation.
+        if (
+            self.is_coordinator is not None
+            and self.__class__.__name__ == "AssistantCreate"
+        ):
+            raise ValueError(
+                "'is_coordinator' is not accepted on this endpoint. "
+                "Use POST /user/{user_id}/coordinator instead.",
+            )
         return self
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
@@ -244,7 +269,8 @@ class AssistantCreate(BaseModel):
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
             },
-        }
+        },
+    )
 
 
 class ConsoleConfigRead(BaseModel):
@@ -256,6 +282,38 @@ class ConsoleConfigRead(BaseModel):
     theme: Optional[Dict[str, Any]] = None
 
 
+class AssistantSpaceSummary(BaseModel):
+    """Shared-space metadata projected onto assistant runtime responses."""
+
+    space_id: int = Field(..., description="Shared space identifier.")
+    name: str = Field(..., description="Human-readable shared space name.")
+    description: str = Field(
+        ...,
+        description="Semantic description of the space's purpose and scope.",
+    )
+
+
+class AssistantContactIdentityRoot(BaseModel):
+    """Root-local contact ids used by clients that read across assistant roots."""
+
+    target_scope: Literal["personal", "space"] = Field(
+        ...,
+        description="Root kind where the contact ids are meaningful.",
+    )
+    target_space_id: Optional[int] = Field(
+        None,
+        description="Shared space identifier when the target scope is a space.",
+    )
+    self_contact_id: int = Field(
+        ...,
+        description="Contact id representing the assistant inside this root.",
+    )
+    boss_contact_id: int = Field(
+        ...,
+        description="Contact id representing the assistant owner inside this root.",
+    )
+
+
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
@@ -263,6 +321,14 @@ class AssistantRead(AssistantCreate):
     For organization-scoped assistants, ``user_id`` is the creator/lifecycle
     owner and ``organization_id`` is the org access scope.
     """
+
+    about: Optional[str] = Field(
+        None,
+        description=(
+            "Description of the assistant. Read responses may include longer "
+            "system-authored bios, such as the canonical Coordinator persona."
+        ),
+    )
 
     user_desktop_url: Optional[str] = Field(
         None,
@@ -405,6 +471,30 @@ class AssistantRead(AssistantCreate):
         description="Team IDs the assistant's user belongs to within the assistant's organization. "
         "Empty for personal assistants or when the user has no team memberships.",
     )
+    space_ids: List[int] = Field(
+        default_factory=list,
+        description="Sorted shared space IDs where the assistant is a live member.",
+    )
+    space_summaries: List[AssistantSpaceSummary] = Field(
+        default_factory=list,
+        description="Sorted shared space names and descriptions for live memberships.",
+    )
+    self_contact_id: int = Field(
+        0,
+        description="Resolved Contacts row ID representing the assistant itself.",
+    )
+    boss_contact_id: int = Field(
+        1,
+        description="Resolved Contacts row ID representing the assistant owner.",
+    )
+    contact_identity_roots: List[AssistantContactIdentityRoot] = Field(
+        default_factory=list,
+        description=(
+            "Resolved self and boss contact ids for each readable root. "
+            "Contact ids are root-local, so clients must use the entry matching "
+            "the context they query."
+        ),
+    )
     secrets: Optional[Dict[str, str]] = Field(
         None,
         description="External service credentials (OAuth tokens, etc.). "
@@ -416,9 +506,10 @@ class AssistantRead(AssistantCreate):
         "Null means the assistant uses default console behavior.",
     )
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
@@ -453,10 +544,76 @@ class AssistantRead(AssistantCreate):
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
+                "space_ids": [101, 205],
+                "space_summaries": [
+                    {
+                        "space_id": 101,
+                        "name": "Support Ops",
+                        "description": "Daily customer support operations and escalation notes.",
+                    },
+                ],
+                "self_contact_id": 42,
+                "boss_contact_id": 43,
                 "is_local": False,
                 "is_coordinator": False,
             },
-        }
+        },
+    )
+
+
+class CoordinatorTranscriptSeed(BaseModel):
+    """Request body for persisting the Coordinator's opener transcript row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(..., min_length=1)
+    source_assistant_id: Optional[str] = Field(None)
+
+
+class CoordinatorTranscriptSeedResponse(BaseModel):
+    """Response returned after the opener row is present in the transcript."""
+
+    log_event_id: int
+
+
+class CoordinatorPreseedWrite(BaseModel):
+    """One batch of rows to write into a colleague-owned context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: str = Field(..., min_length=1)
+    entries: List[Dict[str, Any]] = Field(..., min_length=1)
+
+
+class CoordinatorPreseedRequest(BaseModel):
+    """Request body for seeding a colleague's own working memory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    writes: List[CoordinatorPreseedWrite] = Field(..., min_length=1)
+
+
+class CoordinatorPreseedWriteResponse(BaseModel):
+    """Result for one seeded colleague context."""
+
+    context: str
+    log_event_ids: List[int]
+    row_ids: Dict[str, Any]
+    auto_counting: Dict[str, List[Any]]
+
+
+class CoordinatorPreseedResponse(BaseModel):
+    """Response returned after colleague context rows are written."""
+
+    coordinator_id: int
+    target_assistant_id: int
+    writes: List[CoordinatorPreseedWriteResponse]
+
+
+class CoordinatorResetResponse(BaseModel):
+    """Response returned after Coordinator-owned conversation state is reset."""
+
+    coordinator_id: str
 
 
 class DemoAssistantCreate(BaseModel):
@@ -808,9 +965,10 @@ class AssistantUpdate(BaseModel):
 
         return self
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "job_title": "Senior Mathematician",
                 "weekly_limit": 20.5,
@@ -831,7 +989,8 @@ class AssistantUpdate(BaseModel):
                 "phone_country": "GB",
                 "timezone": "Europe/London",
             },
-        }
+        },
+    )
 
 
 class AssistantStatus(BaseModel):
@@ -1654,6 +1813,75 @@ class AdminUpdateUserByAssistantResponse(BaseModel):
         ...,
         description="Type of assistant ('personal' or 'organization').",
     )
+
+
+class ContactMembershipCreate(BaseModel):
+    """Admin request for an assistant contact relationship overlay."""
+
+    contact_id: int = Field(..., description="Contact row id within the target root.")
+    target_scope: Literal["personal", "space"] = Field(
+        ...,
+        description="Whether the contact id points at personal contacts or a space root.",
+    )
+    target_space_id: Optional[int] = Field(
+        None,
+        description="Space id when target_scope is 'space'.",
+    )
+    relationship: Literal["self", "boss", "coworker", "other"] = Field(
+        ...,
+        description="Assistant-specific relationship to the contact.",
+    )
+    should_respond: bool = Field(
+        True,
+        description="Whether the assistant should respond to this contact.",
+    )
+    response_policy: str = Field(
+        "standard",
+        description="Policy text or slug used by the runtime when responding.",
+    )
+    can_edit: bool = Field(
+        False,
+        description="Whether the assistant can edit the contact's shared facts.",
+    )
+
+    @model_validator(mode="after")
+    def validate_target_polarity(self) -> "ContactMembershipCreate":
+        if self.target_scope == "personal" and self.target_space_id is not None:
+            raise ValueError(
+                "personal contact memberships cannot include target_space_id",
+            )
+        if self.target_scope == "space" and self.target_space_id is None:
+            raise ValueError("space contact memberships require target_space_id")
+        return self
+
+
+class ContactMembershipRead(BaseModel):
+    """Admin response shape for an assistant contact relationship overlay."""
+
+    id: int
+    assistant_id: int
+    authoring_assistant_id: Optional[int]
+    contact_id: int
+    target_scope: str
+    target_space_id: Optional[int]
+    relationship: str
+    should_respond: bool
+    response_policy: str
+    can_edit: bool
+    created_at: datetime
+
+
+class ContactMembershipUpsertResponse(BaseModel):
+    """Admin response for idempotent contact-membership creation."""
+
+    membership: ContactMembershipRead
+    created: bool
+
+
+class ContactMembershipDeleteResponse(BaseModel):
+    """Admin response for deleting contact relationship overlays."""
+
+    deleted: int
 
 
 class AdminUpdateAssistant(BaseModel):

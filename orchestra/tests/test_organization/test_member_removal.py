@@ -21,8 +21,10 @@ from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.models.orchestra_models import (
+    Assistant,
     AssistantCleanupTask,
     AssistantContact,
+    AssistantSpaceMembership,
     ResourceAccess,
     TeamMember,
 )
@@ -55,7 +57,13 @@ def mock_assistant_infra_calls(request):
     ) as mock_bucket_cls, patch(
         "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
         new_callable=AsyncMock,
-    ):
+    ), patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_personal_coordinator_topic, patch(
+        "orchestra.web.api.organization.views.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_org_coordinator_topic:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_assistant_cleanup.return_value = {
@@ -72,6 +80,8 @@ def mock_assistant_infra_calls(request):
             "failed": 0,
             "errors": [],
         }
+        mock_personal_coordinator_topic.return_value = {"success": True}
+        mock_org_coordinator_topic.return_value = {"success": True}
         mock_settings.is_staging = True
 
         mock_bucket_instance = MagicMock()
@@ -276,6 +286,97 @@ async def test_member_removal_removes_from_teams(client: AsyncClient, dbsession)
         dbsession.query(TeamMember).filter(TeamMember.user_id == member["id"]).all()
     )
     assert len(teams_after) == 0, "Member should be removed from all teams"
+
+
+@pytest.mark.anyio
+async def test_member_removal_drops_personal_coordinator_memberships_from_org_spaces(
+    client: AsyncClient,
+    dbsession,
+):
+    """Removing an org member drops that member's personal Coordinator from org spaces."""
+
+    owner = await create_test_user(client, "space_cleanup_owner@test.com")
+    member = await create_test_user(client, "space_cleanup_member@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Membership Cleanup Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert (
+        add_member_resp.status_code == status.HTTP_201_CREATED
+    ), add_member_resp.json()
+
+    create_space_resp = await client.post(
+        "/v0/spaces",
+        headers=owner["headers"],
+        json={
+            "name": "Membership Cleanup Space",
+            "description": "Shared workspace used to verify member-removal cleanup.",
+            "organization_id": org_id,
+        },
+    )
+    assert (
+        create_space_resp.status_code == status.HTTP_201_CREATED
+    ), create_space_resp.json()
+    space_id = create_space_resp.json()["space_id"]
+
+    with patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as create_topic_mock, patch(
+        "orchestra.services.space_membership_refresh_service.reawaken_assistant",
+        new_callable=AsyncMock,
+    ):
+        create_topic_mock.return_value = {"success": True, "skipped": True}
+        add_space_member_resp = await client.post(
+            f"/v0/spaces/{space_id}/members",
+            headers=owner["headers"],
+            json={"member_user_id": member["id"]},
+        )
+        assert (
+            add_space_member_resp.status_code == status.HTTP_201_CREATED
+        ), add_space_member_resp.json()
+        member_coordinator_id = add_space_member_resp.json()["assistant_id"]
+
+        membership_before = (
+            dbsession.query(AssistantSpaceMembership)
+            .filter(
+                AssistantSpaceMembership.assistant_id == member_coordinator_id,
+                AssistantSpaceMembership.space_id == space_id,
+            )
+            .one_or_none()
+        )
+        assert membership_before is not None
+        coordinator = dbsession.get(Assistant, member_coordinator_id)
+        assert coordinator is not None
+        assert coordinator.user_id == member["id"]
+        assert coordinator.organization_id is None
+        assert coordinator.is_coordinator
+
+        remove_resp = await client.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
+        assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    dbsession.expire_all()
+    membership_after = (
+        dbsession.query(AssistantSpaceMembership)
+        .filter(
+            AssistantSpaceMembership.assistant_id == member_coordinator_id,
+            AssistantSpaceMembership.space_id == space_id,
+        )
+        .one_or_none()
+    )
+    assert membership_after is None
 
 
 # =============================================================================

@@ -15,7 +15,14 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.db.models.orchestra_models import Organization, OrganizationMember
+from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    ContactMembership,
+    Organization,
+    OrganizationMember,
+)
 from orchestra.settings import settings
 from orchestra.tests.utils import HEADERS
 
@@ -186,6 +193,50 @@ class TestDemoAssistantListFiltering:
         assert resp.status_code == 200
         # Should succeed even if no demo assistants exist
         assert "info" in resp.json()
+
+    @pytest.mark.anyio
+    async def test_list_with_demo_repairs_missing_personal_contact_overlays(
+        self,
+        client: AsyncClient,
+        dbsession,
+        source_assistant: dict,
+    ):
+        """List reads repair historical assistants missing personal overlays."""
+        agent_id = int(source_assistant["agent_id"])
+        (
+            dbsession.query(ContactMembership)
+            .filter(
+                ContactMembership.assistant_id == agent_id,
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            )
+            .delete(synchronize_session=False)
+        )
+        dbsession.commit()
+
+        resp = await client.get("/v0/assistant?demo=true", headers=HEADERS)
+
+        assert resp.status_code == 200, resp.json()
+        matching = [
+            assistant
+            for assistant in resp.json()["info"]
+            if int(assistant["agent_id"]) == agent_id
+        ]
+        assert len(matching) == 1
+        assert matching[0]["self_contact_id"] == 0
+        assert matching[0]["boss_contact_id"] == 1
+
+        rows = (
+            dbsession.query(ContactMembership)
+            .filter(
+                ContactMembership.assistant_id == agent_id,
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            )
+            .all()
+        )
+        assert {(row.contact_id, row.relationship) for row in rows} == {
+            (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
+            (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
+        }
 
     @pytest.mark.anyio
     async def test_list_with_demo_only(

