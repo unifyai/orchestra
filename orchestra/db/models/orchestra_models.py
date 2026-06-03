@@ -2624,6 +2624,12 @@ class Plot(Base):
         nullable=False,
         index=True,
     )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     user_id = Column(
         String,
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -2644,9 +2650,11 @@ class Plot(Base):
 
     # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
     project = relationship("Project", backref=backref("plots", passive_deletes=True))
+    context = relationship("Context", backref=backref("plots", passive_deletes=True))
 
     __table_args__ = (
         Index("idx_plot_project_id", "project_id"),
+        Index("idx_plot_context_id", "context_id"),
         Index("idx_plot_user_id", "user_id"),
         Index("idx_plot_organization_id", "organization_id"),
     )
@@ -2667,6 +2675,12 @@ class TableView(Base):
         Integer,
         ForeignKey("project.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     user_id = Column(
@@ -2692,9 +2706,14 @@ class TableView(Base):
         "Project",
         backref=backref("table_views", passive_deletes=True),
     )
+    context = relationship(
+        "Context",
+        backref=backref("table_views", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_table_view_project_id", "project_id"),
+        Index("idx_table_view_context_id", "context_id"),
         Index("idx_table_view_user_id", "user_id"),
         Index("idx_table_view_organization_id", "organization_id"),
     )

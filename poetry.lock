@@ -4007,7 +4007,7 @@ files = [
 
 [[package]]
 name = "orchestra-core"
-version = "0.1.2"
+version = "0.0.0"
 description = "Single-tenant persistence kernel for the Unify agent runtime"
 optional = false
 python-versions = "~3.12"
@@ -4053,7 +4053,7 @@ yarl = "^1.9.2"
 type = "git"
 url = "https://github.com/unifyai/orchestra-core.git"
 reference = "staging"
-resolved_reference = "aa2892ab6799e111fe99e6959043422e1e0002de"
+resolved_reference = "6ae76fe2cd3bf6ee06a2f4425778539b972e7027"
 
 [[package]]
 name = "packaging"

@@ -22,31 +22,6 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, exists, or_, select, text
-from sqlalchemy.exc import DataError, SQLAlchemyError
-from sqlalchemy.sql.selectable import Subquery
-
-from orchestra.db.context_naming import is_space_context_name
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.models.orchestra_models import (
-    ActiveDerivedLog,
-    Context,
-    Embedding,
-    LogEvent,
-    LogEventContext,
-    Project,
-)
-from orchestra.services.task_machine_state_service import (
-    TASK_MACHINE_PROJECT_NAME,
-    get_task_ids_for_log_ids,
-    is_internal_task_machine_context_name,
-    is_protected_task_surface_context_name,
-    is_task_surface_context_name,
-    sync_task_activations_for_task_ids,
-)
-from orchestra.web.api.dependencies import auth_admin_key
 from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
 from orchestra_core.db.dao.log_event_dao import (
@@ -56,7 +31,6 @@ from orchestra_core.db.dao.log_event_dao import (
     _extract_field_names_from_equation,
 )
 from orchestra_core.db.dependencies import get_db_session
-
 from orchestra_core.web.api.log.python2SQL import (
     _compute_expression,
     _extract_placeholders,
@@ -102,6 +76,31 @@ from orchestra_core.web.api.log.utils import (
 )
 from orchestra_core.web.api.utils.helpers import CustomEncoder
 from orchestra_core.web.api.utils.http_responses import not_found
+from sqlalchemy import and_, exists, or_, select, text
+from sqlalchemy.exc import DataError, SQLAlchemyError
+from sqlalchemy.sql.selectable import Subquery
+
+from orchestra.db.context_naming import is_space_context_name
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.models.orchestra_models import (
+    ActiveDerivedLog,
+    Context,
+    Embedding,
+    LogEvent,
+    LogEventContext,
+    Project,
+)
+from orchestra.services.task_machine_state_service import (
+    TASK_MACHINE_PROJECT_NAME,
+    get_task_ids_for_log_ids,
+    is_internal_task_machine_context_name,
+    is_protected_task_surface_context_name,
+    is_task_surface_context_name,
+    sync_task_activations_for_task_ids,
+)
+from orchestra.web.api.dependencies import auth_admin_key
 
 from .task_machine_admin import router as task_machine_admin_router
 

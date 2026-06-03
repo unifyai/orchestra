@@ -684,12 +684,14 @@ async def test_duplicate_project(client: AsyncClient):
     await _create_context(client, source_project_name, context_name, "test description")
 
     # Create a log in the source project (to test later that updates don't affect duplicate)
-    log_id = await _create_log(
+    log_response = await _create_log(
         client,
         source_project_name,
         context={"name": context_name},
         entries={"source_key": "source_value"},
     )
+    assert log_response.status_code == 200, log_response.json()
+    log_id = log_response.json()["log_event_ids"][0]
 
     # Create derived logs to test they are also duplicated
     key = "derived_key"
@@ -707,7 +709,7 @@ async def test_duplicate_project(client: AsyncClient):
 
     key = "derived_key2"
     equation = "{Table:source_key} + ' world'"
-    referenced_logs = {"Table": [1]}
+    referenced_logs = {"Table": [log_id]}
     response = await _create_derived_entry(
         client,
         source_project_name,
@@ -1075,7 +1077,7 @@ async def test_duplicate_project(client: AsyncClient):
     # 8) Update the source project logs and verify the changes don't affect the duplicate
     response = await _update_logs(
         client,
-        log_ids=[1],
+        log_ids=[log_id],
         context={"name": context_name},
         entries={"updated_key": "updated_value"},
     )

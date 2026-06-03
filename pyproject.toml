@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "orchestra"
-version = "0.1.0"
+version = "0.0.0"
 description = "Backend API and persistence layer for Unity and the wider Unify stack"
 authors = [
     "Unify <hello@unify.ai>",
@@ -25,8 +25,8 @@ classifiers = [
 # a Rust toolchain or unavailable system headers. Bump explicitly when those
 # deps publish 3.13 wheels.
 python = "~3.12"
-# The open-source kernel follows the shared staging branch workflow used by
-# the rest of the Python repos in this stack.
+# First-party repos track matching environment branches; the lockfile records
+# the exact commit used for reproducible installs.
 orchestra-core = { git = "https://github.com/unifyai/orchestra-core.git", branch = "staging" }
 fastapi = "^0.100.0"
 uvicorn = { version = "^0.22.0", extras = ["standard"] }

@@ -7,8 +7,8 @@ from typing import List, Optional
 import numpy as np
 import pytest
 from httpx import AsyncClient
+from orchestra_core.web.api.log.utils.type_utils import normalize_timestamp
 
-from ...web.api.log.utils.type_utils import normalize_timestamp
 from . import (
     HEADERS,
     _create_derived_entry,

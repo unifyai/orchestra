@@ -9,11 +9,12 @@ import json as _json
 import logging
 import time as _time
 from collections import defaultdict
-from importlib import metadata
 
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.responses import UJSONResponse
+from orchestra_core.observability.prometheus_middleware import metrics
+from orchestra_core.web.application import core_middlewares
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
@@ -27,8 +28,6 @@ from orchestra.pii_scrub import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
-from orchestra_core.observability.prometheus_middleware import metrics
-from orchestra_core.web.application import core_middlewares
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
 
 
@@ -89,7 +88,7 @@ def get_app() -> FastAPI:
         )
     app = FastAPI(
         title="UnifyAI HTTP API Reference",
-        version=metadata.version("orchestra"),
+        version="dev",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,

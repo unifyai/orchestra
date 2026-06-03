@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, joinedload
 
-from orchestra.db.models.orchestra_models import TableView
+from orchestra.db.models.orchestra_models import Context, TableView
 
 
 class TokenGenerationError(Exception):
@@ -32,6 +32,25 @@ class TableViewDAO:
             if not self.get_by_token(token):
                 return token
         raise TokenGenerationError("Failed to generate unique token after 3 attempts")
+
+    def _resolve_context_id(
+        self,
+        project_id: int,
+        project_config: Dict[str, Any],
+    ) -> Optional[int]:
+        """Resolve the stored context name to a FK target for delete cascades."""
+        context_name = project_config.get("context")
+        if context_name is None:
+            return None
+
+        return (
+            self.session.query(Context.id)
+            .filter(
+                Context.project_id == project_id,
+                Context.name == context_name,
+            )
+            .scalar()
+        )
 
     def create(
         self,
@@ -61,6 +80,7 @@ class TableViewDAO:
         table_view = TableView(
             token=token,
             project_id=project_id,
+            context_id=self._resolve_context_id(project_id, project_config),
             user_id=user_id,
             organization_id=organization_id,
             title=title,
@@ -239,6 +259,11 @@ class TableViewDAO:
             table_view.project_config = project_config
         if project_id is not None:
             table_view.project_id = project_id
+        if project_config is not None or project_id is not None:
+            table_view.context_id = self._resolve_context_id(
+                table_view.project_id,
+                table_view.project_config,
+            )
         if organization_id is not ...:
             table_view.organization_id = organization_id
 
