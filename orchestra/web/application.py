@@ -9,7 +9,6 @@ import json as _json
 import logging
 import time as _time
 from collections import defaultdict
-from importlib import metadata
 
 import sentry_sdk
 from fastapi import FastAPI
@@ -89,7 +88,7 @@ def get_app() -> FastAPI:
         )
     app = FastAPI(
         title="UnifyAI HTTP API Reference",
-        version=metadata.version("orchestra"),
+        version="dev",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,

@@ -51,6 +51,12 @@ repos:
     pass_filenames: false
     files: ^orchestra_core/.*\.py$
 
+  - id: check-no-release-versioning
+    name: no first-party release versioning
+    entry: python3 scripts/check_no_release_versioning.py
+    language: system
+    pass_filenames: false
+
   # - id: flake8
   #   name: Check with Flake8
   #   entry: poetry run flake8
