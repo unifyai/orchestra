@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from . import HEADERS, _create_log, _create_project, _get_log
 
@@ -614,7 +614,10 @@ def test_atomic_upsert_concurrent_first_inserts_threaded(fastapi_app_concurrent)
         """Run async request in its own event loop (for thread isolation)."""
 
         async def _make_request():
-            async with AsyncClient(app=app, base_url="http://test") as client:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
                 if method == "post":
                     return await client.post(url, json=json_data, headers=HEADERS)
                 return await client.get(url, headers=HEADERS)
@@ -772,7 +775,10 @@ def test_atomic_upsert_concurrent_high_contention_threaded(fastapi_app_concurren
         """Run async request in its own event loop (for thread isolation)."""
 
         async def _make_request():
-            async with AsyncClient(app=app, base_url="http://test") as client:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
                 if method == "post":
                     return await client.post(url, json=json_data, headers=HEADERS)
                 return await client.get(url, headers=HEADERS)
