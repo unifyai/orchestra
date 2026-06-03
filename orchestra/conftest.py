@@ -7,6 +7,7 @@ import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Generator
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qsl
 
 import numpy as np
@@ -62,6 +63,44 @@ def _restore_detached_indexes(removed_indexes: list[tuple[Any, Any]]) -> None:
 
     for table, index in removed_indexes:
         table.indexes.add(index)
+
+
+@pytest.fixture(autouse=True)
+def stub_coordinator_pubsub_boundary():
+    """Stub Coordinator Pub/Sub provisioning during platform API tests.
+
+    User and workspace creation now provisions a personal Coordinator, which
+    would otherwise call Communication with an unset ``UNITY_COMMS_URL``. Tests
+    that need real infra fanout should patch or override this boundary locally.
+    """
+    with (
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic,
+        patch(
+            "orchestra.web.api.users.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_users_pubsub,
+        patch(
+            "orchestra.web.api.organization.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_org_pubsub,
+        patch(
+            "orchestra.web.api.auth.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_auth_pubsub,
+        patch(
+            "orchestra.web.api.space.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_space_pubsub,
+    ):
+        mock_create_pubsub_topic.return_value = {"success": True}
+        mock_delete_users_pubsub.return_value = {"success": True}
+        mock_delete_org_pubsub.return_value = {"success": True}
+        mock_delete_auth_pubsub.return_value = {"success": True}
+        mock_delete_space_pubsub.return_value = {"success": True}
+        yield
 
 
 @pytest.fixture(scope="session")
