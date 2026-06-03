@@ -8,6 +8,7 @@ import logging
 from typing import Any, Iterable, Optional, Tuple, Union
 
 import imagehash
+from orchestra_core.lib.parallel import threaded_map
 from pgvector.sqlalchemy import Vector
 from PIL import Image
 from sqlalchemy import (
@@ -36,7 +37,6 @@ from sqlalchemy.sql.elements import BinaryExpression, BindParameter, Cast, Claus
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.orchestra_models import Embedding, LogEvent
-from orchestra_core.lib.parallel import threaded_map
 from orchestra.services.bucket_service import BucketService
 
 from . import alias_utils
@@ -1097,40 +1097,51 @@ def _handle_membership_operator_jsonb(
             )
             return containment if is_in else not_(containment)
 
-        # Case 1: RHS is JSONB array (use centralized type helper)
-        if _is_list_type(rhs_type):
-            containment = rhs_expr.op("@>")(
-                func.jsonb_build_array(lhs_expr),
+        # Case 1: RHS is Python list literal or list of SQL expressions
+        if (
+            isinstance(rhs_dict, list)
+            or (isinstance(rhs_dict, dict) and rhs_dict.get("type") == "literal_list")
+            or (
+                isinstance(rhs_expr, BindParameter) and isinstance(rhs_expr.value, list)
             )
-            return containment if is_in else not_(containment)
-
-        # Case 2: RHS is Python list literal or list of SQL expressions
-        if isinstance(rhs_dict, list) or (
-            isinstance(rhs_dict, dict) and rhs_dict.get("type") == "literal_list"
         ):
             rhs_list = None
             # Check if rhs_expr is a list of SQL expressions (from type_literal processing)
             if isinstance(rhs_expr, list):
-                # rhs_expr is already a list of SQL expressions
-                # Cast LHS to match the type of list elements
-                lhs_casted = cast_expr(lhs_expr, lhs_type, lhs_type, force_to_type=True)
-                return (
-                    lhs_casted.in_(rhs_expr)
-                    if is_in
-                    else not_(lhs_casted.in_(rhs_expr))
-                )
+                rhs_list = rhs_expr
             elif hasattr(rhs_expr, "value"):
                 rhs_list = rhs_expr.value
             if rhs_list is not None:
-                # Cast LHS to match the type of list elements for proper comparison
-                # This handles cases like: sender_id in [1, 2, 3, 4] where sender_id
-                # is extracted as text but needs to be compared as integer
-                lhs_casted = cast_expr(lhs_expr, lhs_type, lhs_type, force_to_type=True)
+                lhs_value, lhs_value_type = _select_value(
+                    lhs_expr,
+                    session,
+                    project_id=project_id,
+                    context_id=context_id,
+                )
+                literal_type_map = {
+                    "bool": "bool",
+                    "int": "int",
+                    "float": "float",
+                    "str": "str",
+                }
+                final_type = lhs_value_type
+                for value in rhs_list:
+                    elem_type = literal_type_map.get(type(value).__name__)
+                    if value is not None and elem_type is not None:
+                        final_type = unify_inferred_types(final_type, elem_type)
+                lhs_casted = cast_expr(lhs_value, lhs_value_type, final_type)
                 return (
                     lhs_casted.in_(rhs_list)
                     if is_in
                     else not_(lhs_casted.in_(rhs_list))
                 )
+
+        # Case 2: RHS is a list-valued field/expression.
+        if _is_list_type(rhs_type):
+            containment = rhs_expr.op("@>")(
+                func.jsonb_build_array(lhs_expr),
+            )
+            return containment if is_in else not_(containment)
 
         # Case 3: Scalar field (substring) - only valid for strings
         if rhs_type == "str":

@@ -55,6 +55,10 @@ from . import (
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
         ),
         (
+            "task_id in [0, 1, 2]",
+            {"task_id": 0},
+        ),
+        (
             "submarine == 6.45 and van is False or len(ship) < 10 and 'audi' in car",
             {"submarine": 7.89, "van": True, "ship": "_" * 10, "car": "porsche"},
         ),
