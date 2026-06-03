@@ -1,14 +1,14 @@
 """Seed personal contact memberships.
 
 Revision ID: seed_personal_cm
-Revises: drop_space_invites
+Revises: 2026_slack_integration
 Create Date: 2026-05-05 12:00:00.000000
 """
 
 from alembic import op
 
 revision = "seed_personal_cm"
-down_revision = "drop_space_invites"
+down_revision = "2026_slack_integration"
 branch_labels = None
 depends_on = None
 
