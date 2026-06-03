@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, HTTPException, Request
+from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+from orchestra_core.db.dependencies import get_db_session
+from orchestra_core.web.api.log.schema import CreateLogConfig
+from orchestra_core.web.api.utils.http_responses import not_found
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Float,
@@ -29,11 +34,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra_core.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     Embedding,
@@ -43,8 +45,6 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.log.python2SQL.operators import _create_truthiness_condition
-from orchestra.web.api.log.schema import CreateLogConfig
-from orchestra_core.web.api.utils.http_responses import not_found
 
 from ..python2SQL import STR_TO_SQL_TYPES
 from ..python2SQL.core import build_sql_query
