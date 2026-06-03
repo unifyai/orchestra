@@ -7,12 +7,13 @@ Tests for admin project endpoints:
 
 import pytest
 from httpx import AsyncClient
-
 from orchestra_core.db.dao.context_dao import ContextDAO
+
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.models.orchestra_models import ResourceAccess
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
@@ -72,7 +73,7 @@ async def test_admin_list_org_projects(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_admin_list_org_projects_empty(client: AsyncClient, dbsession):
-    """Test admin list org projects returns empty list for org with no projects."""
+    """Test admin list org projects returns only the bootstrap Assistants project."""
     owner = await create_test_user(client, "admin_list_empty_owner@test.com")
 
     # Create organization
@@ -83,13 +84,13 @@ async def test_admin_list_org_projects_empty(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    # Admin endpoint should return empty list
     admin_response = await client.get(
         f"/v0/admin/projects/org/{org_id}",
         headers=ADMIN_HEADERS,
     )
     assert admin_response.status_code == 200
-    assert admin_response.json() == []
+    project_names = [project["name"] for project in admin_response.json()]
+    assert project_names == ["Assistants"]
 
 
 @pytest.mark.anyio
@@ -370,13 +371,22 @@ async def test_admin_endpoints_fix_orphaned_project_workflow(
     project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
     role_dao = RoleDAO(dbsession)
 
-    # Step 1: Create orphaned project (no ResourceAccess)
-    project_dao.create(
-        name="Assistants",  # The problematic project name
-        user_id=None,
-        organization_id=org_id,
-    )
-    dbsession.commit()
+    # Step 1: Use the org Assistants project without owner ResourceAccess.
+    existing = project_dao.filter(organization_id=org_id, name="Assistants")
+    if existing:
+        project = existing[0][0]
+        dbsession.query(ResourceAccess).filter(
+            ResourceAccess.resource_type == "project",
+            ResourceAccess.resource_id == project.id,
+        ).delete(synchronize_session=False)
+        dbsession.commit()
+    else:
+        project_dao.create(
+            name="Assistants",
+            user_id=None,
+            organization_id=org_id,
+        )
+        dbsession.commit()
 
     # Step 2: Admin finds the orphaned project
     list_response = await client.get(

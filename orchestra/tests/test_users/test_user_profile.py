@@ -767,6 +767,13 @@ async def test_create_user_accepts_normal_identity_fields(client: AsyncClient):
     }
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    data = response.json()
+    user_id = response.json()["id"]
+
+    profile_resp = await client.get(
+        f"/v0/admin/user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    assert profile_resp.status_code == 200, profile_resp.json()
+    data = profile_resp.json()
     assert data["last_name"] == "O'Brien-Smith"
     assert data["job_title"] == "VP, R&D (EMEA)"

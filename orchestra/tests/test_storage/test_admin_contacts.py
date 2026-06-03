@@ -61,8 +61,13 @@ async def test_admin_list_contacts_basic(client: AsyncClient):
     # 4) Retrieve all contacts (no filters)
     resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
     assert resp.status_code == status.HTTP_200_OK
-    results = resp.json()
-    assert isinstance(results, list) and len(results) == 2
+    results = [
+        row
+        for row in resp.json()
+        if row["email_address"]
+        in {contact1["email_address"], contact2["email_address"]}
+    ]
+    assert len(results) == 2
     emails = {r["email_address"] for r in results}
     assert emails == {"john.doe@example.com", "jane.smith@example.com"}
     for r in results:
@@ -142,9 +147,12 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient):
     # Both entries should be returned by admin_list_contacts (case-sensitive match on 'Contacts')
     resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
     assert resp.status_code == status.HTTP_200_OK
-    results = resp.json()
+    expected_emails = {contact1["email_address"], contact2["email_address"]}
+    results = [
+        row for row in resp.json() if row.get("email_address") in expected_emails
+    ]
     emails = {r.get("email_address") for r in results}
-    assert emails == {contact1["email_address"], contact2["email_address"]}
+    assert emails == expected_emails
     assert len(results) == 2
 
 
@@ -215,9 +223,10 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient):
     # Admin should retrieve both contacts regardless of owner
     resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
     assert resp.status_code == status.HTTP_200_OK
-    results = resp.json()
+    expected_emails = {contact1["email_address"], contact2["email_address"]}
+    results = [row for row in resp.json() if row["email_address"] in expected_emails]
     emails = {r["email_address"] for r in results}
-    assert emails == {contact1["email_address"], contact2["email_address"]}
+    assert emails == expected_emails
     user_ids = {r["user_id"] for r in results}
     assert user_ids == {user1["id"], user2["id"]}
     assert len(results) == 2

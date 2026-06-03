@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from orchestra_core.db.dao.context_dao import ContextDAO
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -28,7 +28,7 @@ from orchestra.db.models.orchestra_models import (
     ResourceAccess,
     TeamMember,
 )
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import create_test_user, ensure_assistants_project
 
 
 @pytest.fixture(autouse=True)
@@ -289,7 +289,7 @@ async def test_member_removal_drops_personal_coordinator_memberships_from_org_sp
     client: AsyncClient,
     dbsession,
 ):
-    """Removing an org member drops that member's personal Coordinator from org spaces."""
+    """Removing an org member drops that member's workspace Coordinator from org spaces."""
 
     owner = await create_test_user(client, "space_cleanup_owner@test.com")
     member = await create_test_user(client, "space_cleanup_member@test.com")
@@ -354,7 +354,7 @@ async def test_member_removal_drops_personal_coordinator_memberships_from_org_sp
         coordinator = dbsession.get(Assistant, member_coordinator_id)
         assert coordinator is not None
         assert coordinator.user_id == member["id"]
-        assert coordinator.organization_id is None
+        assert coordinator.organization_id == org_id
         assert coordinator.is_coordinator
 
         remove_resp = await client.delete(
@@ -1074,12 +1074,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     member_org_key = add_resp.json()["api_key"]
     member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
 
-    # Create Assistants project for org
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
 
     # Member creates assistant (unshared - only they have access)
     assistant_dao = AssistantDAO(dbsession)
@@ -1238,12 +1233,7 @@ async def test_member_removal_preserves_other_assistant_logs(
         headers=owner["headers"],
     )
 
-    # Create Assistants project
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
 
     # Create two assistants - one for each member (both unshared)
     assistant_dao = AssistantDAO(dbsession)
@@ -1447,12 +1437,7 @@ async def test_member_removal_sets_contact_is_system_false(
         headers=owner["headers"],
     )
 
-    # Create Assistants project with All/Contacts context
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
 
     # Create Contact log for the member with is_system=True
     # Match by email since contact sync now uses email

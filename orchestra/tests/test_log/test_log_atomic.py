@@ -1012,14 +1012,9 @@ async def test_atomic_upsert_with_org_api_key(client: AsyncClient):
         "Content-Type": "application/json",
     }
 
-    # Step 2: Create "Assistants" project in org (via the org API key)
-    response = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    # May already exist, so accept 200 or 409
-    assert response.status_code in (200, 201, 409), response.json()
+    from orchestra.tests.utils import ensure_assistants_project
+
+    await ensure_assistants_project(client, org_headers)
 
     # Step 4: Use atomic upsert with org API key
     response = await client.post(
@@ -1131,13 +1126,9 @@ async def test_atomic_upsert_org_project_isolation(client: AsyncClient):
         "Content-Type": "application/json",
     }
 
-    # Create Assistants project in org
-    response = await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=org_headers,
-    )
-    assert response.status_code in (200, 201, 409), response.json()
+    from orchestra.tests.utils import ensure_assistants_project
+
+    await ensure_assistants_project(client, org_headers)
 
     # Step 3: Create a log with org API key (same context path but different test_id)
     response_org = await client.post(

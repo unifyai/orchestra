@@ -116,6 +116,33 @@ async def create_test_user(
     }
 
 
+async def ensure_assistants_project(
+    client: AsyncClient,
+    headers: Dict[str, Any],
+) -> None:
+    """Ensure the Assistants project exists for the authenticated scope.
+
+    Personal signup and organization creation now provision a Coordinator,
+    which also creates the Assistants project. Tests that used to create the
+    project explicitly should call this helper instead of assuming the POST
+    always runs.
+    """
+    projects_resp = await client.get("/v0/projects", headers=headers)
+    assert projects_resp.status_code == status.HTTP_200_OK, projects_resp.json()
+    if "Assistants" in projects_resp.json():
+        return
+
+    create_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=headers,
+    )
+    assert create_resp.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), create_resp.json()
+
+
 async def create_test_org(
     client: AsyncClient,
     owner: Dict[str, Any],

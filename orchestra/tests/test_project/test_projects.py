@@ -611,12 +611,13 @@ async def test_share_project(client: AsyncClient):
     assert response.status_code == 200, response.json()
     data = response.json()
     assert len(data["logs"]) > 0
+    shared_log_id = data["logs"][0]["id"]
     assert "test_key" in data["logs"][0]["entries"]
 
     # 5) Update the logs and verify the new user can access the updated logs
     response = await _update_logs(
         client,
-        log_ids=[1],
+        log_ids=[shared_log_id],
         context={"name": context_name},
         entries={"new_key": "value2"},
     )

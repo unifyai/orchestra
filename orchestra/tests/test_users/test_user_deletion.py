@@ -348,16 +348,21 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
         "user_id": member["id"],
     }
     cleanup_specs = mock_enqueue_cleanup.call_args.args[1]
-    assert [spec.assistant_id for spec in cleanup_specs] == [agent_id]
+    cleaned_ids = [spec.assistant_id for spec in cleanup_specs]
+    assert agent_id in cleaned_ids
+    org_assistant_specs = [
+        spec for spec in cleanup_specs if spec.assistant_id == agent_id
+    ]
+    assert len(org_assistant_specs) == 1
     assert (
         mock_enqueue_cleanup.call_args.kwargs["source_flow"]
         == CleanupSource.USER_DELETE
     )
-    assert cleanup_specs[0].deploy_env is None
-    assert cleanup_specs[0].desktop_mode == "windows"
+    org_spec = org_assistant_specs[0]
+    assert org_spec.deploy_env is None
+    assert org_spec.desktop_mode == "windows"
     assert [
-        (contact.contact_type, contact.contact_value)
-        for contact in cleanup_specs[0].contacts
+        (contact.contact_type, contact.contact_value) for contact in org_spec.contacts
     ] == [("phone", "+15550300123")]
     mock_bucket.delete_all_assistant_data.assert_not_called()
     mock_bucket.delete_user_account_photos.assert_called_once_with(member["id"])
