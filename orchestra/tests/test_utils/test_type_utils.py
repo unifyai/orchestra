@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytest
 
-from orchestra.web.api.log.utils.type_utils import (
+from orchestra_core.web.api.log.utils.type_utils import (
     DEFAULT_FIELD_TYPE,
     get_base_storage_type,
     get_display_type,
@@ -496,7 +496,7 @@ try:
 except ImportError:
     PYDANTIC_AVAILABLE = False
 
-from orchestra.web.api.log.utils.type_utils import (
+from orchestra_core.web.api.log.utils.type_utils import (
     infer_simple_type_from_pydantic_schema,
     is_pydantic_schema,
     normalize_pydantic_schema,
@@ -903,7 +903,7 @@ async def test_types_dont_match_with_pydantic_schemas():
 # Integration Tests with LogDAO.infer_type
 # ================================================================================
 
-from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra_core.db.dao.log_event_dao import LogEventDAO
 
 # Backward-compat alias for tests that still reference LogDAO
 LogDAO = LogEventDAO
@@ -1247,7 +1247,9 @@ async def test_arbitrary_pydantic_nesting_depth():
 @pytest.mark.anyio
 async def test_fallback_validation_simple_model():
     """Test fallback validation without jsonschema library."""
-    from orchestra.web.api.log.utils.type_utils import _validate_against_schema_fallback
+    from orchestra_core.web.api.log.utils.type_utils import (
+        _validate_against_schema_fallback,
+    )
 
     person_schema = Person.model_json_schema()
 
@@ -1286,7 +1288,9 @@ async def test_fallback_validation_simple_model():
 @pytest.mark.anyio
 async def test_fallback_validation_nested_with_refs():
     """Test fallback validation with nested models and $ref resolution."""
-    from orchestra.web.api.log.utils.type_utils import _validate_against_schema_fallback
+    from orchestra_core.web.api.log.utils.type_utils import (
+        _validate_against_schema_fallback,
+    )
 
     person_with_address_schema = PersonWithAddress.model_json_schema()
 
@@ -1329,7 +1333,9 @@ async def test_fallback_validation_nested_with_refs():
 @pytest.mark.anyio
 async def test_fallback_validation_array_types():
     """Test fallback validation with array/list types."""
-    from orchestra.web.api.log.utils.type_utils import _validate_against_schema_fallback
+    from orchestra_core.web.api.log.utils.type_utils import (
+        _validate_against_schema_fallback,
+    )
 
     team_schema = Team.model_json_schema()
 
@@ -1362,7 +1368,9 @@ async def test_fallback_validation_array_types():
 @pytest.mark.anyio
 async def test_fallback_validation_root_model_list():
     """Test fallback validation with RootModel (list at root)."""
-    from orchestra.web.api.log.utils.type_utils import _validate_against_schema_fallback
+    from orchestra_core.web.api.log.utils.type_utils import (
+        _validate_against_schema_fallback,
+    )
 
     annotated_refs_schema = AnnotatedImageRefs.model_json_schema()
 
@@ -1641,7 +1649,7 @@ async def test_infer_type_from_empty_containers():
 # Orchestra now accepts standard JSON Schema type names alongside Python-style types.
 # This enables seamless integration with Pydantic's model_json_schema() output.
 
-from orchestra.web.api.log.utils.type_utils import (
+from orchestra_core.web.api.log.utils.type_utils import (
     JSON_SCHEMA_TYPE_ALIASES,
     ORCHESTRA_TO_JSON_SCHEMA,
 )

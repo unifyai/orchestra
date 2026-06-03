@@ -14,7 +14,7 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra_core.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
-from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra_core.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.plot_dao import PlotDAO

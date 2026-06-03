@@ -46,10 +46,15 @@ repos:
 
   - id: check-core-purity
     name: orchestra_core purity (no platform imports)
-    entry: bash scripts/check_core_purity.sh
+    entry: poetry run bash scripts/check_core_purity.sh
     language: system
     pass_filenames: false
-    files: ^orchestra_core/.*\.py$
+
+  - id: check-no-kernel-forks
+    name: platform has no kernel forks
+    entry: bash scripts/check_no_kernel_forks.sh
+    language: system
+    pass_filenames: false
 
   # - id: flake8
   #   name: Check with Flake8

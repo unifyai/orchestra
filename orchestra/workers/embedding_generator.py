@@ -286,7 +286,7 @@ def generate_vectors_for_items(
     Returns:
         Tuple of (successful_results, failed_results)
     """
-    from orchestra.web.api.log.python2SQL.helpers import _get_embeddings_batch
+    from orchestra_core.web.api.log.python2SQL.helpers import _get_embeddings_batch
 
     if not items:
         return [], []

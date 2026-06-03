@@ -15,7 +15,7 @@ from orchestra.services.task_machine_state_service import (
     update_task_run,
 )
 from orchestra.web.api.dependencies import auth_admin_key
-from orchestra.web.api.log.schema import (
+from orchestra.web.api.log.task_machine_schema import (
     TaskActivationLookupRequest,
     TaskActivationLookupResponse,
     TaskActivationReprojectRequest,

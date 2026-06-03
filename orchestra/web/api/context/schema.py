@@ -213,7 +213,7 @@ class ContextCreateRequest(BaseModel):
             )
 
         # Valid types for unique keys
-        from orchestra.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
+        from orchestra_core.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
 
         allowed_types = list(STR_TO_SQL_TYPES.keys())
 

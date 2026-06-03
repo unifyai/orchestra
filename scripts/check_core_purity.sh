@@ -8,8 +8,22 @@
 # split. Violations let private code leak into the future public repo.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CORE_DIR="$ROOT/orchestra_core"
+CORE_DIR="${ORCHESTRA_CORE_DIR:-}"
+if [[ -z "$CORE_DIR" ]]; then
+    CORE_DIR="$(
+        python - <<'PY'
+import pathlib
+import orchestra_core
+
+print(pathlib.Path(orchestra_core.__file__).resolve().parent)
+PY
+    )"
+fi
+
+if [[ ! -d "$CORE_DIR" ]]; then
+    echo "FAIL: orchestra_core package directory not found: $CORE_DIR" >&2
+    exit 1
+fi
 
 echo "Checking orchestra_core/ purity..."
 

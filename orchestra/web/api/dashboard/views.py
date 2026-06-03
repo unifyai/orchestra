@@ -235,7 +235,10 @@ def admin_filter_bridge(
     via the same internal query path used by GET /v0/logs, and returns
     flattened row entries for ergonomic JS consumption.
     """
-    from orchestra.web.api.log.utils.logging_utils import _format_logs, _get_logs_query
+    from orchestra_core.web.api.log.utils.logging_utils import (
+        _format_logs,
+        _get_logs_query,
+    )
 
     entry = _resolve_tile_token(session, token)
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
@@ -333,7 +336,7 @@ def admin_reduce_bridge(
     ``compute_metric_for_key`` (ungrouped) or
     ``_compute_metric_for_key_grouped`` (grouped).
     """
-    from orchestra.web.api.log.utils.metric_utils import (
+    from orchestra_core.web.api.log.utils.metric_utils import (
         _compute_metric_for_key_grouped,
         compute_metric_for_key,
     )
@@ -414,7 +417,7 @@ def admin_join_bridge(
     Resolves the token to the tile creator's identity and delegates to
     ``_join_query_internal`` with ``metric=None``.
     """
-    from orchestra.web.api.log.utils.logging_utils import _join_query_internal
+    from orchestra_core.web.api.log.utils.logging_utils import _join_query_internal
 
     entry = _resolve_tile_token(session, token)
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
@@ -488,7 +491,7 @@ def admin_join_reduce_bridge(
     Resolves the token to the tile creator's identity and delegates to
     ``_join_query_internal`` with ``metric`` + ``key``.
     """
-    from orchestra.web.api.log.utils.logging_utils import _join_query_internal
+    from orchestra_core.web.api.log.utils.logging_utils import _join_query_internal
 
     entry = _resolve_tile_token(session, token)
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
@@ -594,7 +597,7 @@ def admin_get_dashboard_action(
             detail=f"Token '{tile_token}' not found",
         )
 
-    from orchestra.web.api.log.utils.logging_utils import _get_logs_query
+    from orchestra_core.web.api.log.utils.logging_utils import _get_logs_query
 
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
 
@@ -670,7 +673,7 @@ def admin_list_dashboard_actions(
             detail=f"Token '{tile_token}' not found",
         )
 
-    from orchestra.web.api.log.utils.logging_utils import _get_logs_query
+    from orchestra_core.web.api.log.utils.logging_utils import _get_logs_query
 
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
 

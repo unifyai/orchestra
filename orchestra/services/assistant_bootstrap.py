@@ -14,7 +14,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra_core.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.models.orchestra_models import (
@@ -26,8 +26,8 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
-from orchestra.web.api.log.schema import CreateLogConfig
-from orchestra.web.api.log.utils.logging_utils import create_logs_internal
+from orchestra_core.web.api.log.schema import CreateLogConfig
+from orchestra_core.web.api.log.utils.logging_utils import create_logs_internal
 
 from .contact_membership_service import (
     BOSS_CONTACT_RESPONSE_POLICY,

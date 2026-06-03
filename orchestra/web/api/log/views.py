@@ -22,39 +22,11 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
-from orchestra_core.db.dependencies import get_db_session
-from orchestra_core.web.api.log.schema import (
-    AtomicFieldUpdateRequest,
-    AtomicFieldUpdateResponse,
-    CreateDerivedEntriesConfig,
-    CreateFieldsRequest,
-    CreateLogConfig,
-    DeleteFieldsRequest,
-    DeleteLogEntryRequest,
-    GetLogsMetricRequest,
-    JoinLogsRequest,
-    JoinQueryRequest,
-    QueryLogsPostBody,
-    RenameFieldRequest,
-    UpdateDerivedEntriesConfig,
-    UpdateFieldRequest,
-    UpdateLogRequest,
-)
-from orchestra_core.web.api.utils.helpers import CustomEncoder
-from orchestra_core.web.api.utils.http_responses import not_found
 from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.context_naming import is_space_context_name
-from orchestra.db.dao.log_event_dao import (
-    ImmutableFieldError,
-    LogEventDAO,
-    OverwriteError,
-    _extract_field_names_from_equation,
-)
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -75,16 +47,41 @@ from orchestra.services.task_machine_state_service import (
     sync_task_activations_for_task_ids,
 )
 from orchestra.web.api.dependencies import auth_admin_key
+from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+from orchestra_core.db.dao.log_event_dao import (
+    ImmutableFieldError,
+    LogEventDAO,
+    OverwriteError,
+    _extract_field_names_from_equation,
+)
+from orchestra_core.db.dependencies import get_db_session
 
-from .python2SQL import (
+from orchestra_core.web.api.log.python2SQL import (
     _compute_expression,
     _extract_placeholders,
     _substitute_placeholders,
     build_sql_query,
     str_filter_exp_to_dict,
 )
-from .task_machine_admin import router as task_machine_admin_router
-from .utils import (
+from orchestra_core.web.api.log.schema import (
+    AtomicFieldUpdateRequest,
+    AtomicFieldUpdateResponse,
+    CreateDerivedEntriesConfig,
+    CreateFieldsRequest,
+    CreateLogConfig,
+    DeleteFieldsRequest,
+    DeleteLogEntryRequest,
+    GetLogsMetricRequest,
+    JoinLogsRequest,
+    JoinQueryRequest,
+    QueryLogsPostBody,
+    RenameFieldRequest,
+    UpdateDerivedEntriesConfig,
+    UpdateFieldRequest,
+    UpdateLogRequest,
+)
+from orchestra_core.web.api.log.utils import (
     _build_grouped_data,
     _compute_metric_for_key_grouped,
     _fetch_logs_for_event_ids,
@@ -103,6 +100,10 @@ from .utils import (
     compute_metric_for_key,
     create_logs_internal,
 )
+from orchestra_core.web.api.utils.helpers import CustomEncoder
+from orchestra_core.web.api.utils.http_responses import not_found
+
+from .task_machine_admin import router as task_machine_admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -976,7 +977,7 @@ def create_from_logs(
                                 # handlers, or both store here).
                                 is_image_embedding = "embed_image(" in body.equation
                                 if is_image_embedding:
-                                    from orchestra.web.api.log.python2SQL.helpers import (
+                                    from orchestra_core.web.api.log.python2SQL.helpers import (
                                         DEFAULT_IMAGE_EMBEDDING_MODEL,
                                     )
 
@@ -1958,7 +1959,7 @@ def _update_logs(
     Returns:
         Dict with info message, failed updates list, and modified_keys list
     """
-    from orchestra.web.api.log.utils.logging_utils import enforce_types
+    from orchestra_core.web.api.log.utils.logging_utils import enforce_types
 
     # Get user ID for permission checks
     user_id = request_fastapi.state.user_id

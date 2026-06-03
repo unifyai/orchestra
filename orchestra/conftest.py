@@ -1161,7 +1161,7 @@ def large_log_dataset(_engine_session: Engine):
     from orchestra_core.db.dao.context_dao import ContextDAO
     from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
 
-    from orchestra.db.dao.log_event_dao import LogEventDAO
+    from orchestra_core.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
 
@@ -1656,7 +1656,7 @@ def large_repairs_dataset(
     from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
     from sqlalchemy import delete
 
-    from orchestra.db.dao.log_event_dao import LogEventDAO
+    from orchestra_core.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.models.orchestra_models import (
         Context,
         LogEvent,
