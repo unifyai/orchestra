@@ -7,6 +7,7 @@ import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Generator
+from urllib.parse import parse_qsl
 
 import numpy as np
 import pytest
@@ -385,10 +386,21 @@ class TestAwareAsyncClient(AsyncClient):
     """AsyncClient wrapper that injects test name into requests for SQL capture."""
 
     def __init__(self, *args, test_name: str = "unknown", **kwargs):
+        app = kwargs.pop("app", None)
+        if app is not None and "transport" not in kwargs:
+            kwargs["transport"] = ASGITransport(app=app)
         super().__init__(*args, **kwargs)
         self._test_name = test_name
 
     async def request(self, method, url, **kwargs):
+        params = kwargs.get("params")
+        if isinstance(url, str) and "?" in url and params is not None:
+            path, query = url.split("?", 1)
+            merged_params = dict(parse_qsl(query, keep_blank_values=True))
+            merged_params.update(dict(params))
+            url = path
+            kwargs["params"] = merged_params
+
         # Inject test name header for SQL capture
         headers = kwargs.get("headers", {})
         if headers is None:
