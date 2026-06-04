@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from orchestra_core.db.dao.context_dao import ContextDAO
 from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SPACE_STATUS_DELETING
 from orchestra.db.models.orchestra_models import (

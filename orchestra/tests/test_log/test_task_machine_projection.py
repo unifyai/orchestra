@@ -40,7 +40,7 @@ TASK_OUTBOUND_OPERATIONS_CONTEXT = (
         TASKS_CONTEXT,
     )
 )
-PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID") or "1")
+PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 SECONDARY_USER_ID = "seconday_user"
 _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION = (
     task_machine_state_service._reconcile_scheduled_activation_materialization

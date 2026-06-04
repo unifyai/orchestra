@@ -72,7 +72,7 @@ class ForeignKeyConfig(BaseModel):
             raise ValueError("Foreign key name must be a string")
 
         # For nested paths, use the path parser for validation
-        from orchestra_core.db.utils import FKPathParser
+        from orchestra.db.utils import FKPathParser
 
         if FKPathParser.is_nested_path(v):
             # Validate nested path syntax
@@ -121,7 +121,7 @@ class ForeignKeyConfig(BaseModel):
 
     def model_post_init(self, __context):
         """Auto-populate nested path metadata after validation."""
-        from orchestra_core.db.utils import FKPathParser
+        from orchestra.db.utils import FKPathParser
 
         # Check if this is a nested path
         self.is_nested = FKPathParser.is_nested_path(self.name)
@@ -213,7 +213,7 @@ class ContextCreateRequest(BaseModel):
             )
 
         # Valid types for unique keys
-        from orchestra_core.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
+        from orchestra.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
 
         allowed_types = list(STR_TO_SQL_TYPES.keys())
 

@@ -61,7 +61,7 @@ def coordinator_pubsub_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
-        "orchestra_core.db.dao.log_event_dao.LogEventDAO.bucket_service_factory",
+        "orchestra.db.dao.log_event_dao.LogEventDAO.bucket_service_factory",
         MagicMock(),
     )
 

@@ -31,7 +31,10 @@ async def test_teardown_assistant_runtime_reports_incomplete_steps():
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -53,6 +56,10 @@ async def test_teardown_assistant_runtime_reports_incomplete_steps():
         }
         mock_delete_disk.return_value = {
             "name": "delete_assistant_disk",
+            "success": True,
+        }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
             "success": True,
         }
 
@@ -126,7 +133,10 @@ async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup(
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -148,6 +158,10 @@ async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup(
         }
         mock_delete_disk.return_value = {
             "name": "delete_assistant_disk",
+            "success": True,
+        }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
             "success": True,
         }
 
@@ -205,7 +219,10 @@ async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comm
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -234,6 +251,12 @@ async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comm
             "skipped": True,
             "reason": "missing_comms_config",
         }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
+            "success": True,
+            "skipped": True,
+            "reason": "missing_comms_config",
+        }
 
         result = await assistant_infra.teardown_assistant_runtime(
             "42",
@@ -257,6 +280,7 @@ async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comm
     mock_delete_session.assert_not_awaited()
     mock_delete_topic.assert_awaited_once_with("42", deploy_env=None)
     mock_delete_disk.assert_awaited_once_with("42", deploy_env=None)
+    mock_delete_archive.assert_awaited_once_with("42", deploy_env=None)
 
 
 @pytest.mark.anyio
@@ -410,7 +434,10 @@ async def test_teardown_assistant_runtime_runs_sessionless_fallback_when_stop_is
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -444,6 +471,10 @@ async def test_teardown_assistant_runtime_runs_sessionless_fallback_when_stop_is
         }
         mock_delete_disk.return_value = {
             "name": "delete_assistant_disk",
+            "success": True,
+        }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
             "success": True,
         }
 

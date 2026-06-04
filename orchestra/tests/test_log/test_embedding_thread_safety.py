@@ -40,7 +40,7 @@ class TestSyncClientThreadSafety:
         the AsyncOpenAI client being used from multiple event loops.
         After the refactor, the sync OpenAI client handles this correctly.
         """
-        from orchestra_core.web.api.log.python2SQL.helpers import (
+        from orchestra.web.api.log.python2SQL.helpers import (
             OPENAI_API_KEY,
             _get_embeddings_batch,
         )
@@ -116,7 +116,7 @@ class TestSyncClientThreadSafety:
         Verify that the sync OpenAI client is properly shared and reused
         across multiple threads (single global instance).
         """
-        from orchestra_core.web.api.log.python2SQL.helpers import (
+        from orchestra.web.api.log.python2SQL.helpers import (
             OPENAI_API_KEY,
             _get_openai_client,
         )

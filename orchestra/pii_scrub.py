@@ -5,11 +5,9 @@ Customer Personal Data is at risk of leaving its primary processing purpose:
 error/trace events sent to Sentry, and application log lines. See the brain
 compliance docs (`documents/pseudonymisation-procedure.md`).
 
-It lives in orchestra-platform, not orchestra-core, on purpose: Sentry and the
-managed Cloud Logging pipeline are hosted-product concerns. The public
-orchestra-core kernel carries no observability-sink credentials or
-compliance configuration, and the one-way dependency (platform imports core,
-never the reverse) keeps it that way.
+Sentry and the managed Cloud Logging pipeline are hosted-product concerns,
+so observability sinks call this module before data leaves the service
+boundary.
 
 The module is intentionally dependency-free (stdlib ``re``/``logging`` only) so
 that it can be (a) imported anywhere in the platform without import-order
@@ -155,7 +153,7 @@ class PiiRedactionFilter(logging.Filter):
     """Logging filter that scrubs the rendered message text of a record.
 
     Attach to a handler when you want redaction scoped to that sink. For
-    process-wide coverage (including third-party and orchestra-core loggers)
+    process-wide coverage (including third-party and orchestra loggers)
     prefer :func:`install_log_redaction`, which is handler-independent.
     """
 

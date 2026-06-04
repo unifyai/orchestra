@@ -3,26 +3,6 @@ from datetime import datetime
 from enum import Enum  # noqa: F401  — re-exported below
 
 import sqlalchemy as sa
-from orchestra_core.db.base import Base
-
-# Kernel models live in orchestra-core. Re-exported here so platform
-# code can keep `from orchestra.db.models.orchestra_models import Project`
-# and treat this file as the single platform-facing model surface.
-from orchestra_core.db.models.core_models import (  # noqa: E402, F401
-    ActiveDerivedLog,
-    Context,
-    ContextCounter,
-    ContextVersion,
-    Embedding,
-    EmbeddingQueue,
-    FieldType,
-    LogEvent,
-    LogEventContext,
-    LogEventVersion,
-    LogUniqueConstraint,
-    Project,
-    ProjectVersion,
-)
 from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
@@ -44,6 +24,27 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import backref, relationship, validates
+
+from orchestra.db.base import Base
+
+# Kernel models live in orchestra. Re-exported here so platform
+# code can keep `from orchestra.db.models.orchestra_models import Project`
+# and treat this file as the single platform-facing model surface.
+from orchestra.db.models.core_models import (  # noqa: E402, F401
+    ActiveDerivedLog,
+    Context,
+    ContextCounter,
+    ContextVersion,
+    Embedding,
+    EmbeddingQueue,
+    FieldType,
+    LogEvent,
+    LogEventContext,
+    LogEventVersion,
+    LogUniqueConstraint,
+    Project,
+    ProjectVersion,
+)
 
 # Billing-domain enums + sentinel constants live in their own module so
 # non-ORM consumers (lib, routines, web/api) can import them without

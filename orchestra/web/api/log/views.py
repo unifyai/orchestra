@@ -22,23 +22,48 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
-from orchestra_core.db.dao.log_event_dao import (
+from sqlalchemy import and_, exists, or_, select, text
+from sqlalchemy.exc import DataError, SQLAlchemyError
+from sqlalchemy.sql.selectable import Subquery
+
+from orchestra.db.context_naming import is_space_context_name
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_event_dao import (
     ImmutableFieldError,
     LogEventDAO,
     OverwriteError,
     _extract_field_names_from_equation,
 )
-from orchestra_core.db.dependencies import get_db_session
-from orchestra_core.web.api.log.python2SQL import (
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import (
+    ActiveDerivedLog,
+    Context,
+    Embedding,
+    LogEvent,
+    LogEventContext,
+    Project,
+)
+from orchestra.services.task_machine_state_service import (
+    TASK_MACHINE_PROJECT_NAME,
+    get_task_ids_for_log_ids,
+    is_internal_task_machine_context_name,
+    is_protected_task_surface_context_name,
+    is_task_surface_context_name,
+    sync_task_activations_for_task_ids,
+)
+from orchestra.web.api.dependencies import auth_admin_key
+from orchestra.web.api.log.python2SQL import (
     _compute_expression,
     _extract_placeholders,
     _substitute_placeholders,
     build_sql_query,
     str_filter_exp_to_dict,
 )
-from orchestra_core.web.api.log.schema import (
+from orchestra.web.api.log.schema import (
     AtomicFieldUpdateRequest,
     AtomicFieldUpdateResponse,
     CreateDerivedEntriesConfig,
@@ -55,7 +80,7 @@ from orchestra_core.web.api.log.schema import (
     UpdateFieldRequest,
     UpdateLogRequest,
 )
-from orchestra_core.web.api.log.utils import (
+from orchestra.web.api.log.utils import (
     _build_grouped_data,
     _compute_metric_for_key_grouped,
     _fetch_logs_for_event_ids,
@@ -74,33 +99,8 @@ from orchestra_core.web.api.log.utils import (
     compute_metric_for_key,
     create_logs_internal,
 )
-from orchestra_core.web.api.utils.helpers import CustomEncoder
-from orchestra_core.web.api.utils.http_responses import not_found
-from sqlalchemy import and_, exists, or_, select, text
-from sqlalchemy.exc import DataError, SQLAlchemyError
-from sqlalchemy.sql.selectable import Subquery
-
-from orchestra.db.context_naming import is_space_context_name
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.models.orchestra_models import (
-    ActiveDerivedLog,
-    Context,
-    Embedding,
-    LogEvent,
-    LogEventContext,
-    Project,
-)
-from orchestra.services.task_machine_state_service import (
-    TASK_MACHINE_PROJECT_NAME,
-    get_task_ids_for_log_ids,
-    is_internal_task_machine_context_name,
-    is_protected_task_surface_context_name,
-    is_task_surface_context_name,
-    sync_task_activations_for_task_ids,
-)
-from orchestra.web.api.dependencies import auth_admin_key
+from orchestra.web.api.utils.helpers import CustomEncoder
+from orchestra.web.api.utils.http_responses import not_found
 
 from .task_machine_admin import router as task_machine_admin_router
 
@@ -142,12 +142,13 @@ def _check_project_write_permission(
     if organization_id is None:
         return
     ra_dao = ResourceAccessDAO(session)
-    if not ra_dao.check_user_permission(
+    has_permission = ra_dao.check_user_permission(
         user_id,
         "project",
         project_id,
         "project:write",
-    ):
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=403,
             detail="You do not have permission to write to this project",
@@ -185,7 +186,7 @@ def _sanitize_sql_error(error: Exception) -> str:
 
 
 # Import sibling context cleanup from shared module
-from orchestra_core.db.dao.sibling_context_cleanup import (
+from orchestra.db.dao.sibling_context_cleanup import (
     get_assistants_sibling_context_info as _get_assistants_sibling_context_info,
 )
 
@@ -976,7 +977,7 @@ def create_from_logs(
                                 # handlers, or both store here).
                                 is_image_embedding = "embed_image(" in body.equation
                                 if is_image_embedding:
-                                    from orchestra_core.web.api.log.python2SQL.helpers import (
+                                    from orchestra.web.api.log.python2SQL.helpers import (
                                         DEFAULT_IMAGE_EMBEDDING_MODEL,
                                     )
 
@@ -1958,7 +1959,7 @@ def _update_logs(
     Returns:
         Dict with info message, failed updates list, and modified_keys list
     """
-    from orchestra_core.web.api.log.utils.logging_utils import enforce_types
+    from orchestra.web.api.log.utils.logging_utils import enforce_types
 
     # Get user ID for permission checks
     user_id = request_fastapi.state.user_id
@@ -2427,7 +2428,7 @@ def _update_logs(
     if all_flat_updates:
         # Enforce unique field constraints for updated values (JSONB mode)
         if ctx_id is not None:
-            from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
             unique_fields = {
                 k
@@ -2972,7 +2973,7 @@ def _delete_logs(
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
             # Embedding cleanup before hard delete (see LogEventDAO.delete)
-            from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
+            from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(session)
             embedding_dao.cancel_queue(
@@ -3146,7 +3147,7 @@ def _delete_logs(
             # Delete logs that don't exist in other contexts - BULK DELETE
             if logs_to_delete:
                 # Embedding cleanup before hard delete (see LogEventDAO.delete)
-                from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
+                from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
                 embedding_dao = EmbeddingDAO(session)
                 embedding_dao.cancel_queue(

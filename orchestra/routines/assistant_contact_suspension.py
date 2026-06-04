@@ -113,9 +113,7 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
 
     from sqlalchemy.orm import object_session
 
-    from orchestra.web.api.utils.assistant_infra import (
-        delete_phone_number,
-    )
+    from orchestra.web.api.utils.assistant_infra import delete_phone_number
 
     deploy_env = None
     session = object_session(contact)

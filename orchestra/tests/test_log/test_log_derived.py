@@ -2359,7 +2359,7 @@ async def test_referenced_keys_updated_on_template_update(
     """Verify that referenced_keys is updated when modifying derived log templates."""
     from datetime import datetime, timezone
 
-    from orchestra_core.db.dao.log_event_dao import _extract_field_names_from_equation
+    from orchestra.db.dao.log_event_dao import _extract_field_names_from_equation
     from orchestra.db.models.orchestra_models import ActiveDerivedLog, Context, Project
 
     # Current storage is always enabled

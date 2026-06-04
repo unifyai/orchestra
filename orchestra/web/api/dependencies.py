@@ -10,14 +10,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import AdminUser
+from orchestra.observability.observability import set_user_context
 from orchestra.settings import settings
-from orchestra_core.web.api.utils.http_responses import (
+from orchestra.web.api.utils.http_responses import (
     account_frozen,
     admin_not_authorized,
     invalid_api_key,
     staging_restricted,
 )
-from orchestra_core.observability.observability import set_user_context
 
 UNIFY_EMAIL_DOMAIN = "@unify.ai"
 

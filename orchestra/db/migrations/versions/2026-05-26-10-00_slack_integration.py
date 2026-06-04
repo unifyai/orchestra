@@ -19,7 +19,7 @@ assistants:
   threads) or the sentinel ``__dm_root__`` (DM roots). Rows are TTL'd
   via ``expires_at`` (default 14 days, refreshed on use).
 
-The kernel models in orchestra-core are untouched. Constraint names match
+The kernel models in orchestra are untouched. Constraint names match
 what ``sa.ForeignKey`` / ``UniqueConstraint(name=...)`` / partial-unique
 ``Index(..., postgresql_where=...)`` produce via ``meta.create_all`` so
 fresh test DBs and migrated production DBs agree.

@@ -10,12 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
-from orchestra_core.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Context
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
@@ -32,7 +32,7 @@ from orchestra.web.api.context.schema import (
     CopyContextRequest,
     RenameContextRequest,
 )
-from orchestra_core.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 logger = logging.getLogger(__name__)
 
@@ -730,7 +730,7 @@ def add_logs_to_context(
         if hasattr(request, "log_ids") and request.log_ids:
             log_ids = request.log_ids
         elif hasattr(request, "log_args") and request.log_args:
-            from orchestra_core.web.api.log.utils.logging_utils import _get_logs_query
+            from orchestra.web.api.log.utils.logging_utils import _get_logs_query
 
             # Use log_args to query for matching logs
             log_args = request.log_args

@@ -1,20 +1,17 @@
-# Platform alembic chain (orchestra-platform)
+# Alembic Chain
 
 The platform's migration chain is now a **single squashed revision**:
 
 - `_platform_initial` (`down_revision = "0001_core_initial"`) — creates
-  every platform table outside the 13 kernel tables that orchestra-core's
+  every platform table outside the 13 kernel tables that orchestra's
   `0001_core_initial` already creates, plus the two `project` foreign keys
-  back to `user` / `organization` that orchestra-core deliberately leaves
+  back to `user` / `organization` that orchestra deliberately leaves
   off.
 
 The two chains are now **formally converged**: a fresh database runs
 core then platform sequentially with no `DuplicateTable` conflicts.
-`alembic upgrade head` from the platform's `alembic.ini` discovers both
-version directories (the platform's `versions/` plus orchestra-core's
-installed `versions/` — `env.py` resolves the kernel path at import time
-regardless of whether orchestra-core was installed via git URL or as a
-local path dep).
+`alembic upgrade head` discovers the local revision chain in
+`orchestra/db/migrations/versions`.
 
 ## Production cutover
 
@@ -52,7 +49,7 @@ If you ever need to regenerate `_platform_initial_schema.sql` (e.g. to
 fold subsequent revisions into the squash), the procedure is:
 
 1. Spin up a fresh Postgres + pgvector.
-2. Apply the full migration chain on a copy of the platform repo from
+2. Apply the full migration chain on a copy of this repo from
    the relevant commit.
 3. `pg_dump --schema-only --no-owner --no-comments` excluding kernel
    tables (`project`, `context`, `log_event`, ...), `_backup_orphan_*`

@@ -126,10 +126,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.models.orchestra_models import AssistantContact
 from orchestra.settings import settings
-from orchestra.web.api.utils.assistant_infra import (
-    delete_email,
-    delete_outlook_email,
-)
+from orchestra.web.api.utils.assistant_infra import delete_email, delete_outlook_email
 
 logger = logging.getLogger("teardown_platform_mailboxes")
 

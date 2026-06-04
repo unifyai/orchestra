@@ -2460,7 +2460,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_0(
 
     # Run 2: Recursive baseline path
     # Patch _can_use_grouping_sets to always return False
-    from orchestra_core.web.api.log.utils import grouping_utils
+    from orchestra.web.api.log.utils import grouping_utils
 
     monkeypatch.setattr(
         grouping_utils,
@@ -2570,7 +2570,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_1(
     result_optimized = response_optimized.json()
 
     # Run 2: Recursive baseline path
-    from orchestra_core.web.api.log.utils import grouping_utils
+    from orchestra.web.api.log.utils import grouping_utils
 
     monkeypatch.setattr(
         grouping_utils,
@@ -3102,7 +3102,7 @@ async def test_grouping_sets_sorting_vs_recursive_baseline(
     result_optimized = response_optimized.json()
 
     # Run 2: Force recursive path by patching _can_use_grouping_sets
-    from orchestra_core.web.api.log.utils import grouping_utils
+    from orchestra.web.api.log.utils import grouping_utils
 
     monkeypatch.setattr(
         grouping_utils,

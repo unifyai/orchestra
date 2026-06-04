@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_dao import (
     AuthDAO,
+    MAX_ATTEMPTS,
     check_user_agent,
     decode_verification_token,
     generate_verification_code,
@@ -50,7 +51,8 @@ from orchestra.db.dao.auth_dao import (
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import EmailVerification
 from orchestra.services.coordinator_service import (
     ensure_personal_coordinator_provisioned,
 )
@@ -264,7 +266,26 @@ def verify_code(
     verification = auth_dao.validate_verification_code(email, body.code, purpose)
 
     if verification is None:
+        exhausted = (
+            session.query(EmailVerification)
+            .filter(
+                EmailVerification.email == email,
+                EmailVerification.purpose == purpose,
+                EmailVerification.expires_at > datetime.now(timezone.utc),
+                EmailVerification.attempts >= MAX_ATTEMPTS,
+            )
+            .order_by(EmailVerification.created_at.desc())
+            .first()
+        )
         session.commit()
+        if exhausted is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": "max_attempts",
+                    "message": "Too many verification attempts. Please request a new code.",
+                },
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={

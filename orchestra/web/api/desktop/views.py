@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.desktop_dao import DesktopDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.desktop.schema import DesktopCreate, DesktopRead, DesktopUpdate
 

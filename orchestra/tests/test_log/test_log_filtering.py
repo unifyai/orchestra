@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
-from orchestra_core.web.api.log.python2SQL import str_filter_exp_to_dict_using_ast
+
+from orchestra.web.api.log.python2SQL import str_filter_exp_to_dict_using_ast
 
 from . import (
     HEADERS,

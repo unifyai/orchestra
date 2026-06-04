@@ -19,7 +19,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     AssistantCleanupTask,
     BillingAccount,
@@ -29,7 +29,7 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     User,
 )
-from orchestra_core.lib.time import month_end_utc
+from orchestra.lib.time import month_end_utc
 from orchestra.services.assistant_cleanup_service import (
     DEFAULT_CLEANUP_TASK_BATCH_SIZE,
     MAX_CLEANUP_TASK_BATCH_SIZE,

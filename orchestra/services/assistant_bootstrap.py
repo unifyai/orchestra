@@ -4,19 +4,19 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
-from orchestra_core.db.dao.unique_constraint_dao import (
-    COMPOSITE_KEY_FIELD,
-    UniqueConstraintDAO,
-)
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from orchestra_core.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.unique_constraint_dao import (
+    COMPOSITE_KEY_FIELD,
+    UniqueConstraintDAO,
+)
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
@@ -26,8 +26,8 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
-from orchestra_core.web.api.log.schema import CreateLogConfig
-from orchestra_core.web.api.log.utils.logging_utils import create_logs_internal
+from orchestra.web.api.log.schema import CreateLogConfig
+from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 
 from .contact_membership_service import (
     BOSS_CONTACT_RESPONSE_POLICY,

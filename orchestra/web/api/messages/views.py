@@ -9,7 +9,7 @@ from starlette.requests import Request
 
 from orchestra.db.dao.api_message_dao import ApiMessageDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.messages.schema import (

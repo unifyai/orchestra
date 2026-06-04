@@ -208,9 +208,9 @@ from orchestra.db.models.orchestra_models import (
     RechargeStatus,
 )
 from orchestra.lib.fx import FxProviderError, fetch_period_average, fetch_spot
-from orchestra_core.lib.time import month_end_utc
+from orchestra.lib.time import month_end_utc
+from orchestra.observability.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
-from orchestra_core.observability.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)

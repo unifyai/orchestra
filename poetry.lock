@@ -4006,56 +4006,6 @@ files = [
 ]
 
 [[package]]
-name = "orchestra-core"
-version = "0.0.0"
-description = "Single-tenant persistence kernel for the Unify agent runtime"
-optional = false
-python-versions = "~3.12"
-groups = ["main"]
-files = []
-develop = false
-
-[package.dependencies]
-alembic = "^1.11.1"
-asyncpg = {version = "^0.28.0", extras = ["sa"]}
-fastapi = "^0.100.0"
-google-auth = "^2.29.0"
-httptools = "^0.6.0"
-httpx = "^0.28.0"
-imagehash = "^4.3.1"
-loguru = "^0.7.0"
-numpy = "^1.26.0"
-openai = "^2.8.1"
-opentelemetry-api = ">=1.29.0"
-opentelemetry-exporter-otlp = ">=1.29.0"
-opentelemetry-instrumentation = ">=0.59b0"
-opentelemetry-instrumentation-fastapi = ">=0.50b0"
-opentelemetry-instrumentation-httpx = ">=0.60b1"
-opentelemetry-instrumentation-sqlalchemy = ">=0.50b0"
-opentelemetry-sdk = ">=1.29.0"
-pgvector = "^0.4.1"
-Pillow = "^10.0.0"
-prometheus-client = "^0.17.0"
-prometheus-fastapi-instrumentator = "6.0.0"
-psycopg2-binary = "^2.9.9"
-pydantic = "^2"
-pydantic-settings = "^2"
-python-dotenv = "^1.2.1"
-python-multipart = "^0.0.9"
-scipy = "^1.13.0"
-SQLAlchemy = {version = "^2.0.18", extras = ["asyncio"]}
-tiktoken = "0.12.0"
-ujson = "^5.8.0"
-uvicorn = {version = "^0.22.0", extras = ["standard"]}
-yarl = "^1.9.2"
-
-[package.source]
-type = "git"
-url = "https://github.com/unifyai/orchestra-core.git"
-reference = "staging"
-resolved_reference = "6ae76fe2cd3bf6ee06a2f4425778539b972e7027"
-
-[[package]]
 name = "packaging"
 version = "26.2"
 description = "Core utilities for Python packages"
@@ -7142,4 +7092,4 @@ type = ["pytest-mypy (>=1.0.1) ; platform_python_implementation != \"PyPy\""]
 [metadata]
 lock-version = "2.1"
 python-versions = "~3.12"
-content-hash = "d194c64ed096a00dd5b492d8f12ad9fe5b7423581f07439b3f2a63b84508d09b"
+content-hash = "8ef5f64be775ffea3965de5b74c2953fa2ed228c9d5ffcfeac2f6d3445f931cc"

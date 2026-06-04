@@ -4025,8 +4025,8 @@ ALTER TABLE ONLY public.shared_platform_routes
 
 --
 -- Project foreign keys (from kernel `project` to platform `user`/`organization`).
--- orchestra-core deliberately omits these — the kernel is multi-tenant
--- agnostic — so the platform squash adds them after `user` and
+-- The core project table is multi-tenant agnostic, so this schema adds
+-- the hosted foreign keys after `user` and
 -- `organization` exist.
 --
 

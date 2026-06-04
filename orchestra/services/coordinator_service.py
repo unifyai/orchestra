@@ -7,13 +7,13 @@ from typing import Any, Sequence
 
 import httpx
 from fastapi import HTTPException, status
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
 from sqlalchemy import Integer, and_, literal, select, text
 from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra_core.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -35,8 +35,8 @@ from orchestra.services.contact_membership_service import (
     ensure_personal_contact_memberships,
 )
 from orchestra.services.coordinator_personas import COORDINATOR_BIO
-from orchestra_core.web.api.log.schema import CreateLogConfig
-from orchestra_core.web.api.log.utils.logging_utils import create_logs_internal
+from orchestra.web.api.log.schema import CreateLogConfig
+from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 from orchestra.web.api.utils.assistant_infra import (
     ADMIN_KEY,
     _adapters_url_for,

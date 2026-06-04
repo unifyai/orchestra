@@ -75,9 +75,6 @@ groupings = {
         "Teams & Resource Access",
         "Spaces",
     ],
-    "Storage": [
-        "Storage",
-    ],
 }
 
 api_router = APIRouter()
@@ -235,6 +232,11 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    storage.router,
+    tags=["Storage"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
     dashboard_router,
     tags=["Dashboards"],
     include_in_schema=False,
@@ -295,14 +297,6 @@ api_router.include_router(
 api_router.include_router(
     api_keys.router,
     tags=["API Keys"],
-    dependencies=API_KEY_AUTH,
-)
-
-# Storage
-
-api_router.include_router(
-    storage.router,
-    tags=["Storage"],
     dependencies=API_KEY_AUTH,
 )
 

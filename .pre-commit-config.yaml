@@ -44,18 +44,6 @@ repos:
     language: system
     types: [python]
 
-  - id: check-core-purity
-    name: orchestra_core purity (no platform imports)
-    entry: poetry run bash scripts/check_core_purity.sh
-    language: system
-    pass_filenames: false
-
-  - id: check-no-kernel-forks
-    name: platform has no kernel forks
-    entry: bash scripts/check_no_kernel_forks.sh
-    language: system
-    pass_filenames: false
-
   - id: check-no-release-versioning
     name: no first-party release versioning
     entry: python3 scripts/check_no_release_versioning.py

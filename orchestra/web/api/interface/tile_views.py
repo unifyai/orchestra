@@ -3,13 +3,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Tab, Tile
 from orchestra.web.api.interface.schema import (
     CreateTileRequest,
@@ -779,7 +779,7 @@ def update_tile(
 
     # Validate context fields if they're being updated
     if "context" in update_dict:
-        from orchestra_core.db.dao.context_dao import ContextDAO
+        from orchestra.db.dao.context_dao import ContextDAO
         from orchestra.db.dao.interface_dao import InterfaceDAO
         from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
         from orchestra.db.dao.project_dao import ProjectDAO
@@ -1316,7 +1316,7 @@ def patch_tile(
 
     # Validate context fields if they're being updated
     if "context" in update_data:
-        from orchestra_core.db.dao.context_dao import ContextDAO
+        from orchestra.db.dao.context_dao import ContextDAO
         from orchestra.db.dao.interface_dao import InterfaceDAO
         from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
         from orchestra.db.dao.project_dao import ProjectDAO

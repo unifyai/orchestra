@@ -18,14 +18,14 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 import httpx
-from orchestra_core.db.dao.context_dao import delete_orphaned_log_events
-from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.context_naming import is_space_context_name
+from orchestra.db.dao.context_dao import delete_orphaned_log_events
 from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE
+from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantSpaceMembership,

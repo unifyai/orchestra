@@ -1,7 +1,7 @@
 """Platform FastAPI application factory.
 
 Layers platform-only middleware (rate limiting, staging gate, Sentry) on top
-of the kernel middleware stack provided by orchestra-core, then mounts the
+of the kernel middleware stack provided by orchestra, then mounts the
 full platform router.
 """
 
@@ -12,15 +12,16 @@ from collections import defaultdict
 
 import sentry_sdk
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import UJSONResponse
-from orchestra_core.observability.prometheus_middleware import metrics
-from orchestra_core.web.application import core_middlewares
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from orchestra.observability.prometheus_middleware import PrometheusMiddleware, metrics
+from orchestra.observability.request_trace_middleware import RequestTraceMiddleware
 from orchestra.pii_scrub import (
     install_log_redaction,
     scrub_sentry_breadcrumb,
@@ -29,6 +30,43 @@ from orchestra.pii_scrub import (
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'"
+        )
+        return response
+
+
+def core_middlewares(app: FastAPI) -> None:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "Origin",
+            "X-Requested-With",
+        ],
+    )
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(PrometheusMiddleware, app_name="orchestra")
+    app.add_middleware(RequestTraceMiddleware)
 
 
 def get_app() -> FastAPI:

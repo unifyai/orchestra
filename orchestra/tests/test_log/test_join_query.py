@@ -310,7 +310,7 @@ async def test_join_query_reduce_uses_direct_scalar_path_for_string_join_keys(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-direct-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -357,7 +357,7 @@ async def test_join_query_reduce_accepts_path_like_join_fields(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-path-fields-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -404,7 +404,7 @@ async def test_join_query_reduce_compound_join_expr_falls_back(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-compound-fallback-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -485,7 +485,7 @@ async def test_join_query_reduce_cross_side_filter_falls_back(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-cross-filter-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -640,7 +640,7 @@ async def test_join_query_reduce_vector_column_falls_back_to_generic_path(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-vector-fallback-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -705,7 +705,7 @@ async def test_join_query_rows_uses_direct_scalar_path_for_string_join_keys(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-row-direct-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -792,7 +792,7 @@ async def test_join_query_rows_direct_path_pushes_side_local_filter(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-row-filter-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -845,7 +845,7 @@ async def test_join_query_rows_accepts_path_like_join_fields(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-row-path-fields-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -899,7 +899,7 @@ async def test_join_query_rows_compound_join_expr_falls_back(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-row-compound-fallback-{uuid.uuid4().hex}"
     fact_context = "facts"
@@ -951,7 +951,7 @@ async def test_join_query_rows_cross_side_filter_falls_back(
     client: AsyncClient,
     monkeypatch,
 ):
-    from orchestra_core.web.api.log.utils import logging_utils
+    from orchestra.web.api.log.utils import logging_utils
 
     project_name = f"join-query-row-cross-filter-{uuid.uuid4().hex}"
     fact_context = "facts"

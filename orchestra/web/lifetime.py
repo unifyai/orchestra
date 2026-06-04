@@ -5,20 +5,18 @@ from typing import Callable
 from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from orchestra_core.db.dependencies import register_db_listeners
-from orchestra.settings import settings
-from orchestra_core.observability.inactivity_shutdown import (
+from orchestra.db.dependencies import register_db_listeners
+from orchestra.observability import otel_setup
+from orchestra.observability.inactivity_shutdown import (
     start_inactivity_monitor,
     stop_inactivity_monitor,
 )
-from orchestra_core.observability import otel_setup as _core_otel
-from orchestra_core.observability.otel_setup import (
-    flush_opentelemetry,
-    stop_opentelemetry,
-)
+from orchestra.observability.otel_setup import flush_opentelemetry, stop_opentelemetry
+from orchestra.settings import settings
 from orchestra.web.api.utils.resource_limits_instrumentation import instrument_db_pool
 
 logger = logging.getLogger(__name__)
@@ -123,14 +121,14 @@ def setup_opentelemetry(app: FastAPI) -> None:
     """Set up the kernel OTel stack and layer the platform's OpenAI instrumentation.
 
     The TracerProvider, exporters, and per-app FastAPI/SQLAlchemy/httpx
-    instrumentation are owned by orchestra-core. The OpenAI instrumentation is
+    instrumentation are owned by orchestra. The OpenAI instrumentation is
     a platform-only addition (the kernel does not call OpenAI directly).
     """
     global _openai_instrumented
 
-    _core_otel.setup_opentelemetry(app)
+    otel_setup.setup_opentelemetry(app)
 
-    if not settings.otel_enabled or not _core_otel._otel_tracer_provider_initialized:
+    if not settings.otel_enabled or not otel_setup._otel_tracer_provider_initialized:
         return
 
     if not _openai_instrumented:

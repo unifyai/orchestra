@@ -18,11 +18,11 @@ import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from orchestra_core.db.dependencies import get_db_session
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.slack_dao import DEFAULT_THREAD_ROUTE_TTL_DAYS, SlackDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import SlackInstall
 from orchestra.services.slack_dispatcher import resolve_inbound
 

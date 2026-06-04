@@ -7,8 +7,8 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.log_event_dao import LogEventDAO
-from orchestra_core.db.dao.unique_constraint_dao import (
+from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.unique_constraint_dao import (
     COMPOSITE_KEY_FIELD,
     UniqueConstraintDAO,
 )

@@ -2,9 +2,9 @@
 
 Background
 ----------
-Phase-3 of the orchestra-core split squashed the platform's 259-revision
+Phase-3 of the orchestra split squashed the platform's 259-revision
 alembic chain into a single `_platform_initial` revision whose
-`down_revision` is orchestra-core's `0001_core_initial`. Existing
+`down_revision` is orchestra's `0001_core_initial`. Existing
 production databases are stamped at one of the *old* revisions
 (e.g. `phase3_core_bridge`); the new chain doesn't know about those
 names, so a naive `alembic upgrade head` fails with
@@ -37,8 +37,7 @@ from sqlalchemy.engine import Connection
 logger = logging.getLogger("alembic.reconcile")
 
 # Where the reconcile stamps a pre-squash DB. This is the revision whose
-# schema matches what production was running just before tonight's
-# convergence work — i.e. the schema produced by the historical 259
+# schema matches the state produced by the historical 259
 # platform migrations. Stamping at this point lets alembic naturally
 # apply the kernel + platform drift-fix migrations on top, doing the
 # actual schema convergence as proper migrations rather than as a

@@ -1,39 +1,179 @@
-"""Platform settings — extends orchestra-core's kernel settings."""
-
+import enum
 import os
+from pathlib import Path
+from tempfile import gettempdir
 from typing import Optional
 
-from pydantic_settings import SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from yarl import URL
 
-from orchestra_core.settings import (
-    LogLevel,
-    Settings as CoreSettings,
-    UniqueValidationMode,
-)
-
-__all__ = ["LogLevel", "Settings", "UniqueValidationMode", "settings"]
+TEMP_DIR = Path(gettempdir())
 
 
-class Settings(CoreSettings):
-    """Platform application settings.
+class LogLevel(str, enum.Enum):  # noqa: WPS600
+    """Possible log levels."""
 
-    Adds multi-tenant, billing, voice provider, GCP, OAuth, and Stripe
-    configuration on top of the kernel settings.
+    NOTSET = "NOTSET"
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    FATAL = "FATAL"
+
+
+class UniqueValidationMode(str, enum.Enum):
+    """
+    Mode for unique field validation.
+
+    JSONB_SCAN: Original behavior - scan all logs with JSONB containment (slow, O(N×M))
+    LOOKUP_TABLE: New behavior - use lookup table with B-tree index (fast, O(M×log N))
+
+    Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
+    Default is JSONB_SCAN for backward compatibility during migration.
     """
 
+    JSONB_SCAN = "jsonb_scan"
+    LOOKUP_TABLE = "lookup_table"
+
+
+class Settings(BaseSettings):
+    """
+    Application settings.
+
+    These parameters can be configured
+    with environment variables.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    # quantity of workers for uvicorn
+    workers_count: int = 1
+    # Enable uvicorn reloading
+    reload: bool = False
+    # HTTP keep-alive timeout in seconds (how long to keep idle connections open)
+    timeout_keep_alive: int = 15
+
+    # Inactivity timeout in seconds for local development
+    # When set, the server will shut down after this many seconds without API requests
+    # Default (None) means no timeout - server runs indefinitely
+    inactivity_timeout_seconds: Optional[int] = None
+
+    # Current environment
+    environment: str = "dev"
     is_staging: bool = os.environ.get("STAGING", "False") == "True"
 
+    log_level: LogLevel = LogLevel.INFO
+    # Variables for the database
+    db_host: str = "localhost"
+    db_port: int = 5432
+    db_user: str = os.environ.get("ORCHESTRA_DB_USER", "")
+    db_pass: str = os.environ.get("ORCHESTRA_DB_PASS", "")
+    db_base: str = os.environ.get("ORCHESTRA_DB_BASE", "")
+    db_path_query: str = ""
+    db_send_host: bool = True
+    db_echo: bool = False
+
+    # Cloud SQL configuration
     use_cloud_sql: bool = (
-        os.environ.get("ORCHESTRA_USE_CLOUD_SQL", "false").lower() == "true"
+        os.environ.get("ORCHESTRA_USE_CLOUD_SQL", "false").lower()
+        == "true"  # Set to True to use Cloud SQL connector instead of direct connection
     )
     cloud_sql_instance: str = os.environ.get(
         "ORCHESTRA_CLOUD_SQL_INSTANCE",
-        "gcp-project-saas:europe-west1:dev",
+        "gcp-project-saas:europe-west1:dev",  # Format: "project:region:instance"
     )
 
+    # This variable is used to define
+    # multiproc_dir. It's required for [uvi|guni]corn projects.
+    prometheus_dir: Path = TEMP_DIR / "prom"
+
+    # Sentry's configuration.
     sentry_dsn: Optional[str] = None
     sentry_sample_rate: float = 1.0
 
+    # OpenTelemetry master switch
+    # Set to "false" to disable all OTel tracing
+    otel_enabled: bool = os.environ.get("ORCHESTRA_OTEL", "true").lower() in (
+        "true",
+        "1",
+    )
+
+    # OTLP endpoint for OpenTelemetry export (e.g., http://localhost:4317)
+    # When set, traces are exported via OTLP to Tempo/Jaeger
+    otel_endpoint: Optional[str] = os.environ.get("ORCHESTRA_OTEL_ENDPOINT")
+
+    # Use secure (TLS) connection for OTLP export
+    otel_secure: bool = os.environ.get("ORCHESTRA_OTEL_SECURE", "").lower() == "true"
+
+    # Observability Stack Configuration
+    # Set these to None to disable the respective service
+
+    # Loki URL for log aggregation and storage
+    # Example: http://localhost:3100
+    # Set to None to disable Loki integration
+    loki_url: Optional[str] = os.environ.get(
+        "ORCHESTRA_LOKI_URL",
+        None,
+    )
+    loki_username: Optional[str] = os.environ.get("ORCHESTRA_LOKI_USERNAME")
+    loki_password: Optional[str] = os.environ.get("ORCHESTRA_LOKI_PASSWORD")
+
+    # Tempo URL for distributed tracing backend
+    # Example: http://localhost:4317
+    # Set to None to disable Tempo integration
+    tempo_url: Optional[str] = os.environ.get(
+        "ORCHESTRA_TEMPO_URL",
+        None,
+    )
+
+    # Grafana URL for metrics, logs, and traces visualization
+    # Example: http://localhost:3000
+    # Set to None to disable Grafana integration
+    grafana_url: Optional[str] = os.environ.get(
+        "ORCHESTRA_GRAFANA_URL",
+        None,
+    )
+
+    # Master logging switch (console + file if log_dir is set)
+    # Set to "false" to disable all logging
+    log_enabled: bool = os.environ.get("ORCHESTRA_LOG", "true").lower() in ("true", "1")
+
+    # Local file-based logging directory
+    # When set, traces are written to JSON files in this directory
+    # Example: /Users/user/unity/logs/orchestra/2025-01-01T12-00-00
+    log_dir: Optional[str] = os.environ.get(
+        "ORCHESTRA_LOG_DIR",
+        None,
+    )
+
+    # OTel span log directory (for file-based span export)
+    # When set, OTel spans are written to JSONL files in this directory.
+    # If not set, falls back to log_dir for backward compatibility.
+    # This enables writing spans to a shared directory with Unity for
+    # full-stack trace correlation across processes.
+    # Example: /Users/user/unity/logs/otel
+    otel_log_dir: Optional[str] = os.environ.get(
+        "ORCHESTRA_OTEL_LOG_DIR",
+        None,
+    )
+
+    # Comma-separated span name patterns to exclude from OTel export.
+    # Matched as substrings against span names. Default excludes repetitive
+    # auth/connection overhead that adds noise without diagnostic value.
+    # Set to empty string (ORCHESTRA_OTEL_EXCLUDE_PATTERNS="") to disable.
+    otel_exclude_patterns: list[str] = [
+        p.strip()
+        for p in os.environ.get(
+            "ORCHESTRA_OTEL_EXCLUDE_PATTERNS",
+            "connect,db.query.select.users,db.query.select.api_key,"
+            "db.query.select.team_member,db.query.select.resource_access",
+        ).split(",")
+        if p.strip()
+    ]
+
+    # Unify admin organization (used for demo-assistant gating and other
+    # admin-only features). The org row itself is provisioned out of band;
+    # these settings only record its name and owner id for lookup.
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
         "Unify",
@@ -42,9 +182,12 @@ class Settings(CoreSettings):
         "ORCHESTRA_OWNER_ID",
         "67abcd12-1fac-4a8f-afe9-c54698c96971",
     )
+    # Chat Completions Project
     chat_completions_project_name: str = "Usage"
     chat_completions_markup_rate: float = 1.2
+    cors_allow_origins: list[str] = []
 
+    # Console URL for generating shareable plot links
     console_url: str = os.environ.get(
         "UNIFY_CONSOLE_FRONTEND_URL",
         "https://console.unify.ai/",
@@ -53,26 +196,34 @@ class Settings(CoreSettings):
     gcp_project: str = os.environ.get("GCP_PROJECT_ID", "gcp-project-saas")
     gcp_location: str = os.environ.get("GCP_LOCATION", "europe-west1")
 
+    # Variables for email sending
     google_service_sender_email: Optional[str] = os.environ.get("ONBOARDING_EMAIL")
     google_service_account_key_path: Optional[str] = os.environ.get(
         "MAIL_SENDER_SERVICE_ACCOUNT_KEY",
         "/secrets/gcp/mail_sender_service_account_key.json",
     )
 
+    # BYOD email OAuth client IDs (for building OAuth authorization URLs)
     google_oauth_client_id: Optional[str] = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
-    microsoft_byod_client_id: Optional[str] = os.environ.get("MICROSOFT_BYOD_CLIENT_ID")
+    microsoft_byod_client_id: Optional[str] = os.environ.get(
+        "MICROSOFT_BYOD_CLIENT_ID",
+    )
 
+    # HMAC-SHA256 key for signing OAuth state params (shared with Communication)
     oauth_state_signing_key: Optional[str] = os.environ.get("OAUTH_STATE_SIGNING_KEY")
 
+    # Variables for voice management
     selected_voice_provider: Optional[str] = "elevenlabs"
     cartesia_api_key: Optional[str] = os.environ.get("CARTESIA_API_KEY")
     cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
     elevenlabs_api_key: Optional[str] = os.environ.get("ELEVENLABS_API_KEY")
     deepgram_api_key: Optional[str] = os.environ.get("DEEPGRAM_API_KEY")
-    openai_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None  # Populated by model_config below
 
+    # Cloudflare Turnstile CAPTCHA
     turnstile_secret_key: Optional[str] = os.environ.get("TURNSTILE_SECRET_KEY")
 
+    # Email-auth & MFA secrets
     email_verify_token_secret: Optional[str] = os.environ.get(
         "EMAIL_VERIFY_TOKEN_SECRET",
     )
@@ -80,6 +231,7 @@ class Settings(CoreSettings):
     mfa_kms_keyring: str = os.environ.get("MFA_KMS_KEYRING", "mfa")
     mfa_kms_key: str = os.environ.get("MFA_KMS_KEY", "mfa-secrets")
 
+    # Stripe configuration
     stripe_secret_key: Optional[str] = os.environ.get("STRIPE_SECRET_KEY")
     stripe_webhook_secret: Optional[str] = os.environ.get("STRIPE_WEBHOOK_SECRET")
     stripe_skip_signature_verification: bool = (
@@ -107,32 +259,58 @@ class Settings(CoreSettings):
         os.environ.get("STRIPE_MAX_CREDIT_QTY", "500"),
     )
 
+    # Promo credits
     max_promo_amount: float = 100.0
 
+    # Signup credit grant (free credits for new users)
     signup_credit_grant: float = float(
-        os.environ.get("SIGNUP_CREDIT_GRANT", "100"),
+        os.environ.get("SIGNUP_CREDIT_GRANT", "50"),
     )
 
+    # Assistant creation
     assistant_creation_cost: float = 10.0
 
-    photo_generation_cost: float = 0.05
-    video_generation_cost: float = 0.20
-    default_video_duration: int = 5
-    replicate_api_key: Optional[str] = None
+    # Assistant photo generation
+    photo_generation_cost: float = (
+        0.05  # /img. See https://replicate.com/black-forest-labs/flux-1.1-pro
+    )
+    video_generation_cost: float = (
+        0.20  # /s. See https://replicate.com/bytedance/omni-human-1.5
+    )
+    default_video_duration: int = (
+        5  # Fallback when client does not send duration (billing only)
+    )
+    replicate_api_key: Optional[str] = None  # Populated by model_config below
 
+    # Re-engagement follow-up routine.
+    # inactivity_followup_days: days without correspondence before the
+    #   assistant sends its own re-engagement message.
+    # inactivity_auto_cleanup_days: days after the follow-up (and with
+    #   no reply) before the contacts are deprovisioned and the
+    #   assistant is hard-deleted.
+    # inactivity_followup_batch_size: upper bound on assistants
+    #   processed per routine invocation — caps blast radius and
+    #   keeps the daily Cloud Scheduler run bounded.
+    # inactivity_followup_jitter_seconds: per-assistant random delay
+    #   (0..jitter) applied when dispatching follow-ups so a daily run
+    #   does not fire hundreds of messages in the same second.
     inactivity_followup_days: int = 3
     inactivity_auto_cleanup_days: int = 7
     inactivity_followup_batch_size: int = 200
     inactivity_followup_jitter_seconds: int = 600
 
     @property
-    def db_url(self):
-        """Assemble database URL, routing through Cloud SQL Auth Proxy when present."""
+    def db_url(self) -> URL:
+        """
+        Assemble database URL from settings.
+
+        :return: database URL.
+        """
+        # When the Cloud SQL Auth Proxy socket exists, route through it
+        # so the proxy handles SSL/mTLS automatically.
         socket_dir = f"/cloudsql/{self.cloud_sql_instance}"
         if os.path.isdir(socket_dir):
             from urllib.parse import quote
-
-            from yarl import URL
 
             return URL(
                 f"postgresql+psycopg2://"
@@ -140,7 +318,62 @@ class Settings(CoreSettings):
                 f"{quote(self.db_pass, safe='')}@"
                 f"/{self.db_base}?host={socket_dir}",
             )
-        return super().db_url
+
+        host = self.db_host
+        port = self.db_port
+        if not self.db_send_host:
+            host = ""
+            port = None  # type: ignore
+
+        return URL.build(
+            scheme="postgresql+psycopg2",
+            host=host,
+            port=port,
+            user=self.db_user,
+            password=self.db_pass,
+            path=f"/{self.db_base}",
+            query=self.db_path_query,
+        )
+
+    @property
+    def use_aggregation_cte_optimization(self) -> bool:
+        """
+        Enable CTE-based aggregation optimization.
+
+        Pre-compute aggregations in CTEs instead of correlated subqueries for improved
+        performance on large datasets.
+
+        :return: True if CTE optimization is enabled.
+        """
+        return (
+            os.environ.get(
+                "ORCHESTRA_USE_AGGREGATION_CTE_OPTIMIZATION",
+                "true",
+            ).lower()
+            == "true"
+        )
+
+    @property
+    def unique_validation_mode(self) -> UniqueValidationMode:
+        """
+        Get the unique field validation mode.
+
+        Controls how unique field constraints are checked:
+        - jsonb_scan: Original O(N×M) JSONB containment scan (slow)
+        - lookup_table: New O(M×log N) lookup table approach (fast)
+
+        Default is jsonb_scan for backward compatibility during migration.
+
+        :return: The configured validation mode.
+        """
+        mode_str = os.environ.get(
+            "ORCHESTRA_UNIQUE_VALIDATION_MODE",
+            UniqueValidationMode.LOOKUP_TABLE.value,
+        )
+        try:
+            return UniqueValidationMode(mode_str)
+        except ValueError:
+            return UniqueValidationMode.LOOKUP_TABLE
 
     model_config = SettingsConfigDict(
         env_file=".env",

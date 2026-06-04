@@ -1,0 +1,1371 @@
+import json
+from datetime import date, datetime, time, timedelta
+from enum import Enum
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+
+from fastapi import HTTPException
+from sqlalchemy import (
+    INTEGER,
+    TIMESTAMP,
+    Date,
+    Float,
+    String,
+    and_,
+    case,
+    cast,
+    exists,
+    func,
+    literal,
+    select,
+)
+from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
+from sqlalchemy.sql.selectable import Subquery
+
+from orchestra.db.models.core_models import LogEvent, LogEventContext
+
+from ..python2SQL import build_sql_query, str_filter_exp_to_dict
+
+__all__ = [
+    "_resolve_key_specific_filters",
+    "_postprocess_aggregator_value",
+    "_reduce_shared_value",
+    "AggregationMetric",
+    "SHARED_VALUE_SAFE_METRICS",
+    "REDUCTION_METHODS",
+    "normalize_group_key",
+    "build_grouped_result",
+    "_get_reduction_expr",
+    "_build_cast_expr",
+    "compute_metric_for_key",
+    "compute_metric_for_key",
+    "compute_metric_bulk",
+    "compute_metric_bulk",
+    "_compute_metric_for_key_grouped",
+    "_compute_metric_for_key_grouped",
+]
+
+######################
+# Metrics utilities
+######################
+
+
+class AggregationMetric(str, Enum):
+    MEAN = "mean"
+    VAR = "var"
+    STD = "std"
+    SUM = "sum"
+    MIN = "min"
+    MAX = "max"
+    COUNT = "count"
+    MEDIAN = "median"
+    MODE = "mode"
+
+
+def _resolve_key_specific_filters(
+    request,
+    key: str,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Extract key-specific filter_expr, from_ids, and exclude_ids from the request object.
+
+    Args:
+        request: The GetLogsMetricRequest object
+        key: The field key to extract filters for
+
+    Returns:
+        Tuple of (key_filter_expr, key_from_ids, key_exclude_ids)
+    """
+    # Parse filter_expr if it's a JSON string
+    if request.filter_expr is not None and isinstance(request.filter_expr, str):
+        if request.filter_expr.strip().startswith("{"):
+            request.filter_expr = json.loads(request.filter_expr)
+
+    key_filter_expr = (
+        request.filter_expr.get(key)
+        if isinstance(request.filter_expr, dict)
+        else request.filter_expr
+    )
+
+    # Parse from_ids if it's a JSON string
+    if request.from_ids is not None and isinstance(request.from_ids, str):
+        if request.from_ids.strip().startswith("{"):
+            request.from_ids = json.loads(request.from_ids)
+
+    key_from_ids = (
+        request.from_ids.get(key)
+        if isinstance(request.from_ids, dict)
+        else request.from_ids
+    )
+
+    # Parse exclude_ids if it's a JSON string
+    if request.exclude_ids is not None and isinstance(request.exclude_ids, str):
+        if request.exclude_ids.strip().startswith("{"):
+            request.exclude_ids = json.loads(request.exclude_ids)
+
+    key_exclude_ids = (
+        request.exclude_ids.get(key)
+        if isinstance(request.exclude_ids, dict)
+        else request.exclude_ids
+    )
+
+    return key_filter_expr, key_from_ids, key_exclude_ids
+
+
+def _postprocess_aggregator_value(
+    value: Any,
+    metric: str,
+    field_type: Optional[str],
+) -> Union[float, int, bool, str, None]:
+    """
+    Post-process an aggregator value based on field type and metric.
+
+    Args:
+        value: The raw aggregated value
+        metric: The metric that was computed (mean, sum, etc.)
+        field_type: The field type from field_types dict
+
+    Returns:
+        The processed value with appropriate type
+    """
+    if metric == "count":
+        return int(value or 0)
+
+    if value is None:
+        return None
+
+    if not field_type:
+        return value
+
+    try:
+        # Convert based on the field type
+        if field_type == "datetime":
+            if metric in ("var", "std"):
+                try:
+                    return timedelta(seconds=value).__repr__()
+                except (OverflowError, ValueError):
+                    # Fallback if timedelta overflow occurs
+                    return f"{value} seconds"
+            try:
+                return datetime.fromtimestamp(value).isoformat()
+            except (OverflowError, ValueError, OSError):
+                # Fallback if timestamp is out of range
+                return f"datetime({value})"
+
+        # Handle new data types: time, date, and timedelta
+        elif field_type == "time":
+            if metric in ("var", "std"):
+                # For variance and standard deviation, return as seconds
+                return f"{value} seconds"
+
+            # Convert seconds since midnight to time (with validation)
+            try:
+                seconds = int(value % 86400)  # Ensure within a day
+                hours = seconds // 3600
+                minutes = (seconds % 3600) // 60
+                secs = seconds % 60
+                return time(hours, minutes, secs).strftime("%H:%M:%S")
+            except (ValueError, OverflowError, TypeError):
+                # Fallback if time conversion fails
+                return f"{value % 86400 if isinstance(value, (int, float)) else value} seconds"
+
+        elif field_type == "date":
+            if metric in ("var", "std"):
+                # For variance and standard deviation, return days
+                return f"{value} days"
+
+            # Try converting to date with validation
+            try:
+                # If it's a timestamp in seconds
+                return date.fromtimestamp(value).isoformat()
+            except (ValueError, OverflowError, OSError, TypeError):
+                # Calculate days since epoch as fallback
+                try:
+                    days = value / 86400  # seconds to days
+                    return f"{days:.2f} days since epoch"
+                except (TypeError, ValueError):
+                    return f"date({value})"
+
+        elif field_type == "timedelta":
+            # Handle potential extremely large values
+            try:
+                total_seconds = float(value)
+
+                # For very large values, use a simple representation
+                if abs(total_seconds) > 100000000:  # ~3 years in seconds
+                    days = total_seconds / 86400
+                    return f"{days:.2f} days"
+
+                # Otherwise, build ISO 8601 duration
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                seconds = total_seconds % 60
+
+                # Build ISO 8601 duration string
+                duration = "P"
+                days = hours // 24
+                if days:
+                    duration += f"{days}D"
+                    hours %= 24
+
+                # Add time part if there are hours, minutes, or seconds
+                if hours or minutes or seconds:
+                    duration += "T"
+                    if hours:
+                        duration += f"{hours}H"
+                    if minutes:
+                        duration += f"{minutes}M"
+                    if seconds:
+                        # Handle fractional seconds
+                        if seconds == int(seconds):
+                            duration += f"{int(seconds)}S"
+                        else:
+                            duration += f"{seconds:.6g}S"  # :g removes trailing zeros
+
+                # Handle zero duration edge case
+                if duration == "P":
+                    duration = "PT0S"
+
+                return duration
+
+            except (TypeError, ValueError, OverflowError):
+                # If all else fails, return the raw value with units
+                return f"{value} seconds"
+
+        if (
+            isinstance(value, (int, float))
+            and float(value).is_integer()
+            and metric in ("sum", "min", "max", "median", "mode")
+            and field_type in ("int", "bool", "str")
+        ):
+            if field_type == "bool" and metric in ("min", "max", "median", "mode"):
+                return bool(int(value))
+            return int(value)
+
+        return value
+
+    except Exception as e:
+        # Final fallback - if any error occurs, return the raw value with type annotation
+        return f"{field_type}({value})"
+
+
+def _reduce_shared_value(values: List[Any]) -> Optional[Any]:
+    """
+    Check if all values in the list are identical, and if so, return that value.
+    Otherwise, return None.
+
+    Args:
+        values: List of values to check
+
+    Returns:
+        The shared value if all values are identical, otherwise None
+    """
+    if not values:
+        return None
+
+    # Convert all values to their string representation for comparison
+    # This handles complex types like dicts and lists
+    first_value = values[0]
+
+    # Check if all values are identical to the first value
+    if all(v == first_value for v in values):
+        return first_value
+
+    return None
+
+
+SHARED_VALUE_SAFE_METRICS = frozenset({"mean", "min", "max", "median", "mode"})
+"""Metrics where f([V,V,...,V]) == V, so the shared_value shortcut is valid."""
+
+
+REDUCTION_METHODS = {
+    "count": func.count,
+    "sum": func.sum,
+    "mean": func.avg,
+    "var": func.var_pop,
+    "std": func.stddev_pop,
+    "min": func.min,
+    "max": func.max,
+    "median": func.percentile_cont(0.5).within_group,
+    "mode": func.mode().within_group,
+}
+
+
+def normalize_group_key(val) -> str:
+    """Normalize group key values for consistent formatting.
+
+    Numeric values are converted via float first (e.g. 11 -> "11.0") so
+    that integer and float representations are stable.  Booleans are
+    capitalised to match Python's ``str(True)`` -> ``"True"``.
+    """
+    if val is None:
+        return "None"
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return str(float(val))
+    if isinstance(val, bool):
+        return str(val)
+    return str(val)
+
+
+def build_grouped_result(
+    rows,
+    gb_fields: list,
+    metric: str,
+    field_type=None,
+) -> dict:
+    """Build the grouped result dict from SQL rows.
+
+    Each row has: [*group_values, agg_value, raw_values_array].
+    Uses the shared_value shortcut only for metrics where identical
+    inputs produce that same value as output (mean, min, max, median, mode).
+    """
+    use_shared = metric in SHARED_VALUE_SAFE_METRICS
+    result: dict = {}
+
+    # Single-level grouping: flat dict keyed by normalised group value
+    if len(gb_fields) == 1:
+        for row in rows:
+            gk = normalize_group_key(row[0])  # group value
+            agg_v = row[-2]  # SQL aggregate result
+            raw_v = row[-1]  # array_agg of raw JSONB values
+
+            # If all raw values in the group are identical and the metric
+            # is idempotent (f([V,V,...,V]) == V), return the raw value
+            # directly as shared_value.  Otherwise fall back to the SQL
+            # aggregate and post-process it.
+            shared = _reduce_shared_value(raw_v)
+            entry: dict = {"shared_value": None, metric: None}
+            if shared is not None and use_shared:
+                entry["shared_value"] = shared
+            else:
+                entry[metric] = _postprocess_aggregator_value(
+                    agg_v,
+                    metric,
+                    field_type,
+                )
+            result[gk] = entry
+    else:
+        # Multi-level grouping: nested dicts
+        for row in rows:
+            cur = result
+            for i in range(len(gb_fields) - 1):
+                gk = normalize_group_key(row[i])
+                if gk not in cur:
+                    cur[gk] = {}
+                cur = cur[gk]
+            last_gk = normalize_group_key(row[len(gb_fields) - 1])
+            agg_v = row[-2]  # SQL aggregate result
+            raw_v = row[-1]  # array_agg of raw JSONB values
+            shared = _reduce_shared_value(raw_v)
+            entry = {"shared_value": None, metric: None}
+            if shared is not None and use_shared:
+                entry["shared_value"] = shared
+            else:
+                entry[metric] = _postprocess_aggregator_value(
+                    agg_v,
+                    metric,
+                    field_type,
+                )
+            cur[last_gk] = entry
+
+    return result
+
+
+def _get_reduction_expr(metric, inferred_type, aggCol, label):
+    # Reuse the get_logs_metric logic but for a specific set of log IDs
+    reduction_methods = {
+        AggregationMetric.COUNT: func.count,
+        AggregationMetric.SUM: func.sum,
+        AggregationMetric.MEAN: func.avg,
+        AggregationMetric.VAR: func.var_pop,
+        AggregationMetric.STD: func.stddev_pop,
+        AggregationMetric.MIN: func.min,
+        AggregationMetric.MAX: func.max,
+        AggregationMetric.MEDIAN: func.percentile_cont(0.5).within_group,
+        AggregationMetric.MODE: func.mode().within_group,
+    }
+
+    # interpret X.c.value depending on X.c.inferred_type.
+    if inferred_type in ["list", "dict", "Any"]:
+        # Handle JSONB list/dict aggregation using scalar subqueries
+        # For "Any" type, we treat it as a list to handle arrays properly
+        # This is safe because jsonb_array_elements returns empty for non-arrays
+        if inferred_type in ["list", "Any"]:
+            elements = func.jsonb_array_elements(cast(aggCol, JSONB)).table_valued(
+                "value",
+            )
+            target_col = elements.c.value
+        else:  # dict
+            key_values = func.jsonb_each(cast(aggCol, JSONB)).table_valued("value")
+            target_col = key_values.c.value
+
+        numeric_col = cast(target_col, Float)
+
+        # Map metric to aggregation function
+        if metric == AggregationMetric.COUNT:
+            agg_expr = func.count(numeric_col)
+        elif metric == AggregationMetric.SUM:
+            agg_expr = func.sum(numeric_col)
+        elif metric == AggregationMetric.MEAN:
+            agg_expr = func.avg(numeric_col)
+        elif metric == AggregationMetric.VAR:
+            agg_expr = func.var_pop(numeric_col)
+        elif metric == AggregationMetric.STD:
+            agg_expr = func.stddev_pop(numeric_col)
+        elif metric == AggregationMetric.MIN:
+            agg_expr = func.min(numeric_col)
+        elif metric == AggregationMetric.MAX:
+            agg_expr = func.max(numeric_col)
+        elif metric == AggregationMetric.MEDIAN:
+            agg_expr = func.percentile_cont(0.5).within_group(numeric_col.asc())
+        elif metric == AggregationMetric.MODE:
+            agg_expr = func.mode().within_group(numeric_col.asc())
+
+        subquery = (
+            select(agg_expr)
+            .select_from(
+                elements if inferred_type in ["list", "Any"] else key_values,
+            )
+            .scalar_subquery()
+        )
+        return func.coalesce(subquery, 0).label(label)
+
+    cast_expr = case(
+        # Handle NULL values first
+        (aggCol.is_(None), literal(None, type_=Float)),
+        (
+            inferred_type == "bool",
+            aggCol.cast(BOOLEAN).cast(INTEGER).cast(Float),
+        ),
+        (
+            inferred_type == "str",
+            func.length(cast(aggCol, JSONB)[0].astext).cast(Float),
+        ),
+        (
+            inferred_type == "datetime",
+            func.extract("epoch", cast(cast(aggCol, String), TIMESTAMP)).cast(
+                Float,
+            ),
+        ),
+        (
+            inferred_type == "time",
+            # Extract seconds using time-specific casting
+            func.mod(
+                func.extract(
+                    "epoch",
+                    func.cast(
+                        func.concat(
+                            "2000-01-01 ",
+                            func.trim(func.cast(aggCol, String), '"'),
+                        ),
+                        TIMESTAMP,
+                    ),
+                ),
+                86400,
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "date",
+            # Extract epoch using date-specific casting
+            func.extract(
+                "epoch",
+                func.cast(func.trim(func.cast(aggCol, String), '"'), Date),
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "timedelta",
+            # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+            # This extracts days, hours, minutes, seconds separately and converts to total seconds
+            (
+                # Days component (86400 seconds per day)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "P([0-9]+)D",
+                        ),
+                        Float,
+                    )
+                    * 86400,
+                    0,
+                )
+                +
+                # Hours component (3600 seconds per hour)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T([0-9]+)H",
+                        ),
+                        Float,
+                    )
+                    * 3600,
+                    0,
+                )
+                +
+                # Minutes component (60 seconds per minute)
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T[0-9]*H?([0-9]+)M",
+                        ),
+                        Float,
+                    )
+                    * 60,
+                    0,
+                )
+                +
+                # Seconds component
+                func.coalesce(
+                    func.cast(
+                        func.substring(
+                            func.trim(func.cast(aggCol, String), '"'),
+                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                        ),
+                        Float,
+                    ),
+                    0,
+                )
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "int",
+            func.coalesce(
+                func.nullif(
+                    cast(cast(aggCol, JSONB).op("->>")(0), String),
+                    "null",
+                ).cast(Float),
+                None,
+            ).cast(Float),
+        ),
+        (
+            inferred_type == "float",
+            func.coalesce(
+                func.nullif(
+                    cast(cast(aggCol, JSONB).op("->>")(0), String),
+                    "null",
+                ).cast(Float),
+                None,
+            ).cast(Float),
+        ),
+        else_=literal(0, type_=Float),
+    )
+
+    if metric in [
+        AggregationMetric.SUM,
+        AggregationMetric.MEAN,
+        AggregationMetric.VAR,
+        AggregationMetric.STD,
+    ]:
+        return func.coalesce(reduction_methods[metric](cast_expr), 0).label(label)
+    else:
+        return reduction_methods[metric](cast_expr).label(label)
+
+
+def _build_cast_expr(
+    key: str,
+    field_type: Optional[str],
+    log_event_alias,
+) -> Any:
+    """
+    Build a SQLAlchemy CASE expression to cast JSONB field to Float for aggregation.
+
+    Args:
+        key: Field name to extract from LogEvent.data
+        field_type: Type from FieldType table (str, int, float, bool, list, dict, datetime, time, date, timedelta)
+                    When 'Any', uses jsonb_typeof to determine type dynamically.
+        log_event_alias: Aliased LogEvent table or LogEvent model
+
+    Returns:
+        SQLAlchemy expression that extracts and casts the field value to Float
+    """
+
+    # Extract text value for scalar types
+    text_value = log_event_alias.data.op("->>")(key)
+    # Extract JSONB value for complex types
+    jsonb_value = log_event_alias.data.op("->")(key)
+
+    # Handle NULL checks - if key doesn't exist or value is JSON null
+    null_check = text_value.is_(None)
+    json_null_check = text_value == "null"
+
+    # For "Any" type, use jsonb_typeof to determine type dynamically
+    if field_type == "Any" or field_type is None:
+        # jsonb_typeof returns: 'number', 'string', 'boolean', 'array', 'object', 'null'
+        jsonb_type_expr = func.jsonb_typeof(jsonb_value)
+
+        return case(
+            # NULL checks first
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            # Array - return length
+            (
+                jsonb_type_expr == "array",
+                func.jsonb_array_length(cast(jsonb_value, JSONB)).cast(Float),
+            ),
+            # Object - return key count
+            (
+                jsonb_type_expr == "object",
+                select(func.count())
+                .select_from(func.jsonb_object_keys(cast(jsonb_value, JSONB)))
+                .scalar_subquery()
+                .cast(Float),
+            ),
+            # Boolean - cast to int (True=1, False=0)
+            (
+                jsonb_type_expr == "boolean",
+                case(
+                    (text_value == "true", literal(1, type_=Float)),
+                    else_=literal(0, type_=Float),
+                ),
+            ),
+            # String - return string length
+            (
+                jsonb_type_expr == "string",
+                func.char_length(text_value).cast(Float),
+            ),
+            # Number - cast directly to float
+            (
+                jsonb_type_expr == "number",
+                func.cast(text_value, Float),
+            ),
+            # Fallback - return 0
+            else_=literal(0, type_=Float),
+        ).label("value_as_float")
+
+    if field_type == "list":
+        # For lists, return the array length
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=func.jsonb_array_length(cast(jsonb_value, JSONB)).cast(Float),
+        ).label("value_as_float")
+
+    elif field_type == "dict":
+        # For dicts, return the number of keys
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=select(func.count())
+            .select_from(func.jsonb_object_keys(cast(jsonb_value, JSONB)))
+            .scalar_subquery()
+            .cast(Float),
+        ).label("value_as_float")
+
+    elif field_type == "bool":
+        # For bools, convert to 0/1
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=cast(jsonb_value, BOOLEAN).cast(INTEGER).cast(Float),
+        ).label("value_as_float")
+
+    elif field_type == "str":
+        # For strings, return the string length
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=func.length(text_value).cast(Float),
+        ).label("value_as_float")
+
+    elif field_type == "datetime":
+        # For datetime, extract epoch seconds
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=func.extract(
+                "epoch",
+                func.cast(text_value, TIMESTAMP),
+            ).cast(Float),
+        ).label("value_as_float")
+
+    elif field_type == "time":
+        # For time, extract seconds since midnight
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=func.mod(
+                func.extract(
+                    "epoch",
+                    func.cast(
+                        func.concat("2000-01-01 ", text_value),
+                        TIMESTAMP,
+                    ),
+                ),
+                86400,
+            ).cast(Float),
+        ).label("value_as_float")
+
+    elif field_type == "date":
+        # For date, extract epoch seconds
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=func.extract(
+                "epoch",
+                func.cast(text_value, Date),
+            ).cast(Float),
+        ).label("value_as_float")
+
+    elif field_type == "timedelta":
+        # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=(
+                # Days component (86400 seconds per day)
+                func.coalesce(
+                    func.cast(
+                        func.substring(text_value, "P([0-9]+)D"),
+                        Float,
+                    )
+                    * 86400,
+                    0,
+                )
+                +
+                # Hours component (3600 seconds per hour)
+                func.coalesce(
+                    func.cast(
+                        func.substring(text_value, "T([0-9]+)H"),
+                        Float,
+                    )
+                    * 3600,
+                    0,
+                )
+                +
+                # Minutes component (60 seconds per minute)
+                func.coalesce(
+                    func.cast(
+                        func.substring(text_value, "T[0-9]*H?([0-9]+)M"),
+                        Float,
+                    )
+                    * 60,
+                    0,
+                )
+                +
+                # Seconds component
+                func.coalesce(
+                    func.cast(
+                        func.substring(text_value, "T[0-9]*H?[0-9]*M?([0-9.]+)S"),
+                        Float,
+                    ),
+                    0,
+                )
+            ).cast(Float),
+        ).label("value_as_float")
+
+    elif field_type in ("int", "float"):
+        # For int/float types - cast directly to float
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            else_=func.cast(func.nullif(text_value, "null"), Float),
+        ).label("value_as_float")
+
+    else:
+        # For unrecognized field_type values - use jsonb_typeof for safety
+        # This should rarely happen since we handle 'Any' and None above
+        jsonb_type_expr = func.jsonb_typeof(jsonb_value)
+
+        return case(
+            (null_check, literal(None, type_=Float)),
+            (json_null_check, literal(None, type_=Float)),
+            # For numbers, cast directly
+            (
+                jsonb_type_expr == "number",
+                func.cast(text_value, Float),
+            ),
+            # For strings, return length
+            (
+                jsonb_type_expr == "string",
+                func.char_length(text_value).cast(Float),
+            ),
+            # For everything else, return 0
+            else_=literal(0, type_=Float),
+        ).label("value_as_float")
+
+
+def _compute_metric_for_key_grouped(
+    key: str,
+    metric: str,
+    project_obj,
+    context_id: Optional[int],
+    field_types,
+    group_by: Union[str, List[str]],
+    key_filter_expr: Optional[str] = None,
+    key_from_ids: Optional[str] = None,
+    key_exclude_ids: Optional[str] = None,
+    session=None,
+) -> Dict[str, Any]:
+    """
+    Compute a metric for a single key, grouped by another field.
+
+    Args:
+        key: The field key to compute the metric for
+        metric: The metric to compute (mean, sum, etc.)
+        project_obj: The project object
+        context_id: The context ID
+        field_types: Dict of field types
+        group_by: Field(s) to group by (string or list of strings)
+        key_filter_expr: Key-specific filter expression
+        key_from_ids: Key-specific from_ids
+        key_exclude_ids: Key-specific exclude_ids
+        session: Database session
+
+    Returns:
+        Dict mapping group values to computed metric values
+    """
+    # JSONB mode - all log data is stored in LogEvent.data
+    return _compute_metric_for_key_grouped(
+        key,
+        metric,
+        project_obj,
+        context_id,
+        field_types,
+        group_by,
+        key_filter_expr,
+        key_from_ids,
+        key_exclude_ids,
+        session,
+    )
+
+
+def _compute_metric_for_key_grouped(
+    key: str,
+    metric: str,
+    project_obj,
+    context_id: Optional[int],
+    field_types,
+    group_by: Union[str, List[str]],
+    key_filter_expr: Optional[str] = None,
+    key_from_ids: Optional[str] = None,
+    key_exclude_ids: Optional[str] = None,
+    session=None,
+) -> Dict[str, Any]:
+    """
+    JSONB-based implementation of _compute_metric_for_key_grouped.
+    """
+    # Handle single string or list of strings for group_by
+    if isinstance(group_by, str):
+        group_by_raw = [group_by]
+    else:
+        group_by_raw = list(group_by)
+
+    # Parse group_by fields to strip prefixes (entries/, derived_entries/, Entries/, etc.)
+    # and check for unsupported param versioning
+    group_by_fields = []
+    for field in group_by_raw:
+        # Check for param versioning (no longer supported)
+        if field.startswith("params/"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Parameter versioning is not supported in JSONB mode. "
+                f"Use entries/ prefix or omit prefix. Found: '{field}'",
+            )
+        # Strip common prefixes (entries/, derived_entries/, Entries/)
+        # The actual field names in LogEvent.data don't have these prefixes
+        parts = field.split("/", 1)
+        if len(parts) == 2 and parts[0].lower() in (
+            "entries",
+            "derived_entries",
+        ):
+            group_by_fields.append(parts[1])
+        else:
+            group_by_fields.append(field)
+
+    # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
+    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    if context_id is not None:
+        query = query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
+
+    assert not (key_from_ids and key_exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set for key '{key}', "
+        f"but found values {key_from_ids} and {key_exclude_ids}."
+    )
+
+    if key_from_ids:
+        query = query.where(LogEvent.id.in_([int(i) for i in key_from_ids.split("&")]))
+    elif key_exclude_ids:
+        query = query.where(
+            LogEvent.id.notin_([int(i) for i in key_exclude_ids.split("&")]),
+        )
+
+    if key_filter_expr:
+        filter_dict = str_filter_exp_to_dict(
+            key_filter_expr,
+            field_names=list(field_types.keys()),
+        )
+        if filter_dict:
+            event_ids_subq = query.subquery(name="event_ids_subq")
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids_subq,
+                project_id=project_obj.id,
+                context_id=context_id,
+            )
+            if isinstance(condition, Subquery):
+                query = query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                query = query.filter(condition)
+
+    # Subquery of filtered LogEvents
+    filtered_events_subq = query.subquery()
+
+    agg_cast_expr = _build_cast_expr(key, field_types.get(key), LogEvent)
+
+    # Use -> (not ->>) to get JSONB values so Python converts them with
+    # correct types (e.g. "True" not "true", "11.0" not "11").
+    group_exprs = [
+        LogEvent.data.op("->")(field).label(f"group_{i}_val")
+        for i, field in enumerate(group_by_fields)
+    ]
+
+    raw_value_expr = LogEvent.data.op("->")(key).label("raw_value")
+
+    query = (
+        session.query(
+            *group_exprs,
+            REDUCTION_METHODS[metric](agg_cast_expr).label("agg_value"),
+            func.array_agg(raw_value_expr).label("raw_values"),
+        )
+        .select_from(LogEvent)
+        .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        # Only include rows where the aggregation key exists in JSONB
+        .filter(LogEvent.data.op("?")(literal(key)))
+        .group_by(*group_exprs)
+    )
+
+    rows = query.all()
+    field_type = field_types.get(key)
+
+    return build_grouped_result(rows, group_by_fields, metric, field_type)
+
+
+def compute_metric_for_key(
+    key: str,
+    metric: str,
+    project_obj,
+    context_id: Optional[int],
+    field_types,
+    key_filter_expr: Optional[str] = None,
+    key_from_ids: Optional[str] = None,
+    key_exclude_ids: Optional[str] = None,
+    session=None,
+) -> Union[float, int, bool, str, None]:
+    """
+    Compute a metric for a single key.
+
+    Args:
+        key: The field key to compute the metric for
+        metric: The metric to compute (mean, sum, etc.)
+        project_obj: The project object
+        context_id: The context ID
+        field_types: Dict of field types
+        key_filter_expr: Key-specific filter expression
+        key_from_ids: Key-specific from_ids
+        key_exclude_ids: Key-specific exclude_ids
+        session: Database session
+
+    Returns:
+        The computed metric value
+    """
+    # JSONB mode - all log data is stored in LogEvent.data
+    return compute_metric_for_key(
+        key,
+        metric,
+        project_obj,
+        context_id,
+        field_types,
+        key_filter_expr,
+        key_from_ids,
+        key_exclude_ids,
+        session,
+    )
+
+
+def compute_metric_for_key(
+    key: str,
+    metric: str,
+    project_obj,
+    context_id: Optional[int],
+    field_types,
+    key_filter_expr: Optional[str] = None,
+    key_from_ids: Optional[str] = None,
+    key_exclude_ids: Optional[str] = None,
+    session=None,
+) -> Union[float, int, bool, str, None]:
+    """
+    JSONB-based implementation of compute_metric_for_key.
+    """
+    # Build reduction methods dictionary
+    reduction_methods = {
+        "count": func.count,
+        "sum": func.sum,
+        "mean": func.avg,
+        "var": func.var_pop,
+        "std": func.stddev_pop,
+        "min": func.min,
+        "max": func.max,
+        "median": func.percentile_cont(0.5).within_group,
+        "mode": func.mode().within_group,
+    }
+
+    # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
+    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    if context_id is not None:
+        query = query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
+
+    assert not (key_from_ids and key_exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set for key '{key}', "
+        f"but found values {key_from_ids} and {key_exclude_ids}."
+    )
+
+    if key_from_ids:
+        query = query.where(LogEvent.id.in_([int(i) for i in key_from_ids.split("&")]))
+    elif key_exclude_ids:
+        query = query.where(
+            LogEvent.id.notin_([int(i) for i in key_exclude_ids.split("&")]),
+        )
+
+    if key_filter_expr:
+        filter_dict = str_filter_exp_to_dict(
+            key_filter_expr,
+            field_names=list(field_types.keys()),
+        )
+        if filter_dict:
+            event_ids_subq = query.subquery(name="event_ids_subq")
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids_subq,
+                project_id=project_obj.id,
+                context_id=context_id,
+            )
+            if isinstance(condition, Subquery):
+                query = query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                query = query.filter(condition)
+
+    # Subquery of filtered LogEvents
+    filtered_events_subq = query.subquery()
+
+    # 2) Build the cast expression for the key using JSONB
+    cast_expr = _build_cast_expr(key, field_types.get(key), LogEvent)
+
+    # 3) Build and execute the aggregation query directly on LogEvent
+    metric_query = (
+        session.query(reduction_methods[metric](cast_expr))
+        .select_from(LogEvent)
+        .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        # Filter to only rows where the key exists
+        .filter(LogEvent.data.op("?")(literal(key)))
+    )
+
+    # Capture SQL for test analysis (if enabled)
+    try:
+        from sqlalchemy import text
+
+        from orchestra.observability.sql_capture import (
+            capture_sql,
+            is_capture_enabled,
+            set_test_context,
+        )
+
+        if is_capture_enabled():
+            pass
+
+            mode = "jsonb"
+            # Compile SQL for capture
+            compiled_sql = metric_query.statement.compile(
+                dialect=session.bind.dialect,
+                compile_kwargs={"literal_binds": True},
+            ).string
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
+                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+                + compiled_sql
+            )
+            explain_result = session.execute(text(explain_sql))
+            explain_output = explain_result.fetchone()[0]
+            # Set context and capture
+            set_test_context(
+                test_name="metric_query",
+                filter_expr=f"metric({metric}, {key})",
+                mode=mode,
+            )
+            capture_sql(
+                sql=compiled_sql,
+                explain_analyze=explain_output,
+                filter_expr_override=f"metric({metric}, {key})",
+            )
+    except ImportError:
+        pass  # sql_capture module not available (production environment)
+    except Exception:
+        pass  # Silently ignore capture errors
+
+    reduced_query = metric_query.scalar()
+
+    # Post-process based on field type
+    field_type = field_types.get(key)
+    processed_value = _postprocess_aggregator_value(
+        reduced_query,
+        metric,
+        field_type,
+    )
+
+    return processed_value
+
+
+def compute_metric_bulk(
+    keys: Sequence[str],
+    metric: str,
+    project_id: int,
+    context_id: Optional[int],
+    field_types: Dict[str, str],
+    filter_expr: Optional[str] = None,
+    from_ids: Optional[str] = None,
+    exclude_ids: Optional[str] = None,
+    session=None,
+) -> Dict[str, Union[float, int, bool, str, None]]:
+    """
+    Compute a metric for multiple keys in a single GROUP BY SQL query.
+    Args:
+        keys: Sequence of field keys to compute the metric for
+        metric: The metric to compute (mean, sum, etc.)
+        project_id: The project ID
+        field_types: Dict of field types
+        filter_expr: Filter expression
+        from_ids: IDs to include
+        exclude_ids: IDs to exclude
+        session: Database session
+
+    Returns:
+        Dict mapping keys to their computed metric values
+    """
+    # JSONB mode - all log data is stored in LogEvent.data
+    return compute_metric_bulk(
+        keys,
+        metric,
+        project_id,
+        context_id,
+        field_types,
+        filter_expr,
+        from_ids,
+        exclude_ids,
+        session,
+    )
+
+
+def compute_metric_bulk(
+    keys: Sequence[str],
+    metric: str,
+    project_id: int,
+    context_id: Optional[int],
+    field_types: Dict[str, str],
+    filter_expr: Optional[str] = None,
+    from_ids: Optional[str] = None,
+    exclude_ids: Optional[str] = None,
+    session=None,
+) -> Dict[str, Union[float, int, bool, str, None]]:
+    """
+    JSONB-based implementation of compute_metric_bulk.
+
+    Uses a simpler per-key approach to avoid Cartesian product issues.
+    """
+    if not keys:
+        return {}
+
+    # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
+    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
+    if context_id is not None:
+        query = query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
+
+    assert not (from_ids and exclude_ids), (
+        f"Only one of from_ids or exclude_ids can be set, "
+        f"but found values {from_ids} and {exclude_ids}."
+    )
+
+    if from_ids:
+        query = query.where(LogEvent.id.in_([int(i) for i in from_ids.split("&")]))
+    elif exclude_ids:
+        query = query.where(
+            LogEvent.id.notin_([int(i) for i in exclude_ids.split("&")]),
+        )
+
+    use_filtered_id_fallback = False
+    if filter_expr:
+        filter_dict = str_filter_exp_to_dict(
+            filter_expr,
+            field_names=list(field_types.keys()),
+        )
+        if filter_dict:
+            event_ids_subq = query.subquery(name="event_ids_subq")
+            condition = build_sql_query(
+                filter_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids_subq,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            if isinstance(condition, Subquery):
+                use_filtered_id_fallback = True
+                query = query.filter(
+                    exists(
+                        select(1)
+                        .select_from(condition)
+                        .where(
+                            and_(
+                                condition.c.log_event_id == LogEvent.id,
+                                condition.c.value.is_(True),
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                query = query.filter(condition)
+
+    # 2) Build reduction methods dictionary
+    reduction_methods = {
+        "count": func.count,
+        "sum": func.sum,
+        "mean": func.avg,
+        "var": func.var_pop,
+        "std": func.stddev_pop,
+        "min": func.min,
+        "max": func.max,
+        "median": func.percentile_cont(0.5).within_group,
+        "mode": func.mode().within_group,
+    }
+
+    # 3) Build cast expressions for all keys upfront
+    cast_exprs = {}
+    for key in keys:
+        cast_exprs[key] = _build_cast_expr(key, field_types.get(key), LogEvent)
+
+    # 4) Build aggregate columns for the single batched query
+    aggregate_columns = []
+    for key in keys:
+        cast_expr = cast_exprs[key]
+
+        # Handle median/mode specially (they use .within_group())
+        if metric == "median":
+            agg_col = func.percentile_cont(0.5).within_group(cast_expr.asc()).label(key)
+        elif metric == "mode":
+            agg_col = func.mode().within_group(cast_expr.asc()).label(key)
+        else:
+            # Standard aggregates (mean, sum, min, max, count, var, std)
+            agg_col = reduction_methods[metric](cast_expr).label(key)
+
+        aggregate_columns.append(agg_col)
+
+    # 5) Construct the single batched query.
+    #
+    # Normal context-scoped metrics should aggregate directly over the scoped
+    # LogEvent query. The older filtered-ID wrapper was introduced to batch
+    # multiple metric columns safely, but on large contexts Postgres can choose
+    # a much worse plan for `log_event.id IN (SELECT ...)` than for the direct
+    # `log_event JOIN log_event_context` aggregate.
+    if use_filtered_id_fallback:
+        filtered_events_subq = query.subquery()
+        metric_query = (
+            session.query(*aggregate_columns)
+            .select_from(LogEvent)
+            .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        )
+    else:
+        metric_query = query.with_entities(*aggregate_columns)
+
+    # Capture SQL for test analysis (if enabled) - ONCE for the batched query
+    try:
+        from sqlalchemy import text
+
+        from orchestra.observability.sql_capture import (
+            capture_sql,
+            is_capture_enabled,
+            set_test_context,
+        )
+
+        if is_capture_enabled():
+            pass
+
+            mode = "jsonb"
+            # Compile SQL for capture
+            compiled_sql = metric_query.statement.compile(
+                dialect=session.bind.dialect,
+                compile_kwargs={"literal_binds": True},
+            ).string
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
+                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+                + compiled_sql
+            )
+            explain_result = session.execute(text(explain_sql))
+            explain_output = explain_result.fetchone()[0]
+            # Set context with all keys
+            keys_str = ", ".join(keys)
+            set_test_context(
+                test_name="metric_bulk_query",
+                filter_expr=f"metric_bulk({metric}, {keys_str})",
+                mode=mode,
+            )
+            capture_sql(
+                sql=compiled_sql,
+                explain_analyze=explain_output,
+                filter_expr_override=f"metric_bulk({metric}, {keys_str})",
+            )
+    except ImportError:
+        pass  # sql_capture module not available (production environment)
+    except Exception:
+        pass  # Silently ignore capture errors
+
+    # 6) Execute the batched query once
+    row = metric_query.first()
+
+    # 7) Extract and post-process results for each key
+    result = {}
+    for key in keys:
+        # Get the value from the row (will be None if key doesn't exist in any event)
+        value = getattr(row, key) if row else None
+
+        # Post-process the value based on field type
+        field_type = field_types.get(key)
+        processed_value = _postprocess_aggregator_value(
+            value,
+            metric,
+            field_type,
+        )
+        result[key] = processed_value
+
+    return result

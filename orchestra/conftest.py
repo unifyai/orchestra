@@ -38,12 +38,15 @@ TIMING_RECORDS = []
 # Global to track current test info for timing records
 CURRENT_TEST_INFO = {"name": None, "mode": None}
 
-from orchestra_core.db.dependencies import get_db_session
-from orchestra_core.db.utils import create_database, drop_database
-
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
 from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
+
+
+def _xdist_worker_suffix(worker_id) -> str:
+    return f"_{worker_id}" if worker_id not in (None, "master") else ""
 
 
 def _detach_hnsw_indexes(meta) -> list[tuple[Any, Any]]:
@@ -120,8 +123,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
 
     :yield: new engine.
     """
-    from orchestra_core.db.meta import meta  # noqa: WPS433
-
+    from orchestra.db.meta import meta  # noqa: WPS433
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -134,8 +136,9 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     url = str(settings.db_url)
     # If using xdist, the testing database (orchestra_test) needs to be
     # instantiated for every thread
-    if worker_id:
-        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    suffix = _xdist_worker_suffix(worker_id)
+    if suffix:
+        url = str(settings.db_url.with_path(f"/{settings.db_base}{suffix}"))
     engine = create_engine(url, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -343,8 +346,9 @@ def fastapi_app_concurrent(
     # Create a SEPARATE engine for concurrent tests with production-like settings
     # Production uses READ COMMITTED (PostgreSQL default) with proper transactions.
     url = str(settings.db_url)
-    if worker_id:
-        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    suffix = _xdist_worker_suffix(worker_id)
+    if suffix:
+        url = str(settings.db_url.with_path(f"/{settings.db_base}{suffix}"))
 
     concurrent_engine = create_engine(
         url,
@@ -1025,8 +1029,7 @@ def _engine_session(worker_id) -> Generator[Engine, None, None]:
 
     :yield: new engine.
     """
-    from orchestra_core.db.meta import meta  # noqa: WPS433
-
+    from orchestra.db.meta import meta  # noqa: WPS433
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -1039,8 +1042,9 @@ def _engine_session(worker_id) -> Generator[Engine, None, None]:
     url = str(settings.db_url)
     # If using xdist, the testing database (orchestra_test) needs to be
     # instantiated for every thread
-    if worker_id:
-        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    suffix = _xdist_worker_suffix(worker_id)
+    if suffix:
+        url = str(settings.db_url.with_path(f"/{settings.db_base}{suffix}"))
     engine = create_engine(url, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -1158,10 +1162,9 @@ def large_log_dataset(_engine_session: Engine):
     Session-scoped fixture that creates a large dataset of logs for performance testing.
     :param _engine_session: SQLAlchemy database engine with session scope.
     """
-    from orchestra_core.db.dao.context_dao import ContextDAO
-    from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
-
-    from orchestra_core.db.dao.log_event_dao import LogEventDAO
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
 
@@ -1652,11 +1655,11 @@ def large_repairs_dataset(
     :param repairs_context: Context name (path) for the RepairsDemo context.
     :yield: Nothing (data is available in database during test session)
     """
-    from orchestra_core.db.dao.context_dao import ContextDAO
-    from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
     from sqlalchemy import delete
 
-    from orchestra_core.db.dao.log_event_dao import LogEventDAO
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.models.orchestra_models import (
         Context,
         LogEvent,

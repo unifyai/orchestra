@@ -76,29 +76,6 @@ jobs:
         options: "--check"
         version: "26.1.0"
 
-  core-purity:
-    runs-on: ubuntu-latest
-    env:
-      POETRY_VIRTUALENVS_CREATE: "false"
-    steps:
-    - uses: actions/checkout@v4
-    - name: No platform kernel forks
-      run: bash scripts/check_no_kernel_forks.sh
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
-    - name: Install Poetry
-      run: |
-        pip install --upgrade pip
-        pip install 'virtualenv>=20.25,<21'
-        pip install 'poetry==2.2.1'
-    - name: Install deps
-      run: poetry install
-      env:
-        POETRY_VIRTUALENVS_CREATE: "false"
-    - name: orchestra_core/ purity check
-      run: poetry run bash scripts/check_core_purity.sh
   # flake8:
   #   runs-on: ubuntu-latest
   #   steps:
@@ -171,7 +148,7 @@ jobs:
       run: |
         # Pin pip + virtualenv so poetry's parallel installer doesn't race on
         # site-packages/virtualenv/create/via_global_ref/_virtualenv.py when
-        # building git deps (e.g. orchestra-core). See unifyai/orchestra#1254.
+        # building git deps (e.g. orchestra). See unifyai/orchestra#1254.
         pip install --upgrade pip
         pip install 'virtualenv>=20.25,<21'
         pip install 'poetry==2.2.1'

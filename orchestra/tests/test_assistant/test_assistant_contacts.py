@@ -19,6 +19,7 @@ Covers:
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -210,7 +211,7 @@ def _ensure_user_has_contacts(dbsession: Session) -> None:
     """
     import os
 
-    api_key = os.getenv("AUTH_ACCOUNT_API_KEY", "")
+    api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
     row = dbsession.query(ApiKeyModel).filter(ApiKeyModel.key == api_key).first()
     if row:
         user = dbsession.query(User).filter(User.id == row.user_id).first()
@@ -1625,7 +1626,7 @@ class TestCreateContactEndpoint:
         """Creating a Discord contact without discord_id on profile → 422."""
         import os
 
-        api_key = os.getenv("AUTH_ACCOUNT_API_KEY", "")
+        api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
         row = dbsession.query(ApiKeyModel).filter(ApiKeyModel.key == api_key).first()
         user = dbsession.query(User).filter(User.id == row.user_id).first()
         original_discord_id = user.discord_id
@@ -4972,9 +4973,10 @@ class TestDisconnectEndpoint:
         dbsession.add(byod_contact)
         dbsession.commit()
 
-        with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings:
+        with (
+            patch("orchestra.web.api.assistant.views.settings") as mock_settings,
+            patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
+        ):
             mock_settings.is_staging = True
 
             await client.post(
@@ -5665,9 +5667,10 @@ class TestDisconnectEndpointOrg:
         dbsession.add(byod_contact)
         dbsession.commit()
 
-        with patch(
-            "orchestra.web.api.assistant.views.settings",
-        ) as mock_settings:
+        with (
+            patch("orchestra.web.api.assistant.views.settings") as mock_settings,
+            patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
+        ):
             mock_settings.is_staging = True
 
             await client.post(

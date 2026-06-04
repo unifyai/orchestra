@@ -7,7 +7,7 @@ from google.cloud.exceptions import NotFound
 from google.cloud.pubsub_v1.publisher.exceptions import MessageTooLargeError
 
 from orchestra.settings import settings
-from orchestra_core.web.api.utils.helpers import CustomEncoder
+from orchestra.web.api.utils.helpers import CustomEncoder
 
 logger = logging.getLogger(__name__)
 

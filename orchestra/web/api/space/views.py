@@ -4,11 +4,11 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from orchestra_core.db.dependencies import get_db_session
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE, SpaceDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Space
 from orchestra.services.contact_membership_service import (
     ensure_space_contact_memberships,

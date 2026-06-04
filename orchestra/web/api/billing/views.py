@@ -26,7 +26,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.lib.billing import (
     COUNTRY_NAMES,
     configure_stripe,
@@ -1252,9 +1252,7 @@ def get_current_period_usage(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> CurrentPeriodUsageResponse:
-    from orchestra.routines.monthly_metered_invoicer import (
-        estimate_in_progress_invoice,
-    )
+    from orchestra.routines.monthly_metered_invoicer import estimate_in_progress_invoice
 
     user_id: str = request.state.user_id
     organization_id: Optional[int] = getattr(
@@ -1389,8 +1387,9 @@ def list_available_plans(
     # effective rate side-by-side with the current plan. We didn't put
     # them on PlanGroupAvailableMember to keep it minimal; load in one
     # batch query rather than N+1.
-    from orchestra.db.models.orchestra_models import BillingPlanTemplate
     from sqlalchemy import select as _select
+
+    from orchestra.db.models.orchestra_models import BillingPlanTemplate
 
     template_rows = {
         t.id: t
@@ -1499,10 +1498,7 @@ def switch_plan(
         BillingPlanGroupDAO,
         PlanGroupMemberError,
     )
-    from orchestra.db.models.orchestra_models import (
-        BillingMode,
-        BillingPlanTemplate,
-    )
+    from orchestra.db.models.orchestra_models import BillingMode, BillingPlanTemplate
     from orchestra.lib.billing import ensure_stripe_customer
 
     user_id: str = request_fastapi.state.user_id
