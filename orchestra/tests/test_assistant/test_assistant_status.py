@@ -11,6 +11,7 @@ import httpx
 import pytest
 from httpx import AsyncClient
 
+from orchestra.web.api.utils import assistant_infra
 from orchestra.tests.utils import ADMIN_HEADERS
 from orchestra.web.api.utils.assistant_infra import (
     RUNTIME_JOB_LOOKBACK_HOURS,
@@ -30,6 +31,28 @@ def _mock_response(status_code: int, json_data: dict) -> MagicMock:
     resp.status_code = status_code
     resp.json.return_value = json_data
     return resp
+
+
+def test_comms_url_prefers_configured_unity_gateway_urls():
+    with patch.object(assistant_infra, "COMMS_URL", None), patch.object(
+        assistant_infra,
+        "LOCAL_ADAPTERS_URL",
+        "http://127.0.0.1:8001/",
+    ), patch.object(assistant_infra, "UNITY_GATEWAY_URL", "http://127.0.0.1:9001"):
+        assert assistant_infra._comms_url_for() == "http://127.0.0.1:8001"
+
+
+def test_adapters_url_falls_back_to_local_comms_url():
+    with patch.object(assistant_infra, "ADAPTERS_URL", None), patch.object(
+        assistant_infra,
+        "COMMS_URL",
+        None,
+    ), patch.object(assistant_infra, "LOCAL_ADAPTERS_URL", None), patch.object(
+        assistant_infra,
+        "UNITY_GATEWAY_URL",
+        None,
+    ), patch.dict("os.environ", {"ORCHESTRA_URL": "http://127.0.0.1:8000/v0"}):
+        assert assistant_infra._adapters_url_for() == "http://127.0.0.1:8001"
 
 
 @pytest.mark.anyio

@@ -11,6 +11,8 @@ from orchestra.web.api.utils.http_client import get_async_client
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
+LOCAL_ADAPTERS_URL = os.environ.get("LOCAL_ADAPTERS_URL")
+UNITY_GATEWAY_URL = os.environ.get("UNITY_GATEWAY_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
@@ -128,11 +130,24 @@ def _runtime_has_live_resources(runtime_status: dict[str, Any]) -> bool:
 
 
 def _comms_url_for(deploy_env: str | None = None) -> str:
-    return COMMS_URL or ""
+    del deploy_env
+    if COMMS_URL:
+        return COMMS_URL.rstrip("/")
+    if LOCAL_ADAPTERS_URL:
+        return LOCAL_ADAPTERS_URL.rstrip("/")
+    if UNITY_GATEWAY_URL:
+        return UNITY_GATEWAY_URL.rstrip("/")
+    orchestra_url = os.environ.get("ORCHESTRA_URL", "")
+    if "localhost" in orchestra_url or "127.0.0.1" in orchestra_url:
+        return "http://127.0.0.1:8001"
+    return ""
 
 
 def _adapters_url_for(deploy_env: str | None = None) -> str:
-    return ADAPTERS_URL or ""
+    del deploy_env
+    if ADAPTERS_URL:
+        return ADAPTERS_URL.rstrip("/")
+    return _comms_url_for()
 
 
 def _env_suffix(deploy_env: str | None = None) -> str:
@@ -717,7 +732,7 @@ async def get_social_platforms_costs():
     """
     client = get_async_client()
     response = await client.get(
-        f"{COMMS_URL}/social/available-platforms",
+        f"{_comms_url_for()}/social/available-platforms",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         timeout=20,
     )
