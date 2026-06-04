@@ -58,6 +58,7 @@ def make_billing_account(
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     ba = BillingAccountDAO(dbsession).create(
+        apply_signup_grant=False,
         credits=Decimal(str(credits)),
         account_status=account_status,
         stripe_customer_id=stripe_customer_id,
@@ -445,6 +446,7 @@ def create_test_user_with_stripe(session: Session, email: str) -> tuple[User, st
     )
 
     ba = BillingAccountDAO(session).create(
+        apply_signup_grant=False,
         credits=Decimal("0"),
         stripe_customer_id=stripe_customer_id,
         account_status="ACTIVE",

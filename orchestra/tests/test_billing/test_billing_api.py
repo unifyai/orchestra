@@ -2322,6 +2322,7 @@ class TestAccountInfo:
         # ``plan_assignment_id``); a bare BillingAccount(...) row would
         # break ``resolve_effective_plan`` later.
         ba = BillingAccountDAO(dbsession).create(
+            apply_signup_grant=False,
             credits=Decimal("42.50"),
             stripe_customer_id="cus_test123",
             autorecharge=True,
@@ -2360,7 +2361,10 @@ class TestAccountInfo:
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
-        ba = BillingAccountDAO(dbsession).create(credits=Decimal("0"))
+        ba = BillingAccountDAO(dbsession).create(
+            apply_signup_grant=False,
+            credits=Decimal("0"),
+        )
         db_user.billing_account_id = ba.id
         dbsession.flush()
         dbsession.commit()
@@ -2424,7 +2428,7 @@ class TestCreditGrants:
             OneTimeCreditGrantLinkDAO,
         )
 
-        user = await create_test_user(client, "promo_recharge@test.com")
+        user = await create_test_user(client, "promo-recharge@unify.ai")
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
 
@@ -2470,11 +2474,14 @@ class TestCreditGrants:
             OneTimeCreditGrantLinkDAO,
         )
 
-        user = await create_test_user(client, "promo_last_recharge@test.com")
+        user = await create_test_user(client, "promo-last-recharge@unify.ai")
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
 
-        ba = BillingAccountDAO(dbsession).create(credits=Decimal("0"))
+        ba = BillingAccountDAO(dbsession).create(
+            apply_signup_grant=False,
+            credits=Decimal("0"),
+        )
         db_user.billing_account_id = ba.id
         dbsession.commit()
 
@@ -2514,7 +2521,7 @@ class TestCreditGrants:
             OneTimeCreditGrantLinkDAO,
         )
 
-        user = await create_test_user(client, "promo_newba@test.com")
+        user = await create_test_user(client, "promo-newba@unify.ai")
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
         db_user.billing_account_id = None

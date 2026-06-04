@@ -52,9 +52,14 @@ class BillingAccountDAO:
     # CRUD
     # =========================================================================
 
-    def create(self, **kwargs) -> BillingAccount:
+    def create(
+        self,
+        *,
+        apply_signup_grant: bool = True,
+        **kwargs,
+    ) -> BillingAccount:
         """
-        Create a new billing account with its initial default plan.
+        Create a new billing account with its default plan and signup grant.
 
         Establishes the v2 application invariant: every ``BillingAccount``
         gets an active default ``BillingPlanAssignment`` and a
@@ -67,6 +72,7 @@ class BillingAccountDAO:
         factory — the daily reconciliation routine flags any such row
         as ``plan_assignment_null_pointer`` (critical).
 
+        :param apply_signup_grant: Whether to apply the configured signup promo.
         :param kwargs: Optional initial field values (credits, etc.)
         :return: The created BillingAccount instance.
         """
@@ -85,7 +91,15 @@ class BillingAccountDAO:
             self.session,
         ).assign_default_at_signup(billing_account.id)
         # `assign_default_at_signup` syncs plan_assignment_id via
-        # `_insert_active_assignment`; nothing further to do here.
+        # `_insert_active_assignment`, so grant ledger rows can point at it.
+        if apply_signup_grant:
+            from orchestra.settings import settings
+
+            if settings.signup_credit_grant > 0:
+                self.apply_credit_grant(
+                    billing_account.id,
+                    settings.signup_credit_grant,
+                )
         return billing_account
 
     def get(self, billing_account_id: int) -> Optional[BillingAccount]:
@@ -793,67 +807,6 @@ class BillingAccountDAO:
         self.session.add(recharge)
         self.session.flush()
         return recharge
-
-    def grant_signup_credits(
-        self,
-        user_id: str,
-        selected_type: str,
-        organization_id: Optional[int] = None,
-    ) -> Optional[Recharge]:
-        """
-        Grant one-time signup promo credits to the appropriate billing account.
-
-        Called when a user completes the onboarding workspace-selection step.
-        Credits go to the user's personal billing account when *selected_type*
-        is ``"personal"``, or to the organization's billing account when it is
-        ``"organization"``.
-
-        Idempotent: silently returns ``None`` if the target billing account
-        already has any promo recharge, so the grant is safe to call on
-        retries, auto-complete, or when multiple org members complete
-        onboarding for the same organization.
-
-        :param user_id: The user completing onboarding.
-        :param selected_type: ``"personal"`` or ``"organization"``.
-        :param organization_id: Required when *selected_type* is
-            ``"organization"``.
-        :return: The created Recharge, or ``None`` if skipped.
-        """
-        from orchestra.settings import settings
-
-        credit_amount = settings.signup_credit_grant
-        if credit_amount <= 0:
-            return None
-
-        if selected_type == "organization":
-            if organization_id is None:
-                return None
-            org = (
-                self.session.query(Organization)
-                .filter(Organization.id == organization_id)
-                .first()
-            )
-            if not org or not org.billing_account_id:
-                return None
-            target_ba_id = org.billing_account_id
-        else:
-            user = self.session.query(User).filter(User.id == user_id).first()
-            if not user or not user.billing_account_id:
-                return None
-            target_ba_id = user.billing_account_id
-
-        existing_promo = (
-            self.session.query(Recharge)
-            .filter(
-                Recharge.billing_account_id == target_ba_id,
-                Recharge.type == RECHARGE_TYPE_PROMO,
-            )
-            .first()
-        )
-        if existing_promo:
-            return None
-
-        return self.apply_credit_grant(target_ba_id, credit_amount)
 
     def get_billing_profile(self, billing_account_id: int) -> Optional[dict]:
         """
