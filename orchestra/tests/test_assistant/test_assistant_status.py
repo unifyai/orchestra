@@ -51,7 +51,9 @@ def test_adapters_url_falls_back_to_local_comms_url():
         assistant_infra,
         "UNITY_GATEWAY_URL",
         None,
-    ), patch.dict("os.environ", {"ORCHESTRA_URL": "http://127.0.0.1:8000/v0"}):
+    ), patch.dict(
+        "os.environ", {"ORCHESTRA_URL": "http://127.0.0.1:8000/v0"}
+    ):
         assert assistant_infra._adapters_url_for() == "http://127.0.0.1:8001"
 
 
