@@ -990,6 +990,95 @@ async def test_task_run_latest_returns_most_recent_task_run(client: AsyncClient)
 
 
 @pytest.mark.anyio
+async def test_task_run_latest_filters_by_source_task_log_id(client: AsyncClient):
+    """Source-scoped latest lookup should not cross physical task instances."""
+
+    await _ensure_task_machine_project(client)
+    first_source = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(
+            task_id=313,
+            instance_id=0,
+            start_at="2026-04-10T09:00:00+00:00",
+        ),
+    )
+    assert first_source.status_code == 200, first_source.json()
+    first_source_log_id = first_source.json()["log_event_ids"][0]
+
+    second_source = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(
+            task_id=313,
+            instance_id=1,
+            start_at="2026-04-10T09:30:00+00:00",
+        ),
+    )
+    assert second_source.status_code == 200, second_source.json()
+    second_source_log_id = second_source.json()["log_event_ids"][0]
+
+    for run_key, source_task_log_id in (
+        ("live:42:313:first", first_source_log_id),
+        ("live:42:313:second", second_source_log_id),
+    ):
+        create_response = await client.post(
+            "/v0/admin/task-run/create-or-adopt",
+            json={
+                "project_name": TASK_MACHINE_PROJECT_NAME,
+                "run_key": run_key,
+                "assistant_id": "42",
+                "task_id": 313,
+                "source_task_log_id": source_task_log_id,
+                "source_type": "scheduled",
+                "execution_mode": "live",
+                "state": "pending",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert create_response.status_code == 200, create_response.json()
+
+    update_response = await client.post(
+        "/v0/admin/task-run/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "run_key": "live:42:313:second",
+            "updates": {"state": "completed"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    scoped_response = await client.post(
+        "/v0/admin/task-run/latest",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 313,
+            "source_task_log_id": first_source_log_id,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert scoped_response.status_code == 200, scoped_response.json()
+    assert scoped_response.json()["run"]["run_key"] == "live:42:313:first"
+
+    unscoped_response = await client.post(
+        "/v0/admin/task-run/latest",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 313,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert unscoped_response.status_code == 200, unscoped_response.json()
+    assert unscoped_response.json()["run"]["run_key"] == "live:42:313:second"
+
+
+@pytest.mark.anyio
 async def test_task_outbound_operation_create_or_adopt_is_idempotent(
     client: AsyncClient,
 ):

@@ -1222,17 +1222,26 @@ def get_latest_task_run_for_task(
         project_id=project_id,
         tasks_context_name=resolved_tasks_context_name,
     )
+    filters = [
+        LogEvent.project_id == project_id,
+        LogEventContext.context_id == context_ids.runs_context_id,
+        LogEvent.data.has_key("assistant_id"),
+        LogEvent.data.has_key("task_id"),
+        LogEvent.data.op("->>")("assistant_id") == str(assistant_id),
+        LogEvent.data.op("->>")("task_id") == str(task_id),
+    ]
+    if source_task_log_id is not None:
+        filters.extend(
+            [
+                LogEvent.data.has_key("source_task_log_id"),
+                LogEvent.data.op("->>")("source_task_log_id")
+                == str(source_task_log_id),
+            ],
+        )
     return (
         session.query(LogEvent)
         .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .filter(
-            LogEvent.project_id == project_id,
-            LogEventContext.context_id == context_ids.runs_context_id,
-            LogEvent.data.has_key("assistant_id"),
-            LogEvent.data.has_key("task_id"),
-            LogEvent.data.op("->>")("assistant_id") == str(assistant_id),
-            LogEvent.data.op("->>")("task_id") == str(task_id),
-        )
+        .filter(*filters)
         .order_by(LogEvent.updated_at.desc(), LogEvent.created_at.desc())
         .first()
     )
