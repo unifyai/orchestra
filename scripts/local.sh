@@ -201,6 +201,79 @@ get_venv_executable() {
   fi
 }
 
+seed_billing_defaults() {
+  local db_container="$1"
+
+  docker exec "$db_container" psql -q -U orchestra -d orchestra -c "
+DO \$\$
+BEGIN
+  INSERT INTO billing_plan_template (
+      id, name, display_name, description,
+      billing_mode,
+      commit_amount, currency, commit_period, commit_schedule,
+      base_pricing_factor, overage_pricing_factor,
+      collection_method,
+      proration_policy, credits_rollover_policy,
+      fx_policy, fx_locked_rate,
+      is_custom, is_active, created_at
+  ) VALUES (
+      1, 'default', 'Default',
+      'Platform-default pay-as-you-go plan. Credit-based wallet with auto-recharge support.',
+      'CREDITS',
+      NULL, 'USD', NULL, NULL,
+      1.0, 1.0,
+      'AUTO_CARD',
+      'PRORATE', NULL,
+      NULL, NULL,
+      false, true, now()
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  PERFORM setval(
+    'billing_plan_template_id_seq',
+    GREATEST((SELECT COALESCE(MAX(id), 1) FROM billing_plan_template), 1)
+  );
+
+  INSERT INTO plan_group (id, name, display_name, description, is_active)
+  VALUES (1, 'default', 'Default', 'Default plan group for local dev / test users', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  PERFORM setval('plan_group_id_seq', GREATEST((SELECT MAX(id) FROM plan_group), 1));
+
+  INSERT INTO plan_group_member (group_id, template_id, position, added_at)
+  VALUES (1, 1, 0, now())
+  ON CONFLICT (group_id, template_id) DO NOTHING;
+
+  UPDATE billing_account
+  SET plan_group_id = 1
+  WHERE plan_group_id IS NULL;
+
+  INSERT INTO billing_plan_assignment (billing_account_id, template_id, change_reason)
+  SELECT ba.id, 1, 'local bootstrap default plan'
+  FROM billing_account ba
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM billing_plan_assignment active_assignment
+    WHERE active_assignment.billing_account_id = ba.id
+      AND active_assignment.ended_at IS NULL
+  );
+
+  WITH active AS (
+    SELECT DISTINCT ON (billing_account_id) id, billing_account_id
+    FROM billing_plan_assignment
+    WHERE ended_at IS NULL
+    ORDER BY billing_account_id, started_at DESC, id DESC
+  )
+  UPDATE billing_account ba
+  SET plan_assignment_id = active.id
+  FROM active
+  WHERE ba.id = active.billing_account_id
+    AND ba.plan_assignment_id IS NULL;
+END
+\$\$;
+" 2>&1
+}
+
 # =============================================================================
 # PostgreSQL Container Management
 # =============================================================================
@@ -426,6 +499,11 @@ seed_test_user() {
     return 1
   fi
 
+  if ! seed_billing_defaults "$db_container"; then
+    log_error "Failed to seed billing defaults"
+    return 1
+  fi
+
   local user_exists
   user_exists=$(docker exec "$db_container" psql -U orchestra -d orchestra -tAc \
     "SELECT 1 FROM \"user\" WHERE id = '$test_user_id'" 2>/dev/null || echo "")
@@ -489,6 +567,10 @@ END
 " 2>&1
 
   if [[ $? -eq 0 ]]; then
+    if ! seed_billing_defaults "$db_container"; then
+      log_error "Failed to seed billing defaults"
+      return 1
+    fi
     log_success "Test user created"
     log_info "Test API key: $test_api_key"
     return 0
