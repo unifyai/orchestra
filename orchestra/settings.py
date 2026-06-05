@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     # Current environment
     environment: str = "dev"
     is_staging: bool = os.environ.get("STAGING", "False") == "True"
+    is_self_host: bool = os.environ.get("SELF_HOST", "0") == "1"
+
+    @property
+    def charges_billing(self) -> bool:
+        """Whether credit pre-checks and deductions run for billable actions."""
+        return not self.is_staging and not self.is_self_host
 
     log_level: LogLevel = LogLevel.INFO
     # Variables for the database
