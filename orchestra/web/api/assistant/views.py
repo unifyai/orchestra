@@ -39,7 +39,6 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.space_dao import SpaceDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
@@ -49,6 +48,7 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     CONTACT_MEMBERSHIP_SCOPE_SPACE,
+    CONTACT_MEMBERSHIP_SCOPE_TEAM,
     Assistant,
     AssistantCleanupTask,
     AssistantConsoleConfig,
@@ -79,7 +79,7 @@ from orchestra.services.contact_membership_service import (
     PERSONAL_BOSS_CONTACT_ID,
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
-    ensure_space_contact_memberships,
+    ensure_team_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
     emit_onboarding_session_started_event,
@@ -96,7 +96,7 @@ from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramServic
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
-from orchestra.services.space_cleanup_service import purge_assistant_memberships
+from orchestra.services.team_cleanup_service import purge_assistant_memberships
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AdminUpdateAssistant,
@@ -340,7 +340,7 @@ def _resolved_contact_identity_roots_for_assistants(
     session: Session,
     assistant_ids: list[int],
     *,
-    space_ids_by_assistant: dict[int, list[int]] | None = None,
+    team_ids_by_assistant: dict[int, list[int]] | None = None,
     personal_ids_by_assistant: dict[int, ResolvedContactIds] | None = None,
 ) -> dict[int, list[AssistantContactIdentityRoot]]:
     """Resolve self/boss contact ids for every readable assistant root."""
@@ -348,8 +348,8 @@ def _resolved_contact_identity_roots_for_assistants(
     if not assistant_ids:
         return {}
 
-    if space_ids_by_assistant is None:
-        space_ids_by_assistant = SpaceDAO(session).space_ids_for_assistants(
+    if team_ids_by_assistant is None:
+        team_ids_by_assistant = TeamDAO(session).team_ids_for_assistants(
             assistant_ids,
         )
 
@@ -365,21 +365,22 @@ def _resolved_contact_identity_roots_for_assistants(
             AssistantContactIdentityRoot(
                 target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
                 target_space_id=None,
+                target_team_id=None,
                 self_contact_id=personal_ids.self_contact_id,
                 boss_contact_id=personal_ids.boss_contact_id,
             ),
         ]
 
-    active_space_ids_by_assistant = {
-        assistant_id: set(space_ids_by_assistant.get(assistant_id, []))
+    active_team_ids_by_assistant = {
+        assistant_id: set(team_ids_by_assistant.get(assistant_id, []))
         for assistant_id in assistant_ids
     }
-    active_space_ids = {
-        space_id
-        for space_ids in active_space_ids_by_assistant.values()
-        for space_id in space_ids
+    active_team_ids = {
+        team_id
+        for team_ids in active_team_ids_by_assistant.values()
+        for team_id in team_ids
     }
-    if not active_space_ids:
+    if not active_team_ids:
         return roots_by_assistant
 
     relationship_values = {
@@ -387,32 +388,32 @@ def _resolved_contact_identity_roots_for_assistants(
         CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     }
 
-    def _fetch_space_identity_rows(
+    def _fetch_team_identity_rows(
         *,
         pairs: set[tuple[int, int]] | None = None,
     ) -> list[tuple[int, int, int | None, int, str]]:
         query = session.query(
             ContactMembership.id,
             ContactMembership.assistant_id,
-            ContactMembership.target_space_id,
+            ContactMembership.target_team_id,
             ContactMembership.contact_id,
             ContactMembership.relationship,
         ).filter(
             ContactMembership.assistant_id.in_(assistant_ids),
-            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
-            ContactMembership.target_space_id.in_(active_space_ids),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM,
+            ContactMembership.target_team_id.in_(active_team_ids),
             ContactMembership.relationship.in_(relationship_values),
         )
         if pairs:
             query = query.filter(
                 tuple_(
                     ContactMembership.assistant_id,
-                    ContactMembership.target_space_id,
+                    ContactMembership.target_team_id,
                 ).in_(sorted(pairs)),
             )
         return query.order_by(
             ContactMembership.assistant_id,
-            ContactMembership.target_space_id,
+            ContactMembership.target_team_id,
             ContactMembership.relationship,
             ContactMembership.id,
         ).all()
@@ -422,57 +423,58 @@ def _resolved_contact_identity_roots_for_assistants(
     ) -> dict[tuple[int, int], dict[str, int]]:
         ids: dict[tuple[int, int], dict[str, int]] = {}
         seen: set[tuple[int, int, str]] = set()
-        for _, assistant_id, target_space_id, contact_id, relationship_name in rows:
-            if target_space_id is None:
+        for _, assistant_id, target_team_id, contact_id, relationship_name in rows:
+            if target_team_id is None:
                 continue
-            if target_space_id not in active_space_ids_by_assistant[assistant_id]:
+            if target_team_id not in active_team_ids_by_assistant[assistant_id]:
                 continue
 
-            key = (assistant_id, target_space_id, relationship_name)
+            key = (assistant_id, target_team_id, relationship_name)
             if key in seen:
                 continue
             seen.add(key)
-            ids.setdefault((assistant_id, target_space_id), {})[
+            ids.setdefault((assistant_id, target_team_id), {})[
                 relationship_name
             ] = contact_id
         return ids
 
-    ids_by_root = _collect_ids_by_root(_fetch_space_identity_rows())
+    ids_by_root = _collect_ids_by_root(_fetch_team_identity_rows())
     missing_pairs = {
-        (assistant_id, space_id)
+        (assistant_id, team_id)
         for assistant_id in assistant_ids
-        for space_id in active_space_ids_by_assistant[assistant_id]
+        for team_id in active_team_ids_by_assistant[assistant_id]
         if (
             CONTACT_MEMBERSHIP_RELATIONSHIP_SELF
-            not in ids_by_root.get((assistant_id, space_id), {})
+            not in ids_by_root.get((assistant_id, team_id), {})
             or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS
-            not in ids_by_root.get((assistant_id, space_id), {})
+            not in ids_by_root.get((assistant_id, team_id), {})
         )
     }
     if missing_pairs:
-        ensure_space_contact_memberships(session, sorted(missing_pairs))
+        ensure_team_contact_memberships(session, sorted(missing_pairs))
         ids_by_root.update(
-            _collect_ids_by_root(_fetch_space_identity_rows(pairs=missing_pairs)),
+            _collect_ids_by_root(_fetch_team_identity_rows(pairs=missing_pairs)),
         )
 
     for assistant_id in assistant_ids:
-        for space_id in sorted(active_space_ids_by_assistant[assistant_id]):
-            contact_ids = ids_by_root.get((assistant_id, space_id), {})
+        for team_id in sorted(active_team_ids_by_assistant[assistant_id]):
+            contact_ids = ids_by_root.get((assistant_id, team_id), {})
             if (
                 CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
                 or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
             ):
                 logging.warning(
-                    "Missing space contact identity for assistant %s in space %s",
+                    "Missing team contact identity for assistant %s in team %s",
                     assistant_id,
-                    space_id,
+                    team_id,
                 )
                 continue
 
             roots_by_assistant[assistant_id].append(
                 AssistantContactIdentityRoot(
-                    target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                    target_space_id=space_id,
+                    target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                    target_space_id=None,
+                    target_team_id=team_id,
                     self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
                     boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
                 ),
@@ -511,6 +513,7 @@ def _build_assistant_read(
     user_image: Optional[str] = None,
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
+    team_summaries: Optional[list[dict[str, Any]]] = None,
     space_ids: Optional[List[int]] = None,
     space_summaries: Optional[list[dict[str, Any]]] = None,
     self_contact_id: Optional[int] = None,
@@ -545,18 +548,15 @@ def _build_assistant_read(
             user_desktop_url = desktop.url
             user_desktop_mode = desktop.os
 
+    team_dao = TeamDAO(session)
     if team_ids is None:
-        if a.organization_id is not None:
-            team_dao = TeamDAO(session)
-            teams = team_dao.get_user_teams(a.user_id, a.organization_id)
-            team_ids = [t.id for t in teams]
-        else:
-            team_ids = []
-
+        team_ids = team_dao.team_ids_for_assistant(a.agent_id)
+    if team_summaries is None:
+        team_summaries = team_dao.team_summaries_for_assistant(a.agent_id)
     if space_ids is None:
-        space_ids = SpaceDAO(session).space_ids_for_assistant(a.agent_id)
+        space_ids = []
     if space_summaries is None:
-        space_summaries = SpaceDAO(session).space_summaries_for_assistant(a.agent_id)
+        space_summaries = []
 
     if self_contact_id is None or boss_contact_id is None:
         resolved_contact_ids = _resolved_contact_ids_for_assistants(
@@ -572,7 +572,7 @@ def _build_assistant_read(
         contact_identity_roots = _resolved_contact_identity_roots_for_assistants(
             session,
             [a.agent_id],
-            space_ids_by_assistant={a.agent_id: space_ids},
+            team_ids_by_assistant={a.agent_id: team_ids},
             personal_ids_by_assistant={
                 a.agent_id: ResolvedContactIds(
                     self_contact_id=self_contact_id,
@@ -657,6 +657,7 @@ def _build_assistant_read(
         user_email=user_email,
         user_image=user_image,
         team_ids=team_ids,
+        team_summaries=team_summaries,
         space_ids=space_ids,
         space_summaries=space_summaries,
         self_contact_id=self_contact_id,
@@ -1598,12 +1599,12 @@ def list_assistants(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
-        space_dao = SpaceDAO(session)
+        team_dao = TeamDAO(session)
         assistant_ids = [a.agent_id for a in assistants]
-        space_ids_by_assistant = space_dao.space_ids_for_assistants(
+        team_ids_by_assistant = team_dao.team_ids_for_assistants(
             assistant_ids,
         )
-        space_summaries_by_assistant = space_dao.space_summaries_for_assistants(
+        team_summaries_by_assistant = team_dao.team_summaries_for_assistants(
             assistant_ids,
         )
         contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
@@ -1614,7 +1615,7 @@ def list_assistants(
             _resolved_contact_identity_roots_for_assistants(
                 session,
                 assistant_ids,
-                space_ids_by_assistant=space_ids_by_assistant,
+                team_ids_by_assistant=team_ids_by_assistant,
                 personal_ids_by_assistant=contact_ids_by_assistant,
             )
         )
@@ -1638,11 +1639,13 @@ def list_assistants(
                         else None
                     ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
-                    space_ids=space_ids_by_assistant.get(a.agent_id, []),
-                    space_summaries=space_summaries_by_assistant.get(
+                    team_ids=team_ids_by_assistant.get(a.agent_id, []),
+                    team_summaries=team_summaries_by_assistant.get(
                         a.agent_id,
                         [],
                     ),
+                    space_ids=[],
+                    space_summaries=[],
                     self_contact_id=_contact_id_pair(
                         contact_ids_by_assistant,
                         a.agent_id,
@@ -6265,6 +6268,9 @@ def admin_list_all_assistants(
         )
 
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
+        skip_team_summaries = (
+            requested_fields is not None and "team_summaries" not in requested_fields
+        )
         skip_space_ids = (
             requested_fields is not None and "space_ids" not in requested_fields
         )
@@ -6308,14 +6314,14 @@ def admin_list_all_assistants(
                         s.secret_name
                     ] = s.secret_value
 
-        space_ids_by_assistant = {}
-        space_summaries_by_assistant = {}
-        space_dao = SpaceDAO(session)
+        team_ids_by_assistant = {}
+        team_summaries_by_assistant = {}
+        team_dao = TeamDAO(session)
         agent_ids = [a.agent_id for a in assistants]
-        if not skip_space_ids:
-            space_ids_by_assistant = space_dao.space_ids_for_assistants(agent_ids)
-        if not skip_space_summaries:
-            space_summaries_by_assistant = space_dao.space_summaries_for_assistants(
+        if not skip_teams:
+            team_ids_by_assistant = team_dao.team_ids_for_assistants(agent_ids)
+        if not skip_team_summaries:
+            team_summaries_by_assistant = team_dao.team_summaries_for_assistants(
                 agent_ids,
             )
         contact_ids_by_assistant = {}
@@ -6326,16 +6332,16 @@ def admin_list_all_assistants(
             )
         contact_identity_roots_by_assistant = {}
         if not skip_contact_identity_roots:
-            identity_space_ids_by_assistant = space_ids_by_assistant
-            if skip_space_ids:
-                identity_space_ids_by_assistant = space_dao.space_ids_for_assistants(
+            identity_team_ids_by_assistant = team_ids_by_assistant
+            if skip_teams:
+                identity_team_ids_by_assistant = team_dao.team_ids_for_assistants(
                     agent_ids,
                 )
             contact_identity_roots_by_assistant = (
                 _resolved_contact_identity_roots_for_assistants(
                     session,
                     agent_ids,
-                    space_ids_by_assistant=identity_space_ids_by_assistant,
+                    team_ids_by_assistant=identity_team_ids_by_assistant,
                     personal_ids_by_assistant=(
                         contact_ids_by_assistant if not skip_contact_ids else None
                     ),
@@ -6353,15 +6359,16 @@ def admin_list_all_assistants(
                 user_email=users[i].email if users else None,
                 user_image=users[i].image if users else None,
                 user_whatsapp_number=(users[i].whatsapp_number if users else None),
-                team_ids=[] if skip_teams else None,
-                space_ids=(
-                    [] if skip_space_ids else space_ids_by_assistant.get(a.agent_id, [])
+                team_ids=(
+                    [] if skip_teams else team_ids_by_assistant.get(a.agent_id, [])
                 ),
-                space_summaries=(
+                team_summaries=(
                     []
-                    if skip_space_summaries
-                    else space_summaries_by_assistant.get(a.agent_id, [])
+                    if skip_team_summaries
+                    else team_summaries_by_assistant.get(a.agent_id, [])
                 ),
+                space_ids=[] if skip_space_ids else [],
+                space_summaries=[] if skip_space_summaries else [],
                 self_contact_id=(
                     PERSONAL_SELF_CONTACT_ID
                     if skip_contact_ids
@@ -6596,10 +6603,10 @@ def admin_list_assistants_for_user(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
-        space_dao = SpaceDAO(session)
+        team_dao = TeamDAO(session)
         assistant_ids = [a.agent_id for a in assistants]
-        space_ids_by_assistant = space_dao.space_ids_for_assistants(assistant_ids)
-        space_summaries_by_assistant = space_dao.space_summaries_for_assistants(
+        team_ids_by_assistant = team_dao.team_ids_for_assistants(assistant_ids)
+        team_summaries_by_assistant = team_dao.team_summaries_for_assistants(
             assistant_ids,
         )
         contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
@@ -6610,7 +6617,7 @@ def admin_list_assistants_for_user(
             _resolved_contact_identity_roots_for_assistants(
                 session,
                 assistant_ids,
-                space_ids_by_assistant=space_ids_by_assistant,
+                team_ids_by_assistant=team_ids_by_assistant,
                 personal_ids_by_assistant=contact_ids_by_assistant,
             )
         )
@@ -6622,11 +6629,13 @@ def admin_list_assistants_for_user(
                     session,
                     api_key=api_keys[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
-                    space_ids=space_ids_by_assistant.get(a.agent_id, []),
-                    space_summaries=space_summaries_by_assistant.get(
+                    team_ids=team_ids_by_assistant.get(a.agent_id, []),
+                    team_summaries=team_summaries_by_assistant.get(
                         a.agent_id,
                         [],
                     ),
+                    space_ids=[],
+                    space_summaries=[],
                     self_contact_id=_contact_id_pair(
                         contact_ids_by_assistant,
                         a.agent_id,

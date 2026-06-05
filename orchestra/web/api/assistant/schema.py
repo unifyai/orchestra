@@ -293,16 +293,31 @@ class AssistantSpaceSummary(BaseModel):
     )
 
 
+class AssistantTeamSummary(BaseModel):
+    """Organization team metadata projected onto assistant runtime responses."""
+
+    team_id: int = Field(..., description="Organization team identifier.")
+    name: str = Field(..., description="Human-readable team name.")
+    description: Optional[str] = Field(
+        None,
+        description="Semantic description of the team's purpose and scope.",
+    )
+
+
 class AssistantContactIdentityRoot(BaseModel):
     """Root-local contact ids used by clients that read across assistant roots."""
 
-    target_scope: Literal["personal", "space"] = Field(
+    target_scope: Literal["personal", "space", "team"] = Field(
         ...,
         description="Root kind where the contact ids are meaningful.",
     )
     target_space_id: Optional[int] = Field(
         None,
         description="Shared space identifier when the target scope is a space.",
+    )
+    target_team_id: Optional[int] = Field(
+        None,
+        description="Organization team identifier when the target scope is a team.",
     )
     self_contact_id: int = Field(
         ...,
@@ -468,16 +483,19 @@ class AssistantRead(AssistantCreate):
     )
     team_ids: List[int] = Field(
         default_factory=list,
-        description="Team IDs the assistant's user belongs to within the assistant's organization. "
-        "Empty for personal assistants or when the user has no team memberships.",
+        description="Sorted organization team IDs where the assistant is a live shared-memory member.",
+    )
+    team_summaries: List[AssistantTeamSummary] = Field(
+        default_factory=list,
+        description="Sorted organization team names and descriptions for live memberships.",
     )
     space_ids: List[int] = Field(
         default_factory=list,
-        description="Sorted shared space IDs where the assistant is a live member.",
+        description="Deprecated shared-space membership ids. Always empty.",
     )
     space_summaries: List[AssistantSpaceSummary] = Field(
         default_factory=list,
-        description="Sorted shared space names and descriptions for live memberships.",
+        description="Deprecated shared-space summaries. Always empty.",
     )
     self_contact_id: int = Field(
         0,
