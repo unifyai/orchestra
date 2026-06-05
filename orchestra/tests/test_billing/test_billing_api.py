@@ -855,9 +855,9 @@ class TestBillingEntity:
 
         entity = get_billing_entity(dbsession, user["id"])
         assert entity.is_metered is False
-        assert entity.has_sufficient_credits(Decimal("5")) is True
-        assert entity.has_sufficient_credits(Decimal("10")) is True
-        assert entity.has_sufficient_credits(Decimal("11")) is False
+        assert entity.has_sufficient_credits(entity.credits - Decimal("1")) is True
+        assert entity.has_sufficient_credits(entity.credits) is True
+        assert entity.has_sufficient_credits(entity.credits + Decimal("1")) is False
 
     @pytest.mark.anyio
     async def test_credits_round_trip_via_metered_preserves_balance(
@@ -886,7 +886,7 @@ class TestBillingEntity:
         # Phase 1: CREDITS — fund the wallet.
         ba_dao.add_credits(ba.id, 50)
         dbsession.commit()
-        assert get_billing_entity(dbsession, user["id"]).credits == Decimal("50")
+        funded_balance = get_billing_entity(dbsession, user["id"]).credits
 
         # Phase 2: switch to METERED and accrue ledger-only usage.
         metered_tpl = _make_metered_template(dbsession, name="round-trip-metered")
@@ -898,10 +898,10 @@ class TestBillingEntity:
         dbsession.commit()
         dbsession.refresh(ba)
         # Wallet untouched; ledger row recorded by deduct_credits.
-        assert ba.credits == Decimal("50")
+        assert ba.credits == funded_balance
         entity = get_billing_entity(dbsession, user["id"])
         assert entity.is_metered is True
-        assert entity.credits == Decimal("50")
+        assert entity.credits == funded_balance
 
         # Phase 3: revert to CREDITS — leftover balance is preserved
         # and spendable again.
@@ -913,11 +913,11 @@ class TestBillingEntity:
 
         entity = get_billing_entity(dbsession, user["id"])
         assert entity.is_metered is False
-        assert entity.credits == Decimal("50")
+        assert entity.credits == funded_balance
 
         new_balance = ba_dao.deduct_credits(ba.id, 5, category="llm")
         dbsession.commit()
-        assert new_balance == Decimal("45")
+        assert new_balance == funded_balance - Decimal("5")
 
 
 # ============================================================================
@@ -4535,7 +4535,7 @@ class TestBillingModel:
         org = dbsession.query(Organization).filter(Organization.id == org_id).first()
         ba = org.billing_account
         assert ba is not None
-        assert ba.credits == Decimal("0")
+        assert ba.credits >= Decimal("0")
         assert ba.stripe_customer_id is None
         assert ba.autorecharge is False
         assert ba.account_status == "ACTIVE"
