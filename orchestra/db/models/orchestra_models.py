@@ -27,6 +27,11 @@ from sqlalchemy.orm import backref, relationship, validates
 
 from orchestra.db.base import Base
 
+
+def _new_string_uuid() -> str:
+    return str(uuid.uuid4())
+
+
 # Kernel models live in orchestra. Re-exported here so platform
 # code can keep `from orchestra.db.models.orchestra_models import Project`
 # and treat this file as the single platform-facing model surface.
@@ -793,7 +798,7 @@ class User(Base):
     __tablename__ = "user"
 
     # === IDENTITY FIELDS ===
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=_new_string_uuid)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String)
     last_name = Column(String)
@@ -864,7 +869,7 @@ class User(Base):
 class Account(Base):
     __tablename__ = "account"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=_new_string_uuid)
     user_id = Column(String, ForeignKey("user.id", ondelete="CASCADE"))
     provider = Column(String, nullable=False)  # OAuth provider name
     provider_type = Column(String, nullable=False)
