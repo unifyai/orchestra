@@ -1713,13 +1713,16 @@ async def test_create_with_nested_pydantic_schema_and_nullable_fields(
 
 
 @pytest.mark.anyio
-async def test_concurrent_auto_counting_produces_unique_ids(client: AsyncClient):
+async def test_concurrent_auto_counting_produces_unique_ids(
+    client_concurrent: AsyncClient,
+):
     """Two concurrent log creates on the same auto-counted context must both
     succeed with distinct row_id values, not collide on the same value."""
     import asyncio
 
     project_name = "concurrent-auto-count-project"
     context_name = "concurrent-auto-count-ctx"
+    client = client_concurrent
 
     await _create_project(client, project_name)
     resp_ctx = await client.post(
