@@ -24,8 +24,8 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantCleanupTask,
     AssistantContact,
-    AssistantSpaceMembership,
     ResourceAccess,
+    TeamAssistantMembership,
     TeamMember,
 )
 from orchestra.tests.utils import create_test_user, ensure_assistants_project
@@ -286,14 +286,14 @@ async def test_member_removal_removes_from_teams(client: AsyncClient, dbsession)
 
 
 @pytest.mark.anyio
-async def test_member_removal_drops_personal_coordinator_memberships_from_org_spaces(
+async def test_member_removal_drops_personal_coordinator_memberships_from_org_teams(
     client: AsyncClient,
     dbsession,
 ):
-    """Removing an org member drops that member's workspace Coordinator from org spaces."""
+    """Removing an org member drops that member's workspace Coordinator from org teams."""
 
-    owner = await create_test_user(client, "space_cleanup_owner@test.com")
-    member = await create_test_user(client, "space_cleanup_member@test.com")
+    owner = await create_test_user(client, "team_cleanup_owner@test.com")
+    member = await create_test_user(client, "team_cleanup_member@test.com")
 
     org_resp = await client.post(
         "/v0/organizations",
@@ -311,43 +311,42 @@ async def test_member_removal_drops_personal_coordinator_memberships_from_org_sp
         add_member_resp.status_code == status.HTTP_201_CREATED
     ), add_member_resp.json()
 
-    create_space_resp = await client.post(
-        "/v0/spaces",
+    create_team_resp = await client.post(
+        f"/v0/organizations/{org_id}/teams",
         headers=owner["headers"],
         json={
-            "name": "Membership Cleanup Space",
-            "description": "Shared workspace used to verify member-removal cleanup.",
-            "organization_id": org_id,
+            "name": "Membership Cleanup Team",
+            "description": "Shared team used to verify member-removal cleanup.",
         },
     )
     assert (
-        create_space_resp.status_code == status.HTTP_201_CREATED
-    ), create_space_resp.json()
-    space_id = create_space_resp.json()["space_id"]
+        create_team_resp.status_code == status.HTTP_201_CREATED
+    ), create_team_resp.json()
+    team_id = create_team_resp.json()["id"]
 
     with patch(
         "orchestra.services.coordinator_service.create_pubsub_topic",
         new_callable=AsyncMock,
     ) as create_topic_mock, patch(
-        "orchestra.services.space_membership_refresh_service.reawaken_assistant",
+        "orchestra.services.team_membership_refresh_service.reawaken_assistant",
         new_callable=AsyncMock,
     ):
         create_topic_mock.return_value = {"success": True, "skipped": True}
-        add_space_member_resp = await client.post(
-            f"/v0/spaces/{space_id}/members",
+        add_team_member_resp = await client.post(
+            f"/v0/organizations/{org_id}/teams/{team_id}/assistant-members",
             headers=owner["headers"],
             json={"member_user_id": member["id"]},
         )
         assert (
-            add_space_member_resp.status_code == status.HTTP_201_CREATED
-        ), add_space_member_resp.json()
-        member_coordinator_id = add_space_member_resp.json()["assistant_id"]
+            add_team_member_resp.status_code == status.HTTP_201_CREATED
+        ), add_team_member_resp.json()
+        member_coordinator_id = add_team_member_resp.json()["assistant_id"]
 
         membership_before = (
-            dbsession.query(AssistantSpaceMembership)
+            dbsession.query(TeamAssistantMembership)
             .filter(
-                AssistantSpaceMembership.assistant_id == member_coordinator_id,
-                AssistantSpaceMembership.space_id == space_id,
+                TeamAssistantMembership.assistant_id == member_coordinator_id,
+                TeamAssistantMembership.team_id == team_id,
             )
             .one_or_none()
         )
@@ -366,10 +365,10 @@ async def test_member_removal_drops_personal_coordinator_memberships_from_org_sp
 
     dbsession.expire_all()
     membership_after = (
-        dbsession.query(AssistantSpaceMembership)
+        dbsession.query(TeamAssistantMembership)
         .filter(
-            AssistantSpaceMembership.assistant_id == member_coordinator_id,
-            AssistantSpaceMembership.space_id == space_id,
+            TeamAssistantMembership.assistant_id == member_coordinator_id,
+            TeamAssistantMembership.team_id == team_id,
         )
         .one_or_none()
     )

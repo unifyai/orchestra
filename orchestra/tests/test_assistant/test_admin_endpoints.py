@@ -2267,7 +2267,7 @@ async def test_admin_list_assistant_team_ids_personal(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_admin_list_assistant_team_ids_org_no_teams(client: AsyncClient):
-    """Org assistant where user has no team memberships returns empty team_ids."""
+    """Org assistants without shared-memory team memberships return empty team_ids."""
     owner = await create_test_user(client, "team_ids_org_no_teams@test.com")
 
     org_resp = await client.post(
@@ -2311,8 +2311,11 @@ async def test_admin_list_assistant_team_ids_org_no_teams(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistant_team_ids_with_membership(client: AsyncClient):
-    """Org assistant where user belongs to teams returns those team_ids."""
+async def test_admin_list_assistant_team_ids_with_membership(
+    client: AsyncClient,
+    dbsession,
+):
+    """Workspace coordinators expose shared-memory team memberships on AssistantRead."""
     owner = await create_test_user(client, "team_ids_member@test.com")
 
     org_resp = await client.post(
@@ -2361,26 +2364,26 @@ async def test_admin_list_assistant_team_ids_with_membership(client: AsyncClient
     )
     assert add_resp2.status_code == 200
 
-    create_resp = await client.post(
-        "/v0/assistant",
-        json={
-            "first_name": "OrgWithTeams",
-            "surname": "Test",
-            "create_infra": False,
-        },
-        headers=org_headers,
+    from orchestra.db.models.orchestra_models import Assistant
+
+    coordinator = (
+        dbsession.query(Assistant)
+        .filter(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id == org_id,
+            Assistant.is_coordinator.is_(True),
+        )
+        .one()
     )
-    assert create_resp.status_code == 200
-    agent_id = create_resp.json()["info"]["agent_id"]
 
     admin_resp = await client.get(
         "/v0/admin/assistant",
-        params={"agent_id": agent_id},
+        params={"agent_id": coordinator.agent_id},
         headers=ADMIN_HEADERS,
     )
     assert admin_resp.status_code == 200
     assistants = admin_resp.json()["info"]
-    our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
+    our = next(a for a in assistants if str(a["agent_id"]) == str(coordinator.agent_id))
     assert sorted(our["team_ids"]) == sorted([team1_id, team2_id])
 
 
