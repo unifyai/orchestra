@@ -17,7 +17,7 @@ from orchestra.db.models.orchestra_models import (
     AssistantCleanupTask,
     AssistantContact,
 )
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import (
     delete_phone_number,
@@ -313,7 +313,7 @@ def _delete_assistant_gcs_data(spec: AssistantCleanupSpec) -> dict[str, object]:
 
     errors: list[str] = []
     deleted_counts = {"media": 0, "recordings": 0, "attachments": 0}
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
 
     for field_name in ("profile_photo", "profile_video"):
         gcs_url = getattr(spec, field_name)

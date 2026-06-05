@@ -20,7 +20,7 @@ from orchestra.db.models.core_models import (
     LogEventContext,
     Project,
 )
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +81,12 @@ def _extract_field_names_from_equation(equation: str) -> List[str]:
 
 
 class LogEventDAO:
-    bucket_service_factory: Callable[[], Any] = BucketService
+    bucket_service_factory: Callable[[], Any] = create_bucket_service
 
     def __init__(self, session: Session, context_dao: Optional[ContextDAO] = None):
         self.session = session
         self.context_dao = context_dao or ContextDAO(session)
-        self.bucket_service = self.bucket_service_factory()
+        self.bucket_service = type(self).bucket_service_factory()
 
     def bulk_create(
         self,

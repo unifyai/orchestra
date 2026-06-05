@@ -46,10 +46,10 @@ def cleanup_temp_files(max_age_hours: int = DEFAULT_MAX_AGE_HOURS) -> int:
     Returns:
         Number of files deleted.
     """
-    from orchestra.services.bucket_service import BucketService
+    from orchestra.services.bucket_service import create_bucket_service
 
     try:
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
     except Exception as e:
         logger.error(f"Temp file cleanup: failed to initialise BucketService: {e}")
         raise

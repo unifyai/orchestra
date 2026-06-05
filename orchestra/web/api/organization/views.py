@@ -44,7 +44,7 @@ from orchestra.services.assistant_cleanup_service import (
     enqueue_cleanup_tasks,
     process_assistant_cleanup_tasks,
 )
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.services.coordinator_service import (
     ensure_workspace_coordinator_provisioned,
@@ -492,7 +492,7 @@ async def upload_org_photo(
             detail=f"File size exceeds {MAX_SIZE_BYTES // (1024 * 1024)}MB limit.",
         )
 
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
     gcs_url = bucket_service.upload_org_photo_file(
         file_content=file_content,
         org_id=organization_id,
@@ -540,7 +540,7 @@ async def remove_org_photo(
 
     # Delete all photos for this org from the account photo bucket
     try:
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
         bucket_service.delete_org_account_photos(organization_id)
     except Exception as e:
         logger.error(
@@ -725,7 +725,7 @@ async def delete_organization(
                     cleanup_summary["errors"],
                 )
 
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
 
         # Clean up org account photos from the dedicated account photo bucket
         try:

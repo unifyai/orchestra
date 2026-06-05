@@ -10,7 +10,7 @@ from starlette.requests import Request
 from orchestra.db.dao.api_message_dao import ApiMessageDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.messages.schema import (
     MessageComplete,
@@ -39,7 +39,7 @@ def _generate_signed_url(gs_url: str) -> str | None:
         bucket_name, object_path = parse_gcs_url(gs_url)
         if not bucket_name or not object_path:
             return None
-        svc = BucketService()
+        svc = create_bucket_service()
         bucket = svc.storage_client.bucket(bucket_name)
         blob = bucket.blob(object_path)
         if not blob.exists():

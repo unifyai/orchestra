@@ -1096,7 +1096,7 @@ async def upload_user_photo(
     file: UploadFile = File(...),
     session: Session = Depends(get_db_session),
 ):
-    from orchestra.services.bucket_service import BucketService
+    from orchestra.services.bucket_service import create_bucket_service
 
     user_id = request.state.user_id
     if not user_id:
@@ -1120,7 +1120,7 @@ async def upload_user_photo(
             detail=f"File size exceeds {MAX_SIZE_BYTES // (1024 * 1024)}MB limit.",
         )
 
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
     gcs_url = bucket_service.upload_user_photo_file(
         file_content=file_content,
         user_id=user_id,
@@ -1142,7 +1142,7 @@ def remove_user_photo(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
-    from orchestra.services.bucket_service import BucketService
+    from orchestra.services.bucket_service import create_bucket_service
 
     user_id = request.state.user_id
     if not user_id:
@@ -1153,7 +1153,7 @@ def remove_user_photo(
 
     # Delete all photos for this user from the account photo bucket
     try:
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
         bucket_service.delete_user_account_photos(user_id)
     except Exception as e:
         logger.error(f"Failed to delete GCS photos for user {user_id}: {e}")

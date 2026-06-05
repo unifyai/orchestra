@@ -432,9 +432,9 @@ class UserAccountCleanupService:
         Best-effort operation – logs errors but never fails the deletion.
         """
         try:
-            from orchestra.services.bucket_service import BucketService
+            from orchestra.services.bucket_service import create_bucket_service
 
-            bucket_service = BucketService()
+            bucket_service = create_bucket_service()
 
             if not assistant_ids:
                 # Fallback: no assistants found (user had none, or they were

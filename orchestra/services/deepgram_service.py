@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import HTTPException, status
 
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.settings import settings
 
 
@@ -52,7 +52,7 @@ class DeepgramService:
         Detects language from audio by uploading it to a temporary URL.
         Reference: https://developers.deepgram.com/reference/speech-to-text-api/listen
         """
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
         temp_gcs_uri = None
 
         if settings.selected_voice_provider == "cartesia":

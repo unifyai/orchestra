@@ -73,7 +73,7 @@ from orchestra.services.assistant_cleanup_service import (
     enqueue_cleanup_tasks,
     process_assistant_cleanup_tasks,
 )
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.contact_membership_service import (
     PERSONAL_BOSS_CONTACT_ID,
@@ -808,7 +808,7 @@ async def create_assistant(
                     detail="You do not have permission to create assistants in this organization.",
                 )
 
-        if not settings.is_staging:
+        if settings.charges_billing:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -1146,7 +1146,7 @@ async def create_assistant(
         )
 
     # Phase 2: Deduct credits from the correct billing account (user or org).
-    if not settings.is_staging:
+    if settings.charges_billing:
         try:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
@@ -2056,7 +2056,7 @@ async def create_assistant_contact(
     )
 
     # 4. Credit check (skip in staging)
-    if not settings.is_staging:
+    if settings.charges_billing:
         try:
             billing_entity = get_billing_entity(session, user_id, organization_id)
         except ValueError:
@@ -2170,7 +2170,7 @@ async def create_assistant_contact(
         contact.monthly_cost = monthly_cost
 
         # 7. Deduct one-time cost
-        if not settings.is_staging and one_time_cost > 0:
+        if settings.charges_billing and one_time_cost > 0:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -3385,7 +3385,7 @@ async def update_assistant_config(
     organization_id = getattr(request.state, "organization_id", None)
     user_dao = UserDAO(session)
     assistant_dao = AssistantDAO(session)
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
 
     # Store the old photo URL before the update
     old_photo_url = None
@@ -4879,7 +4879,7 @@ async def upload_assistant_photo(
     assistant_id: Optional[int] = Form(None),
     session: Session = Depends(get_db_session),
 ):
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
     user_id = request.state.user_id
     if not user_id:
         raise HTTPException(
@@ -4961,7 +4961,7 @@ async def upload_assistant_video(
     assistant_id: Optional[int] = Form(None),
     session: Session = Depends(get_db_session),
 ):
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
     user_id = request.state.user_id
     if not user_id:
         raise HTTPException(
@@ -5071,7 +5071,7 @@ async def generate_assistant_photo(
         )
 
     # 2. Pre-check credits if not in staging
-    if not settings.is_staging:
+    if settings.charges_billing:
         try:
             billing_entity = get_billing_entity(session, user_id, organization_id)
         except ValueError:
@@ -5099,7 +5099,7 @@ async def generate_assistant_photo(
         )
 
         # 4. Deduct credits after successful generation if not in staging
-        if not settings.is_staging:
+        if settings.charges_billing:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -5142,7 +5142,7 @@ async def edit_assistant_photo(
     request: Request,
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
-    bucket_service: BucketService = Depends(),
+    bucket_service=Depends(create_bucket_service),
     openai_service: OpenAIService = Depends(),
     prompt: str = Form(
         ...,
@@ -5240,7 +5240,7 @@ async def edit_assistant_photo(
             raise
 
         # 2. Pre-check credits if not in staging
-        if not settings.is_staging:
+        if settings.charges_billing:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -5266,7 +5266,7 @@ async def edit_assistant_photo(
         )
 
         # 4. Deduct credits after successful edit if not in staging
-        if not settings.is_staging:
+        if settings.charges_billing:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             edit_entity = get_billing_entity(session, user_id, organization_id)
@@ -5326,7 +5326,7 @@ async def animate_video_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
-    bucket_service: BucketService = Depends(),
+    bucket_service=Depends(create_bucket_service),
     openai_service: OpenAIService = Depends(),
     image_url: Optional[str] = Form(None),
     image_file: Optional[UploadFile] = File(None),
@@ -5496,7 +5496,7 @@ async def animate_video_endpoint(
             )
 
         # Pre-check credits
-        if not settings.is_staging:
+        if settings.charges_billing:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -5520,7 +5520,7 @@ async def animate_video_endpoint(
         _prediction_owners[prediction.id] = user_id
 
         # Deduct credits after successful prediction creation
-        if not settings.is_staging:
+        if settings.charges_billing:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)

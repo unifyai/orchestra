@@ -449,9 +449,9 @@ def _get_image_embedding_from_url(
             if image_url.startswith("http://") or image_url.startswith("https://"):
                 # This is a GCS URL - download the image first
                 if bucket_service is None:
-                    from orchestra.services.bucket_service import BucketService
+                    from orchestra.services.bucket_service import create_bucket_service
 
-                    bucket_service = BucketService()
+                    bucket_service = create_bucket_service()
 
                 # Extract filename from URL and fetch with retry for GCS eventual consistency
                 filename = image_url.split("/")[-1]

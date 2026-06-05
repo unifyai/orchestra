@@ -37,7 +37,7 @@ from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.core_models import Embedding, LogEvent
 from orchestra.lib.parallel import threaded_map
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 
 from . import alias_utils
 from .ast_utils import get_identifier_value, is_identifier_node, parse_base_params
@@ -4293,7 +4293,7 @@ def _handle_embed_image_jsonb(
         if not rows:
             return None
 
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
 
         def compute_image_embedding(args):
             log_event_id, image_url, bucket_svc = args
@@ -4450,7 +4450,7 @@ def _handle_phash_jsonb(
         if not rows:
             return None
 
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
 
         def compute_image_hash(args):
             log_event_id, image_url, bucket_svc = args
@@ -4560,7 +4560,7 @@ def _handle_phash_jsonb(
                 image_data = base64.b64decode(b64_string)
             else:
                 # GCS URL - fetch from bucket service
-                bucket_service = BucketService()
+                bucket_service = create_bucket_service()
                 base64_image = bucket_service.get_media(image_url.split("/")[-1])
                 if not base64_image:
                     return literal(None)
