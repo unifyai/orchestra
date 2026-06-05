@@ -32,10 +32,10 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    AssistantSpaceMembership,
     Recharge,
     RechargeStatus,
-    Space,
+    Team,
+    TeamAssistantMembership,
 )
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
@@ -50,11 +50,11 @@ from orchestra.services.coordinator_service import (
     ensure_workspace_coordinator_provisioned,
     get_workspace_coordinator,
 )
-from orchestra.services.space_cleanup_service import delete_space as run_space_cleanup
-from orchestra.services.space_cleanup_service import (
-    purge_assistant_overlay as purge_space_member_overlay,
+from orchestra.services.team_cleanup_service import delete_team as run_team_cleanup
+from orchestra.services.team_cleanup_service import (
+    purge_assistant_overlay as purge_team_member_overlay,
 )
-from orchestra.services.space_membership_refresh_service import (
+from orchestra.services.team_membership_refresh_service import (
     membership_refresh_payloads,
     publish_membership_refreshes_best_effort,
 )
@@ -566,9 +566,9 @@ async def delete_organization(
     """
     Delete an organization and enqueue durable runtime cleanup for its assistants.
 
-    Space cleanup may commit partial progress before the organization row is
+    Team cleanup may commit partial progress before the organization row is
     dropped. If a later cleanup step fails, the next delete retry resumes from
-    the remaining spaces. Runtime/contact cleanup is attempted after the space
+    the remaining teams. Runtime/contact cleanup is attempted after the team
     cascade and retried later from the cleanup queue if external teardown fails.
     """
     user_id = request_fastapi.state.user_id
@@ -651,16 +651,17 @@ async def delete_organization(
 
     # Delete organization (cascades to related tables)
     try:
-        org_space_ids = session.scalars(
-            select(Space.space_id)
-            .where(Space.organization_id == organization_id)
-            .order_by(Space.space_id.asc()),
+        org_team_ids = session.scalars(
+            select(Team.id)
+            .where(Team.organization_id == organization_id)
+            .order_by(Team.id.asc()),
         ).all()
-        for space_id in org_space_ids:
-            await run_space_cleanup(
+        for team_id in org_team_ids:
+            await run_team_cleanup(
                 session,
-                space_id=space_id,
+                team_id=team_id,
                 user_id=request_fastapi.state.user_id,
+                organization_id=organization_id,
             )
 
         org_assistants = (
@@ -997,7 +998,7 @@ async def remove_organization_member(
         )
 
     cleanup_task_ids: list[int] = []
-    space_membership_refreshes = []
+    team_membership_refreshes = []
 
     # Remove member and clean up all associated data
     try:
@@ -1073,36 +1074,33 @@ async def remove_organization_member(
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 
-        # 8. Remove the member's org Coordinator from org-scoped spaces.
+        # 8. Remove the member's org Coordinator from org team memberships.
         org_coordinator = get_workspace_coordinator(
             session,
             user_id=user_id,
             organization_id=organization_id,
         )
         if org_coordinator is not None:
-            coordinator_space_ids = [
-                int(space_id)
-                for (space_id,) in session.execute(
-                    select(Space.space_id)
-                    .join(
-                        AssistantSpaceMembership,
-                        AssistantSpaceMembership.space_id == Space.space_id,
-                    )
+            coordinator_team_ids = [
+                int(team_id)
+                for (team_id,) in session.execute(
+                    select(TeamAssistantMembership.team_id)
+                    .join(Team, Team.id == TeamAssistantMembership.team_id)
                     .where(
-                        AssistantSpaceMembership.assistant_id
+                        TeamAssistantMembership.assistant_id
                         == org_coordinator.agent_id,
-                        Space.organization_id == organization_id,
+                        Team.organization_id == organization_id,
                     ),
                 ).all()
             ]
-            for space_id in coordinator_space_ids:
-                await purge_space_member_overlay(
+            for team_id in coordinator_team_ids:
+                await purge_team_member_overlay(
                     session,
                     assistant_id=org_coordinator.agent_id,
-                    space_id=space_id,
+                    team_id=team_id,
                 )
-            if coordinator_space_ids:
-                space_membership_refreshes = membership_refresh_payloads(
+            if coordinator_team_ids:
+                team_membership_refreshes = membership_refresh_payloads(
                     session,
                     [org_coordinator],
                 )
@@ -1122,8 +1120,8 @@ async def remove_organization_member(
             detail="Failed to remove member",
         )
 
-    if space_membership_refreshes:
-        await publish_membership_refreshes_best_effort(space_membership_refreshes)
+    if team_membership_refreshes:
+        await publish_membership_refreshes_best_effort(team_membership_refreshes)
 
     await fan_out_contact_sync_for_org(organization_id, session)
 

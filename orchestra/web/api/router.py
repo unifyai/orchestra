@@ -14,7 +14,6 @@ from orchestra.web.api import (  # noqa: WPS235
     organization,
     project,
     roles,
-    space,
     storage,
     teams,
     users,
@@ -73,7 +72,6 @@ groupings = {
         "Organizations",
         "Roles & Permissions",
         "Teams & Resource Access",
-        "Spaces",
     ],
 }
 
@@ -291,11 +289,6 @@ api_router.include_router(
 api_router.include_router(
     teams.router,
     tags=["Teams & Resource Access"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    space.router,
-    tags=["Spaces"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
