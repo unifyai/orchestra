@@ -2,32 +2,162 @@
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.team_dao import TeamDAO
+from orchestra.db.dao.team_dao import TEAM_STATUS_ACTIVE, TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import Assistant, Team
+from orchestra.services.contact_membership_service import (
+    ensure_team_contact_memberships,
+)
+from orchestra.services.coordinator_service import (
+    ensure_workspace_coordinator_provisioned,
+    get_workspace_coordinator,
+)
+from orchestra.services.team_cleanup_service import (
+    TeamCleanupAuthError,
+    TeamCleanupConflictError,
+    TeamCleanupFailure,
+    TeamCleanupNotFoundError,
+)
+from orchestra.services.team_cleanup_service import delete_team as run_team_cleanup
+from orchestra.services.team_cleanup_service import (
+    purge_assistant_overlay as purge_team_member_overlay,
+)
+from orchestra.services.team_membership_refresh_service import (
+    membership_refresh_payloads,
+    publish_membership_refreshes_best_effort,
+)
 from orchestra.web.api.teams.schema import (
     ResourceAccessGrant,
     ResourceAccessListResponse,
     ResourceAccessResponse,
     ResourceAccessRevoke,
     ResourceAccessUpdate,
+    TeamAssistantMember,
+    TeamAssistantMemberCreate,
     TeamCreate,
     TeamMemberAdd,
+    TeamMembershipResponse,
+    TeamMembershipStatus,
     TeamResponse,
+    TeamSummary,
     TeamUpdate,
     TeamWithMembersResponse,
     UserResourceAccessEntry,
     UserResourceAccessResponse,
 )
+from orchestra.web.api.utils.assistant_infra import delete_pubsub_topic
 
 router = APIRouter()
+
+
+def _require_active_team(team: Team) -> None:
+    """Reject mutations against teams that are being deleted."""
+
+    if team.status != TEAM_STATUS_ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="team_not_active",
+        )
+
+
+def _ensure_member_team_contacts(
+    session: Session,
+    *,
+    assistant_id: int,
+    team_id: int,
+) -> None:
+    """Ensure default team-scoped self/boss overlays for one live membership."""
+
+    ensure_team_contact_memberships(session, [(assistant_id, team_id)])
+
+
+async def _add_coordinator_to_team(
+    session: Session,
+    *,
+    team: Team,
+    member_user_id: str,
+    actor_user_id: str,
+) -> tuple[Assistant, bool, list]:
+    """Provision a member's workspace coordinator and add it to the team."""
+
+    existing_workspace_coordinator = get_workspace_coordinator(
+        session,
+        user_id=member_user_id,
+        organization_id=team.organization_id,
+    )
+    created_workspace_coordinator = False
+    if existing_workspace_coordinator is not None:
+        assistant = existing_workspace_coordinator
+    else:
+        try:
+            assistant, created_workspace_coordinator = (
+                await ensure_workspace_coordinator_provisioned(
+                    session,
+                    user_id=member_user_id,
+                    organization_id=team.organization_id,
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="workspace_coordinator_provisioning_failed",
+            ) from exc
+
+    team_dao = TeamDAO(session)
+    refresh_payloads: list = []
+    if (
+        team_dao.get_assistant_membership(
+            team_id=team.id,
+            assistant_id=assistant.agent_id,
+        )
+        is None
+    ):
+        team_dao.add_assistant_membership(
+            team=team,
+            assistant=assistant,
+            added_by=actor_user_id,
+        )
+        _ensure_member_team_contacts(
+            session,
+            assistant_id=assistant.agent_id,
+            team_id=team.id,
+        )
+        refresh_payloads = membership_refresh_payloads(session, [assistant])
+    else:
+        _ensure_member_team_contacts(
+            session,
+            assistant_id=assistant.agent_id,
+            team_id=team.id,
+        )
+
+    return assistant, created_workspace_coordinator, refresh_payloads
+
+
+def _require_assistant_membership_target_allowed(
+    *,
+    actor_user_id: str,
+    team: Team,
+    assistant: Assistant,
+) -> None:
+    """Require the target assistant to be eligible for the team."""
+
+    if assistant.organization_id == team.organization_id:
+        return
+    if assistant.user_id == actor_user_id:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="assistant_not_eligible_for_team",
+    )
 
 
 @router.post(
@@ -35,7 +165,7 @@ router = APIRouter()
     response_model=TeamResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_team(
+async def create_team(
     request_fastapi: Request,
     organization_id: int,
     team_data: TeamCreate,
@@ -85,28 +215,84 @@ def create_team(
             detail=f"Team with name '{team_data.name}' already exists in this organization",
         )
 
+    created_workspace_coordinator = False
+    created_workspace_coordinator_id: int | None = None
+    refresh_payloads = []
     try:
         team = team_dao.create(
             name=team_data.name,
             organization_id=organization_id,
             description=team_data.description,
         )
-        session.commit()
-
-        return TeamResponse(
-            id=team.id,
-            name=team.name,
-            description=team.description,
-            organization_id=team.organization_id,
-            created_at=team.created_at,
-            member_count=0,
+        coordinator = get_workspace_coordinator(
+            session,
+            user_id=user_id,
+            organization_id=organization_id,
         )
+        if coordinator is None:
+            try:
+                coordinator, created_workspace_coordinator = (
+                    await ensure_workspace_coordinator_provisioned(
+                        session,
+                        user_id=user_id,
+                        organization_id=organization_id,
+                    )
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="workspace_coordinator_provisioning_failed",
+                ) from exc
+            created_workspace_coordinator_id = coordinator.agent_id
+        if (
+            team_dao.get_assistant_membership(
+                team_id=team.id,
+                assistant_id=coordinator.agent_id,
+            )
+            is None
+        ):
+            team_dao.add_assistant_membership(
+                team=team,
+                assistant=coordinator,
+                added_by=user_id,
+            )
+            _ensure_member_team_contacts(
+                session,
+                assistant_id=coordinator.agent_id,
+                team_id=team.id,
+            )
+            refresh_payloads = membership_refresh_payloads(session, [coordinator])
+        session.commit()
+    except HTTPException:
+        session.rollback()
+        if (
+            created_workspace_coordinator
+            and created_workspace_coordinator_id is not None
+        ):
+            await delete_pubsub_topic(str(created_workspace_coordinator_id))
+        raise
     except Exception as e:
         session.rollback()
+        if (
+            created_workspace_coordinator
+            and created_workspace_coordinator_id is not None
+        ):
+            await delete_pubsub_topic(str(created_workspace_coordinator_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create team: {str(e)}",
         )
+
+    await publish_membership_refreshes_best_effort(refresh_payloads)
+
+    return TeamResponse(
+        id=team.id,
+        name=team.name,
+        description=team.description,
+        organization_id=team.organization_id,
+        created_at=team.created_at,
+        member_count=0,
+    )
 
 
 @router.get(
@@ -234,7 +420,7 @@ def get_team(
     response_model=TeamResponse,
     status_code=status.HTTP_200_OK,
 )
-def update_team(
+async def update_team(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -278,15 +464,14 @@ def update_team(
             detail="You do not have permission to update teams in this organization",
         )
 
-    # Get team
     team = team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Team with id {team_id} not found in this organization",
         )
+    _require_active_team(team)
 
-    # Check for duplicate name if updating name
     if team_data.name and team_data.name != team.name:
         existing_team = team_dao.get_by_name(team_data.name, organization_id)
         if existing_team:
@@ -301,19 +486,17 @@ def update_team(
             name=team_data.name,
             description=team_data.description,
         )
+        refresh_payloads = []
+        if team_data.name is not None or team_data.description is not None:
+            refresh_payloads = membership_refresh_payloads(
+                session,
+                [
+                    assistant
+                    for _, assistant in team_dao.list_assistant_members(team_id)
+                ],
+            )
         session.commit()
-
-        # Refresh team
         team = team_dao.get(team_id)
-
-        return TeamResponse(
-            id=team.id,
-            name=team.name,
-            description=team.description,
-            organization_id=team.organization_id,
-            created_at=team.created_at,
-            member_count=len(team_dao.get_team_members(team_id)),
-        )
     except Exception as e:
         session.rollback()
         raise HTTPException(
@@ -321,17 +504,28 @@ def update_team(
             detail=f"Failed to update team: {str(e)}",
         )
 
+    await publish_membership_refreshes_best_effort(refresh_payloads)
+
+    return TeamResponse(
+        id=team.id,
+        name=team.name,
+        description=team.description,
+        organization_id=team.organization_id,
+        created_at=team.created_at,
+        member_count=len(team_dao.get_team_members(team_id)),
+    )
+
 
 @router.delete(
     "/organizations/{organization_id}/teams/{team_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def delete_team(
+async def delete_team(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
     session: Session = Depends(get_db_session),
-) -> None:
+) -> Response:
     """
     Delete a team.
 
@@ -367,7 +561,6 @@ def delete_team(
             detail="You do not have permission to delete teams in this organization",
         )
 
-    # Get team
     team = team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
@@ -376,15 +569,33 @@ def delete_team(
         )
 
     try:
-        team_dao.delete(team_id)
-        session.commit()
-        return None
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete team: {str(e)}",
+        await run_team_cleanup(
+            session,
+            team_id=team_id,
+            user_id=user_id,
+            organization_id=organization_id,
         )
+    except TeamCleanupNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team with id {team_id} not found in this organization",
+        )
+    except TeamCleanupAuthError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="team_mutation_forbidden",
+        )
+    except TeamCleanupConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="team_cleanup_in_progress",
+        )
+    except TeamCleanupFailure as exc:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"phase": exc.phase, "reason": exc.reason},
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -392,7 +603,7 @@ def delete_team(
     response_model=TeamWithMembersResponse,
     status_code=status.HTTP_200_OK,
 )
-def add_team_members(
+async def add_team_members(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -438,16 +649,17 @@ def add_team_members(
             detail="You do not have permission to manage team members",
         )
 
-    # Get team
     team = team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Team with id {team_id} not found in this organization",
         )
+    _require_active_team(team)
 
+    created_coordinator_ids: list[int] = []
+    refresh_payloads = []
     try:
-        # Verify all users exist and are org members
         for user_id_to_add in member_data.user_ids:
             user = user_dao.get_by_id(user_id_to_add)
             if not user:
@@ -456,7 +668,6 @@ def add_team_members(
                     detail=f"User with id {user_id_to_add} not found",
                 )
 
-            # Check if user is org member
             is_owner = org.owner_id == user_id_to_add
             is_member = org_member_dao.filter(
                 user_id=user_id_to_add,
@@ -469,31 +680,45 @@ def add_team_members(
                     detail=f"User {user_id_to_add} is not a member of this organization",
                 )
 
-            # Add to team (skip if already member)
             if not team_dao.is_team_member(team_id, user_id_to_add):
                 team_dao.add_member(team_id, user_id_to_add)
 
+            assistant, created, payloads = await _add_coordinator_to_team(
+                session,
+                team=team,
+                member_user_id=user_id_to_add,
+                actor_user_id=user_id,
+            )
+            if created:
+                created_coordinator_ids.append(assistant.agent_id)
+            refresh_payloads.extend(payloads)
+
         session.commit()
-
-        members = team_dao.get_team_members(team_id)
-
-        return TeamWithMembersResponse(
-            id=team.id,
-            name=team.name,
-            description=team.description,
-            organization_id=team.organization_id,
-            created_at=team.created_at,
-            members=members,
-        )
     except HTTPException:
         session.rollback()
+        for coordinator_id in created_coordinator_ids:
+            await delete_pubsub_topic(str(coordinator_id))
         raise
     except Exception as e:
         session.rollback()
+        for coordinator_id in created_coordinator_ids:
+            await delete_pubsub_topic(str(coordinator_id))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to add team members: {str(e)}",
         )
+
+    await publish_membership_refreshes_best_effort(refresh_payloads)
+
+    members = team_dao.get_team_members(team_id)
+    return TeamWithMembersResponse(
+        id=team.id,
+        name=team.name,
+        description=team.description,
+        organization_id=team.organization_id,
+        created_at=team.created_at,
+        members=members,
+    )
 
 
 @router.delete(
@@ -501,7 +726,7 @@ def add_team_members(
     response_model=TeamWithMembersResponse,
     status_code=status.HTTP_200_OK,
 )
-def remove_team_member(
+async def remove_team_member(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -545,7 +770,285 @@ def remove_team_member(
             detail="You do not have permission to manage team members",
         )
 
-    # Get team
+    team = team_dao.get(team_id)
+    if not team or team.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team with id {team_id} not found in this organization",
+        )
+    _require_active_team(team)
+
+    refresh_payloads = []
+    try:
+        coordinator = get_workspace_coordinator(
+            session,
+            user_id=user_id_to_remove,
+            organization_id=organization_id,
+        )
+        if coordinator is not None and team_dao.get_assistant_membership(
+            team_id=team_id,
+            assistant_id=coordinator.agent_id,
+        ):
+            await purge_team_member_overlay(
+                session,
+                assistant_id=coordinator.agent_id,
+                team_id=team_id,
+            )
+            refresh_payloads = membership_refresh_payloads(session, [coordinator])
+
+        team_dao.remove_member(team_id, user_id_to_remove)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove team member: {str(e)}",
+        )
+
+    await publish_membership_refreshes_best_effort(refresh_payloads)
+
+    members = team_dao.get_team_members(team_id)
+    return TeamWithMembersResponse(
+        id=team.id,
+        name=team.name,
+        description=team.description,
+        organization_id=team.organization_id,
+        created_at=team.created_at,
+        members=members,
+    )
+
+
+@router.post(
+    "/organizations/{organization_id}/teams/{team_id}/assistant-members",
+    response_model=TeamMembershipResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_team_assistant_member(
+    request_fastapi: Request,
+    response: Response,
+    organization_id: int,
+    team_id: int,
+    body: TeamAssistantMemberCreate,
+    session: Session = Depends(get_db_session),
+) -> TeamMembershipResponse:
+    """Add an eligible assistant to a team."""
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    team_dao = TeamDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+    if not resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage team members",
+        )
+
+    team = team_dao.get(team_id)
+    if not team or team.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team with id {team_id} not found in this organization",
+        )
+    _require_active_team(team)
+
+    created_workspace_coordinator = False
+    created_workspace_coordinator_id: int | None = None
+    refresh_payloads = []
+    try:
+        if body.member_user_id:
+            if org_member_dao.get_member(body.member_user_id, organization_id) is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organization member not found.",
+                )
+            assistant, created_workspace_coordinator, refresh_payloads = (
+                await _add_coordinator_to_team(
+                    session,
+                    team=team,
+                    member_user_id=body.member_user_id,
+                    actor_user_id=user_id,
+                )
+            )
+            if created_workspace_coordinator:
+                created_workspace_coordinator_id = assistant.agent_id
+            if not team_dao.is_team_member(team_id, body.member_user_id):
+                team_dao.add_member(team_id, body.member_user_id)
+            response.status_code = status.HTTP_201_CREATED
+        else:
+            assistant = team_dao.get_assistant(body.assistant_id)
+            if assistant is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Assistant not found.",
+                )
+            _require_assistant_membership_target_allowed(
+                actor_user_id=user_id,
+                team=team,
+                assistant=assistant,
+            )
+            if team_dao.get_assistant_membership(
+                team_id=team.id,
+                assistant_id=assistant.agent_id,
+            ):
+                _ensure_member_team_contacts(
+                    session,
+                    assistant_id=assistant.agent_id,
+                    team_id=team.id,
+                )
+                response.status_code = status.HTTP_200_OK
+            else:
+                team_dao.add_assistant_membership(
+                    team=team,
+                    assistant=assistant,
+                    added_by=user_id,
+                )
+                _ensure_member_team_contacts(
+                    session,
+                    assistant_id=assistant.agent_id,
+                    team_id=team.id,
+                )
+                refresh_payloads = membership_refresh_payloads(session, [assistant])
+        session.commit()
+    except HTTPException:
+        session.rollback()
+        if (
+            created_workspace_coordinator
+            and created_workspace_coordinator_id is not None
+        ):
+            await delete_pubsub_topic(str(created_workspace_coordinator_id))
+        raise
+    except Exception:
+        session.rollback()
+        if (
+            created_workspace_coordinator
+            and created_workspace_coordinator_id is not None
+        ):
+            await delete_pubsub_topic(str(created_workspace_coordinator_id))
+        raise
+
+    await publish_membership_refreshes_best_effort(refresh_payloads)
+    return TeamMembershipResponse(
+        membership_status=TeamMembershipStatus.active,
+        assistant_id=assistant.agent_id,
+        team_id=team.id,
+    )
+
+
+@router.delete(
+    "/organizations/{organization_id}/teams/{team_id}/assistant-members/{assistant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_team_assistant_member(
+    request_fastapi: Request,
+    organization_id: int,
+    team_id: int,
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+) -> Response:
+    """Remove an assistant from a team."""
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    team_dao = TeamDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+    if not resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage team members",
+        )
+
+    team = team_dao.get(team_id)
+    if not team or team.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team with id {team_id} not found in this organization",
+        )
+    _require_active_team(team)
+
+    membership = team_dao.get_assistant_membership(
+        team_id=team_id,
+        assistant_id=assistant_id,
+    )
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team assistant membership not found.",
+        )
+
+    assistant = team_dao.get_assistant(assistant_id)
+    if assistant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    await purge_team_member_overlay(
+        session,
+        assistant_id=assistant_id,
+        team_id=team_id,
+    )
+    refresh_payloads = membership_refresh_payloads(session, [assistant])
+    session.commit()
+    await publish_membership_refreshes_best_effort(refresh_payloads)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/organizations/{organization_id}/teams/{team_id}/assistant-members",
+    response_model=List[TeamAssistantMember],
+    status_code=status.HTTP_200_OK,
+)
+def list_team_assistant_members(
+    request_fastapi: Request,
+    organization_id: int,
+    team_id: int,
+    session: Session = Depends(get_db_session),
+) -> List[TeamAssistantMember]:
+    """List assistant members for a team."""
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    team_dao = TeamDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    is_owner = org.owner_id == user_id
+    is_member = org_member_dao.filter(user_id=user_id, organization_id=organization_id)
+    if not is_owner and not is_member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a member of this organization to view teams",
+        )
+
     team = team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
@@ -553,26 +1056,73 @@ def remove_team_member(
             detail=f"Team with id {team_id} not found in this organization",
         )
 
-    try:
-        team_dao.remove_member(team_id, user_id_to_remove)
-        session.commit()
+    return [
+        TeamAssistantMember(
+            assistant_id=assistant.agent_id,
+            team_id=membership.team_id,
+            user_id=assistant.user_id,
+            organization_id=assistant.organization_id,
+            added_by=membership.added_by,
+            created_at=membership.created_at,
+        )
+        for membership, assistant in team_dao.list_assistant_members(team_id)
+    ]
 
-        members = team_dao.get_team_members(team_id)
 
-        return TeamWithMembersResponse(
-            id=team.id,
+@router.get(
+    "/assistants/{assistant_id}/teams",
+    response_model=List[TeamSummary],
+    status_code=status.HTTP_200_OK,
+)
+def list_teams_for_assistant(
+    request_fastapi: Request,
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+) -> List[TeamSummary]:
+    """List teams where an assistant is a live member."""
+
+    user_id = request_fastapi.state.user_id
+    team_dao = TeamDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    assistant = team_dao.get_assistant(assistant_id)
+    if assistant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if assistant.user_id == user_id:
+        pass
+    elif assistant.is_coordinator and assistant.organization_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant.",
+        )
+    elif (
+        assistant.organization_id is not None
+        and resource_access_dao.check_org_member_permission(
+            user_id,
+            assistant.organization_id,
+            "org:read",
+        )
+    ):
+        pass
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant.",
+        )
+
+    return [
+        TeamSummary(
+            team_id=team.id,
             name=team.name,
             description=team.description,
-            organization_id=team.organization_id,
-            created_at=team.created_at,
-            members=members,
         )
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove team member: {str(e)}",
-        )
+        for team in team_dao.list_teams_for_assistant(assistant_id)
+    ]
 
 
 @router.post(
