@@ -92,7 +92,7 @@ def org_delete_boundaries(monkeypatch: pytest.MonkeyPatch) -> _CommsClient:
         "attachments": 0,
     }
     monkeypatch.setattr(
-        "orchestra.web.api.organization.views.BucketService",
+        "orchestra.web.api.organization.views.create_bucket_service",
         MagicMock(return_value=bucket),
     )
     monkeypatch.setattr(

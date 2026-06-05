@@ -40,7 +40,7 @@ def mock_infra_and_bucket(request):
         "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_org_cleanup, patch(
-        "orchestra.web.api.organization.views.BucketService",
+        "orchestra.web.api.organization.views.create_bucket_service",
     ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
@@ -60,6 +60,7 @@ def mock_infra_and_bucket(request):
             "errors": [],
         }
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         mock_bucket_instance = MagicMock()
         mock_bucket_instance.delete_all_assistant_data.return_value = {

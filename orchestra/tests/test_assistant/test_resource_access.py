@@ -52,7 +52,7 @@ def mock_assistant_infra_calls(request):
             0.0,
         ),
         patch(
-            "orchestra.web.api.assistant.views.BucketService",
+            "orchestra.web.api.assistant.views.create_bucket_service",
         ) as mock_bucket_cls,
         patch(
             "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
@@ -75,6 +75,7 @@ def mock_assistant_infra_calls(request):
         }
         # Patch is_staging to skip credit checks
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
         mock_bucket = MagicMock()
         mock_bucket.delete_assistant_file.return_value = None
         mock_bucket.delete_all_assistant_data.return_value = {

@@ -95,6 +95,7 @@ def mock_all_infra(dbsession):
                 "orchestra.web.api.assistant.views.settings",
             ) as mock_settings:
                 mock_settings.is_staging = True
+                mock_settings.charges_billing = False
                 with patch(
                     "orchestra.web.api.assistant.views.get_db_session",
                     side_effect=_mock_get_db_session_generator(dbsession),

@@ -1881,7 +1881,7 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
         "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.BucketService",
+        "orchestra.web.api.assistant.views.create_bucket_service",
     ) as MockBucketServiceClass:
         mock_process_cleanup.return_value = {
             "processed": 1,
@@ -1927,7 +1927,7 @@ async def test_delete_assistant_processes_cleanup_tasks(
         "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.BucketService",
+        "orchestra.web.api.assistant.views.create_bucket_service",
     ) as MockBucketServiceClass:
         mock_process_cleanup.return_value = {
             "processed": 1,
@@ -1976,7 +1976,7 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
         "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.BucketService",
+        "orchestra.web.api.assistant.views.create_bucket_service",
     ) as MockBucketServiceClass:
         mock_process_cleanup.return_value = {
             "processed": 1,

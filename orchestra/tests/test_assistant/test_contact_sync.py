@@ -60,6 +60,7 @@ def mock_assistant_infra_calls(request):
         }
         # Patch is_staging to skip credit checks
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
 

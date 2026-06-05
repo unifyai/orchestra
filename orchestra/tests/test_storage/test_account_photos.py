@@ -72,6 +72,7 @@ class TestAccountPhotoBucketNaming:
                         "orchestra.services.bucket_service.settings",
                     ) as mock_settings:
                         mock_settings.is_staging = True
+                        mock_settings.charges_billing = False
                         service = BucketService()
 
                         assert (

@@ -637,6 +637,7 @@ async def test_process_assistant_cleanup_tasks_deletes_assistant_gcs_after_runti
             "errors": [],
         }
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
         mock_bucket = mock_bucket_cls.return_value
         mock_bucket.delete_all_assistant_data.return_value = {
             "media": 2,

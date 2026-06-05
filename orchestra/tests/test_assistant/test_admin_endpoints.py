@@ -61,6 +61,7 @@ def mock_assistant_infra_calls(request):
             "errors": [],
         }
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
 

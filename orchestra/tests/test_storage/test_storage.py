@@ -6,8 +6,14 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.services.bucket_service import BucketService as OriginalBucketService
+from orchestra.services.bucket_service import (
+    BucketService as OriginalBucketService,
+    create_bucket_service,
+)
 from orchestra.tests.utils import HEADERS
+from orchestra.web.api.storage.views import (
+    create_bucket_service as storage_create_bucket_service,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -34,12 +40,16 @@ def mock_bucket_service(fastapi_app):
     # Create a mock BucketService instance
     bucket_mock = MagicMock(spec=OriginalBucketService)
     bucket_mock.storage_client = mock_storage_client
+    bucket_mock.is_allowed_bucket.return_value = True
 
     # Override the dependency - use a factory function
     def get_mock_bucket_service():
         return bucket_mock
 
-    fastapi_app.dependency_overrides[OriginalBucketService] = get_mock_bucket_service
+    fastapi_app.dependency_overrides[create_bucket_service] = get_mock_bucket_service
+    fastapi_app.dependency_overrides[storage_create_bucket_service] = (
+        get_mock_bucket_service
+    )
 
     yield {
         "service": bucket_mock,
@@ -48,7 +58,8 @@ def mock_bucket_service(fastapi_app):
         "blob": mock_blob,
     }
 
-    fastapi_app.dependency_overrides.pop(OriginalBucketService, None)
+    fastapi_app.dependency_overrides.pop(create_bucket_service, None)
+    fastapi_app.dependency_overrides.pop(storage_create_bucket_service, None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,7 +78,7 @@ async def test_signed_url_success(client: AsyncClient, mock_bucket_service):
         headers=HEADERS,
     )
 
-    assert resp.status_code == status.HTTP_200_OK
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
     data = resp.json()
     assert "signed_url" in data
     assert data["expires_in_minutes"] == 60  # Default
@@ -93,7 +104,7 @@ async def test_signed_url_custom_expiration(client: AsyncClient, mock_bucket_ser
         headers=HEADERS,
     )
 
-    assert resp.status_code == status.HTTP_200_OK
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
     data = resp.json()
     assert data["expires_in_minutes"] == 120
 

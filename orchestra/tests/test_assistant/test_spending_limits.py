@@ -37,6 +37,7 @@ def mock_assistant_infra_calls(request):
         mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
         # Patch is_staging to skip credit/billing checks during assistant creation
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         yield mock_wake_up, mock_reawaken, mock_create_pubsub_topic
 

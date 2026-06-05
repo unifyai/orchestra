@@ -53,7 +53,7 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_org_cleanup, patch(
-        "orchestra.web.api.organization.views.BucketService",
+        "orchestra.web.api.organization.views.create_bucket_service",
     ) as mock_bucket_cls, patch(
         "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
         new_callable=AsyncMock,
@@ -79,6 +79,7 @@ def mock_assistant_infra_calls(request):
         }
         mock_personal_coordinator_topic.return_value = {"success": True}
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         mock_bucket_instance = MagicMock()
         mock_bucket_instance.delete_all_assistant_data.return_value = {

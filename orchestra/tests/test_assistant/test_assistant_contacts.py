@@ -1071,6 +1071,7 @@ def mock_all_infra(dbsession):
                 "orchestra.web.api.assistant.views.settings",
             ) as mock_settings:
                 mock_settings.is_staging = True
+                mock_settings.charges_billing = False
                 with patch(
                     "orchestra.web.api.assistant.views.get_db_session",
                     side_effect=_mock_get_db_session_generator(dbsession),
@@ -3699,6 +3700,7 @@ class TestConnectEndpoint:
             mock_settings.microsoft_byod_client_id = None
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -3759,6 +3761,7 @@ class TestConnectEndpoint:
             mock_settings.microsoft_byod_client_id = None
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -3793,6 +3796,7 @@ class TestConnectEndpoint:
             mock_settings.microsoft_byod_client_id = "test-ms-client-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -3828,6 +3832,7 @@ class TestConnectEndpoint:
             mock_settings.microsoft_byod_client_id = None
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -3858,6 +3863,7 @@ class TestConnectEndpoint:
             mock_settings.google_oauth_client_id = "test-google-client-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -3889,6 +3895,7 @@ class TestConnectEndpoint:
             mock_settings.microsoft_byod_client_id = None
             mock_settings.oauth_state_signing_key = "test-signing-secret"
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -3955,6 +3962,7 @@ class TestGrantedFeaturesEndpoint:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.get(
                 f"/v0/assistant/{agent_id}/granted-features",
@@ -3984,6 +3992,7 @@ class TestGrantedFeaturesEndpoint:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -4029,6 +4038,7 @@ class TestGrantedFeaturesEndpoint:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -4066,6 +4076,7 @@ class TestGrantedFeaturesEndpoint:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.get(
                 "/v0/assistant/999999/granted-features",
@@ -4094,6 +4105,7 @@ class TestGrantedFeaturesEndpoint:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -4134,6 +4146,7 @@ class TestConnectEndpointEdgeCases:
             mock_settings.google_oauth_client_id = "test-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 "/v0/assistant/999999/connect",
@@ -4165,6 +4178,7 @@ class TestConnectEndpointEdgeCases:
             mock_settings.google_oauth_client_id = "test-google-client-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -4216,6 +4230,7 @@ class TestConnectEndpointEdgeCases:
             mock_settings.microsoft_byod_client_id = "test-ms-client-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -4264,6 +4279,7 @@ class TestConnectEndpointEdgeCases:
             mock_settings.google_oauth_client_id = "test-google-client-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -4298,6 +4314,7 @@ class TestConnectEndpointEdgeCases:
             mock_settings.microsoft_byod_client_id = "test-ms-client-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -4375,6 +4392,7 @@ class TestConnectScopeReduction:
             mock_settings.microsoft_byod_client_id = None
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             for name, value in [
                 ("GOOGLE_ACCESS_TOKEN", "access-tok"),
@@ -4454,6 +4472,7 @@ class TestConnectScopeReduction:
             mock_settings.microsoft_byod_client_id = None
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             for name, value in [
                 ("GOOGLE_ACCESS_TOKEN", "access-tok"),
@@ -4507,6 +4526,7 @@ class TestCompulsoryFeatures:
             mock_settings.google_oauth_client_id = "test-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -4555,6 +4575,7 @@ class TestCompulsoryFeatures:
             mock_settings.microsoft_byod_client_id = "test-ms-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -4606,6 +4627,7 @@ class TestGrantedFeaturesRequiredField:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -4648,6 +4670,7 @@ class TestGrantedFeaturesRequiredField:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -4691,6 +4714,7 @@ class TestGrantedFeaturesRequiredField:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.get(
                 f"/v0/assistant/{agent_id}/granted-features",
@@ -4788,6 +4812,7 @@ class TestDisconnectEndpoint:
             ),
         ):
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             for name, value in [
                 ("GOOGLE_ACCESS_TOKEN", "access-tok"),
@@ -4871,6 +4896,7 @@ class TestDisconnectEndpoint:
             ),
         ):
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             for name, value in [
                 ("GOOGLE_ACCESS_TOKEN", "access-tok"),
@@ -4916,6 +4942,7 @@ class TestDisconnectEndpoint:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             for name, value in [
                 ("MICROSOFT_ACCESS_TOKEN", "ms-access"),
@@ -4978,6 +5005,7 @@ class TestDisconnectEndpoint:
             patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
         ):
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5028,6 +5056,7 @@ class TestDisconnectEndpoint:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5236,6 +5265,7 @@ class TestConnectEndpointOrg:
             mock_settings.google_oauth_client_id = "test-google-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -5266,6 +5296,7 @@ class TestConnectEndpointOrg:
             mock_settings.microsoft_byod_client_id = "test-ms-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -5297,6 +5328,7 @@ class TestConnectEndpointOrg:
             mock_settings.google_oauth_client_id = "test-google-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -5324,6 +5356,7 @@ class TestConnectEndpointOrg:
             mock_settings.google_oauth_client_id = "test-google-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -5351,6 +5384,7 @@ class TestConnectEndpointOrg:
             mock_settings.google_oauth_client_id = "test-google-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -5402,6 +5436,7 @@ class TestConnectEndpointOrg:
             mock_settings.microsoft_byod_client_id = "test-ms-id"
             mock_settings.oauth_state_signing_key = None
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
@@ -5483,6 +5518,7 @@ class TestDisconnectEndpointOrg:
             ),
         ):
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             for name, value in [
                 ("GOOGLE_ACCESS_TOKEN", "g-access"),
@@ -5546,6 +5582,7 @@ class TestDisconnectEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             for name, value in [
                 ("MICROSOFT_ACCESS_TOKEN", "ms-access"),
@@ -5594,6 +5631,7 @@ class TestDisconnectEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5627,6 +5665,7 @@ class TestDisconnectEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5672,6 +5711,7 @@ class TestDisconnectEndpointOrg:
             patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
         ):
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5711,6 +5751,7 @@ class TestGrantedFeaturesEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5753,6 +5794,7 @@ class TestGrantedFeaturesEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5796,6 +5838,7 @@ class TestGrantedFeaturesEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5847,6 +5890,7 @@ class TestGrantedFeaturesEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
@@ -5882,6 +5926,7 @@ class TestGrantedFeaturesEndpointOrg:
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
 
             await client.post(
                 f"/v0/assistant/{agent_id}/secret",
