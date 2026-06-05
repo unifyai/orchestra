@@ -1331,6 +1331,7 @@ class AssistantSpaceMembership(Base):
 
 CONTACT_MEMBERSHIP_SCOPE_PERSONAL = "personal"
 CONTACT_MEMBERSHIP_SCOPE_SPACE = "space"
+CONTACT_MEMBERSHIP_SCOPE_TEAM = "team"
 CONTACT_MEMBERSHIP_RELATIONSHIP_SELF = "self"
 CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS = "boss"
 CONTACT_MEMBERSHIP_RELATIONSHIP_COWORKER = "coworker"
@@ -1363,6 +1364,11 @@ class ContactMembership(Base):
     target_space_id = Column(
         BigInteger,
         ForeignKey("spaces.space_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    target_team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="CASCADE"),
         nullable=True,
     )
     relationship = Column(Text, nullable=False)
@@ -1400,19 +1406,18 @@ class ContactMembership(Base):
         foreign_keys=[authoring_assistant_id],
     )
     target_space = orm_relationship("Space", back_populates="contact_memberships")
+    target_team = orm_relationship("Team", back_populates="contact_memberships")
 
     __table_args__ = (
         sa.CheckConstraint(
-            "target_scope IN ('personal', 'space')",
+            "target_scope IN ('personal', 'space', 'team')",
             name="ck_contact_memberships_target_scope",
         ),
         sa.CheckConstraint(
-            "target_scope NOT IN ('personal', 'space') OR ("
-            "target_scope = 'space' AND target_space_id IS NOT NULL"
-            ") OR ("
-            "target_scope = 'personal' AND target_space_id IS NULL"
-            ")",
-            name="ck_contact_memberships_scope_space_consistency",
+            "(target_scope = 'personal' AND target_space_id IS NULL AND target_team_id IS NULL) OR "
+            "(target_scope = 'space' AND target_space_id IS NOT NULL AND target_team_id IS NULL) OR "
+            "(target_scope = 'team' AND target_team_id IS NOT NULL AND target_space_id IS NULL)",
+            name="ck_contact_memberships_scope_target_consistency",
         ),
         sa.CheckConstraint(
             "relationship IN ('self', 'boss', 'coworker', 'other')",
@@ -1456,6 +1461,25 @@ class ContactMembership(Base):
             "target_space_id",
             unique=True,
             postgresql_where=text("target_scope = 'space'"),
+        ),
+        Index(
+            "ix_contact_memberships_target_team_id",
+            "target_team_id",
+            postgresql_where=text("target_team_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_contact_memberships_assistant_team_target",
+            "assistant_id",
+            "target_team_id",
+            postgresql_where=text("target_scope = 'team'"),
+        ),
+        Index(
+            "ux_contact_memberships_team_pair",
+            "assistant_id",
+            "contact_id",
+            "target_team_id",
+            unique=True,
+            postgresql_where=text("target_scope = 'team'"),
         ),
     )
 
@@ -1528,6 +1552,10 @@ class RolePermission(Base):
     )
 
 
+TEAM_STATUS_ACTIVE = "active"
+TEAM_STATUS_DELETING = "deleting"
+
+
 class Team(Base):
     """Model for teams within organizations."""
 
@@ -1541,10 +1569,57 @@ class Team(Base):
         ForeignKey("organization.id", ondelete="CASCADE"),
         nullable=False,
     )
+    status = Column(
+        Text,
+        nullable=False,
+        default=TEAM_STATUS_ACTIVE,
+        server_default=TEAM_STATUS_ACTIVE,
+    )
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    assistant_memberships = relationship(
+        "TeamAssistantMembership",
+        back_populates="team",
+        cascade="all, delete-orphan",
+    )
+    contact_memberships = relationship(
+        "ContactMembership",
+        back_populates="target_team",
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "organization_id", name="uq_team_name_org"),
+    )
+
+
+class TeamAssistantMembership(Base):
+    """Live membership connecting an assistant to an organization team."""
+
+    __tablename__ = "team_assistant_memberships"
+
+    team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    added_by = Column(String, nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    team = relationship("Team", back_populates="assistant_memberships")
+    assistant = relationship("Assistant", back_populates="team_memberships")
+
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("team_id", "assistant_id"),
+        Index("ix_team_assistant_memberships_assistant_id", "assistant_id"),
     )
 
 
@@ -1898,6 +1973,11 @@ class Assistant(Base):
     )
     space_memberships = relationship(
         "AssistantSpaceMembership",
+        back_populates="assistant",
+        passive_deletes=True,
+    )
+    team_memberships = relationship(
+        "TeamAssistantMembership",
         back_populates="assistant",
         passive_deletes=True,
     )
