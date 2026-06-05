@@ -8,7 +8,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import BucketService, create_bucket_service
+from orchestra.services.local_bucket_service import LocalBucketService
+from orchestra.settings import settings
 from orchestra.web.api.storage.schema import (
     DownloadRequest,
     DownloadResponse,
@@ -22,6 +24,37 @@ logger = logging.getLogger(__name__)
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 
 router = APIRouter()
+
+
+@router.get(
+    "/storage/local/{bucket_name}/{object_path:path}",
+    summary="Serve a locally stored object (self-host only)",
+)
+def serve_local_object(bucket_name: str, object_path: str):
+    """Stream an object from the local bucket directory for self-host deployments."""
+    if not settings.is_self_host:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    bucket_service = create_bucket_service()
+    if not isinstance(bucket_service, LocalBucketService):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not bucket_service.is_allowed_bucket(bucket_name):
+        raise HTTPException(status_code=403, detail="Bucket not permitted")
+
+    try:
+        content, content_type = bucket_service.read_local_object(
+            bucket_name,
+            object_path,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Object not found") from exc
+
+    from fastapi.responses import Response
+
+    return Response(
+        content=content,
+        media_type=content_type or "application/octet-stream",
+    )
 
 
 def _validate_bucket(bucket_name: str, bucket_service: BucketService) -> None:
@@ -43,7 +76,7 @@ def _sanitize_filename(filename: str) -> str:
 )
 def generate_signed_url(
     request: SignedUrlRequest,
-    bucket_service: BucketService = Depends(BucketService),
+    bucket_service: BucketService = Depends(create_bucket_service),
 ) -> SignedUrlResponse:
     """Generate a temporary signed URL for a GCS object."""
     bucket_name, object_path = parse_gcs_url(request.gcs_uri)
@@ -98,7 +131,7 @@ def generate_signed_url(
 )
 def download_object(
     request: DownloadRequest,
-    bucket_service: BucketService = Depends(BucketService),
+    bucket_service: BucketService = Depends(create_bucket_service),
 ) -> DownloadResponse:
     """Download a GCS object and return its content as base64."""
     bucket_name, object_path = parse_gcs_url(request.gcs_uri)
