@@ -55,6 +55,7 @@ from orchestra.routines.assistant_contact_notifications import (
     send_notification_emails_sync,
     set_last_notification_day,
 )
+from orchestra.settings import settings
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,12 @@ def levy_provisioned_resources(
     Returns:
         :class:`LevyResult` with aggregate metrics.
     """
+    if not settings.charges_billing:
+        today = _dt.datetime.now(_dt.timezone.utc).date()
+        if year is None or month is None:
+            year, month = today.year, today.month
+        return LevyResult(billing_month=f"{year}-{month:02d}")
+
     if session is not None:
         return _levy_in_session(session, year, month)
 

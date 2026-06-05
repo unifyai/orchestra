@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 
 router = APIRouter()
+public_router = APIRouter()
 
 
-@router.get(
+@public_router.get(
     "/storage/local/{bucket_name}/{object_path:path}",
     summary="Serve a locally stored object (self-host only)",
 )

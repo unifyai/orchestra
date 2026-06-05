@@ -818,13 +818,12 @@ def trigger_assistant_contact_levy(
     This endpoint is designed to be called by Cloud Scheduler on the 1st of
     each month (``0 0 1 * *``).
 
-    Skipped in staging environments where billing infrastructure is not
-    fully configured.
+    Skipped when billing is disabled for the current environment.
     """
-    if settings.is_staging:
+    if not settings.charges_billing:
         return {
             "status": "skipped",
-            "message": "Resource levy is disabled in staging environments.",
+            "message": "Resource levy is disabled for this environment.",
         }
 
     try:

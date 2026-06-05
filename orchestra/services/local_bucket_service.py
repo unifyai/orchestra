@@ -237,7 +237,11 @@ class LocalBucketService:
         return self._root / bucket_name
 
     def _object_path(self, bucket_name: str, object_path: str) -> Path:
-        return self._bucket_root(bucket_name) / object_path
+        bucket_root = self._bucket_root(bucket_name).resolve()
+        path = (bucket_root / object_path.lstrip("/")).resolve()
+        if bucket_root != path and bucket_root not in path.parents:
+            raise ValueError("Object path escapes bucket root")
+        return path
 
     def _write_object(
         self,
@@ -516,7 +520,10 @@ class LocalBucketService:
         """Load bytes and optional content type for a locally stored object."""
         if not self.is_allowed_bucket(bucket_name):
             raise FileNotFoundError(bucket_name)
-        path = self._object_path(bucket_name, object_path)
+        try:
+            path = self._object_path(bucket_name, object_path)
+        except ValueError as exc:
+            raise FileNotFoundError(object_path) from exc
         if not path.is_file():
             raise FileNotFoundError(object_path)
         content_type = None

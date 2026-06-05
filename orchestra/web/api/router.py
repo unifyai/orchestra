@@ -232,6 +232,10 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    storage.public_router,
+    tags=["Storage"],
+)
+api_router.include_router(
     storage.router,
     tags=["Storage"],
     dependencies=API_KEY_AUTH,
