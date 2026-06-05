@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -129,6 +128,7 @@ def deduct_credits(
     :return: Response with previous, deducted, and current credit amounts.
     """
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.settings import settings
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -141,6 +141,13 @@ def deduct_credits(
         raise HTTPException(status_code=400, detail="Billing is not set up")
 
     current_credits = float(billing_entity.credits)
+
+    if not settings.charges_billing:
+        return DeductCreditsResponse(
+            previous_credits=current_credits,
+            deducted=0.0,
+            current_credits=current_credits,
+        )
 
     # ``BillingAccountDAO.deduct_credits`` is mode-aware: CREDITS mutates
     # the wallet and returns the new balance; METERED writes a
