@@ -620,7 +620,7 @@ async def test_process_assistant_cleanup_tasks_deletes_assistant_gcs_after_runti
         "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
         new_callable=AsyncMock,
     ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.BucketService",
+        "orchestra.services.assistant_cleanup_service.create_bucket_service",
     ) as mock_bucket_cls, patch(
         "orchestra.services.assistant_cleanup_service.settings",
     ) as mock_settings:
@@ -689,7 +689,7 @@ async def test_process_assistant_cleanup_tasks_defers_gcs_until_runtime_is_clean
         "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
         new_callable=AsyncMock,
     ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.BucketService",
+        "orchestra.services.assistant_cleanup_service.create_bucket_service",
     ) as mock_bucket_cls:
         mock_teardown.return_value = {
             "success": False,

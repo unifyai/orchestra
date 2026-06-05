@@ -678,6 +678,7 @@ class TestBillingEntity:
         dbsession.commit()
 
         entity = get_billing_entity(dbsession, user["id"])
+        starting_balance = entity.credits
 
         new_balance = ba_dao.deduct_credits(
             entity.billing_account_id,
@@ -686,10 +687,11 @@ class TestBillingEntity:
         )
         dbsession.commit()
 
-        assert new_balance == Decimal("74.50")
+        expected_balance = starting_balance - Decimal("25.50")
+        assert new_balance == expected_balance
 
         updated_user = user_dao.get_user_with_id(user["id"])
-        assert updated_user.billing_account.credits == Decimal("74.50")
+        assert updated_user.billing_account.credits == expected_balance
 
     @pytest.mark.anyio
     async def test_deduct_credits_from_org(self, client: AsyncClient, dbsession):

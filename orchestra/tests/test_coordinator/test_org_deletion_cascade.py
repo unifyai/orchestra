@@ -96,7 +96,7 @@ def org_delete_boundaries(monkeypatch: pytest.MonkeyPatch) -> _CommsClient:
         MagicMock(return_value=bucket),
     )
     monkeypatch.setattr(
-        "orchestra.services.assistant_cleanup_service.BucketService",
+        "orchestra.services.assistant_cleanup_service.create_bucket_service",
         MagicMock(return_value=bucket),
     )
     monkeypatch.setattr(

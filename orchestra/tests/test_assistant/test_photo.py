@@ -4,7 +4,10 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
-from orchestra.services.bucket_service import BucketService as OriginalBucketService
+from orchestra.services.bucket_service import (
+    BucketService as OriginalBucketService,
+    create_bucket_service,
+)
 from orchestra.services.openai_service import ImageAnalysisResponse
 from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
 from orchestra.services.openai_service import (
@@ -16,6 +19,9 @@ from orchestra.services.replicate_service import (
 )
 from orchestra.settings import settings
 from orchestra.tests.utils import HEADERS
+from orchestra.web.api.assistant.views import (
+    create_bucket_service as assistant_create_bucket_service,
+)
 
 
 @pytest.fixture(
@@ -81,10 +87,17 @@ def mock_media_services_factory(fastapi_app):
     )
 
     fastapi_app.dependency_overrides[OriginalReplicateService] = lambda: replicate_mock
-    fastapi_app.dependency_overrides[OriginalBucketService] = lambda: bucket_mock
+    fastapi_app.dependency_overrides[create_bucket_service] = lambda: bucket_mock
+    fastapi_app.dependency_overrides[assistant_create_bucket_service] = (
+        lambda: bucket_mock
+    )
     fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
 
-    yield replicate_mock, bucket_mock, openai_mock
+    with patch(
+        "orchestra.web.api.assistant.views.create_bucket_service",
+        return_value=bucket_mock,
+    ):
+        yield replicate_mock, bucket_mock, openai_mock
 
     fastapi_app.dependency_overrides.clear()
 
