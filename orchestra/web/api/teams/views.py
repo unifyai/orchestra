@@ -224,6 +224,8 @@ async def create_team(
             organization_id=organization_id,
             description=team_data.description,
         )
+        if not team_dao.is_team_member(team.id, user_id):
+            team_dao.add_member(team.id, user_id)
         coordinator = get_workspace_coordinator(
             session,
             user_id=user_id,
@@ -291,7 +293,7 @@ async def create_team(
         description=team.description,
         organization_id=team.organization_id,
         created_at=team.created_at,
-        member_count=0,
+        member_count=len(team_dao.get_team_members(team.id)),
     )
 
 
