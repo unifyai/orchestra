@@ -163,7 +163,7 @@ async def test_batch_create_contexts(client: AsyncClient):
     contexts_invalid = [
         "valid_context",
         "invalid//context",  # Double slashes
-        "invalid context",  # Space
+        "invalid context",  # whitespace
         "valid-context-2",
     ]
     response = await client.post(

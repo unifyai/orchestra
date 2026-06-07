@@ -1,4 +1,4 @@
-"""Coordinator organization deletion tests for shared-space cleanup."""
+"""Coordinator organization deletion tests for shared-team cleanup."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ from sqlalchemy.orm import Session
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantCleanupTask,
-    AssistantSpaceMembership,
     Context,
     LogEvent,
     LogEventContext,
     Project,
-    Space,
+    Team,
+    TeamAssistantMembership,
 )
-from orchestra.services import space_cleanup_service, task_machine_state_service
+from orchestra.services import task_machine_state_service, team_cleanup_service
 from orchestra.tests.utils import create_test_user
 
 
@@ -72,7 +72,7 @@ def org_delete_boundaries(monkeypatch: pytest.MonkeyPatch) -> _CommsClient:
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
-        "orchestra.services.space_membership_refresh_service.reawaken_assistant",
+        "orchestra.services.team_membership_refresh_service.reawaken_assistant",
         AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
@@ -103,14 +103,14 @@ def org_delete_boundaries(monkeypatch: pytest.MonkeyPatch) -> _CommsClient:
         "orchestra.services.assistant_cleanup_service.delete_phone_number",
         AsyncMock(return_value={"success": True}),
     )
-    monkeypatch.setattr(space_cleanup_service, "ADMIN_KEY", "test-admin-key")
+    monkeypatch.setattr(team_cleanup_service, "ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(
-        space_cleanup_service,
+        team_cleanup_service,
         "_comms_url_for",
         lambda: "https://comms.test",
     )
     monkeypatch.setattr(
-        space_cleanup_service,
+        team_cleanup_service,
         "get_async_client",
         lambda: comms_client,
     )
@@ -143,7 +143,7 @@ async def _create_org(client: AsyncClient, owner: dict, suffix: str) -> dict:
     }
 
 
-async def _create_org_space(
+async def _create_org_team(
     client: AsyncClient,
     owner: dict,
     *,
@@ -151,27 +151,27 @@ async def _create_org_space(
     name: str,
 ) -> dict:
     response = await client.post(
-        "/v0/spaces",
+        f"/v0/organizations/{organization_id}/teams",
         headers=owner["headers"],
         json={
             "name": name,
             "description": f"{name} organization workspace for cascade cleanup.",
-            "organization_id": organization_id,
         },
     )
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     return response.json()
 
 
-async def _add_space_member(
+async def _add_team_member(
     client: AsyncClient,
     owner: dict,
     *,
-    space_id: int,
+    organization_id: int,
+    team_id: int,
     assistant_id: int,
 ) -> None:
     response = await client.post(
-        f"/v0/spaces/{space_id}/members",
+        f"/v0/organizations/{organization_id}/teams/{team_id}/assistant-members",
         headers=owner["headers"],
         json={"assistant_id": assistant_id},
     )
@@ -249,7 +249,7 @@ def _add_scheduled_activation(
     project: Project,
     owner_id: str,
     assistant_id: int,
-    space_id: int,
+    team_id: int,
     task_id: int,
 ) -> None:
     _add_context_log(
@@ -261,7 +261,7 @@ def _add_scheduled_activation(
         entries={
             "activation_kind": "scheduled",
             "assistant_id": str(assistant_id),
-            "destination": f"space:{space_id}",
+            "destination": f"team:{team_id}",
             "task_id": task_id,
             "activation_revision": f"rev-{task_id}",
             "next_due_at": "2026-04-10T09:00:00+00:00",
@@ -270,13 +270,13 @@ def _add_scheduled_activation(
     )
 
 
-def _space_context_count(dbsession: Session, space_id: int) -> int:
-    space_root = f"Spaces/{space_id}"
+def _team_context_count(dbsession: Session, team_id: int) -> int:
+    team_root = f"Teams/{team_id}"
     return int(
         dbsession.scalar(
             sa.select(sa.func.count())
             .select_from(Context)
-            .where((Context.name == space_root) | Context.name.like(f"{space_root}/%")),
+            .where((Context.name == team_root) | Context.name.like(f"{team_root}/%")),
         )
         or 0,
     )
@@ -301,31 +301,31 @@ def _org_delete_cleanup_task_count(
 
 
 @pytest.mark.anyio
-async def test_org_deletion_cascades_through_space_cleanup_service(
+async def test_org_deletion_cascades_through_team_cleanup_service(
     client: AsyncClient,
     dbsession: Session,
     org_delete_boundaries: _CommsClient,
 ) -> None:
-    """Deleting an organization cleans every owned space before dropping the org."""
+    """Deleting an organization cleans every owned team before dropping the org."""
 
     owner = await _create_user(client, "success")
     org = await _create_org(client, owner, "success")
     organization_id = org["id"]
     coordinator_id = int(org["coordinator_id"])
-    first_space = await _create_org_space(
+    first_team = await _create_org_team(
         client,
         owner,
         organization_id=organization_id,
         name="Success Shared",
     )
-    first_space_id = first_space["space_id"]
-    team_space = await _create_org_space(
+    first_team_id = first_team["id"]
+    second_team = await _create_org_team(
         client,
         owner,
         organization_id=organization_id,
         name="Success Team",
     )
-    team_space_id = team_space["space_id"]
+    second_team_id = second_team["id"]
     team_assistant = _make_org_assistant(
         dbsession,
         owner_id=owner["id"],
@@ -334,10 +334,11 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
     )
     team_assistant_id = team_assistant.agent_id
     dbsession.commit()
-    await _add_space_member(
+    await _add_team_member(
         client,
         owner,
-        space_id=team_space_id,
+        organization_id=organization_id,
+        team_id=second_team_id,
         assistant_id=team_assistant_id,
     )
 
@@ -345,13 +346,13 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
     _add_context_log(
         dbsession,
         project=project,
-        context_name=f"Spaces/{first_space_id}/Knowledge",
+        context_name=f"Teams/{first_team_id}/Knowledge",
         entries={"fact": "shared"},
     )
     _add_context_log(
         dbsession,
         project=project,
-        context_name=f"Spaces/{team_space_id}/Knowledge",
+        context_name=f"Teams/{second_team_id}/Knowledge",
         entries={"fact": "team"},
     )
     _add_scheduled_activation(
@@ -359,7 +360,7 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
         project=project,
         owner_id=owner["id"],
         assistant_id=team_assistant_id,
-        space_id=team_space_id,
+        team_id=second_team_id,
         task_id=101,
     )
     dbsession.commit()
@@ -376,52 +377,52 @@ async def test_org_deletion_cascades_through_space_cleanup_service(
         101,
     ]
     dbsession.expire_all()
-    assert dbsession.get(Space, first_space_id) is None
-    assert dbsession.get(Space, team_space_id) is None
+    assert dbsession.get(Team, first_team_id) is None
+    assert dbsession.get(Team, second_team_id) is None
     assert dbsession.get(Assistant, coordinator_id) is not None
     assert dbsession.get(Assistant, team_assistant_id) is None
     assert (
         dbsession.scalar(
             sa.select(sa.func.count())
-            .select_from(AssistantSpaceMembership)
+            .select_from(TeamAssistantMembership)
             .where(
-                AssistantSpaceMembership.space_id.in_(
-                    [first_space_id, team_space_id],
+                TeamAssistantMembership.team_id.in_(
+                    [first_team_id, second_team_id],
                 ),
             ),
         )
         == 0
     )
-    assert _space_context_count(dbsession, first_space_id) == 0
-    assert _space_context_count(dbsession, team_space_id) == 0
+    assert _team_context_count(dbsession, first_team_id) == 0
+    assert _team_context_count(dbsession, second_team_id) == 0
 
 
 @pytest.mark.anyio
-async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanup_failure(
+async def test_org_deletion_retry_finishes_remaining_teams_after_partial_cleanup_failure(
     client: AsyncClient,
     dbsession: Session,
     org_delete_boundaries: _CommsClient,
 ) -> None:
-    """Retried organization deletion resumes after completed space cleanup."""
+    """Retried organization deletion resumes after completed team cleanup."""
 
     owner = await _create_user(client, "retry")
     org = await _create_org(client, owner, "retry")
     organization_id = org["id"]
     coordinator_id = int(org["coordinator_id"])
-    first_space = await _create_org_space(
+    first_team = await _create_org_team(
         client,
         owner,
         organization_id=organization_id,
         name="Retry Shared",
     )
-    first_space_id = first_space["space_id"]
-    team_space = await _create_org_space(
+    first_team_id = first_team["id"]
+    second_team = await _create_org_team(
         client,
         owner,
         organization_id=organization_id,
         name="Retry Team",
     )
-    team_space_id = team_space["space_id"]
+    second_team_id = second_team["id"]
     team_assistant = _make_org_assistant(
         dbsession,
         owner_id=owner["id"],
@@ -430,10 +431,11 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
     )
     team_assistant_id = team_assistant.agent_id
     dbsession.commit()
-    await _add_space_member(
+    await _add_team_member(
         client,
         owner,
-        space_id=team_space_id,
+        organization_id=organization_id,
+        team_id=second_team_id,
         assistant_id=team_assistant_id,
     )
 
@@ -441,13 +443,13 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
     _add_context_log(
         dbsession,
         project=project,
-        context_name=f"Spaces/{first_space_id}/Knowledge",
+        context_name=f"Teams/{first_team_id}/Knowledge",
         entries={"fact": "cleaned first"},
     )
     _add_context_log(
         dbsession,
         project=project,
-        context_name=f"Spaces/{team_space_id}/Knowledge",
+        context_name=f"Teams/{second_team_id}/Knowledge",
         entries={"fact": "retry me"},
     )
     _add_scheduled_activation(
@@ -455,7 +457,7 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
         project=project,
         owner_id=owner["id"],
         assistant_id=team_assistant_id,
-        space_id=team_space_id,
+        team_id=second_team_id,
         task_id=202,
     )
     dbsession.commit()
@@ -468,12 +470,12 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
 
     assert first.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     dbsession.expire_all()
-    assert dbsession.get(Space, first_space_id) is None
-    remaining_space = dbsession.get(Space, team_space_id)
-    assert remaining_space is not None
-    assert remaining_space.status == "deleting"
-    assert _space_context_count(dbsession, first_space_id) == 0
-    assert _space_context_count(dbsession, team_space_id) == 1
+    assert dbsession.get(Team, first_team_id) is None
+    remaining_team = dbsession.get(Team, second_team_id)
+    assert remaining_team is not None
+    assert remaining_team.status == "deleting"
+    assert _team_context_count(dbsession, first_team_id) == 0
+    assert _team_context_count(dbsession, second_team_id) == 1
     assert (
         _org_delete_cleanup_task_count(
             dbsession,
@@ -489,12 +491,12 @@ async def test_org_deletion_retry_finishes_remaining_spaces_after_partial_cleanu
 
     assert second.status_code == status.HTTP_204_NO_CONTENT, second.text
     dbsession.expire_all()
-    assert dbsession.get(Space, team_space_id) is None
+    assert dbsession.get(Team, second_team_id) is None
     assert (
         dbsession.scalar(
             sa.select(sa.func.count())
-            .select_from(Space)
-            .where(Space.organization_id == organization_id),
+            .select_from(Team)
+            .where(Team.organization_id == organization_id),
         )
         == 0
     )

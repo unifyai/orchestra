@@ -253,22 +253,3 @@ async def test_assistant_read_returns_assistant_team_memberships(
             "description": "Read Team shared team",
         },
     ]
-    assert body["space_ids"] == []
-    assert body["space_summaries"] == []
-
-
-@pytest.mark.anyio
-async def test_spaces_route_is_not_mounted(client: AsyncClient) -> None:
-    """Shared-memory space endpoints are retired in favor of team endpoints."""
-
-    owner = await create_test_user(client, "team-no-spaces-owner@test.com")
-    response = await client.post(
-        "/v0/spaces",
-        headers=owner["headers"],
-        json={
-            "name": "Retired",
-            "description": "Retired shared workspace path",
-            "organization_id": None,
-        },
-    )
-    assert response.status_code == status.HTTP_404_NOT_FOUND
