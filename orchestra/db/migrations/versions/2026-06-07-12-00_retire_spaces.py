@@ -30,13 +30,6 @@ def upgrade() -> None:
     )
 
     op.drop_constraint(
-        "contact_memberships_target_space_id_fkey",
-        "contact_memberships",
-        type_="foreignkey",
-    )
-    op.drop_column("contact_memberships", "target_space_id")
-
-    op.drop_constraint(
         "ck_contact_memberships_scope_target_consistency",
         "contact_memberships",
         type_="check",
@@ -46,6 +39,13 @@ def upgrade() -> None:
         "contact_memberships",
         type_="check",
     )
+    op.drop_constraint(
+        "contact_memberships_target_space_id_fkey",
+        "contact_memberships",
+        type_="foreignkey",
+    )
+    op.drop_column("contact_memberships", "target_space_id")
+
     op.create_check_constraint(
         "ck_contact_memberships_target_scope",
         "contact_memberships",
