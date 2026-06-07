@@ -1145,11 +1145,6 @@ class Organization(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    spaces = relationship(
-        "Space",
-        back_populates="organization",
-        passive_deletes=True,
-    )
 
 
 class OrganizationMember(Base):
@@ -1217,120 +1212,7 @@ class OrganizationInvite(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
-class Space(Base):
-    """A named shared memory pool owned by a user.
-
-    Spaces may be associated with an organization, but ownership always
-    resolves to a user so personal-user and organization-backed spaces share
-    one lifecycle model.
-    """
-
-    __tablename__ = "spaces"
-
-    space_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    name = Column(Text, nullable=False)
-    description = Column(Text, nullable=False)
-    organization_id = Column(
-        Integer,
-        ForeignKey("organization.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
-    owner_user_id = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    status = Column(
-        Text,
-        nullable=False,
-        default="active",
-        server_default="active",
-    )
-    kind = Column(Text, nullable=False, default="team", server_default="team")
-    created_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    updated_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    organization = relationship("Organization", back_populates="spaces")
-    owner = relationship(
-        "User",
-        backref=backref("owned_spaces", passive_deletes=True),
-        foreign_keys=[owner_user_id],
-    )
-    memberships = relationship(
-        "AssistantSpaceMembership",
-        back_populates="space",
-        passive_deletes=True,
-    )
-    contact_memberships = relationship(
-        "ContactMembership",
-        back_populates="target_space",
-        passive_deletes=True,
-    )
-
-    __table_args__ = (
-        Index("ix_spaces_organization_id", "organization_id"),
-        Index("ix_spaces_owner_user_id", "owner_user_id"),
-        sa.CheckConstraint(
-            "length(name) BETWEEN 1 AND 200",
-            name="ck_spaces_name_length",
-        ),
-        sa.CheckConstraint(
-            "length(description) BETWEEN 20 AND 1000",
-            name="ck_spaces_description_length",
-        ),
-        sa.CheckConstraint(
-            "status IN ('active', 'deleting')",
-            name="ck_spaces_status",
-        ),
-        sa.CheckConstraint(
-            "kind = 'team'",
-            name="ck_spaces_kind",
-        ),
-    )
-
-
-class AssistantSpaceMembership(Base):
-    """Live membership connecting an assistant to a shared space."""
-
-    __tablename__ = "assistant_space_memberships"
-
-    assistant_id = Column(
-        Integer,
-        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    space_id = Column(
-        BigInteger,
-        ForeignKey("spaces.space_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    added_by = Column(String, nullable=False)
-    created_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-
-    assistant = relationship("Assistant", back_populates="space_memberships")
-    space = relationship("Space", back_populates="memberships")
-
-    __table_args__ = (
-        sa.PrimaryKeyConstraint("assistant_id", "space_id"),
-        Index("ix_asm_space_id", "space_id"),
-    )
-
-
 CONTACT_MEMBERSHIP_SCOPE_PERSONAL = "personal"
-CONTACT_MEMBERSHIP_SCOPE_SPACE = "space"
 CONTACT_MEMBERSHIP_SCOPE_TEAM = "team"
 CONTACT_MEMBERSHIP_RELATIONSHIP_SELF = "self"
 CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS = "boss"
@@ -1361,11 +1243,6 @@ class ContactMembership(Base):
     )
     contact_id = Column(Integer, nullable=False)
     target_scope = Column(Text, nullable=False)
-    target_space_id = Column(
-        BigInteger,
-        ForeignKey("spaces.space_id", ondelete="CASCADE"),
-        nullable=True,
-    )
     target_team_id = Column(
         Integer,
         ForeignKey("team.id", ondelete="CASCADE"),
@@ -1405,18 +1282,16 @@ class ContactMembership(Base):
         "Assistant",
         foreign_keys=[authoring_assistant_id],
     )
-    target_space = orm_relationship("Space", back_populates="contact_memberships")
     target_team = orm_relationship("Team", back_populates="contact_memberships")
 
     __table_args__ = (
         sa.CheckConstraint(
-            "target_scope IN ('personal', 'space', 'team')",
+            "target_scope IN ('personal', 'team')",
             name="ck_contact_memberships_target_scope",
         ),
         sa.CheckConstraint(
-            "(target_scope = 'personal' AND target_space_id IS NULL AND target_team_id IS NULL) OR "
-            "(target_scope = 'space' AND target_space_id IS NOT NULL AND target_team_id IS NULL) OR "
-            "(target_scope = 'team' AND target_team_id IS NOT NULL AND target_space_id IS NULL)",
+            "(target_scope = 'personal' AND target_team_id IS NULL) OR "
+            "(target_scope = 'team' AND target_team_id IS NOT NULL)",
             name="ck_contact_memberships_scope_target_consistency",
         ),
         sa.CheckConstraint(
@@ -1428,17 +1303,6 @@ class ContactMembership(Base):
             "ix_contact_memberships_authoring_assistant_id",
             "authoring_assistant_id",
             postgresql_where=text("authoring_assistant_id IS NOT NULL"),
-        ),
-        Index(
-            "ix_contact_memberships_target_space_id",
-            "target_space_id",
-            postgresql_where=text("target_space_id IS NOT NULL"),
-        ),
-        Index(
-            "ix_contact_memberships_assistant_space_target",
-            "assistant_id",
-            "target_space_id",
-            postgresql_where=text("target_scope = 'space'"),
         ),
         Index(
             "ix_contact_memberships_assistant_personal_self",
@@ -1453,14 +1317,6 @@ class ContactMembership(Base):
             "contact_id",
             unique=True,
             postgresql_where=text("target_scope = 'personal'"),
-        ),
-        Index(
-            "ux_contact_memberships_space_pair",
-            "assistant_id",
-            "contact_id",
-            "target_space_id",
-            unique=True,
-            postgresql_where=text("target_scope = 'space'"),
         ),
         Index(
             "ix_contact_memberships_target_team_id",
@@ -1970,11 +1826,6 @@ class Assistant(Base):
         uselist=False,
         back_populates="assistant",
         cascade="all, delete-orphan",
-    )
-    space_memberships = relationship(
-        "AssistantSpaceMembership",
-        back_populates="assistant",
-        passive_deletes=True,
     )
     team_memberships = relationship(
         "TeamAssistantMembership",
