@@ -47,12 +47,11 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-    CONTACT_MEMBERSHIP_SCOPE_SPACE,
     CONTACT_MEMBERSHIP_SCOPE_TEAM,
+    TEAM_STATUS_ACTIVE,
     Assistant,
     AssistantCleanupTask,
     AssistantConsoleConfig,
-    AssistantSpaceMembership,
     ContactMembership,
     Context,
     DemoAssistantMeta,
@@ -61,7 +60,8 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
-    Space,
+    Team,
+    TeamAssistantMembership,
     User,
 )
 from orchestra.lib.billing import get_billing_entity
@@ -364,7 +364,6 @@ def _resolved_contact_identity_roots_for_assistants(
         roots_by_assistant[assistant_id] = [
             AssistantContactIdentityRoot(
                 target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-                target_space_id=None,
                 target_team_id=None,
                 self_contact_id=personal_ids.self_contact_id,
                 boss_contact_id=personal_ids.boss_contact_id,
@@ -473,7 +472,6 @@ def _resolved_contact_identity_roots_for_assistants(
             roots_by_assistant[assistant_id].append(
                 AssistantContactIdentityRoot(
                     target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
-                    target_space_id=None,
                     target_team_id=team_id,
                     self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
                     boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
@@ -514,8 +512,6 @@ def _build_assistant_read(
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
     team_summaries: Optional[list[dict[str, Any]]] = None,
-    space_ids: Optional[List[int]] = None,
-    space_summaries: Optional[list[dict[str, Any]]] = None,
     self_contact_id: Optional[int] = None,
     boss_contact_id: Optional[int] = None,
     contact_identity_roots: Optional[list[AssistantContactIdentityRoot]] = None,
@@ -553,11 +549,6 @@ def _build_assistant_read(
         team_ids = team_dao.team_ids_for_assistant(a.agent_id)
     if team_summaries is None:
         team_summaries = team_dao.team_summaries_for_assistant(a.agent_id)
-    if space_ids is None:
-        space_ids = []
-    if space_summaries is None:
-        space_summaries = []
-
     if self_contact_id is None or boss_contact_id is None:
         resolved_contact_ids = _resolved_contact_ids_for_assistants(
             session,
@@ -658,8 +649,6 @@ def _build_assistant_read(
         user_image=user_image,
         team_ids=team_ids,
         team_summaries=team_summaries,
-        space_ids=space_ids,
-        space_summaries=space_summaries,
         self_contact_id=self_contact_id,
         boss_contact_id=boss_contact_id,
         contact_identity_roots=contact_identity_roots,
@@ -1644,8 +1633,6 @@ def list_assistants(
                         a.agent_id,
                         [],
                     ),
-                    space_ids=[],
-                    space_summaries=[],
                     self_contact_id=_contact_id_pair(
                         contact_ids_by_assistant,
                         a.agent_id,
@@ -5705,8 +5692,8 @@ def _contact_membership_read(row: ContactMembership) -> ContactMembershipRead:
         ),
         contact_id=int(row.contact_id),
         target_scope=str(row.target_scope),
-        target_space_id=(
-            int(row.target_space_id) if row.target_space_id is not None else None
+        target_team_id=(
+            int(row.target_team_id) if row.target_team_id is not None else None
         ),
         relationship=str(row.relationship),
         should_respond=bool(row.should_respond),
@@ -5722,7 +5709,7 @@ def _select_contact_membership(
     assistant_id: int,
     contact_id: int,
     target_scope: str,
-    target_space_id: int | None,
+    target_team_id: int | None,
 ) -> ContactMembership | None:
     query = session.query(ContactMembership).filter(
         ContactMembership.assistant_id == assistant_id,
@@ -5730,9 +5717,9 @@ def _select_contact_membership(
         ContactMembership.target_scope == target_scope,
     )
     if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
-        query = query.filter(ContactMembership.target_space_id.is_(None))
+        query = query.filter(ContactMembership.target_team_id.is_(None))
     else:
-        query = query.filter(ContactMembership.target_space_id == target_space_id)
+        query = query.filter(ContactMembership.target_team_id == target_team_id)
     return query.order_by(ContactMembership.id).first()
 
 
@@ -5757,21 +5744,21 @@ def admin_create_contact_membership(
             detail="Assistant not found.",
         )
 
-    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE:
+    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM:
         membership = (
-            session.query(AssistantSpaceMembership)
-            .join(Space, Space.space_id == AssistantSpaceMembership.space_id)
+            session.query(TeamAssistantMembership)
+            .join(Team, Team.id == TeamAssistantMembership.team_id)
             .filter(
-                AssistantSpaceMembership.assistant_id == assistant_id,
-                AssistantSpaceMembership.space_id == request_body.target_space_id,
-                Space.status == "active",
+                TeamAssistantMembership.assistant_id == assistant_id,
+                TeamAssistantMembership.team_id == request_body.target_team_id,
+                Team.status == TEAM_STATUS_ACTIVE,
             )
             .first()
         )
         if membership is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assistant is not a live member of the target space.",
+                detail="Assistant is not a live member of the target team.",
             )
 
     values = {
@@ -5779,7 +5766,7 @@ def admin_create_contact_membership(
         "authoring_assistant_id": assistant_id,
         "contact_id": request_body.contact_id,
         "target_scope": request_body.target_scope,
-        "target_space_id": request_body.target_space_id,
+        "target_team_id": request_body.target_team_id,
         "relationship": request_body.relationship,
         "should_respond": request_body.should_respond,
         "response_policy": request_body.response_policy,
@@ -5801,10 +5788,10 @@ def admin_create_contact_membership(
             index_elements=[
                 ContactMembership.assistant_id,
                 ContactMembership.contact_id,
-                ContactMembership.target_space_id,
+                ContactMembership.target_team_id,
             ],
             index_where=(
-                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM
             ),
         )
     inserted_id = session.execute(
@@ -5822,7 +5809,7 @@ def admin_create_contact_membership(
             assistant_id=assistant_id,
             contact_id=request_body.contact_id,
             target_scope=request_body.target_scope,
-            target_space_id=request_body.target_space_id,
+            target_team_id=request_body.target_team_id,
         )
     if row is None:
         raise HTTPException(
@@ -5848,24 +5835,21 @@ def admin_create_contact_membership(
 def admin_delete_contact_memberships(
     assistant_id: int,
     contact_id: int,
-    target_scope: Literal["personal", "space"] = Query(...),
-    target_space_id: Optional[int] = Query(None),
+    target_scope: Literal["personal", "team"] = Query(...),
+    target_team_id: Optional[int] = Query(None),
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[ContactMembershipDeleteResponse]:
     """Delete the relationship overlay for one assistant/contact target."""
 
-    if (
-        target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
-        and target_space_id is not None
-    ):
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL and target_team_id is not None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="personal contact memberships cannot include target_space_id",
+            detail="personal contact memberships cannot include target_team_id",
         )
-    if target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE and target_space_id is None:
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM and target_team_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="space contact memberships require target_space_id",
+            detail="team contact memberships require target_team_id",
         )
 
     stmt = delete(ContactMembership).where(
@@ -5874,9 +5858,9 @@ def admin_delete_contact_memberships(
         ContactMembership.target_scope == target_scope,
     )
     if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
-        stmt = stmt.where(ContactMembership.target_space_id.is_(None))
+        stmt = stmt.where(ContactMembership.target_team_id.is_(None))
     else:
-        stmt = stmt.where(ContactMembership.target_space_id == target_space_id)
+        stmt = stmt.where(ContactMembership.target_team_id == target_team_id)
 
     result = session.execute(
         stmt,
@@ -6271,12 +6255,6 @@ def admin_list_all_assistants(
         skip_team_summaries = (
             requested_fields is not None and "team_summaries" not in requested_fields
         )
-        skip_space_ids = (
-            requested_fields is not None and "space_ids" not in requested_fields
-        )
-        skip_space_summaries = (
-            requested_fields is not None and "space_summaries" not in requested_fields
-        )
         skip_contact_ids = requested_fields is not None and not (
             {"self_contact_id", "boss_contact_id"} & requested_fields
         )
@@ -6367,8 +6345,6 @@ def admin_list_all_assistants(
                     if skip_team_summaries
                     else team_summaries_by_assistant.get(a.agent_id, [])
                 ),
-                space_ids=[] if skip_space_ids else [],
-                space_summaries=[] if skip_space_summaries else [],
                 self_contact_id=(
                     PERSONAL_SELF_CONTACT_ID
                     if skip_contact_ids
@@ -6634,8 +6610,6 @@ def admin_list_assistants_for_user(
                         a.agent_id,
                         [],
                     ),
-                    space_ids=[],
-                    space_summaries=[],
                     self_contact_id=_contact_id_pair(
                         contact_ids_by_assistant,
                         a.agent_id,

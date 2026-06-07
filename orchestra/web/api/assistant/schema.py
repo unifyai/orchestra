@@ -282,17 +282,6 @@ class ConsoleConfigRead(BaseModel):
     theme: Optional[Dict[str, Any]] = None
 
 
-class AssistantSpaceSummary(BaseModel):
-    """Shared-space metadata projected onto assistant runtime responses."""
-
-    space_id: int = Field(..., description="Shared space identifier.")
-    name: str = Field(..., description="Human-readable shared space name.")
-    description: str = Field(
-        ...,
-        description="Semantic description of the space's purpose and scope.",
-    )
-
-
 class AssistantTeamSummary(BaseModel):
     """Organization team metadata projected onto assistant runtime responses."""
 
@@ -307,13 +296,9 @@ class AssistantTeamSummary(BaseModel):
 class AssistantContactIdentityRoot(BaseModel):
     """Root-local contact ids used by clients that read across assistant roots."""
 
-    target_scope: Literal["personal", "space", "team"] = Field(
+    target_scope: Literal["personal", "team"] = Field(
         ...,
         description="Root kind where the contact ids are meaningful.",
-    )
-    target_space_id: Optional[int] = Field(
-        None,
-        description="Shared space identifier when the target scope is a space.",
     )
     target_team_id: Optional[int] = Field(
         None,
@@ -489,14 +474,6 @@ class AssistantRead(AssistantCreate):
         default_factory=list,
         description="Sorted organization team names and descriptions for live memberships.",
     )
-    space_ids: List[int] = Field(
-        default_factory=list,
-        description="Deprecated shared-space membership ids. Always empty.",
-    )
-    space_summaries: List[AssistantSpaceSummary] = Field(
-        default_factory=list,
-        description="Deprecated shared-space summaries. Always empty.",
-    )
     self_contact_id: int = Field(
         0,
         description="Resolved Contacts row ID representing the assistant itself.",
@@ -562,10 +539,10 @@ class AssistantRead(AssistantCreate):
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
-                "space_ids": [101, 205],
-                "space_summaries": [
+                "team_ids": [101, 205],
+                "team_summaries": [
                     {
-                        "space_id": 101,
+                        "team_id": 101,
                         "name": "Support Ops",
                         "description": "Daily customer support operations and escalation notes.",
                     },
@@ -1911,13 +1888,13 @@ class ContactMembershipCreate(BaseModel):
     """Admin request for an assistant contact relationship overlay."""
 
     contact_id: int = Field(..., description="Contact row id within the target root.")
-    target_scope: Literal["personal", "space"] = Field(
+    target_scope: Literal["personal", "team"] = Field(
         ...,
-        description="Whether the contact id points at personal contacts or a space root.",
+        description="Whether the contact id points at personal contacts or a team root.",
     )
-    target_space_id: Optional[int] = Field(
+    target_team_id: Optional[int] = Field(
         None,
-        description="Space id when target_scope is 'space'.",
+        description="Team id when target_scope is 'team'.",
     )
     relationship: Literal["self", "boss", "coworker", "other"] = Field(
         ...,
@@ -1938,12 +1915,12 @@ class ContactMembershipCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_target_polarity(self) -> "ContactMembershipCreate":
-        if self.target_scope == "personal" and self.target_space_id is not None:
+        if self.target_scope == "personal" and self.target_team_id is not None:
             raise ValueError(
-                "personal contact memberships cannot include target_space_id",
+                "personal contact memberships cannot include target_team_id",
             )
-        if self.target_scope == "space" and self.target_space_id is None:
-            raise ValueError("space contact memberships require target_space_id")
+        if self.target_scope == "team" and self.target_team_id is None:
+            raise ValueError("team contact memberships require target_team_id")
         return self
 
 
@@ -1955,7 +1932,7 @@ class ContactMembershipRead(BaseModel):
     authoring_assistant_id: Optional[int]
     contact_id: int
     target_scope: str
-    target_space_id: Optional[int]
+    target_team_id: Optional[int]
     relationship: str
     should_respond: bool
     response_policy: str
