@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,7 @@ class TaskActivationLookupRequest(BaseModel):
     task_id: int = Field(description="Logical task identifier.")
     destination: Optional[str] = Field(
         default=None,
-        description="Shared-space destination for the task definition, if any.",
+        description="Team destination for the task definition, if any.",
     )
 
 
@@ -67,7 +67,7 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
         description="Owning Unity/Tasks row for the activation instance.",
     )
     source_type: str = Field(
-        description="Why the run exists: scheduled, triggered, etc."
+        description="Why the run exists: scheduled, triggered, etc.",
     )
     execution_mode: Literal["live", "offline"] = Field(
         description="Which execution lane owns the run.",
@@ -183,7 +183,7 @@ class TaskOutboundOperationCreateOrAdoptRequest(BaseModel):
         description="Idempotency key for this outbound communication attempt.",
     )
     assistant_id: str = Field(
-        description="Assistant identifier that owns the outbound attempt."
+        description="Assistant identifier that owns the outbound attempt.",
     )
     task_run_key: str = Field(description="Owning task run key for the operation.")
     task_id: Optional[int] = Field(
@@ -246,7 +246,7 @@ class TaskOutboundOperationUpdateRequest(BaseModel):
         description="Project that owns the internal task machine contexts.",
     )
     assistant_id: str = Field(
-        description="Assistant identifier that owns the outbound operation."
+        description="Assistant identifier that owns the outbound operation.",
     )
     operation_key: str = Field(
         description="Idempotency key for the outbound operation to update.",

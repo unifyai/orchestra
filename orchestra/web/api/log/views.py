@@ -26,7 +26,7 @@ from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.context_naming import is_space_context_name
+from orchestra.db.context_naming import is_team_context_name
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import (
@@ -1514,7 +1514,7 @@ def atomic_field_upsert(
     2. Acquires an advisory lock on the unique key values (prevents race on first insert)
     3. Finds an existing log by unique_keys or creates it with initial_data
     4. Applies an atomic operation to the specified field
-    5. If add_to_all_context=true, mirrors non-space logs to the All/* archive context
+    5. If add_to_all_context=true, mirrors non-team logs to the All/* archive context
 
     Required body fields for upsert mode:
     - project: Name of the project
@@ -1849,10 +1849,10 @@ def _atomic_upsert_mode(
 
     mirrored_contexts = []
 
-    # If add_to_all_context=true, mirror non-space contexts to the archive context
-    if body.add_to_all_context and is_space_context_name(body.context):
+    # If add_to_all_context=true, mirror non-team contexts to the archive context
+    if body.add_to_all_context and is_team_context_name(body.context):
         logger.debug(
-            "Skipping archive mirror for shared-space context.",
+            "Skipping archive mirror for shared-team context.",
             extra={"mirror_skipped": True, "context_name": body.context},
         )
     elif body.add_to_all_context:

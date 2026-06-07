@@ -93,16 +93,11 @@ def stub_coordinator_pubsub_boundary():
             "orchestra.web.api.auth.views.delete_pubsub_topic",
             new_callable=AsyncMock,
         ) as mock_delete_auth_pubsub,
-        patch(
-            "orchestra.web.api.space.views.delete_pubsub_topic",
-            new_callable=AsyncMock,
-        ) as mock_delete_space_pubsub,
     ):
         mock_create_pubsub_topic.return_value = {"success": True}
         mock_delete_users_pubsub.return_value = {"success": True}
         mock_delete_org_pubsub.return_value = {"success": True}
         mock_delete_auth_pubsub.return_value = {"success": True}
-        mock_delete_space_pubsub.return_value = {"success": True}
         yield
 
 

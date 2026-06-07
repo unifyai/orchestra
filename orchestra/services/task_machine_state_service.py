@@ -22,19 +22,19 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.context_naming import is_space_context_name
+from orchestra.db.context_naming import is_team_context_name
 from orchestra.db.dao.context_dao import delete_orphaned_log_events
-from orchestra.db.dao.space_dao import SPACE_STATUS_ACTIVE
 from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.models.orchestra_models import (
+    TEAM_STATUS_ACTIVE,
     Assistant,
-    AssistantSpaceMembership,
     Context,
     FieldType,
     LogEvent,
     LogEventContext,
     LogUniqueConstraint,
-    Space,
+    Team,
+    TeamAssistantMembership,
 )
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
@@ -130,20 +130,20 @@ def _assistant_id_from_context_name(context_name: str | None) -> str | None:
     segments = _split_context_name(context_name)
     if len(segments) < 2 or segments[-1] != TASKS_CONTEXT_NAME:
         return None
-    if is_space_context_name(context_name):
+    if is_team_context_name(context_name):
         return None
     if segments[-2] == _ALL_CONTEXT_SEGMENT:
         return None
     return segments[-2]
 
 
-def _space_id_from_context_name(context_name: str | None) -> int | None:
-    """Extract the space id from a shared-space task surface context."""
+def _team_id_from_context_name(context_name: str | None) -> int | None:
+    """Extract the team id from a shared-team task surface context."""
 
     segments = _split_context_name(context_name)
     if len(segments) != 3 or segments[-1] != TASKS_CONTEXT_NAME:
         return None
-    if segments[0] != "Spaces":
+    if segments[0] != "Teams":
         return None
     return _coerce_int(segments[1])
 
@@ -151,10 +151,10 @@ def _space_id_from_context_name(context_name: str | None) -> int | None:
 def _destination_from_context_name(context_name: str | None) -> str | None:
     """Return the public destination label represented by a task surface path."""
 
-    space_id = _space_id_from_context_name(context_name)
-    if space_id is None:
+    team_id = _team_id_from_context_name(context_name)
+    if team_id is None:
         return None
-    return f"space:{space_id}"
+    return f"team:{team_id}"
 
 
 def build_task_activation_context_name(tasks_context_name: str) -> str:
@@ -258,9 +258,9 @@ def is_task_surface_context_name(context_name: str | None) -> bool:
     segments = _split_context_name(context_name)
     if not segments or segments[-1] != TASKS_CONTEXT_NAME:
         return False
-    if is_space_context_name(context_name):
+    if is_team_context_name(context_name):
         return (
-            len(segments) == 3 and _space_id_from_context_name(context_name) is not None
+            len(segments) == 3 and _team_id_from_context_name(context_name) is not None
         )
     if len(segments) >= 2 and segments[-2] == _ALL_CONTEXT_SEGMENT:
         return False
@@ -416,7 +416,7 @@ def _executor_tasks_context_name(
             project_id=project_id,
             assistant_id=normalized_assistant_id,
         )
-    if not is_space_context_name(source_tasks_context_name):
+    if not is_team_context_name(source_tasks_context_name):
         return (source_tasks_context_name or "").strip("/")
     return None
 
@@ -436,25 +436,25 @@ def _get_assistant_for_task_machine_lookup(
     ).scalar_one_or_none()
 
 
-def _assistant_is_space_member(
+def _assistant_is_team_member(
     session: Session,
     *,
     assistant_id: str | None,
-    space_id: int | None,
+    team_id: int | None,
 ) -> bool:
-    """Return whether an assistant currently belongs to a shared space."""
+    """Return whether an assistant currently belongs to a shared team."""
 
     assistant_id_int = _coerce_int(assistant_id)
-    if assistant_id_int is None or space_id is None:
+    if assistant_id_int is None or team_id is None:
         return False
     return (
         session.execute(
-            select(AssistantSpaceMembership)
-            .join(Space, Space.space_id == AssistantSpaceMembership.space_id)
+            select(TeamAssistantMembership)
+            .join(Team, Team.id == TeamAssistantMembership.team_id)
             .where(
-                AssistantSpaceMembership.assistant_id == assistant_id_int,
-                AssistantSpaceMembership.space_id == space_id,
-                Space.status == SPACE_STATUS_ACTIVE,
+                TeamAssistantMembership.assistant_id == assistant_id_int,
+                TeamAssistantMembership.team_id == team_id,
+                Team.status == TEAM_STATUS_ACTIVE,
             ),
         ).scalar_one_or_none()
         is not None
@@ -478,7 +478,7 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "destination": {
         "field_type": "str",
         "mutable": True,
-        "description": "Shared-space destination for the source task definition.",
+        "description": "Team destination for the source task definition.",
     },
     "activation_key": {
         "field_type": "str",
@@ -608,7 +608,7 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "destination": {
         "field_type": "str",
         "mutable": True,
-        "description": "Shared-space destination for the source task definition.",
+        "description": "Team destination for the source task definition.",
     },
     "source_task_log_id": {
         "field_type": "int",
@@ -877,7 +877,7 @@ def sync_task_activations_for_task_ids(
         return {"upserted": 0, "deleted": 0}
     normalized_tasks_context_name = (tasks_context_name or "").strip("/")
     source_destination = _destination_from_context_name(normalized_tasks_context_name)
-    source_space_id = _space_id_from_context_name(normalized_tasks_context_name)
+    source_team_id = _team_id_from_context_name(normalized_tasks_context_name)
 
     tasks_context_id = _get_context_id(
         session=session,
@@ -965,10 +965,10 @@ def sync_task_activations_for_task_ids(
             if existing_activation is not None
             else None
         )
-        if source_destination is not None and not _assistant_is_space_member(
+        if source_destination is not None and not _assistant_is_team_member(
             session=session,
             assistant_id=group.assistant_id,
-            space_id=source_space_id,
+            team_id=source_team_id,
         ):
             activation_payload = None
         else:

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Final
 
-SPACE_CONTEXT_PREFIX: Final[str] = "Spaces/"
+TEAM_CONTEXT_PREFIX: Final[str] = "Teams/"
 
 
-def is_space_context_name(name: str | None) -> bool:
-    """Return whether a context name is rooted under shared space memory."""
+def is_team_context_name(name: str | None) -> bool:
+    """Return whether a context name is rooted under shared team memory."""
 
-    return (name or "").strip("/").startswith(SPACE_CONTEXT_PREFIX)
+    return (name or "").strip("/").startswith(TEAM_CONTEXT_PREFIX)
