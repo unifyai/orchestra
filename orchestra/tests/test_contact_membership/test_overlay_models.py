@@ -1,4 +1,4 @@
-"""Schema tests for assistant contact membership overlays."""
+"""Schema tests for assistant contact membership overlays (team scope)."""
 
 from __future__ import annotations
 
@@ -13,10 +13,11 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-    CONTACT_MEMBERSHIP_SCOPE_SPACE,
+    CONTACT_MEMBERSHIP_SCOPE_TEAM,
     Assistant,
     ContactMembership,
-    Space,
+    Organization,
+    Team,
     User,
 )
 
@@ -42,15 +43,26 @@ def _make_assistant(dbsession: Session, owner: User, suffix: str) -> Assistant:
     return assistant
 
 
-def _make_space(dbsession: Session, owner: User, suffix: str) -> Space:
-    space = Space(
-        name=f"Overlay Space {suffix}",
-        description=f"Shared contact overlay workspace for {suffix} tests.",
-        owner_user_id=owner.id,
+def _make_organization(dbsession: Session, owner: User, suffix: str) -> Organization:
+    org = Organization(
+        name=f"Overlay Org {suffix}",
+        owner_id=owner.id,
     )
-    dbsession.add(space)
+    dbsession.add(org)
     dbsession.flush()
-    return space
+    return org
+
+
+def _make_team(dbsession: Session, owner: User, suffix: str) -> Team:
+    org = _make_organization(dbsession, owner, suffix)
+    team = Team(
+        name=f"Overlay Team {suffix}",
+        description=f"Shared contact overlay workspace for {suffix} tests.",
+        organization_id=org.id,
+    )
+    dbsession.add(team)
+    dbsession.flush()
+    return team
 
 
 def _make_membership(
@@ -59,7 +71,7 @@ def _make_membership(
     contact_id: int,
     target_scope: str,
     relationship: str = CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER,
-    target_space_id: int | None = None,
+    target_team_id: int | None = None,
     authoring_assistant_id: int | None = None,
 ) -> ContactMembership:
     return ContactMembership(
@@ -67,7 +79,7 @@ def _make_membership(
         authoring_assistant_id=authoring_assistant_id,
         contact_id=contact_id,
         target_scope=target_scope,
-        target_space_id=target_space_id,
+        target_team_id=target_team_id,
         relationship=relationship,
     )
 
@@ -75,10 +87,10 @@ def _make_membership(
 def test_scope_polarity_constraint_accepts_consistent_targets(
     dbsession: Session,
 ) -> None:
-    """Personal overlays omit a space, while space overlays name one."""
+    """Personal overlays omit a team, while team overlays name one."""
     owner = _make_user(dbsession, "polarity-valid")
     assistant = _make_assistant(dbsession, owner, "polarity-valid")
-    space = _make_space(dbsession, owner, "polarity-valid")
+    team = _make_team(dbsession, owner, "polarity-valid")
 
     dbsession.add_all(
         [
@@ -90,8 +102,8 @@ def test_scope_polarity_constraint_accepts_consistent_targets(
             _make_membership(
                 assistant=assistant,
                 contact_id=2,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=team.id,
             ),
         ],
     )
@@ -99,35 +111,35 @@ def test_scope_polarity_constraint_accepts_consistent_targets(
 
 
 @pytest.mark.parametrize(
-    ("target_scope", "uses_space"),
+    ("target_scope", "uses_team"),
     [
         (CONTACT_MEMBERSHIP_SCOPE_PERSONAL, True),
-        (CONTACT_MEMBERSHIP_SCOPE_SPACE, False),
+        (CONTACT_MEMBERSHIP_SCOPE_TEAM, False),
     ],
 )
 def test_scope_polarity_constraint_rejects_inconsistent_targets(
     dbsession: Session,
     target_scope: str,
-    uses_space: bool,
+    uses_team: bool,
 ) -> None:
     """The database rejects overlays whose root discriminator is ambiguous."""
-    owner = _make_user(dbsession, f"polarity-invalid-{target_scope}-{uses_space}")
+    owner = _make_user(dbsession, f"polarity-invalid-{target_scope}-{uses_team}")
     assistant = _make_assistant(dbsession, owner, f"polarity-{target_scope}")
-    space = _make_space(dbsession, owner, f"polarity-{target_scope}")
-    target_space_id = space.space_id if uses_space else None
+    team = _make_team(dbsession, owner, f"polarity-{target_scope}")
+    target_team_id = team.id if uses_team else None
 
     dbsession.add(
         _make_membership(
             assistant=assistant,
             contact_id=1,
             target_scope=target_scope,
-            target_space_id=target_space_id,
+            target_team_id=target_team_id,
         ),
     )
 
     with pytest.raises(
         IntegrityError,
-        match="ck_contact_memberships_scope_space_consistency",
+        match="ck_contact_memberships_scope_target_consistency",
     ):
         dbsession.flush()
 
@@ -179,7 +191,7 @@ def test_relationship_constraint_rejects_unknown_values(dbsession: Session) -> N
 
 
 def test_target_scope_constraint_rejects_unknown_values(dbsession: Session) -> None:
-    """Only personal and space roots can be named by overlay rows."""
+    """Only personal and team roots can be named by overlay rows."""
     owner = _make_user(dbsession, "target-scope-invalid")
     assistant = _make_assistant(dbsession, owner, "target-scope-invalid")
 
@@ -191,7 +203,7 @@ def test_target_scope_constraint_rejects_unknown_values(dbsession: Session) -> N
         ),
     )
 
-    with pytest.raises(IntegrityError, match="ck_contact_memberships_target_scope"):
+    with pytest.raises(IntegrityError, match="ck_contact_memberships"):
         dbsession.flush()
 
 
@@ -226,7 +238,7 @@ def test_authoring_assistant_delete_preserves_membership_row(
 def test_personal_contact_memberships_are_unique_per_contact(
     dbsession: Session,
 ) -> None:
-    """Personal overlays dedupe even though their target space is NULL."""
+    """Personal overlays dedupe even though their target team is NULL."""
     owner = _make_user(dbsession, "unique-personal")
     assistant = _make_assistant(dbsession, owner, "unique-personal")
     dbsession.add(
@@ -250,27 +262,27 @@ def test_personal_contact_memberships_are_unique_per_contact(
         dbsession.flush()
 
 
-def test_space_contact_memberships_are_unique_per_contact_and_space(
+def test_team_contact_memberships_are_unique_per_contact_and_team(
     dbsession: Session,
 ) -> None:
-    """Space overlays dedupe within the root named by target_space_id."""
-    owner = _make_user(dbsession, "unique-space")
-    assistant = _make_assistant(dbsession, owner, "unique-space")
-    first_space = _make_space(dbsession, owner, "unique-space-a")
-    second_space = _make_space(dbsession, owner, "unique-space-b")
+    """Team overlays dedupe within the root named by target_team_id."""
+    owner = _make_user(dbsession, "unique-team")
+    assistant = _make_assistant(dbsession, owner, "unique-team")
+    first_team = _make_team(dbsession, owner, "unique-team-a")
+    second_team = _make_team(dbsession, owner, "unique-team-b")
     dbsession.add_all(
         [
             _make_membership(
                 assistant=assistant,
                 contact_id=42,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=first_space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=first_team.id,
             ),
             _make_membership(
                 assistant=assistant,
                 contact_id=42,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=second_space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=second_team.id,
             ),
         ],
     )
@@ -280,23 +292,23 @@ def test_space_contact_memberships_are_unique_per_contact_and_space(
         _make_membership(
             assistant=assistant,
             contact_id=42,
-            target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-            target_space_id=first_space.space_id,
+            target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+            target_team_id=first_team.id,
         ),
     )
 
-    with pytest.raises(IntegrityError, match="ux_contact_memberships_space_pair"):
+    with pytest.raises(IntegrityError, match="ux_contact_memberships_team_pair"):
         dbsession.flush()
 
 
-def test_space_delete_cascades_only_space_targeted_memberships(
+def test_team_delete_cascades_only_team_targeted_memberships(
     dbsession: Session,
 ) -> None:
-    """Deleting a space drops only overlays pointing at that shared root."""
-    owner = _make_user(dbsession, "space-cascade")
-    assistant = _make_assistant(dbsession, owner, "space-cascade")
-    removed_space = _make_space(dbsession, owner, "space-cascade-removed")
-    retained_space = _make_space(dbsession, owner, "space-cascade-retained")
+    """Deleting a team drops only overlays pointing at that shared root."""
+    owner = _make_user(dbsession, "team-cascade")
+    assistant = _make_assistant(dbsession, owner, "team-cascade")
+    removed_team = _make_team(dbsession, owner, "team-cascade-removed")
+    retained_team = _make_team(dbsession, owner, "team-cascade-retained")
     dbsession.add_all(
         [
             _make_membership(
@@ -307,20 +319,20 @@ def test_space_delete_cascades_only_space_targeted_memberships(
             _make_membership(
                 assistant=assistant,
                 contact_id=2,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=removed_space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=removed_team.id,
             ),
             _make_membership(
                 assistant=assistant,
                 contact_id=3,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=retained_space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=retained_team.id,
             ),
         ],
     )
     dbsession.flush()
 
-    dbsession.execute(sa.delete(Space).where(Space.space_id == removed_space.space_id))
+    dbsession.execute(sa.delete(Team).where(Team.id == removed_team.id))
     dbsession.flush()
 
     remaining = dbsession.scalars(
@@ -330,11 +342,11 @@ def test_space_delete_cascades_only_space_targeted_memberships(
 
 
 def test_assistant_delete_cascades_contact_memberships(dbsession: Session) -> None:
-    """Deleting an assistant removes all of its personal and space overlays."""
+    """Deleting an assistant removes all of its personal and team overlays."""
     owner = _make_user(dbsession, "assistant-cascade")
     deleted_assistant = _make_assistant(dbsession, owner, "assistant-cascade-deleted")
     retained_assistant = _make_assistant(dbsession, owner, "assistant-cascade-retained")
-    space = _make_space(dbsession, owner, "assistant-cascade")
+    team = _make_team(dbsession, owner, "assistant-cascade")
     dbsession.add_all(
         [
             _make_membership(
@@ -345,14 +357,14 @@ def test_assistant_delete_cascades_contact_memberships(dbsession: Session) -> No
             _make_membership(
                 assistant=deleted_assistant,
                 contact_id=2,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=team.id,
             ),
             _make_membership(
                 assistant=retained_assistant,
                 contact_id=3,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=team.id,
             ),
         ],
     )
