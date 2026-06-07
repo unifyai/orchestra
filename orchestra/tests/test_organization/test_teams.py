@@ -39,7 +39,7 @@ async def test_create_team(client: AsyncClient):
     assert team["name"] == "Engineering"
     assert team["description"] == "Engineering team"
     assert team["organization_id"] == org_id
-    assert team["member_count"] == 0
+    assert team["member_count"] == 1
 
 
 @pytest.mark.anyio

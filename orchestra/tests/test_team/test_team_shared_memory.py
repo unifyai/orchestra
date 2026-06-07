@@ -17,6 +17,7 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     ContactMembership,
     TeamAssistantMembership,
+    TeamMember,
 )
 from orchestra.tests.utils import create_test_org, create_test_user
 
@@ -67,7 +68,7 @@ async def test_create_team_auto_adds_acting_user_workspace_coordinator(
     dbsession: Session,
     reawaken_assistant_mock: AsyncMock,
 ) -> None:
-    """Creating a team adds the acting user's workspace coordinator as a member."""
+    """Creating a team adds the acting user and their workspace coordinator."""
 
     owner = await create_test_user(client, "team-shared-create-owner@test.com")
     organization = await create_test_org(client, owner, "Team Shared Create Org")
@@ -77,6 +78,16 @@ async def test_create_team_auto_adds_acting_user_workspace_coordinator(
         organization_id=organization["id"],
         name="Central South P1",
     )
+
+    human_membership = (
+        dbsession.query(TeamMember)
+        .filter(
+            TeamMember.team_id == team["id"],
+            TeamMember.user_id == owner["id"],
+        )
+        .one()
+    )
+    assert human_membership.user_id == owner["id"]
 
     coordinator = (
         dbsession.query(Assistant)
