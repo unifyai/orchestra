@@ -1,4 +1,4 @@
-"""Atomic upsert archive mirroring for shared-space context paths."""
+"""Atomic upsert archive mirroring for shared-team context paths."""
 
 from __future__ import annotations
 
@@ -118,22 +118,22 @@ async def test_personal_path_mirrors_when_add_to_all_context_true(
 
 
 @pytest.mark.anyio
-async def test_space_path_skips_mirror_when_add_to_all_context_true(
+async def test_team_path_skips_mirror_when_add_to_all_context_true(
     client: AsyncClient,
     dbsession: Session,
     caplog: pytest.LogCaptureFixture,
 ):
-    """Shared-space atomic upserts keep only the canonical context link."""
+    """Shared-team atomic upserts keep only the canonical context link."""
 
-    project_name = _project_name("space")
+    project_name = _project_name("team")
     await _create_project(client, project_name)
     caplog.set_level(logging.DEBUG, logger="orchestra.web.api.log.views")
 
     response = await _atomic_upsert(
         client,
         project_name=project_name,
-        context_name="Spaces/7/SomeTable",
-        row_id="space-bypass",
+        context_name="Teams/7/SomeTable",
+        row_id="team-bypass",
         add_to_all_context=True,
     )
 
@@ -144,7 +144,7 @@ async def test_space_path_skips_mirror_when_add_to_all_context_true(
         dbsession,
         project_name=project_name,
         log_id=payload["log_id"],
-    ) == ["Spaces/7/SomeTable"]
+    ) == ["Teams/7/SomeTable"]
     assert not _context_exists(
         dbsession,
         project_name=project_name,
@@ -152,17 +152,17 @@ async def test_space_path_skips_mirror_when_add_to_all_context_true(
     )
     assert any(
         getattr(record, "mirror_skipped", False) is True
-        and getattr(record, "context_name", None) == "Spaces/7/SomeTable"
+        and getattr(record, "context_name", None) == "Teams/7/SomeTable"
         for record in caplog.records
     )
 
 
 @pytest.mark.anyio
-async def test_space_path_idempotent_under_retry(
+async def test_team_path_idempotent_under_retry(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Retries against a shared-space row update the canonical row without mirroring."""
+    """Retries against a shared-team row update the canonical row without mirroring."""
 
     project_name = _project_name("retry")
     await _create_project(client, project_name)
@@ -170,15 +170,15 @@ async def test_space_path_idempotent_under_retry(
     first_response = await _atomic_upsert(
         client,
         project_name=project_name,
-        context_name="Spaces/7/SomeTable",
-        row_id="space-retry",
+        context_name="Teams/7/SomeTable",
+        row_id="team-retry",
         add_to_all_context=True,
     )
     second_response = await _atomic_upsert(
         client,
         project_name=project_name,
-        context_name="Spaces/7/SomeTable",
-        row_id="space-retry",
+        context_name="Teams/7/SomeTable",
+        row_id="team-retry",
         add_to_all_context=True,
     )
 
@@ -195,7 +195,7 @@ async def test_space_path_idempotent_under_retry(
         dbsession,
         project_name=project_name,
         log_id=second_payload["log_id"],
-    ) == ["Spaces/7/SomeTable"]
+    ) == ["Teams/7/SomeTable"]
     assert not _context_exists(
         dbsession,
         project_name=project_name,

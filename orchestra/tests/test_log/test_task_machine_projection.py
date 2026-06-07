@@ -10,9 +10,10 @@ from httpx import AsyncClient
 
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    AssistantSpaceMembership,
     Context,
-    Space,
+    Organization,
+    Team,
+    TeamAssistantMembership,
 )
 from orchestra.services import task_machine_state_service
 from orchestra.tests.test_log import (
@@ -105,31 +106,47 @@ def _make_assistant(dbsession, *, user_id: str) -> Assistant:
     return assistant
 
 
-def _make_space_member(
+def _ensure_organization(dbsession, *, owner_user_id: str) -> Organization:
+    """Return or create an organization for task routing tests."""
+
+    org = (
+        dbsession.query(Organization)
+        .filter(Organization.owner_id == owner_user_id)
+        .first()
+    )
+    if org is None:
+        org = Organization(name="Task Routing Org", owner_id=owner_user_id)
+        dbsession.add(org)
+        dbsession.flush()
+    return org
+
+
+def _make_team_member(
     dbsession,
     *,
     assistant: Assistant,
     owner_user_id: str = PRIMARY_USER_ID,
-) -> Space:
-    """Create a shared space and attach the assistant as a live member."""
+) -> Team:
+    """Create a shared team and attach the assistant as a live member."""
 
-    space = Space(
+    org = _ensure_organization(dbsession, owner_user_id=owner_user_id)
+    team = Team(
         name="Project Room",
         description="Project room workspace for task routing tests.",
-        owner_user_id=owner_user_id,
+        organization_id=org.id,
         status="active",
     )
-    dbsession.add(space)
+    dbsession.add(team)
     dbsession.flush()
     dbsession.add(
-        AssistantSpaceMembership(
+        TeamAssistantMembership(
             assistant_id=assistant.agent_id,
-            space_id=space.space_id,
+            team_id=team.id,
             added_by=owner_user_id,
         ),
     )
     dbsession.flush()
-    return space
+    return team
 
 
 @pytest.fixture(autouse=True)
@@ -381,7 +398,7 @@ async def test_task_create_projects_scheduled_activation(
 
 
 @pytest.mark.anyio
-async def test_space_task_projects_activation_into_executor_context(
+async def test_team_task_projects_activation_into_executor_context(
     client: AsyncClient,
     dbsession,
     materialization_calls,
@@ -390,8 +407,8 @@ async def test_space_task_projects_activation_into_executor_context(
 
     await _ensure_task_machine_project(client)
     assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
-    space = _make_space_member(dbsession, assistant=assistant)
-    space_tasks_context = f"Spaces/{space.space_id}/Tasks"
+    team = _make_team_member(dbsession, assistant=assistant)
+    team_tasks_context = f"Teams/{team.id}/Tasks"
     executor_activation_context = (
         task_machine_state_service.build_task_activation_context_name(
             _assistant_tasks_context(
@@ -410,7 +427,7 @@ async def test_space_task_projects_activation_into_executor_context(
     response = await _create_log(
         client,
         TASK_MACHINE_PROJECT_NAME,
-        context=space_tasks_context,
+        context=team_tasks_context,
         entries=entries,
     )
     assert response.status_code == 200, response.json()
@@ -425,14 +442,11 @@ async def test_space_task_projects_activation_into_executor_context(
     assert len(matching) == 1
     activation = matching[0]
     assert activation["assistant_id"] == str(assistant.agent_id)
-    assert activation["destination"] == f"space:{space.space_id}"
-    assert (
-        activation["activation_key"]
-        == f"{assistant.agent_id}:space:{space.space_id}:111"
-    )
+    assert activation["destination"] == f"team:{team.id}"
+    assert activation["activation_key"] == f"{assistant.agent_id}:team:{team.id}:111"
     assert materialization_calls == [(None, activation)]
 
-    shared_activation_context = f"Spaces/{space.space_id}/Tasks/Activations"
+    shared_activation_context = f"Teams/{team.id}/Tasks/Activations"
     assert (
         dbsession.query(Context)
         .filter(Context.name == shared_activation_context)
@@ -442,22 +456,23 @@ async def test_space_task_projects_activation_into_executor_context(
 
 
 @pytest.mark.anyio
-async def test_space_task_membership_mismatch_does_not_project_activation(
+async def test_team_task_membership_mismatch_does_not_project_activation(
     client: AsyncClient,
     dbsession,
     materialization_calls,
 ):
-    """Shared task rows should not arm assistants that no longer belong to the space."""
+    """Shared task rows should not arm assistants that no longer belong to the team."""
 
     await _ensure_task_machine_project(client)
     assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
-    space = Space(
+    org = _ensure_organization(dbsession, owner_user_id=PRIMARY_USER_ID)
+    team = Team(
         name="Restricted Room",
         description="Restricted room workspace for revoked membership tests.",
-        owner_user_id=PRIMARY_USER_ID,
+        organization_id=org.id,
         status="active",
     )
-    dbsession.add(space)
+    dbsession.add(team)
     dbsession.flush()
     entries = _assistant_scoped_scheduled_entries(
         user_id=PRIMARY_USER_ID,
@@ -469,7 +484,7 @@ async def test_space_task_membership_mismatch_does_not_project_activation(
     response = await _create_log(
         client,
         TASK_MACHINE_PROJECT_NAME,
-        context=f"Spaces/{space.space_id}/Tasks",
+        context=f"Teams/{team.id}/Tasks",
         entries=entries,
     )
     assert response.status_code == 200, response.json()
@@ -491,17 +506,17 @@ async def test_space_task_membership_mismatch_does_not_project_activation(
 
 
 @pytest.mark.anyio
-async def test_deleting_space_does_not_project_activation(
+async def test_deleting_team_does_not_project_activation(
     client: AsyncClient,
     dbsession,
     materialization_calls,
 ):
-    """Deleting spaces stop arming new scheduled work for member assistants."""
+    """Deleting teams stop arming new scheduled work for member assistants."""
 
     await _ensure_task_machine_project(client)
     assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
-    space = _make_space_member(dbsession, assistant=assistant)
-    space.status = "deleting"
+    team = _make_team_member(dbsession, assistant=assistant)
+    team.status = "deleting"
     dbsession.flush()
     entries = _assistant_scoped_scheduled_entries(
         user_id=PRIMARY_USER_ID,
@@ -513,7 +528,7 @@ async def test_deleting_space_does_not_project_activation(
     response = await _create_log(
         client,
         TASK_MACHINE_PROJECT_NAME,
-        context=f"Spaces/{space.space_id}/Tasks",
+        context=f"Teams/{team.id}/Tasks",
         entries=entries,
     )
     assert response.status_code == 200, response.json()
