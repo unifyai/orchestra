@@ -1,4 +1,4 @@
-"""Tests for assistant deletion across shared-space memberships."""
+"""Tests for assistant deletion across shared-team memberships."""
 
 from __future__ import annotations
 
@@ -10,17 +10,18 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    AssistantSpaceMembership,
     Context,
     LogEvent,
     LogEventContext,
+    Organization,
     Project,
-    Space,
+    Team,
+    TeamAssistantMembership,
 )
 from orchestra.services import (
-    space_cleanup_service,
-    space_membership_refresh_service,
     task_machine_state_service,
+    team_cleanup_service,
+    team_membership_refresh_service,
 )
 from orchestra.tests.utils import create_test_user
 
@@ -74,29 +75,30 @@ def _make_assistant(dbsession: Session, *, owner_id: str) -> Assistant:
     return assistant
 
 
-def _make_space_membership(
+def _make_team_membership(
     dbsession: Session,
     *,
     owner_id: str,
     assistant: Assistant,
     name: str,
-) -> Space:
-    space = Space(
+    organization_id: int,
+) -> Team:
+    team = Team(
         name=name,
         description=f"{name} assistant deletion membership workspace.",
-        owner_user_id=owner_id,
+        organization_id=organization_id,
     )
-    dbsession.add(space)
+    dbsession.add(team)
     dbsession.flush()
     dbsession.add(
-        AssistantSpaceMembership(
+        TeamAssistantMembership(
             assistant_id=assistant.agent_id,
-            space_id=space.space_id,
+            team_id=team.id,
             added_by=owner_id,
         ),
     )
     dbsession.flush()
-    return space
+    return team
 
 
 def _ensure_assistants_project(dbsession: Session, *, owner_id: str) -> Project:
@@ -118,7 +120,7 @@ def _add_scheduled_activation(
     project: Project,
     owner_id: str,
     assistant_id: int,
-    space_id: int,
+    team_id: int,
     task_id: int,
 ) -> LogEvent:
     context_name = task_machine_state_service.build_task_activation_context_name(
@@ -138,7 +140,7 @@ def _add_scheduled_activation(
         data={
             "activation_kind": "scheduled",
             "assistant_id": str(assistant_id),
-            "destination": f"space:{space_id}",
+            "destination": f"team:{team_id}",
             "task_id": task_id,
             "activation_revision": f"rev-{task_id}",
             "next_due_at": "2026-04-10T09:00:00+00:00",
@@ -150,6 +152,17 @@ def _add_scheduled_activation(
     dbsession.add(LogEventContext(log_event_id=log_event.id, context_id=context.id))
     dbsession.flush()
     return log_event
+
+
+def _ensure_organization(dbsession: Session, *, owner_id: str) -> Organization:
+    org = (
+        dbsession.query(Organization).filter(Organization.owner_id == owner_id).first()
+    )
+    if org is None:
+        org = Organization(name="Delete Test Org", owner_id=owner_id)
+        dbsession.add(org)
+        dbsession.flush()
+    return org
 
 
 @pytest.fixture
@@ -167,7 +180,7 @@ def membership_update(monkeypatch):
         return {"success": True}
 
     monkeypatch.setattr(
-        space_membership_refresh_service,
+        team_membership_refresh_service,
         "reawaken_assistant",
         _publish,
     )
@@ -177,13 +190,13 @@ def membership_update(monkeypatch):
 @pytest.fixture
 def comms_client(monkeypatch):
     client = _CommsClient()
-    monkeypatch.setattr(space_cleanup_service, "ADMIN_KEY", "test-admin-key")
+    monkeypatch.setattr(team_cleanup_service, "ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(
-        space_cleanup_service,
+        team_cleanup_service,
         "_comms_url_for",
         lambda: "https://comms.test",
     )
-    monkeypatch.setattr(space_cleanup_service, "get_async_client", lambda: client)
+    monkeypatch.setattr(team_cleanup_service, "get_async_client", lambda: client)
     return client
 
 
@@ -197,20 +210,23 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
     """Assistant deletion removes membership-owned state before deleting the row."""
 
     owner = await create_test_user(client, "assistant-delete-member@test.com")
+    org = _ensure_organization(dbsession, owner_id=owner["id"])
     assistant = _make_assistant(dbsession, owner_id=owner["id"])
     assistant_id = assistant.agent_id
     assistant_deploy_env = assistant.deploy_env
-    first_space = _make_space_membership(
+    first_team = _make_team_membership(
         dbsession,
         owner_id=owner["id"],
         assistant=assistant,
         name="First",
+        organization_id=org.id,
     )
-    second_space = _make_space_membership(
+    second_team = _make_team_membership(
         dbsession,
         owner_id=owner["id"],
         assistant=assistant,
         name="Second",
+        organization_id=org.id,
     )
     project = _ensure_assistants_project(dbsession, owner_id=owner["id"])
     _add_scheduled_activation(
@@ -218,7 +234,7 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
         project=project,
         owner_id=owner["id"],
         assistant_id=assistant_id,
-        space_id=first_space.space_id,
+        team_id=first_team.id,
         task_id=501,
     )
     _add_scheduled_activation(
@@ -226,7 +242,7 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
         project=project,
         owner_id=owner["id"],
         assistant_id=assistant_id,
-        space_id=second_space.space_id,
+        team_id=second_team.id,
         task_id=502,
     )
     dbsession.commit()
@@ -239,8 +255,8 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
     assert response.status_code == status.HTTP_200_OK, response.json()
     assert dbsession.get(Assistant, assistant_id) is None
     assert (
-        dbsession.query(AssistantSpaceMembership)
-        .filter(AssistantSpaceMembership.assistant_id == assistant_id)
+        dbsession.query(TeamAssistantMembership)
+        .filter(TeamAssistantMembership.assistant_id == assistant_id)
         .count()
         == 0
     )
@@ -254,8 +270,8 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
             "deploy_env": assistant_deploy_env,
             "data": {
                 "assistant_id": str(assistant_id),
-                "space_ids": "[]",
-                "space_summaries": "[]",
+                "team_ids": "[]",
+                "team_summaries": "[]",
                 "update_kind": "membership",
             },
         },
@@ -272,22 +288,24 @@ async def test_delete_assistant_membership_cleanup_failure_rolls_back(
     """A failed membership cleanup leaves the assistant and membership retryable."""
 
     comms_client = _CommsClient(default_response=_Response(status_code=500))
-    monkeypatch.setattr(space_cleanup_service, "ADMIN_KEY", "test-admin-key")
+    monkeypatch.setattr(team_cleanup_service, "ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(
-        space_cleanup_service,
+        team_cleanup_service,
         "_comms_url_for",
         lambda: "https://comms.test",
     )
-    monkeypatch.setattr(space_cleanup_service, "get_async_client", lambda: comms_client)
+    monkeypatch.setattr(team_cleanup_service, "get_async_client", lambda: comms_client)
 
     owner = await create_test_user(client, "assistant-delete-failure@test.com")
+    org = _ensure_organization(dbsession, owner_id=owner["id"])
     assistant = _make_assistant(dbsession, owner_id=owner["id"])
     assistant_id = assistant.agent_id
-    space = _make_space_membership(
+    team = _make_team_membership(
         dbsession,
         owner_id=owner["id"],
         assistant=assistant,
         name="Failure",
+        organization_id=org.id,
     )
     project = _ensure_assistants_project(dbsession, owner_id=owner["id"])
     activation = _add_scheduled_activation(
@@ -295,7 +313,7 @@ async def test_delete_assistant_membership_cleanup_failure_rolls_back(
         project=project,
         owner_id=owner["id"],
         assistant_id=assistant_id,
-        space_id=space.space_id,
+        team_id=team.id,
         task_id=503,
     )
     dbsession.commit()
@@ -309,10 +327,10 @@ async def test_delete_assistant_membership_cleanup_failure_rolls_back(
     dbsession.expire_all()
     assert dbsession.get(Assistant, assistant_id) is not None
     assert (
-        dbsession.query(AssistantSpaceMembership)
+        dbsession.query(TeamAssistantMembership)
         .filter(
-            AssistantSpaceMembership.assistant_id == assistant_id,
-            AssistantSpaceMembership.space_id == space.space_id,
+            TeamAssistantMembership.assistant_id == assistant_id,
+            TeamAssistantMembership.team_id == team.id,
         )
         .one_or_none()
         is not None

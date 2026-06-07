@@ -22,11 +22,12 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_OTHER,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-    CONTACT_MEMBERSHIP_SCOPE_SPACE,
+    CONTACT_MEMBERSHIP_SCOPE_TEAM,
     AssistantConsoleConfig,
-    AssistantSpaceMembership,
     ContactMembership,
-    Space,
+    Organization,
+    Team,
+    TeamAssistantMembership,
     User,
 )
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
@@ -1317,11 +1318,15 @@ async def test_admin_assistant_projects_contact_identity_roots(
     dbsession,
     monkeypatch,
 ):
-    """Assistant reads backfill missing space identities before projecting roots."""
+    """Assistant reads backfill missing team identities before projecting roots."""
 
     monkeypatch.setattr(
         "orchestra.services.coordinator_service.create_pubsub_topic",
         AsyncMock(return_value={"success": True, "skipped": True}),
+    )
+    monkeypatch.setattr(
+        "orchestra.services.team_membership_refresh_service.reawaken_assistant",
+        AsyncMock(return_value={"success": True}),
     )
     owner = await create_test_user(
         client,
@@ -1339,49 +1344,52 @@ async def test_admin_assistant_projects_contact_identity_roots(
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
-    complete_space = Space(
+    org = Organization(name="Contact Identity Org", owner_id=owner["id"])
+    dbsession.add(org)
+    dbsession.flush()
+    complete_team = Team(
         name="Contact Identity Complete",
         description="Complete identity root used by assistant read tests.",
-        owner_user_id=owner["id"],
+        organization_id=org.id,
     )
-    incomplete_space = Space(
+    incomplete_team = Team(
         name="Contact Identity Incomplete",
         description="Incomplete identity root used by assistant read tests.",
-        owner_user_id=owner["id"],
+        organization_id=org.id,
     )
-    dbsession.add_all([complete_space, incomplete_space])
+    dbsession.add_all([complete_team, incomplete_team])
     dbsession.flush()
     dbsession.add_all(
         [
-            AssistantSpaceMembership(
+            TeamAssistantMembership(
                 assistant_id=agent_id,
-                space_id=complete_space.space_id,
+                team_id=complete_team.id,
                 added_by=owner["id"],
             ),
-            AssistantSpaceMembership(
+            TeamAssistantMembership(
                 assistant_id=agent_id,
-                space_id=incomplete_space.space_id,
+                team_id=incomplete_team.id,
                 added_by=owner["id"],
             ),
             ContactMembership(
                 assistant_id=agent_id,
                 contact_id=77,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=complete_space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=complete_team.id,
                 relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
             ),
             ContactMembership(
                 assistant_id=agent_id,
                 contact_id=78,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=complete_space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=complete_team.id,
                 relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
             ),
             ContactMembership(
                 assistant_id=agent_id,
                 contact_id=88,
-                target_scope=CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                target_space_id=incomplete_space.space_id,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=incomplete_team.id,
                 relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
             ),
         ],
@@ -1401,36 +1409,36 @@ async def test_admin_assistant_projects_contact_identity_roots(
             "contact_identity_roots": [
                 {
                     "target_scope": CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-                    "target_space_id": None,
+                    "target_team_id": None,
                     "self_contact_id": 0,
                     "boss_contact_id": 1,
                 },
                 {
-                    "target_scope": CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                    "target_space_id": complete_space.space_id,
+                    "target_scope": CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                    "target_team_id": complete_team.id,
                     "self_contact_id": 77,
                     "boss_contact_id": 78,
                 },
                 {
-                    "target_scope": CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                    "target_space_id": incomplete_space.space_id,
+                    "target_scope": CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                    "target_team_id": incomplete_team.id,
                     "self_contact_id": 88,
                     "boss_contact_id": 1,
                 },
             ],
         },
     ]
-    incomplete_space_rows = (
+    incomplete_team_rows = (
         dbsession.query(ContactMembership)
         .filter(
             ContactMembership.assistant_id == agent_id,
-            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
-            ContactMembership.target_space_id == incomplete_space.space_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM,
+            ContactMembership.target_team_id == incomplete_team.id,
         )
         .order_by(ContactMembership.contact_id.asc())
         .all()
     )
-    assert [(row.contact_id, row.relationship) for row in incomplete_space_rows] == [
+    assert [(row.contact_id, row.relationship) for row in incomplete_team_rows] == [
         (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
         (88, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
     ]
@@ -1490,7 +1498,7 @@ async def test_create_assistant_provisions_personal_contact_memberships(
         CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS: 1,
     }
     for row in rows:
-        assert row.target_space_id is None
+        assert row.target_team_id is None
         assert row.should_respond is True
         assert row.can_edit is True
 

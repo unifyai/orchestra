@@ -33,17 +33,18 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-    CONTACT_MEMBERSHIP_SCOPE_SPACE,
+    CONTACT_MEMBERSHIP_SCOPE_TEAM,
 )
 from orchestra.db.models.orchestra_models import ApiKey as ApiKeyModel
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
     AssistantContactCost,
-    AssistantSpaceMembership,
     BillingAccount,
     ContactMembership,
     Organization,
+    Team,
+    TeamAssistantMembership,
     User,
 )
 from orchestra.tests.utils import HEADERS, create_test_org, create_test_user
@@ -3429,58 +3430,59 @@ class TestBYODContactCreation:
         assert contact.status == "active"
 
     @pytest.mark.anyio
-    async def test_byod_contact_response_persists_space_identity_heal(
+    async def test_byod_contact_response_persists_team_identity_heal(
         self,
         client: AsyncClient,
         dbsession: Session,
         mock_all_infra,
     ):
-        """BYOD response writes any repaired space identity overlays durably."""
+        """BYOD response writes any repaired team identity overlays durably."""
+        user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
         create_resp = await client.post(
             "/v0/assistant",
-            json={"first_name": "BYOD", "surname": "SpaceHeal", "create_infra": False},
+            json={"first_name": "BYOD", "surname": "TeamHeal", "create_infra": False},
             headers=HEADERS,
         )
         assert create_resp.status_code == status.HTTP_200_OK
         agent_id = int(create_resp.json()["info"]["agent_id"])
 
-        create_space_resp = await client.post(
-            "/v0/spaces",
-            json={
-                "name": "BYOD Space Heal",
-                "description": "Space heal regression test",
-            },
-            headers=HEADERS,
+        org = Organization(name="BYOD Team Heal Org", owner_id=user_id)
+        dbsession.add(org)
+        dbsession.flush()
+        team = Team(
+            name="BYOD Team Heal",
+            description="Team heal regression test",
+            organization_id=org.id,
         )
-        assert (
-            create_space_resp.status_code == status.HTTP_201_CREATED
-        ), create_space_resp.json()
-        space_id = int(create_space_resp.json()["space_id"])
+        dbsession.add(team)
+        dbsession.flush()
+        team_id = team.id
 
-        add_member_resp = await client.post(
-            f"/v0/spaces/{space_id}/members",
-            json={"assistant_id": agent_id},
-            headers=HEADERS,
+        dbsession.add(
+            TeamAssistantMembership(
+                assistant_id=agent_id,
+                team_id=team_id,
+                added_by=user_id,
+            ),
         )
-        assert (
-            add_member_resp.status_code == status.HTTP_201_CREATED
-        ), add_member_resp.json()
-        assert (
-            dbsession.query(AssistantSpaceMembership)
-            .filter(
-                AssistantSpaceMembership.assistant_id == agent_id,
-                AssistantSpaceMembership.space_id == space_id,
-            )
-            .one_or_none()
-            is not None
+        dbsession.flush()
+        dbsession.add(
+            ContactMembership(
+                assistant_id=agent_id,
+                contact_id=1,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                target_team_id=team_id,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+            ),
         )
+        dbsession.flush()
 
         removed = (
             dbsession.query(ContactMembership)
             .filter(
                 ContactMembership.assistant_id == agent_id,
-                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                ContactMembership.target_space_id == space_id,
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                ContactMembership.target_team_id == team_id,
                 ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
             )
             .delete()
@@ -3506,8 +3508,8 @@ class TestBYODContactCreation:
             dbsession.query(ContactMembership)
             .filter(
                 ContactMembership.assistant_id == agent_id,
-                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_SPACE,
-                ContactMembership.target_space_id == space_id,
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                ContactMembership.target_team_id == team_id,
                 ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
             )
             .one_or_none()

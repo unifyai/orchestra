@@ -1,4 +1,4 @@
-"""Schema tests for Coordinator assistants and team-only spaces."""
+"""Schema tests for Coordinator assistants."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     ContactMembership,
     Organization,
-    Space,
     User,
 )
 from orchestra.web.api.assistant.views import _build_assistant_read
@@ -93,27 +92,6 @@ def _make_personal_contact_memberships(
     dbsession.flush()
 
 
-def _make_space(
-    dbsession: Session,
-    owner: User,
-    suffix: str,
-    *,
-    organization: Organization | None = None,
-    kind: str | None = None,
-) -> Space:
-    space = Space(
-        name=f"Coordinator Space {suffix}",
-        description=f"Coordinator schema workspace for {suffix} tests.",
-        owner_user_id=owner.id,
-        organization_id=organization.id if organization else None,
-    )
-    if kind is not None:
-        space.kind = kind
-    dbsession.add(space)
-    dbsession.flush()
-    return space
-
-
 def test_personal_coordinator_unique_index_scopes_to_personal_rows(
     dbsession: Session,
 ) -> None:
@@ -177,44 +155,6 @@ def test_is_coordinator_is_immutable_after_persistence(
 
     with pytest.raises(ValueError, match="is_coordinator is immutable"):
         assistant.is_coordinator = False
-
-
-def test_space_kind_defaults_to_team_and_rejects_org_default(
-    dbsession: Session,
-) -> None:
-    """Spaces are team-only; org_default values are rejected."""
-    owner = _make_user(dbsession, "org-default")
-    organization = _make_organization(dbsession, owner, "org-default")
-
-    default_space = _make_space(dbsession, owner, "default", organization=organization)
-    assert default_space.kind == "team"
-    _make_space(dbsession, owner, "team-sibling", organization=organization)
-
-    rejected_space = Space(
-        name="Rejected org default",
-        description="Rejected workspace kind for coordinator schema tests.",
-        owner_user_id=owner.id,
-        organization_id=organization.id,
-        kind="org_default",
-    )
-    dbsession.add(rejected_space)
-    with pytest.raises(IntegrityError, match="ck_spaces_kind"):
-        dbsession.flush()
-
-
-def test_space_kind_rejects_unknown_values(dbsession: Session) -> None:
-    """Only team spaces are valid kinds."""
-    owner = _make_user(dbsession, "invalid-kind")
-    space = Space(
-        name="Archived Space",
-        description="Archived space kind row used to exercise the kind constraint.",
-        owner_user_id=owner.id,
-        kind="archived",
-    )
-    dbsession.add(space)
-
-    with pytest.raises(IntegrityError, match="ck_spaces_kind"):
-        dbsession.flush()
 
 
 def test_assistant_read_projects_coordinator_flag(dbsession: Session) -> None:
