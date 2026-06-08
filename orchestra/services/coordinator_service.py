@@ -171,8 +171,6 @@ def create_coordinator_assistant(
         profile_photo=None,
         profile_video=None,
         desktop_mode=COORDINATOR_DEFAULT_DESKTOP_MODE,
-        user_desktop_id=None,
-        user_desktop_filesys_sync=False,
         about=COORDINATOR_BIO,
         weekly_limit=None,
         max_parallel=None,

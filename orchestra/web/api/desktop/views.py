@@ -6,7 +6,13 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.assistant.schema import InfoResponse
-from orchestra.web.api.desktop.schema import DesktopCreate, DesktopRead, DesktopUpdate
+from orchestra.web.api.desktop.schema import (
+    DesktopCreate,
+    DesktopLinkCreate,
+    DesktopLinkRead,
+    DesktopRead,
+    DesktopUpdate,
+)
 
 router = APIRouter(tags=["Desktops"])
 
@@ -41,7 +47,7 @@ def register_desktop(
             name=desktop.name,
             url=desktop.url,
             os=desktop.os,
-            assigned_to_assistant_id=None,
+            assigned_to_assistant_ids=[],
             created_at=desktop.created_at,
             updated_at=desktop.updated_at,
         ),
@@ -71,7 +77,7 @@ def list_desktops(
                 name=d.name,
                 url=d.url,
                 os=d.os,
-                assigned_to_assistant_id=dao.get_assigned_assistant_id(d.id),
+                assigned_to_assistant_ids=dao.list_assigned_assistant_ids(d.id),
                 created_at=d.created_at,
                 updated_at=d.updated_at,
             )
@@ -118,7 +124,7 @@ def update_desktop(
             name=updated.name,
             url=updated.url,
             os=updated.os,
-            assigned_to_assistant_id=dao.get_assigned_assistant_id(updated.id),
+            assigned_to_assistant_ids=dao.list_assigned_assistant_ids(updated.id),
             created_at=updated.created_at,
             updated_at=updated.updated_at,
         ),
@@ -140,8 +146,7 @@ def delete_desktop(
     user_id = request.state.user_id
     dao = DesktopDAO(session)
 
-    dao.unlink_from_assistant(desktop_id)
-
+    # Assistant links cascade via the FK ON DELETE CASCADE.
     deleted = dao.delete(desktop_id, user_id)
     if not deleted:
         raise HTTPException(
@@ -151,3 +156,70 @@ def delete_desktop(
     session.commit()
 
     return InfoResponse(info="Desktop deleted successfully.")
+
+
+@router.post(
+    "/desktop/link",
+    response_model=InfoResponse[DesktopLinkRead],
+    status_code=status.HTTP_200_OK,
+    summary="Link a desktop to an assistant",
+    description=(
+        "Link the caller's own registered desktop to an assistant. Replaces any "
+        "desktop the caller has already linked to that assistant."
+    ),
+)
+def link_desktop(
+    link_in: DesktopLinkCreate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[DesktopLinkRead]:
+    user_id = request.state.user_id
+    dao = DesktopDAO(session)
+
+    link = dao.link(
+        assistant_id=link_in.assistant_id,
+        desktop_id=link_in.desktop_id,
+        requesting_user_id=user_id,
+        filesys_sync=link_in.filesys_sync,
+    )
+    if link is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Desktop not found.",
+        )
+    session.commit()
+
+    return InfoResponse(
+        info=DesktopLinkRead(
+            assistant_id=link.assistant_id,
+            desktop_id=link.user_desktop_id,
+            owner_user_id=link.owner_user_id,
+            filesys_sync=link.filesys_sync,
+        ),
+    )
+
+
+@router.delete(
+    "/desktop/link/{assistant_id}",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_200_OK,
+    summary="Unlink the caller's desktop from an assistant",
+    description="Remove the caller's own desktop link from an assistant.",
+)
+def unlink_desktop(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[str]:
+    user_id = request.state.user_id
+    dao = DesktopDAO(session)
+
+    unlinked = dao.unlink(assistant_id, user_id)
+    if not unlinked:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No linked desktop found for this assistant.",
+        )
+    session.commit()
+
+    return InfoResponse(info="Desktop unlinked successfully.")
