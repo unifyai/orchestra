@@ -69,13 +69,9 @@ COORDINATOR_OPENER_SOURCE = "coordinator_opener"
 # "Skip onboarding" or by the conversation completing in some other
 # backend-driven way).
 #
-# We deliberately avoid the word ``active`` here because the
-# ``Coordinator/Checklist`` context exposes its own ``mode`` field
-# with ``active`` / ``ready_to_go`` values for a different purpose.
-# Keeping the two vocabularies distinct makes it obvious which row
-# any given piece of code is dealing with — Coordinator/State is the
-# onboarding lifecycle, Coordinator/Checklist is the setup punch
-# list.
+# We deliberately avoid the word ``active`` here because other
+# coordinator-facing surfaces use ``active`` with a different meaning.
+# ``Coordinator/State`` owns the onboarding lifecycle vocabulary.
 COORDINATOR_MODE_ONBOARDING = "onboarding"
 COORDINATOR_MODE_WORKING = "working"
 COORDINATOR_MODES = frozenset({COORDINATOR_MODE_ONBOARDING, COORDINATOR_MODE_WORKING})
@@ -1122,10 +1118,10 @@ def set_coordinator_state(
 #   etc.) stays silent. The same trigger sites are still useful
 #   then but the narration becomes noise, so the helper is the
 #   bottleneck.
-# * **Event-direct, not checklist-mirrored**: we don't persist a
-#   separate "checklist item N is done" log row just to power the
+# * **Event-direct, not UI-mirrored**: we don't persist a
+#   separate "step N is done" log row just to power the
 #   narration — Unity reacts to the live event payload and the
-#   console-side checklist state remains the source of truth for
+#   console Onboarding tab remains the source of truth for
 #   the UI. The trade-off is that a missed event (e.g. Unity wasn't
 #   awake) is lost; resume-recap flows would need their own state.
 
@@ -1136,7 +1132,7 @@ def set_coordinator_state(
 COORDINATOR_ONBOARDING_EVENT_TYPE = "coordinator_onboarding_event"
 
 # Subtype vocabulary — the "real action just landed" signals the
-# onboarding checklist tracks. Keep these strings stable: they are
+# Onboarding tab tracks. Keep these strings stable: they are
 # referenced by Unity's prompt copy + handler dispatch, and by the
 # orchestra unit tests.
 #
@@ -1548,11 +1544,11 @@ async def emit_onboarding_session_started_event(
     the Coordinator" regardless of medium.
 
     ``completed_step_ids`` is a best-effort, lightweight client
-    snapshot of the checklist-step keys the console considers done
+    snapshot of the Onboarding-tab step keys the console considers done
     at picker time (e.g. ``["meet", "workspace"]``). It piggybacks
     on the existing ``details`` channel so Unity can mention it
-    explicitly when narrating the recap path without needing to
-    join against ``Coordinator/Checklist`` rows itself.
+    explicitly when narrating the recap path without needing a
+    server-side step registry lookup.
 
     Gated on ``Coordinator/State.mode == 'onboarding'`` like the
     other onboarding events; emissions outside onboarding are

@@ -1261,7 +1261,7 @@ async def reset_coordinator_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[CoordinatorResetResponse]:
-    """Clear the Coordinator's state, checklist, transcript, and exchange contexts."""
+    """Clear Coordinator-owned state, transcripts, and exchange contexts."""
     coordinator = require_authorized_coordinator(
         session,
         coordinator_id=coordinator_id,

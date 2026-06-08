@@ -579,7 +579,7 @@ class OnboardingSessionStarted(BaseModel):
     is intentionally tiny — Unity reads ``Coordinator/State`` and
     the chat-history snapshot itself when generating the opener,
     and only needs a hint about which medium and a best-effort
-    snapshot of the client-side checklist progress to lean on when
+    snapshot of the client-side onboarding step progress to lean on when
     narrating the recap path.
     """
 
