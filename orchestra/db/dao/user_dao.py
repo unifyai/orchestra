@@ -38,8 +38,8 @@ class UserDAO:
     """
     Data Access Object for the unified User table.
 
-    Billing account operations (credits, autorecharge, Stripe, freeze/status,
-    auto-recharge eligibility) are handled by BillingAccountDAO.
+    Billing account operations (credits, Stripe, freeze/status) are handled
+    by BillingAccountDAO.
     This DAO manages user profile fields, spending caps, and telemetry.
     """
 

@@ -181,7 +181,7 @@ cmd_start() {
         $(stripe_api_key_flag) \
         --forward-to "$WEBHOOK_URL" \
         --device-name "$STRIPE_DEVICE_NAME" \
-        --events checkout.session.completed,invoice.payment_succeeded,invoice.paid,invoice.payment_failed,invoice.payment_action_required,charge.refunded,charge.refund.updated,charge.dispute.created,charge.dispute.funds_withdrawn,charge.dispute.closed,customer.tax_id.created,customer.tax_id.updated,customer.tax_id.deleted,customer.updated,review.opened,review.closed
+        --events checkout.session.completed,invoice.payment_succeeded,invoice.paid,invoice.payment_failed,invoice.payment_action_required,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,charge.refunded,charge.refund.updated,charge.dispute.created,charge.dispute.funds_withdrawn,charge.dispute.closed,customer.tax_id.created,customer.tax_id.updated,customer.tax_id.deleted,customer.updated,review.opened,review.closed
 }
 
 cmd_bg() {
@@ -215,7 +215,7 @@ cmd_bg() {
         $(stripe_api_key_flag) \
         --forward-to "$WEBHOOK_URL" \
         --device-name "$STRIPE_DEVICE_NAME" \
-        --events checkout.session.completed,invoice.payment_succeeded,invoice.paid,invoice.payment_failed,invoice.payment_action_required,charge.refunded,charge.refund.updated,charge.dispute.created,charge.dispute.funds_withdrawn,charge.dispute.closed,customer.tax_id.created,customer.tax_id.updated,customer.tax_id.deleted,customer.updated,review.opened,review.closed \
+        --events checkout.session.completed,invoice.payment_succeeded,invoice.paid,invoice.payment_failed,invoice.payment_action_required,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,charge.refunded,charge.refund.updated,charge.dispute.created,charge.dispute.funds_withdrawn,charge.dispute.closed,customer.tax_id.created,customer.tax_id.updated,customer.tax_id.deleted,customer.updated,review.opened,review.closed \
         > "$STRIPE_LOGFILE" 2>&1 &
 
     local pid=$!
@@ -332,6 +332,12 @@ cmd_trigger() {
         subscription|customer.subscription.created)
             stripe trigger $api_key_flag customer.subscription.created
             ;;
+        subscription_updated|customer.subscription.updated)
+            stripe trigger $api_key_flag customer.subscription.updated
+            ;;
+        cancel|subscription_deleted|customer.subscription.deleted)
+            stripe trigger $api_key_flag customer.subscription.deleted
+            ;;
         all)
             log_info "Triggering all relevant events..."
             stripe trigger $api_key_flag checkout.session.completed
@@ -445,6 +451,7 @@ main() {
             echo "  invoice          invoice.paid"
             echo "  tax_id           customer.tax_id.created"
             echo "  subscription     customer.subscription.created"
+            echo "  cancel           customer.subscription.deleted"
             echo "  all              Trigger all above events"
             echo "  <any>            Pass any Stripe event type"
             echo ""

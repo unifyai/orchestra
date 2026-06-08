@@ -69,7 +69,10 @@ def get_notification_emails_for_ba(
     """Return email addresses of account owners to notify.
 
     - For a personal billing account → user's email.
-    - For an org billing account → org owner's email + billing_email if set.
+    - For an org billing account → org owner's email.
+
+    (The billing email is no longer stored locally — it lives on the Stripe
+    Customer — so notifications go to the account-holder login emails.)
     """
     emails: List[str] = []
 
@@ -89,10 +92,6 @@ def get_notification_emails_for_ba(
         owner = session.query(User).filter(User.id == org.owner_id).first()
         if owner and owner.email and owner.email not in emails:
             emails.append(owner.email)
-
-    # Also include billing_email if set and different
-    if ba.billing_email and ba.billing_email not in emails:
-        emails.append(ba.billing_email)
 
     return emails
 

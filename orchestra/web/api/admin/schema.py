@@ -489,7 +489,7 @@ class BillingProfileUpdateRequest(BaseModel):
 class BillingProfileResponse(BaseModel):
     """Response shape for billing-profile reads/writes.
 
-    Mirrors ``BillingAccountDAO.get_billing_profile`` plus the
+    Mirrors ``fetch_billing_profile_from_stripe`` plus the
     ``billing_account_id`` so callers can link the response back to
     the account.
     """

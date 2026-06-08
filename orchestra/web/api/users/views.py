@@ -80,7 +80,6 @@ logger = logging.getLogger(__name__)
 
 # TODO: Move exceptions to exceptions file
 # TODO: Fetch organization if it exists when reading user info
-# TODO: Return tier in user info endpoints + double check rest of the information
 
 # Endpoints used by next-auth
 
@@ -676,11 +675,6 @@ def generate_key(size=32):
     key = base64.b64encode(buffer).decode("utf-8")
     # Replace forward slashes with hyphens to avoid issues with URL encoding
     return key.replace("/", "-")
-
-
-## Tier-setting endpoint has been moved to orchestra/web/api/admin/views.py
-## under generalized PUT /billing/tier.  Backward-compat alias PUT /user/tier
-## is registered there.
 
 
 @admin_router.put("/user/quotas/reset")

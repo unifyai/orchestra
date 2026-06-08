@@ -290,7 +290,8 @@ class UserSpendResponse(BaseModel):
 
 
 # Business address used for billing/onboarding.
-# Field names match Stripe address format and BillingAccount.billing_address JSONB keys.
+# Field names match the Stripe Customer address format (the source of truth
+# for billing address PII; it is no longer mirrored on BillingAccount).
 class BusinessAddress(BaseModel):
     """Address information for billing purposes."""
 

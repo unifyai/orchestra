@@ -8,7 +8,6 @@ keeping the Stripe secret key exclusively on the backend.
 """
 
 import logging
-import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -17,42 +16,43 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.param_functions import Depends
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.billing_account_dao import (
-    MIN_AUTORECHARGE_AMOUNT,
-    MIN_SPEND_FOR_AUTO_RECHARGE,
-    BillingAccountDAO,
-)
-from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.lib.billing import (
     COUNTRY_NAMES,
+    PaymentMethodError,
     configure_stripe,
+    create_setup_intent,
+    detach_payment_method,
     extract_tax_id_info,
     is_stripe_mode_conflict,
-    prefill_customer_fields,
+    list_payment_methods,
+    set_default_payment_method,
     sync_billing_profile_to_stripe,
-    sync_tax_id_to_customer,
 )
 from orchestra.settings import settings
 from orchestra.web.api.billing.schema import (
     AccountInfoResponse,
-    AutoRechargeResponse,
-    AutoRechargeUpdateRequest,
+    AutoIncrementResponse,
+    AutoIncrementUpdateRequest,
     AvailablePlanItem,
     AvailablePlansResponse,
     BillingProfileResponse,
     BillingProfileUpdate,
-    CheckoutSessionResponse,
-    CheckoutStatusResponse,
+    CancelSubscriptionResponse,
     CurrentPeriodUsageResponse,
     CurrentPlanSummary,
     InvoiceListItem,
     InvoiceListResponse,
     InvoiceUrlsResponse,
+    PaymentMethodListResponse,
     PortalSessionResponse,
+    SetupIntentResponse,
+    SubscribeRequest,
+    SubscribeResponse,
     SwitchPlanRequest,
     SwitchPlanResponse,
     TaxIdValidationRequest,
@@ -80,41 +80,6 @@ def _init_stripe() -> None:
     except RuntimeError as exc:
         logger.error(f"Stripe configuration failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail="Stripe is not configured")
-
-
-def _customer_has_payment_method(stripe_customer_id: Optional[str]) -> bool:
-    """
-    Check whether a Stripe customer has a default payment method on file.
-
-    Returns ``False`` when there is no customer or Stripe is not configured.
-    """
-    if not stripe_customer_id:
-        return False
-    try:
-        _init_stripe()
-        customer = stripe.Customer.retrieve(
-            stripe_customer_id,
-            expand=["invoice_settings.default_payment_method"],
-        )
-        # Check invoice_settings.default_payment_method first (used for invoices),
-        # then fall back to the legacy default_source field.
-        if (
-            customer.invoice_settings
-            and customer.invoice_settings.default_payment_method
-        ):
-            return True
-        if customer.default_source:
-            return True
-        return False
-    except Exception:
-        # If Stripe is unreachable, don't block the response – just
-        # report "no payment method" so the UI shows the right hint.
-        logger.warning(
-            "Could not verify payment method for customer %s",
-            stripe_customer_id,
-            exc_info=True,
-        )
-        return False
 
 
 def _check_org_billing_permission(
@@ -169,8 +134,8 @@ def get_account_info(
     Return billing account information for the authenticated user / org.
 
     The response includes credit balance, Stripe customer status,
-    account status, and auto-recharge settings.  Context (personal vs org)
-    is derived from the API key.
+    account status, and current plan/subscription details.  Context
+    (personal vs org) is derived from the API key.
     """
     user_id: str = request_fastapi.state.user_id
     organization_id: Optional[int] = getattr(
@@ -212,248 +177,101 @@ def get_account_info(
     plan = BillingPlanAssignmentDAO(session).resolve_effective_plan(ba.id)
     plan_summary = CurrentPlanSummary.from_effective_plan(plan)
 
+    # Self-serve subscription fields for the console subscription page.
+    # ``is_subscribed`` requires BOTH an active Stripe subscription id and a
+    # self-serve tier plan (CREDITS / STRIPE_SUBSCRIPTION) — that pairing is
+    # the only state where the subscription-billing UI applies.
+    from orchestra.db.models.enums import BillingMode, CollectionMethod
+
+    is_subscribed = bool(ba.stripe_subscription_id) and (
+        str(plan.billing_mode) == BillingMode.CREDITS
+        and str(plan.collection_method) == CollectionMethod.STRIPE_SUBSCRIPTION
+    )
+
+    next_renewal_at: Optional[str] = None
+    if is_subscribed and ba.current_period_end is not None:
+        renewal = ba.current_period_end
+        if renewal.tzinfo is None:
+            renewal = renewal.replace(tzinfo=timezone.utc)
+        next_renewal_at = renewal.isoformat()
+
+    # Surface the unconsumed signup *trial* grant's expiry from the
+    # expiring-grant ledger — but only for not-yet-subscribed accounts (a
+    # subscriber has no live trial grant to show).
+    trial_expires_at: Optional[str] = None
+    if not is_subscribed:
+        from orchestra.lib.credit_grants import GRANT_KIND_TRIAL, compute_grant_lots
+
+        trial_lots = [
+            lot
+            for lot in compute_grant_lots(session, ba.id)
+            if lot.grant_kind == GRANT_KIND_TRIAL and lot.remaining > 0
+        ]
+        if trial_lots:
+            # Soonest-expiring live trial lot (there is normally just one).
+            soonest = min(trial_lots, key=lambda lot: lot.expires_at)
+            trial_expires_at = soonest.expires_at.isoformat()
+
     return AccountInfoResponse(
         billing_account_id=ba.id,
         credits=float(ba.credits) if ba.credits else 0.0,
         account_status=ba.account_status or "ACTIVE",
         last_recharge_at=last_recharge_at,
-        autorecharge=ba.autorecharge,
-        autorecharge_threshold=(
-            float(ba.autorecharge_threshold) if ba.autorecharge_threshold else 0.0
-        ),
-        autorecharge_qty=(float(ba.autorecharge_qty) if ba.autorecharge_qty else 25.0),
         billing_mode=plan.billing_mode,
         plan=plan_summary,
         plan_group_id=ba.plan_group_id,
-    )
-
-
-# ============================================================================
-# POST /billing/checkout-session
-# ============================================================================
-
-
-@router.post(
-    "/billing/checkout-session",
-    response_model=CheckoutSessionResponse,
-    include_in_schema=False,
-    responses={
-        200: {"description": "Checkout session created"},
-        400: {"description": "Bad request"},
-        500: {"description": "Stripe configuration error"},
-    },
-)
-def create_checkout_session(
-    request_fastapi: Request,
-    session=Depends(get_db_session),
-) -> CheckoutSessionResponse:
-    """
-    Create a Stripe Checkout session for the authenticated user / org.
-
-    Resolves billing context from the API key, fetches user & billing data,
-    creates a Stripe Checkout Session, and returns the redirect URL + session
-    ID.
-    """
-    _init_stripe()
-
-    user_id: str = request_fastapi.state.user_id
-    organization_id: Optional[int] = getattr(
-        request_fastapi.state,
-        "organization_id",
-        None,
-    )
-
-    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
-
-    # --- Resolve billing account -----------------------------------------
-    user_dao = UserDAO(session)
-    ba_dao = BillingAccountDAO(session)
-
-    user = user_dao.get_user_with_id(user_id)
-
-    if organization_id:
-        org_dao = OrganizationDAO(session)
-        org = org_dao.get(organization_id)
-        if not org:
-            raise HTTPException(status_code=404, detail="Organization not found")
-        ba = org.billing_account
-        if ba is None:
-            ba = ba_dao.create()
-            org.billing_account_id = ba.id
-            session.flush()
-    else:
-        ba = user.billing_account
-        if ba is None:
-            ba = ba_dao.create()
-            user.billing_account_id = ba.id
-            session.flush()
-
-    # METERED accounts pay by monthly invoice (handled by
-    # ``monthly_metered_invoicer``) — they don't top up a credits
-    # wallet. Block the Buy-Credits flow rather than letting the
-    # checkout succeed and silently grant credits that would never get
-    # debited (METERED's deduct_credits doesn't touch the wallet).
-    from orchestra.db.models.orchestra_models import BillingMode
-
-    if ba_dao.resolve_billing_mode(ba) == BillingMode.METERED:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Account is on a METERED billing plan; usage is invoiced "
-                "monthly. Buying credits is disabled."
-            ),
-        )
-
-    customer_id: Optional[str] = ba.stripe_customer_id
-
-    # --- Collect checkout metadata ---------------------------------------
-    # Total spending (for fraud / repeat-customer signals)
-    total_spending = float(ba_dao.get_total_spending(ba.id))
-
-    # Account age
-    account_age_days = 0
-    if user.created_at:
-        created = user.created_at
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        account_age_days = math.floor(
-            (now - created).total_seconds() / 86400,
-        )
-
-    is_repeat_customer = total_spending > 0
-
-    # Billing profile (tax / name / email)
-    billing_email: Optional[str] = ba.billing_email or user.email
-    billing_name: Optional[str] = ba.name or user.name
-    tax_id: Optional[str] = ba.tax_id
-    tax_id_type: Optional[str] = ba.tax_id_type or "eu_vat"
-    has_tax_id = bool(tax_id)
-
-    # --- Checkout quantities ---------------------------------------------
-    default_credit_qty = getattr(settings, "stripe_default_credit_qty", 25)
-    min_credit_qty = getattr(settings, "stripe_min_credit_qty", 5)
-    max_credit_qty = getattr(settings, "stripe_max_credit_qty", 500)
-
-    # --- Price ID --------------------------------------------------------
-    price_id = (
-        settings.stripe_unify_credits_price_id_business
-        if organization_id
-        else settings.stripe_unify_credits_price_id_personal
-    )
-    if not price_id:
-        ctx_label = "business" if organization_id else "personal"
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"Stripe price ID not configured for {ctx_label} workspace. "
-                "Check STRIPE_UNIFY_CREDITS_PRICE_ID_PERSONAL / _BUSINESS env vars."
-            ),
-        )
-
-    # --- Pre-fill / tax sync on existing customer ------------------------
-    if customer_id:
-        prefill_customer_fields(customer_id, billing_email, billing_name)
-        if has_tax_id and tax_id:
-            sync_tax_id_to_customer(customer_id, tax_id, tax_id_type)
-
-    # --- Session metadata ------------------------------------------------
-    metadata: dict = {
-        "user_id": user_id,
-        "credits_purchased": str(default_credit_qty),
-        "user_total_spend": str(total_spending),
-        "user_account_age_days": str(account_age_days),
-        "user_is_repeat_customer": str(is_repeat_customer),
-    }
-    if organization_id:
-        metadata["organization_id"] = str(organization_id)
-
-    # --- Build session params --------------------------------------------
-    console_url = settings.console_url.rstrip("/")
-
-    session_params: dict = {
-        "mode": "payment",
-        "submit_type": "pay",
-        "line_items": [
-            {
-                "price": price_id,
-                "quantity": default_credit_qty,
-                "adjustable_quantity": {
-                    "enabled": True,
-                    "minimum": min_credit_qty,
-                    "maximum": max_credit_qty,
-                },
-            },
-        ],
-        "payment_method_types": ["card"],
-        "automatic_tax": {"enabled": True},
-        "client_reference_id": user_id,
-        "success_url": f"{console_url}/billing?sessionId={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": f"{console_url}/billing",
-        "billing_address_collection": "required",
-        "payment_method_options": {
-            "card": {"request_three_d_secure": "automatic"},
-        },
-        "custom_text": {
-            "submit": {
-                "message": "Credits will be added to your account immediately after payment.",
-            },
-        },
-        "payment_intent_data": {"metadata": metadata},
-        "metadata": metadata,
-    }
-
-    if has_tax_id:
-        session_params["tax_id_collection"] = {"enabled": True}
-
-    if customer_id:
-        session_params["customer"] = customer_id
-        session_params["customer_update"] = {"address": "auto", "name": "auto"}
-    else:
-        session_params["customer_creation"] = "always"
-        if billing_email:
-            session_params["customer_email"] = billing_email
-
-    # --- Create the Stripe Checkout Session ------------------------------
-    try:
-        checkout_session = stripe.checkout.Session.create(**session_params)
-    except stripe.InvalidRequestError as exc:
-        if customer_id and is_stripe_mode_conflict(exc):
-            logger.warning(
-                "Customer %s is from a different Stripe mode; retrying without customer",
-                customer_id,
-            )
-            session_params.pop("customer", None)
-            session_params.pop("customer_update", None)
-            session_params["customer_creation"] = "always"
-            if billing_email:
-                session_params["customer_email"] = billing_email
-            checkout_session = stripe.checkout.Session.create(**session_params)
-        else:
-            logger.error(
-                f"Stripe checkout session creation failed: {exc}",
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to create checkout session",
-            )
-
-    if not checkout_session.url:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to create checkout session URL",
-        )
-
-    return CheckoutSessionResponse(
-        url=checkout_session.url,
-        session_id=checkout_session.id,
+        is_subscribed=is_subscribed,
+        trial_expires_at=trial_expires_at,
+        next_renewal_at=next_renewal_at,
+        subscription_cancel_at_period_end=(
+            bool(ba.subscription_cancel_at_period_end) if is_subscribed else False
+        ),
     )
 
 
 # ============================================================================
 # POST /billing/portal-session
 # ============================================================================
+
+
+# Cached id of the restricted billing-portal configuration (created lazily,
+# once per process). The portal is now only used by METERED accounts for
+# invoice history — CREDITS manage cards + billing profile in-app — so the
+# config hides the duplicate payment-method and customer-info editors.
+_RESTRICTED_PORTAL_CONFIG_ID: Optional[str] = None
+
+
+def _get_restricted_portal_configuration_id() -> Optional[str]:
+    """Return (creating + caching once) a stripped-down portal configuration.
+
+    Returns ``None`` if the configuration can't be created (e.g. the Stripe
+    account has no default business profile set), so the caller falls back to
+    the account-default portal rather than failing the request.
+    """
+    global _RESTRICTED_PORTAL_CONFIG_ID
+    if _RESTRICTED_PORTAL_CONFIG_ID:
+        return _RESTRICTED_PORTAL_CONFIG_ID
+    try:
+        config = stripe.billing_portal.Configuration.create(
+            features={
+                # The reason a METERED customer opens the portal.
+                "invoice_history": {"enabled": True},
+                # Cards + billing details are now managed in-app; hide the
+                # duplicate editors.
+                "payment_method_update": {"enabled": False},
+                "customer_update": {"enabled": False},
+            },
+            metadata={"orchestra_portal": "metered_invoice_history_only"},
+        )
+        _RESTRICTED_PORTAL_CONFIG_ID = config.id
+        return config.id
+    except Exception:
+        logger.warning(
+            "Could not create restricted billing-portal configuration; "
+            "falling back to the account-default portal.",
+            exc_info=True,
+        )
+        return None
 
 
 @router.post(
@@ -500,10 +318,17 @@ def create_portal_session(
 
     customer_id = ba.stripe_customer_id
 
+    # The portal now only backs METERED accounts (CREDITS manage cards +
+    # billing profile in-app), so strip the duplicate payment-method and
+    # billing-info editors and leave just the invoice history. Falls back to
+    # the account-default portal if the restricted config can't be built.
+    portal_kwargs: dict = {"customer": customer_id}
+    restricted_config_id = _get_restricted_portal_configuration_id()
+    if restricted_config_id:
+        portal_kwargs["configuration"] = restricted_config_id
+
     try:
-        portal_session = stripe.billing_portal.Session.create(
-            customer=customer_id,
-        )
+        portal_session = stripe.billing_portal.Session.create(**portal_kwargs)
     except stripe.InvalidRequestError as exc:
         if is_stripe_mode_conflict(exc):
             logger.warning(
@@ -527,183 +352,273 @@ def create_portal_session(
 
 
 # ============================================================================
-# GET /billing/checkout-status
+# Payment methods (in-app card management — replaces the Stripe Portal)
+#
+# Cards are collected client-side with Stripe Elements against a SetupIntent
+# (the card never touches our servers — PCI SAQ-A), then managed here:
+# list, set-default (the card that backs subscription renewals), and detach.
 # ============================================================================
 
 
-@router.get(
-    "/billing/checkout-status",
-    response_model=CheckoutStatusResponse,
-    include_in_schema=False,
-    responses={
-        200: {"description": "Checkout session status"},
-        400: {"description": "Missing or invalid sessionId"},
-        403: {"description": "Session does not belong to caller"},
-        500: {"description": "Stripe configuration error"},
-    },
-)
-def get_checkout_status(
+def _resolve_billing_customer(
+    session: Session,
     request_fastapi: Request,
-    session_id: str,
-    session=Depends(get_db_session),
-) -> CheckoutStatusResponse:
-    """
-    Retrieve the status of a Stripe Checkout session.
+    permission: str,
+    *,
+    create_if_missing: bool = False,
+):
+    """Resolve the billing account + Stripe customer id, or raise 4xx.
 
-    Security: verifies the session belongs to the authenticated user / org
-    by cross-checking the Stripe customer or ``client_reference_id``.
+    Shared preamble for the payment-method endpoints: enforces the billing
+    permission and resolves the Stripe customer. The customer is normally
+    created when the billing profile is saved; ``create_if_missing`` lets a
+    write entrypoint (adding the first card) create it on demand so a card
+    can be saved even before the profile sync ran. Read paths still 404 when
+    there's no customer — there's nothing to list yet.
+    """
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+    _check_org_billing_permission(session, user_id, organization_id, permission)
+
+    ba = BillingAccountDAO(session).resolve(user_id, organization_id)
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    if not ba.stripe_customer_id and create_if_missing:
+        from orchestra.lib.billing import ensure_stripe_customer
+        from orchestra.lib.subscription_billing import resolve_is_business
+
+        user = UserDAO(session).get_user_with_id(user_id)
+        try:
+            ensure_stripe_customer(
+                session,
+                ba,
+                is_business=resolve_is_business(ba, organization_id),
+                fallback_email=user.email if user else None,
+                fallback_name=user.name if user else None,
+            )
+            session.flush()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    if not ba.stripe_customer_id:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No billing customer yet. Save your billing profile to set "
+                "up payment methods."
+            ),
+        )
+    return ba
+
+
+@router.post(
+    "/billing/payment-methods/setup-intent",
+    response_model=SetupIntentResponse,
+    summary="Start adding a card (Stripe SetupIntent)",
+    include_in_schema=False,
+)
+def create_payment_method_setup_intent(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> SetupIntentResponse:
+    """Create a SetupIntent and return its client secret for Stripe Elements."""
+    _init_stripe()
+    ba = _resolve_billing_customer(
+        session, request_fastapi, "billing:write", create_if_missing=True
+    )
+    try:
+        client_secret = create_setup_intent(ba.stripe_customer_id)
+    except stripe.error.StripeError as exc:
+        logger.error(f"Stripe error creating setup intent: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't start adding a card. Please try again.",
+        )
+    # Persist the Stripe customer id if it was just created on demand.
+    session.commit()
+    return SetupIntentResponse(client_secret=client_secret)
+
+
+@router.get(
+    "/billing/payment-methods",
+    response_model=PaymentMethodListResponse,
+    summary="List saved cards",
+    include_in_schema=False,
+)
+def get_payment_methods(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> PaymentMethodListResponse:
+    """List the customer's saved cards, flagging the renewal default."""
+    _init_stripe()
+    ba = _resolve_billing_customer(session, request_fastapi, "billing:read")
+    try:
+        cards = list_payment_methods(ba.stripe_customer_id)
+    except stripe.error.StripeError as exc:
+        logger.error(f"Stripe error listing payment methods: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't load payment methods. Please try again.",
+        )
+    return PaymentMethodListResponse(payment_methods=cards)
+
+
+@router.post(
+    "/billing/payment-methods/{payment_method_id}/default",
+    response_model=PaymentMethodListResponse,
+    summary="Set the default card for renewals",
+    include_in_schema=False,
+)
+def set_payment_method_default(
+    payment_method_id: str,
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> PaymentMethodListResponse:
+    """Make a card the default for invoices + the active subscription."""
+    _init_stripe()
+    ba = _resolve_billing_customer(session, request_fastapi, "billing:write")
+    try:
+        set_default_payment_method(
+            ba.stripe_customer_id,
+            ba.stripe_subscription_id,
+            payment_method_id,
+        )
+        cards = list_payment_methods(ba.stripe_customer_id)
+    except stripe.error.InvalidRequestError as exc:
+        # e.g. the card isn't attached to this customer.
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.StripeError as exc:
+        logger.error(f"Stripe error setting default card: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't update your default card. Please try again.",
+        )
+    return PaymentMethodListResponse(payment_methods=cards)
+
+
+@router.delete(
+    "/billing/payment-methods/{payment_method_id}",
+    response_model=PaymentMethodListResponse,
+    summary="Remove a saved card",
+    include_in_schema=False,
+)
+def remove_payment_method(
+    payment_method_id: str,
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> PaymentMethodListResponse:
+    """Detach a saved card.
+
+    Guard: you can't remove the default card while a subscription is active —
+    renewals would have nothing to charge. Set another card as default first
+    (which, when only one card exists, means adding one). This keeps the
+    common footgun out of the self-serve flow.
     """
     _init_stripe()
-
-    user_id: str = request_fastapi.state.user_id
-    organization_id: Optional[int] = getattr(
-        request_fastapi.state,
-        "organization_id",
-        None,
-    )
-
-    _check_org_billing_permission(session, user_id, organization_id, "billing:read")
-
-    # Get billing account to find stripe customer
-    ba_dao = BillingAccountDAO(session)
-    ba = ba_dao.resolve(user_id, organization_id)
-    if not ba:
-        raise HTTPException(status_code=400, detail="Billing is not set up")
-    customer_id: Optional[str] = ba.stripe_customer_id
-
+    ba = _resolve_billing_customer(session, request_fastapi, "billing:write")
     try:
-        checkout_session = stripe.checkout.Session.retrieve(session_id)
-    except stripe.InvalidRequestError as exc:
-        logger.error(f"Stripe checkout session retrieval failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=400, detail="Invalid checkout session")
-
-    # --- Ownership verification ------------------------------------------
-    session_customer = checkout_session.customer
-    session_ref_id = checkout_session.client_reference_id
-
-    if customer_id and session_customer != customer_id:
-        # Also allow match via client_reference_id for the authenticated user
-        if session_ref_id != user_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Checkout session does not belong to the authenticated workspace",
+        cards = list_payment_methods(ba.stripe_customer_id)
+        target = next((c for c in cards if c["id"] == payment_method_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Card not found.")
+        if ba.stripe_subscription_id and target["is_default"]:
+            raise PaymentMethodError(
+                "This is your default card for an active subscription. Set "
+                "another card as default before removing it.",
             )
-    elif not customer_id and session_ref_id != user_id:
+        detach_payment_method(payment_method_id)
+        cards = list_payment_methods(ba.stripe_customer_id)
+    except PaymentMethodError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.InvalidRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.StripeError as exc:
+        logger.error(f"Stripe error detaching card: {exc}", exc_info=True)
         raise HTTPException(
-            status_code=403,
-            detail="Checkout session does not belong to the authenticated workspace",
+            status_code=502,
+            detail="Couldn't remove the card. Please try again.",
         )
+    return PaymentMethodListResponse(payment_methods=cards)
 
-    return CheckoutStatusResponse(
-        status=checkout_session.status,
-        payment_status=checkout_session.payment_status,
+
+# ============================================================================
+# GET / PUT  /billing/auto-increment  (self-serve auto-upgrade-on-depletion)
+# ============================================================================
+
+
+def _auto_increment_state(session, ba) -> AutoIncrementResponse:
+    """Build the auto-increment response (flag + UI-gating context)."""
+    from orchestra.lib.subscription_billing import next_tier_template
+
+    is_subscribed = bool(ba.stripe_subscription_id)
+    at_top_tier = False
+    if is_subscribed:
+        at_top_tier = next_tier_template(session, ba) is None
+    return AutoIncrementResponse(
+        enabled=bool(ba.auto_increment),
+        is_subscribed=is_subscribed,
+        at_top_tier=at_top_tier,
     )
-
-
-# ============================================================================
-# GET / PUT  /billing/auto-recharge
-# ============================================================================
 
 
 @router.get(
-    "/billing/auto-recharge",
-    response_model=AutoRechargeResponse,
-    responses={
-        200: {"description": "Auto-recharge settings and eligibility"},
-        400: {"description": "Billing not set up"},
-    },
+    "/billing/auto-increment",
+    response_model=AutoIncrementResponse,
+    summary="Read the self-serve auto-upgrade-on-depletion setting",
+    description=(
+        "Return whether auto-increment is enabled, plus context the "
+        "console uses to gate the toggle: ``is_subscribed`` (the toggle "
+        "is only meaningful on a self-serve subscription tier) and "
+        "``at_top_tier`` (auto-increment hard-stops at the top of the "
+        "ladder)."
+    ),
 )
-def get_auto_recharge(
+def get_auto_increment(
     request_fastapi: Request,
     session=Depends(get_db_session),
-) -> AutoRechargeResponse:
-    """
-    Return auto-recharge settings **and** eligibility in a single call.
-
-    The response includes:
-    - Current settings (``enabled``, ``threshold``, ``qty``).
-    - Eligibility data (``eligible``, ``total_spending``,
-      ``minimum_spend_required``, ``remaining_spend_needed``).
-
-    Context (personal vs org) is derived from the API key.
-    """
+) -> AutoIncrementResponse:
     user_id: str = request_fastapi.state.user_id
     organization_id: Optional[int] = getattr(
         request_fastapi.state,
         "organization_id",
         None,
     )
-
     _check_org_billing_permission(session, user_id, organization_id, "billing:read")
 
-    ba_dao = BillingAccountDAO(session)
-    ba = ba_dao.resolve(user_id, organization_id)
+    ba = BillingAccountDAO(session).resolve(user_id, organization_id)
     if not ba:
         raise HTTPException(status_code=400, detail="Billing is not set up")
-
-    total_spending = float(ba_dao.get_total_spending(ba.id))
-    can_enable = ba_dao.can_enable_auto_recharge(ba.id)
-    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
-    has_pm = _customer_has_payment_method(ba.stripe_customer_id)
-
-    blocked_reason = None
-    if not ba.autorecharge:
-        if ba.account_status in ("SUSPENDED", "CLOSED"):
-            blocked_reason = "account_status"
-        elif ba_dao.has_unpaid_auto_recharges(ba.id):
-            blocked_reason = "unpaid_invoice"
-        elif not can_enable:
-            blocked_reason = "spending"
-        elif not has_pm:
-            blocked_reason = "payment_method"
-
-    return AutoRechargeResponse(
-        enabled=ba.autorecharge,
-        threshold=float(ba.autorecharge_threshold),
-        qty=float(ba.autorecharge_qty),
-        min_recharge_amount=float(MIN_AUTORECHARGE_AMOUNT),
-        eligible=can_enable,
-        total_spending=total_spending,
-        minimum_spend_required=min_required,
-        remaining_spend_needed=max(0.0, min_required - total_spending),
-        has_payment_method=has_pm,
-        blocked_reason=blocked_reason,
-    )
+    return _auto_increment_state(session, ba)
 
 
 @router.put(
-    "/billing/auto-recharge",
-    response_model=AutoRechargeResponse,
-    responses={
-        200: {"description": "Auto-recharge settings updated"},
-        400: {"description": "Validation error or eligibility not met"},
-    },
+    "/billing/auto-increment",
+    response_model=AutoIncrementResponse,
+    summary="Toggle self-serve auto-upgrade-on-depletion",
+    description=(
+        "Enable or disable auto-increment. When enabled, hitting a zero "
+        "wallet balance auto-upgrades the subscription to the next tier "
+        "up the ladder (capped at the top tier; never auto-downgrades). "
+        "When disabled, depletion is a hard stop until the customer "
+        "upgrades manually."
+    ),
 )
-def update_auto_recharge(
+def update_auto_increment(
     request_fastapi: Request,
-    body: AutoRechargeUpdateRequest,
+    body: AutoIncrementUpdateRequest,
     session=Depends(get_db_session),
-) -> AutoRechargeResponse:
-    """
-    Update auto-recharge settings atomically.
-
-    - ``enabled`` (required) – enable or disable auto-recharge.
-    - ``threshold`` (optional) – the credit balance that triggers a top-up.
-    - ``qty`` (optional) – the amount of credits to add per top-up.
-
-    When *enabling*, the account must have met the minimum spending
-    threshold (fraud-prevention measure).  ``qty`` must be ≥ $25.
-
-    Context (personal vs org) is derived from the API key.
-    Returns the updated settings + eligibility (same shape as GET).
-    """
+) -> AutoIncrementResponse:
     user_id: str = request_fastapi.state.user_id
     organization_id: Optional[int] = getattr(
         request_fastapi.state,
         "organization_id",
         None,
     )
-
     _check_org_billing_permission(session, user_id, organization_id, "billing:write")
 
     ba_dao = BillingAccountDAO(session)
@@ -711,86 +626,10 @@ def update_auto_recharge(
     if not ba:
         raise HTTPException(status_code=400, detail="Billing is not set up")
 
-    # --- Eligibility check when enabling ---------------------------------
-    if body.enabled and not ba.autorecharge:
-        if ba.account_status in ("SUSPENDED", "CLOSED"):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Auto-recharge cannot be enabled while your account "
-                    f"is {ba.account_status.lower()}. "
-                    "Please contact support."
-                ),
-            )
-        if ba_dao.has_unpaid_auto_recharges(ba.id):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Auto-recharge cannot be enabled while you have an "
-                    "outstanding unpaid invoice. It will be available "
-                    "once your invoice is paid."
-                ),
-            )
-        if not ba_dao.can_enable_auto_recharge(ba.id):
-            total_spending = float(ba_dao.get_total_spending(ba.id))
-            min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"You must spend at least ${min_required:.2f} before "
-                    f"enabling auto-recharge. "
-                    f"Current spending: ${total_spending:.2f}"
-                ),
-            )
-        if not _customer_has_payment_method(ba.stripe_customer_id):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "A default payment method is required to enable "
-                    "auto-recharge. Please add one via Manage Payment Methods."
-                ),
-            )
-
-    # --- Validate qty if provided ----------------------------------------
-    if body.qty is not None and body.qty < float(MIN_AUTORECHARGE_AMOUNT):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Minimum auto-recharge amount is "
-                f"${float(MIN_AUTORECHARGE_AMOUNT):.2f}. "
-                f"Provided: ${body.qty:.2f}"
-            ),
-        )
-
-    # --- Apply updates via DAO -------------------------------------------
-    ba_dao.set_autorecharge(ba.id, body.enabled)
-
-    if body.threshold is not None:
-        ba_dao.set_autorecharge_threshold(ba.id, body.threshold)
-
-    if body.qty is not None:
-        ba_dao.set_autorecharge_qty(ba.id, body.qty)
-
+    ba_dao.set_auto_increment(ba.id, bool(body.enabled))
     session.commit()
     session.refresh(ba)
-
-    # --- Return updated state + eligibility ------------------------------
-    total_spending = float(ba_dao.get_total_spending(ba.id))
-    can_enable = ba_dao.can_enable_auto_recharge(ba.id)
-    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
-    has_pm = _customer_has_payment_method(ba.stripe_customer_id)
-
-    return AutoRechargeResponse(
-        enabled=ba.autorecharge,
-        threshold=float(ba.autorecharge_threshold),
-        qty=float(ba.autorecharge_qty),
-        min_recharge_amount=float(MIN_AUTORECHARGE_AMOUNT),
-        eligible=can_enable,
-        total_spending=total_spending,
-        minimum_spend_required=min_required,
-        remaining_spend_needed=max(0.0, min_required - total_spending),
-        has_payment_method=has_pm,
-    )
+    return _auto_increment_state(session, ba)
 
 
 # ============================================================================
@@ -879,17 +718,24 @@ def get_billing_profile(
 
     _check_org_billing_permission(session, user_id, organization_id, "billing:read")
 
+    from orchestra.lib.subscription_billing import resolve_is_business
+
     ba_dao = BillingAccountDAO(session)
     ba = ba_dao.resolve(user_id, organization_id)
 
-    is_business = organization_id is not None
-
     if not ba:
-        return BillingProfileResponse(is_business=is_business)
+        # No billing account yet ⇒ no tax ID ⇒ treated as individual.
+        # Business treatment is now keyed off the billing profile's tax ID
+        # (see resolve_is_business), not org membership.
+        return BillingProfileResponse(is_business=False)
 
-    profile = ba_dao.get_billing_profile(ba.id)
-    if not profile:
-        return BillingProfileResponse(is_business=is_business)
+    is_business = resolve_is_business(ba, organization_id)
+
+    # PII is no longer stored locally — read the editable profile back from
+    # the Stripe Customer (source of truth). The derived flags stay local.
+    from orchestra.lib.billing import fetch_billing_profile_from_stripe
+
+    profile = fetch_billing_profile_from_stripe(ba.stripe_customer_id)
 
     return BillingProfileResponse(
         billing_email=profile.get("billing_email"),
@@ -897,7 +743,7 @@ def get_billing_profile(
         tax_id=profile.get("tax_id"),
         tax_id_type=profile.get("tax_id_type"),
         billing_address=profile.get("billing_address", {}),
-        billing_setup_complete=profile.get("billing_setup_complete", False),
+        billing_setup_complete=bool(ba.billing_setup_complete),
         is_business=is_business,
     )
 
@@ -935,12 +781,9 @@ def update_billing_profile(
             detail="Billing account not found",
         )
 
-    is_business = organization_id is not None
-
     billing_email = profile_update.billing_email
     resolved_name = profile_update.name
     tax_id = profile_update.tax_id
-    tax_id_type = profile_update.tax_id_type
     billing_address = (
         profile_update.billing_address.model_dump(exclude_unset=True)
         if profile_update.billing_address is not None
@@ -969,16 +812,54 @@ def update_billing_profile(
                     detail=f"Invalid billing address: {error_msg}",
                 )
 
+            # Authoritative tax-location check: once the address is complete,
+            # confirm Stripe Tax can actually resolve a jurisdiction for it
+            # (e.g. a US ZIP/state that maps to a real location). This fails
+            # the save with a clear message rather than letting the customer
+            # hit the error later at checkout. Best-effort: skipped silently
+            # if Stripe is unreachable/unconfigured (see the helper).
+            address_complete = all(
+                (addr.get(f) or "").strip()
+                for f in ("line1", "city", "postal_code", "country")
+            )
+            if address_complete:
+                from orchestra.lib.billing import validate_address_tax_location
+
+                location_error = validate_address_tax_location(addr)
+                if location_error:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=location_error,
+                    )
+
+    from orchestra.lib.billing import (
+        ensure_stripe_customer,
+        fetch_billing_profile_from_stripe,
+    )
+
+    # PII is no longer stored locally — Stripe is the source of truth. Read
+    # the current profile back from Stripe so partial updates (e.g. a tax_id
+    # edit without re-sending the address) can resolve the country and so the
+    # response reflects the merged result.
+    existing_profile = fetch_billing_profile_from_stripe(ba.stripe_customer_id)
+    existing_billing_address = existing_profile.get("billing_address") or {}
+
+    # Merge a partial address over what's already on the Stripe customer —
+    # Stripe's ``Customer.modify`` replaces the whole address object, so we
+    # must send the full merged dict to avoid dropping previously-saved
+    # fields on a partial update.
+    if billing_address is not None:
+        billing_address = {**existing_billing_address, **billing_address}
+
     # Validate tax_id if provided along with country
-    existing_billing_address = ba.billing_address
     if tax_id is not None:
         country = None
         if billing_address and billing_address.get("country"):
             country = billing_address["country"]
-        elif existing_billing_address and existing_billing_address.get("country"):
+        elif existing_billing_address.get("country"):
             country = existing_billing_address["country"]
 
-        if country:
+        if country and (tax_id or "").strip():
             is_valid, formatted_id, error = TaxIDValidator.validate_tax_id(
                 tax_id,
                 country,
@@ -990,18 +871,42 @@ def update_billing_profile(
                 )
             tax_id = formatted_id
 
-    # Persist changes via DAO
-    ba_dao.update_billing_profile(
-        billing_account_id=ba.id,
-        billing_email=billing_email,
-        name=resolved_name,
-        tax_id=tax_id,
-        tax_id_type=tax_id_type,
-        billing_address=billing_address,
-    )
-    session.flush()
+    # Derive business-ness from the *updated* profile: a non-empty tax ID
+    # flips the account to business treatment (the customer.tax_id webhook
+    # later refines this, flipping it off if Stripe rejects the ID). When the
+    # request doesn't touch the tax ID, preserve the existing flag.
+    if tax_id is not None:
+        is_business = bool((tax_id or "").strip())
+    else:
+        is_business = bool(ba.is_business)
 
-    # Sync to Stripe if customer exists
+    # Create the Stripe Customer up front (at profile save) rather than
+    # lazily at first payment, so the in-app payment manager can attach a
+    # card *before* subscribing. Best-effort: a Stripe hiccup here must not
+    # fail the profile save (the customer is also ensured at subscribe /
+    # add-card time as a fallback).
+    if not ba.stripe_customer_id:
+        user = UserDAO(session).get_user_with_id(user_id)
+        try:
+            ensure_stripe_customer(
+                session,
+                ba,
+                is_business=is_business,
+                name=resolved_name,
+                email=billing_email,
+                address=billing_address,
+                tax_id=tax_id,
+                fallback_email=billing_email or (user.email if user else None),
+                fallback_name=resolved_name or (user.name if user else None),
+            )
+        except Exception:
+            logger.warning(
+                "Could not create Stripe customer on profile save "
+                "(will retry at subscribe/add-card)",
+                exc_info=True,
+            )
+
+    # Sync the saved profile onto the Stripe customer (now that one exists).
     if ba.stripe_customer_id:
         sync_billing_profile_to_stripe(
             ba.stripe_customer_id,
@@ -1014,20 +919,28 @@ def update_billing_profile(
             logger_instance=logger,
         )
 
+    # Re-read the merged profile from Stripe so the response and the
+    # ``billing_setup_complete`` gate reflect what's actually on file.
+    from orchestra.lib.billing import is_billing_address_complete
+
+    profile = fetch_billing_profile_from_stripe(ba.stripe_customer_id)
+    merged_address = profile.get("billing_address") or {}
+    billing_setup_complete = is_billing_address_complete(merged_address)
+
+    ba_dao.set_billing_flags(
+        billing_account_id=ba.id,
+        is_business=is_business,
+        billing_setup_complete=billing_setup_complete,
+    )
     session.commit()
 
-    # Build response
-    profile = ba_dao.get_billing_profile(ba.id)
-
     return BillingProfileResponse(
-        billing_email=profile.get("billing_email") if profile else None,
-        name=profile.get("name") if profile else None,
-        tax_id=profile.get("tax_id") if profile else None,
-        tax_id_type=profile.get("tax_id_type") if profile else None,
-        billing_address=profile.get("billing_address", {}) if profile else {},
-        billing_setup_complete=(
-            profile.get("billing_setup_complete", False) if profile else False
-        ),
+        billing_email=profile.get("billing_email"),
+        name=profile.get("name"),
+        tax_id=profile.get("tax_id"),
+        tax_id_type=profile.get("tax_id_type"),
+        billing_address=merged_address,
+        billing_setup_complete=billing_setup_complete,
         is_business=is_business,
     )
 
@@ -1154,6 +1067,9 @@ def list_billing_invoices(
                 stripe_invoice_id=recharge.stripe_invoice_id,
                 plan_assignment_id=recharge.plan_id,
                 plan_template_name=template.name if template else None,
+                plan_template_display_name=(
+                    (template.display_name or template.name) if template else None
+                ),
                 detail=recharge.detail,
             ),
         )
@@ -1449,6 +1365,21 @@ def list_available_plans(
     #      [Default], current = Default → empty UX). When a paid tier
     #      joins the default group the rule no longer fires and every
     #      account suddenly sees the switcher.
+    # Interval-aware: an account already subscribed to a paid tier may only
+    # switch among tiers of the SAME billing interval (monthly↔annual goes
+    # through cancel + resubscribe, never an in-place switch). Drop
+    # other-interval members. Unsubscribed/default accounts have no interval
+    # (commit_period is NULL) so both monthly and annual tiers are returned
+    # and the picker's monthly/annual toggle decides what to show.
+    current_member = next((m for m in members if m.is_current), None)
+    current_interval = current_member.commit_period if current_member else None
+    if current_interval in ("MONTHLY", "ANNUAL"):
+        items = [
+            it
+            for it in items
+            if it.commit_period == current_interval or it.is_current
+        ]
+
     has_current = any(item.is_current for item in items)
     has_alternative = any(not item.is_current for item in items)
     if not has_current or not has_alternative:
@@ -1498,8 +1429,13 @@ def switch_plan(
         BillingPlanGroupDAO,
         PlanGroupMemberError,
     )
-    from orchestra.db.models.orchestra_models import BillingMode, BillingPlanTemplate
+    from orchestra.db.models.enums import CollectionMethod
+    from orchestra.db.models.orchestra_models import (
+        BillingMode,
+        BillingPlanTemplate,
+    )
     from orchestra.lib.billing import ensure_stripe_customer
+    from orchestra.lib.subscription_billing import resolve_is_business
 
     user_id: str = request_fastapi.state.user_id
     organization_id: Optional[int] = getattr(
@@ -1587,6 +1523,66 @@ def switch_plan(
             classification="current",
         )
 
+    # --- Self-serve subscription tier change (immediate) -----------------
+    # Accounts already on a Stripe Subscription switch tiers *immediately*
+    # (anniversary-anchored, not AT_BOUNDARY): the subscription quantity is
+    # re-pointed with proration invoiced now, the cycle anchor resets to
+    # now, and upgrades grant the credit delta inline. Downgrades are
+    # allowed and never claw back consumed credits. METERED + free/default
+    # accounts fall through to the legacy AT_BOUNDARY path below.
+    if (
+        ba.stripe_subscription_id
+        and target_template.billing_mode == BillingMode.CREDITS
+        and target_template.collection_method
+        == CollectionMethod.STRIPE_SUBSCRIPTION
+    ):
+        from orchestra.lib.subscription_billing import (
+            SubscriptionError,
+            change_subscription_tier,
+        )
+
+        _init_stripe()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            change_subscription_tier(
+                session,
+                ba,
+                target_template,
+                user_id=user_id,
+            )
+        except SubscriptionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except stripe.error.CardError as exc:
+            # The proration charge was declined. Because the tier change is
+            # made with ``payment_behavior="error_if_incomplete"``, Stripe
+            # rolled the subscription back and we never touched the local
+            # plan/credits — so this is a clean "try another card" failure
+            # rather than a half-applied upgrade.
+            logger.info(f"Tier change declined by card: {exc}")
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    "Your card was declined, so the plan change didn't go "
+                    "through and you're still on your current plan. Update "
+                    "your default card under Manage payment methods and try "
+                    "again."
+                ),
+            )
+        except stripe.error.StripeError as exc:
+            logger.error(f"Stripe error changing tier: {exc}", exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Stripe error while changing subscription tier: {exc}",
+            )
+        session.commit()
+        return SwitchPlanResponse(
+            status="switched",
+            billing_account_id=ba.id,
+            template_id=body.template_id,
+            effective_at=now_iso,
+            classification=classification,
+        )
+
     # METERED templates need a Stripe Customer for the invoicer to
     # attach monthly invoices. Mirror the admin endpoint's behaviour
     # but auto-create silently — the customer has already gone
@@ -1601,7 +1597,7 @@ def switch_plan(
             ensure_stripe_customer(
                 session,
                 ba,
-                is_business=organization_id is not None,
+                is_business=resolve_is_business(ba, organization_id),
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -1635,7 +1631,7 @@ def switch_plan(
             detail={
                 "code": "pending_recharges",
                 "message": (
-                    "An auto-recharge or top-up is still being invoiced "
+                    "A pending charge is still being invoiced "
                     "on your current plan. Try switching again after "
                     "your next monthly invoice has been issued."
                 ),
@@ -1680,4 +1676,358 @@ def switch_plan(
         template_id=body.template_id,
         effective_at=next_boundary.isoformat(),
         classification=classification,
+    )
+
+
+# ============================================================================
+# POST /billing/subscribe  — self-serve subscription onboarding
+# ============================================================================
+
+
+@router.post(
+    "/billing/subscribe",
+    response_model=SubscribeResponse,
+    summary="Subscribe a self-serve account to a credit tier",
+    description=(
+        "Create the backing Stripe Subscription for a self-serve CREDITS "
+        "tier and activate the plan immediately. The monthly credit grant "
+        "is posted once Stripe collects the first invoice (via the "
+        "``invoice.paid`` webhook). Refuses if the account is already on a "
+        "subscription (use ``POST /v0/billing/plan`` to upgrade/downgrade) "
+        "or if the target is not an active self-serve tier in the "
+        "account's plan group."
+    ),
+)
+def subscribe(
+    body: SubscribeRequest,
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> SubscribeResponse:
+    from orchestra.db.dao.billing_plan_group_dao import BillingPlanGroupDAO
+    from orchestra.db.models.orchestra_models import BillingPlanTemplate
+    from orchestra.lib.subscription_billing import (
+        SubscriptionError,
+        assert_self_serve_subscribable,
+        create_subscription,
+        resolve_is_business,
+    )
+
+    _init_stripe()
+
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
+
+    ba_dao = BillingAccountDAO(session)
+    ba = ba_dao.resolve(user_id, organization_id)
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    if ba.stripe_subscription_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Account already has an active subscription. Use the plan "
+                "switch endpoint to change tiers."
+            ),
+        )
+
+    # Membership gate (same as switch_plan): the tier must be in the
+    # account's plan group.
+    group_dao = BillingPlanGroupDAO(session)
+    if not group_dao.is_member(
+        group_id=ba.plan_group_id,
+        template_id=body.template_id,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Template id={body.template_id} is not part of this "
+                "account's plan group; subscribe refused."
+            ),
+        )
+
+    template = session.get(BillingPlanTemplate, body.template_id)
+    if template is None or not template.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Template id={body.template_id} is not assignable.",
+        )
+    try:
+        assert_self_serve_subscribable(template)
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Tax gate: subscriptions enable Stripe automatic tax, which needs the
+    # customer's location resolvable at invoice time. The address lives on the
+    # Stripe Customer (synced from the Billing Profile); the local
+    # ``billing_setup_complete`` flag is the derived (non-PII) mirror of that
+    # address's completeness, kept fresh on every mutation path (profile PATCH,
+    # admin edit, and the ``customer.updated`` webhook for dashboard edits), so
+    # we gate on it without a Stripe round-trip and it can't drift stale.
+    # A country alone resolves tax for country-level jurisdictions (e.g. UK
+    # VAT) but NOT for sub-national ones (US sales tax needs a postal
+    # code/state), so a full address is required — otherwise the first invoice
+    # can't finalise (automatic_tax -> requires_location_inputs).
+    if not ba.billing_setup_complete:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Add your full billing address (street, city, postal code and "
+                "country) in your Billing Profile before subscribing — it's "
+                "needed to calculate tax on your invoices."
+            ),
+        )
+
+    user = UserDAO(session).get_user_with_id(user_id)
+    fallback_email = user.email if user else None
+    fallback_name = user.name if user else None
+
+    from orchestra.lib.billing import PaymentMethodError
+
+    try:
+        subscription = create_subscription(
+            session,
+            ba,
+            template,
+            is_business=resolve_is_business(ba, organization_id),
+            user_id=user_id,
+            organization_id=organization_id,
+            fallback_email=fallback_email,
+            fallback_name=fallback_name,
+        )
+    except PaymentMethodError:
+        # No saved card to charge off-session — the in-app payment manager
+        # lets the customer add one before subscribing.
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                "Add a payment method under Payment methods before "
+                "subscribing — we charge your first invoice right away."
+            ),
+        )
+    except stripe.error.CardError as exc:
+        # The off-session first charge was declined; ``error_if_incomplete``
+        # means no subscription was created, so the account stays on its
+        # current (free) plan.
+        logger.info(f"Subscribe declined by card: {exc}")
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                "Your card was declined, so the subscription wasn't started. "
+                "Update your default card under Payment methods and try again."
+            ),
+        )
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.InvalidRequestError as exc:
+        # Bad customer input (not an upstream outage) — most commonly Stripe
+        # Tax failing to resolve the customer's location from the saved
+        # address (invalid/incomplete postal code, or a US address with no
+        # state). Surface a clean, actionable 400 instead of a 502.
+        msg = str(exc)
+        logger.warning(f"Stripe rejected subscription (invalid request): {msg}")
+        if "location" in msg.lower() or "address" in msg.lower() or "tax" in msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "We couldn't verify your billing address for tax. Please "
+                    "double-check it's a valid, complete address — including a "
+                    "correct postal/ZIP code and, for US addresses, a state — "
+                    "then try again."
+                ),
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stripe rejected the subscription: {msg}",
+        )
+    except stripe.error.StripeError as exc:
+        logger.error(f"Stripe error creating subscription: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Stripe error while creating subscription: {exc}",
+        )
+
+    session.commit()
+
+    # Surface the latest invoice's PaymentIntent client secret / hosted
+    # URL so the FE can collect payment if the customer has no usable
+    # default PM yet (default_incomplete flow).
+    client_secret: Optional[str] = None
+    hosted_invoice_url: Optional[str] = None
+    latest_invoice = (
+        subscription.get("latest_invoice")
+        if isinstance(subscription, dict)
+        else getattr(subscription, "latest_invoice", None)
+    )
+    if isinstance(latest_invoice, dict):
+        hosted_invoice_url = latest_invoice.get("hosted_invoice_url")
+        payment_intent = latest_invoice.get("payment_intent")
+        if isinstance(payment_intent, dict):
+            client_secret = payment_intent.get("client_secret")
+
+    return SubscribeResponse(
+        status="subscribed",
+        billing_account_id=ba.id,
+        template_id=body.template_id,
+        stripe_subscription_id=ba.stripe_subscription_id or "",
+        subscription_status=(
+            subscription.get("status")
+            if isinstance(subscription, dict)
+            else getattr(subscription, "status", None)
+        ),
+        client_secret=client_secret,
+        hosted_invoice_url=hosted_invoice_url,
+    )
+
+
+# ============================================================================
+# DELETE /billing/subscription  — self-serve cancellation
+# ============================================================================
+
+
+@router.delete(
+    "/billing/subscription",
+    response_model=CancelSubscriptionResponse,
+    summary="Cancel a self-serve subscription",
+    description=(
+        "Cancel the account's self-serve subscription. By default the "
+        "cancellation is scheduled for the end of the current billing "
+        "period (the customer keeps their credits and service until "
+        "then); pass ``immediate=true`` to cancel right away (forfeiting "
+        "any unconsumed credits). The account reverts to the free tier "
+        "when Stripe emits the deletion webhook."
+    ),
+)
+def cancel_subscription_endpoint(
+    request_fastapi: Request,
+    immediate: bool = False,
+    session: Session = Depends(get_db_session),
+) -> CancelSubscriptionResponse:
+    from orchestra.lib.subscription_billing import (
+        SubscriptionError,
+        cancel_subscription,
+    )
+
+    _init_stripe()
+
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
+
+    ba = BillingAccountDAO(session).resolve(user_id, organization_id)
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    if not ba.stripe_subscription_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Account has no active subscription to cancel.",
+        )
+
+    try:
+        effective = cancel_subscription(
+            session,
+            ba,
+            at_period_end=not immediate,
+        )
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.StripeError as exc:
+        logger.error(f"Stripe error cancelling subscription: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Stripe error while cancelling subscription: {exc}",
+        )
+
+    session.commit()
+
+    return CancelSubscriptionResponse(
+        status="canceled" if immediate else "canceling",
+        billing_account_id=ba.id,
+        effective_at=effective.isoformat() if effective else None,
+    )
+
+
+# ============================================================================
+# POST /billing/subscription/reactivate  — undo a scheduled cancellation
+# ============================================================================
+
+
+@router.post(
+    "/billing/subscription/reactivate",
+    response_model=CancelSubscriptionResponse,
+    summary="Resume a subscription scheduled to cancel",
+    description=(
+        "Clears a pending end-of-period cancellation so the subscription "
+        "renews normally. Only valid while the subscription is still active "
+        "and flagged to cancel at period end (before Stripe deletes it at the "
+        "period boundary)."
+    ),
+)
+def reactivate_subscription_endpoint(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> CancelSubscriptionResponse:
+    from orchestra.lib.subscription_billing import (
+        SubscriptionError,
+        reactivate_subscription,
+    )
+
+    _init_stripe()
+
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
+
+    ba = BillingAccountDAO(session).resolve(user_id, organization_id)
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    if not ba.stripe_subscription_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Account has no active subscription to resume.",
+        )
+
+    if not ba.subscription_cancel_at_period_end:
+        raise HTTPException(
+            status_code=400,
+            detail="Subscription is not scheduled to cancel.",
+        )
+
+    try:
+        effective = reactivate_subscription(session, ba)
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.StripeError as exc:
+        logger.error(
+            f"Stripe error reactivating subscription: {exc}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Stripe error while resuming subscription: {exc}",
+        )
+
+    session.commit()
+
+    return CancelSubscriptionResponse(
+        status="active",
+        billing_account_id=ba.id,
+        effective_at=effective.isoformat() if effective else None,
     )

@@ -16,9 +16,7 @@ fixes are applied.  Each tier includes all lower tiers:
 ``"safe"``
     Fixes with zero financial impact — purely defensive cleanup:
 
-    - Clear deleted/missing Stripe customer ID + disable autorecharge.
-    - Disable autorecharge when no ``stripe_customer_id`` exists.
-    - Disable autorecharge when no payment method on file.
+    - Clear deleted/missing Stripe customer ID.
     - Dispute lost → status set to ``FAILED`` (credits already voided).
     - Orphaned grace-period contacts → ``active`` (BA has credits ≥ 0).
 
@@ -38,7 +36,6 @@ fixes are applied.  Each tier includes all lower tiers:
     - Stale recharge void/uncollectible → ``FAILED`` + credits voided.
     - Orphaned paid invoice → create ``Recharge`` + grant credits.
     - Missed webhook → replay event through ``handle_event``.
-    - Unvoided FAILED auto-recharge → deduct unearned credits.
 
 Passing ``True`` (bool) is treated as ``"all"`` for backward
 compatibility; ``False`` is treated as ``"none"``.
@@ -93,7 +90,7 @@ import stripe
 from sqlalchemy import func
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestra.db.models.enums import BillingMode
+from orchestra.db.models.enums import BillingMode, CollectionMethod
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
     RECHARGE_TYPE_MONTHLY_COMMIT,
@@ -319,7 +316,6 @@ def _reconcile_with_session(
     )
     _check_credit_balance_integrity(session, result, fix_level=fix_level)
     _check_duplicate_stripe_customers(session, result)
-    _check_payment_methods(session, result, fix_level=fix_level)
     _check_credit_balance_ceiling(session, result)
     _check_webhook_gaps(
         session,
@@ -327,9 +323,9 @@ def _reconcile_with_session(
         lookback_days=lookback_days,
         fix_level=fix_level,
     )
-    _check_failed_recharge_voids(session, result, fix_level=fix_level)
     _check_orphaned_grace_periods(session, result, fix_level=fix_level)
     _check_unjustified_suspensions(session, result, fix_level=fix_level)
+    _check_subscription_state_drift(session, result)
     _check_plan_assignment_integrity(session, result)
     _check_metered_invoicing_completeness(
         session,
@@ -593,7 +589,7 @@ def _check_stripe_customers(
     """Verify that billing accounts with ``stripe_customer_id`` still
     have a live (non-deleted) Stripe customer.
 
-    Tier: safe — clears dangling reference, disables autorecharge.
+    Tier: safe — clears dangling reference.
     """
     auto_fix = fix_level >= FIX_SAFE
     accounts: List[BillingAccount] = (
@@ -628,10 +624,8 @@ def _check_stripe_customers(
                 )
                 if auto_fix:
                     ba.stripe_customer_id = None
-                    ba.autorecharge = False
                     logger.info(
-                        "Auto-fixed BA %s: cleared deleted Stripe customer "
-                        "%s, disabled autorecharge",
+                        "Auto-fixed BA %s: cleared deleted Stripe customer %s",
                         ba.id,
                         old_cid,
                     )
@@ -653,10 +647,8 @@ def _check_stripe_customers(
             )
             if auto_fix:
                 ba.stripe_customer_id = None
-                ba.autorecharge = False
                 logger.info(
-                    "Auto-fixed BA %s: cleared missing Stripe customer "
-                    "%s, disabled autorecharge",
+                    "Auto-fixed BA %s: cleared missing Stripe customer %s",
                     ba.id,
                     old_cid,
                 )
@@ -741,9 +733,8 @@ def _check_orphaned_invoices(
                         )
                         session.add(new_recharge)
                         ba.credits += credits_amount
-                        if (
-                            ba.account_status == "SUSPENDED"
-                            and ba.suspension_reason != "admin_freeze"
+                        if ba.account_status == "SUSPENDED" and (
+                            ba.suspension_reason not in ("admin_freeze", "past_due")
                         ):
                             ba.account_status = "ACTIVE"
                             ba.suspension_reason = None
@@ -813,7 +804,7 @@ def _check_credit_balance_integrity(
     """For billing accounts with recent recharge activity, verify that
     the credit balance is plausible.
 
-    Tier: disable autorecharge → safe.
+    Tier: flag-only.
     """
     # SUSPENDED with positive credits — flag only, suspension may be intentional
     suspended_positive = (
@@ -836,36 +827,6 @@ def _check_credit_balance_integrity(
                 ),
             ),
         )
-
-    # Autorecharge enabled without Stripe customer → disable (safe)
-    fix_autorecharge = fix_level >= FIX_SAFE
-    phantom_autorecharge = (
-        session.query(BillingAccount)
-        .filter(
-            BillingAccount.autorecharge.is_(True),
-            BillingAccount.stripe_customer_id.is_(None),
-        )
-        .all()
-    )
-    for ba in phantom_autorecharge:
-        result.discrepancies.append(
-            Discrepancy(
-                category="autorecharge_no_customer",
-                severity="warning",
-                billing_account_id=ba.id,
-                detail=(
-                    f"BA {ba.id} has autorecharge enabled but no "
-                    f"stripe_customer_id — autorecharge will always fail"
-                ),
-                auto_fixed=fix_autorecharge,
-            ),
-        )
-        if fix_autorecharge:
-            ba.autorecharge = False
-            logger.info(
-                "Auto-fixed BA %s: disabled autorecharge (no stripe_customer_id)",
-                ba.id,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -989,9 +950,8 @@ def _check_stuck_disputes(
                     )
                     if ba:
                         ba.credits += recharge.quantity
-                        if (
-                            ba.account_status == "SUSPENDED"
-                            and ba.suspension_reason != "admin_freeze"
+                        if ba.account_status == "SUSPENDED" and (
+                            ba.suspension_reason not in ("admin_freeze", "past_due")
                         ):
                             ba.account_status = "ACTIVE"
                             ba.suspension_reason = None
@@ -1083,75 +1043,6 @@ def _check_duplicate_stripe_customers(
                 ),
             ),
         )
-
-
-# ---------------------------------------------------------------------------
-# Check 7: Payment method health for autorecharge accounts
-# ---------------------------------------------------------------------------
-
-
-def _check_payment_methods(
-    session: Session,
-    result: ReconciliationResult,
-    *,
-    fix_level: int = FIX_NONE,
-) -> None:
-    """For accounts with autorecharge enabled and a Stripe customer,
-    verify that at least one payment method exists.
-
-    Tier: safe — disables autorecharge (it will fail anyway).
-    """
-    fix = fix_level >= FIX_SAFE
-    accounts: List[BillingAccount] = (
-        session.query(BillingAccount)
-        .filter(
-            BillingAccount.autorecharge.is_(True),
-            BillingAccount.stripe_customer_id.isnot(None),
-            BillingAccount.account_status == "ACTIVE",
-        )
-        .all()
-    )
-
-    for ba in accounts:
-        try:
-            methods = stripe.PaymentMethod.list(
-                customer=ba.stripe_customer_id,
-                limit=1,
-            )
-            has_method = bool(
-                (
-                    methods.get("data")
-                    if isinstance(methods, dict)
-                    else getattr(methods, "data", [])
-                ),
-            )
-            if not has_method:
-                result.discrepancies.append(
-                    Discrepancy(
-                        category="missing_payment_method",
-                        severity="warning",
-                        billing_account_id=ba.id,
-                        stripe_id=ba.stripe_customer_id,
-                        detail=(
-                            f"BA {ba.id} has autorecharge enabled but Stripe "
-                            f"customer {ba.stripe_customer_id} has no payment "
-                            f"methods — autorecharge will fail"
-                        ),
-                        auto_fixed=fix,
-                    ),
-                )
-                if fix:
-                    ba.autorecharge = False
-                    logger.info(
-                        "Auto-fixed BA %s: disabled autorecharge "
-                        "(no payment methods on customer %s)",
-                        ba.id,
-                        ba.stripe_customer_id,
-                    )
-        except Exception as e:
-            result.errors.append(
-                f"Error checking payment methods for BA {ba.id}: {e}",
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -1294,124 +1185,6 @@ def _check_webhook_gaps(
 
 
 # ---------------------------------------------------------------------------
-# Check 11: Failed recharge credit void verification
-# ---------------------------------------------------------------------------
-
-
-def _check_failed_recharge_voids(
-    session: Session,
-    result: ReconciliationResult,
-    *,
-    fix_level: int = FIX_NONE,
-) -> None:
-    """Verify that FAILED auto-recharges had their credits properly voided.
-
-    Auto-recharge grants credits immediately (PENDING_INVOICE) and bills
-    at month-end.  When the invoice ultimately fails, credits should be
-    voided (deducted back).  If the void was missed, the account has
-    unearned credits.
-
-    Only examines recharges that were already FAILED before this
-    reconciliation run (excludes recharges just fixed by earlier checks
-    like stale-recharge → FAILED, which void credits as part of their
-    own auto-fix).
-
-    Tier: ``all`` — deducts the unvoided credits.
-    """
-    already_fixed_ids = {
-        d.stripe_id for d in result.discrepancies if d.auto_fixed and d.stripe_id
-    }
-
-    failed_auto = (
-        session.query(Recharge)
-        .filter(
-            Recharge.status == RechargeStatus.FAILED,
-            Recharge.type == RECHARGE_TYPE_AUTO,
-            Recharge.stripe_invoice_id.isnot(None),
-            Recharge.quantity > 0,
-        )
-        .all()
-    )
-
-    failed_auto = [
-        r for r in failed_auto if r.stripe_invoice_id not in already_fixed_ids
-    ]
-
-    for recharge in failed_auto:
-        try:
-            inv = stripe.Invoice.retrieve(recharge.stripe_invoice_id)
-        except Exception:
-            continue
-
-        inv_status = (
-            inv.get("status") if isinstance(inv, dict) else getattr(inv, "status", None)
-        )
-        if inv_status not in ("void", "uncollectible"):
-            continue
-
-        ba = (
-            session.query(BillingAccount)
-            .filter_by(id=recharge.billing_account_id)
-            .first()
-        )
-        if ba is None:
-            continue
-
-        paid_total = (
-            session.query(func.coalesce(func.sum(Recharge.quantity), 0))
-            .filter(
-                Recharge.billing_account_id == ba.id,
-                Recharge.status == RechargeStatus.PAID,
-            )
-            .scalar()
-        )
-
-        if ba.credits > paid_total:
-            fixed = False
-            if fix_level >= FIX_ALL:
-                from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
-                ba_dao = BillingAccountDAO(session)
-                ba_dao.deduct_credits(
-                    ba.id,
-                    float(recharge.quantity),
-                    category="void",
-                    description="Reconciliation: voided unearned credits",
-                    detail={
-                        "event": "reconciliation_void",
-                        "recharge_id": recharge.id,
-                        "stripe_invoice_id": recharge.stripe_invoice_id,
-                    },
-                )
-                fixed = True
-                logger.info(
-                    "Auto-fixed BA %s: voided %s unearned credits from "
-                    "FAILED recharge %s",
-                    ba.id,
-                    recharge.quantity,
-                    recharge.id,
-                )
-
-            result.discrepancies.append(
-                Discrepancy(
-                    category="unvoided_failed_recharge",
-                    severity="critical",
-                    billing_account_id=ba.id,
-                    stripe_id=recharge.stripe_invoice_id,
-                    detail=(
-                        f"FAILED auto-recharge {recharge.id} "
-                        f"(${float(recharge.quantity):.2f}) was not voided — "
-                        f"BA has {float(ba.credits):.2f} credits vs "
-                        f"{float(paid_total):.2f} from paid recharges"
-                    ),
-                    auto_fixed=fixed,
-                ),
-            )
-
-        result.recharges_checked += 1
-
-
-# ---------------------------------------------------------------------------
 # Check 12: Grace period without negative balance
 # ---------------------------------------------------------------------------
 
@@ -1508,6 +1281,8 @@ def _check_unjustified_suspensions(
     Uses ``suspension_reason`` to decide whether a suspension is intentional:
 
     - ``admin_freeze`` → intentional, always skipped.
+    - ``past_due`` → Stripe-driven (subscription ``unpaid`` after dunning);
+      legitimate while the subscription is unpaid, always skipped.
     - ``dispute`` → flagged only if no active DISPUTED recharges remain
       (dispute may have been resolved without the webhook clearing the
       status).  Auto-fixed at ``moderate``.
@@ -1524,7 +1299,7 @@ def _check_unjustified_suspensions(
     )
 
     for ba in suspended:
-        if ba.suspension_reason == "admin_freeze":
+        if ba.suspension_reason in ("admin_freeze", "past_due"):
             continue
 
         active_disputes = (
@@ -1727,6 +1502,131 @@ def _check_plan_assignment_integrity(
                     "points at it; either the BA's pointer was cleared "
                     "without closing this row, or a duplicate active row was "
                     "inserted bypassing set_plan()"
+                ),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Self-serve subscriptions: local ↔ Stripe state drift
+# ---------------------------------------------------------------------------
+
+
+def _check_subscription_state_drift(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    stale_days: int = 3,
+) -> None:
+    """Flag accounts whose local self-serve subscription state looks wrong.
+
+    The Stripe Subscription is the collection engine for CREDITS tier
+    plans; the local ``BillingAccount`` mirrors it via
+    ``stripe_subscription_id`` + ``current_period_end`` and the active
+    ``BillingPlanAssignment``. Three drifts can silently break billing:
+
+    * **Missing subscription id** — the active plan is a
+      ``STRIPE_SUBSCRIPTION`` tier but ``stripe_subscription_id IS NULL``
+      (nothing will ever bill / grant credits).
+    * **Stale cycle** — on a sub tier with a subscription id, but
+      ``current_period_end`` is more than ``stale_days`` in the past: a
+      ``invoice.paid`` (cycle) webhook was likely missed, so credits
+      never reset/renewed.
+    * **Orphaned subscription id** — ``stripe_subscription_id`` is set but
+      the active plan is NOT a sub tier (e.g. a cancel reverted the plan
+      but left the id, or vice-versa).
+
+    Flag-only at ``warning`` (no Stripe call, no auto-fix) — operators
+    reconcile against the Stripe dashboard via the runbook.
+    """
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - timedelta(days=stale_days)
+    sub_method = CollectionMethod.STRIPE_SUBSCRIPTION.value
+
+    rows = (
+        session.query(BillingAccount, BillingPlanTemplate)
+        .join(
+            BillingPlanAssignment,
+            BillingAccount.plan_assignment_id == BillingPlanAssignment.id,
+        )
+        .join(
+            BillingPlanTemplate,
+            BillingPlanTemplate.id == BillingPlanAssignment.template_id,
+        )
+        .filter(BillingPlanAssignment.ended_at.is_(None))
+        .all()
+    )
+
+    seen_ids: set[int] = set()
+    for ba, template in rows:
+        seen_ids.add(ba.id)
+        is_sub_tier = template.collection_method == sub_method
+
+        if is_sub_tier and not ba.stripe_subscription_id:
+            result.discrepancies.append(
+                Discrepancy(
+                    category="subscription_state_drift",
+                    severity="warning",
+                    billing_account_id=ba.id,
+                    detail=(
+                        f"BA {ba.id} active plan is a self-serve subscription "
+                        f"tier ({template.name!r}) but stripe_subscription_id "
+                        "is NULL — nothing will bill or grant monthly credits"
+                    ),
+                ),
+            )
+        elif is_sub_tier and ba.stripe_subscription_id:
+            cpe = ba.current_period_end
+            if cpe is not None:
+                if cpe.tzinfo is None:
+                    cpe = cpe.replace(tzinfo=timezone.utc)
+                if cpe < stale_cutoff:
+                    result.discrepancies.append(
+                        Discrepancy(
+                            category="subscription_state_drift",
+                            severity="warning",
+                            billing_account_id=ba.id,
+                            detail=(
+                                f"BA {ba.id} subscription cycle is stale: "
+                                f"current_period_end {cpe.isoformat()} is "
+                                f">{stale_days}d in the past — a cycle "
+                                "invoice.paid webhook was likely missed"
+                            ),
+                        ),
+                    )
+        elif (not is_sub_tier) and ba.stripe_subscription_id:
+            result.discrepancies.append(
+                Discrepancy(
+                    category="subscription_state_drift",
+                    severity="warning",
+                    billing_account_id=ba.id,
+                    detail=(
+                        f"BA {ba.id} has stripe_subscription_id "
+                        f"{ba.stripe_subscription_id!r} but its active plan "
+                        f"({template.name!r}) is not a subscription tier — "
+                        "the subscription may need cancelling in Stripe"
+                    ),
+                ),
+            )
+
+    # Accounts carrying a subscription id with no active assignment at all.
+    orphans = (
+        session.query(BillingAccount)
+        .filter(BillingAccount.stripe_subscription_id.isnot(None))
+        .all()
+    )
+    for ba in orphans:
+        if ba.id in seen_ids:
+            continue
+        result.discrepancies.append(
+            Discrepancy(
+                category="subscription_state_drift",
+                severity="warning",
+                billing_account_id=ba.id,
+                detail=(
+                    f"BA {ba.id} has stripe_subscription_id "
+                    f"{ba.stripe_subscription_id!r} but no active plan "
+                    "assignment — local plan state is missing"
                 ),
             ),
         )
@@ -2161,8 +2061,6 @@ def _enrich_discrepancies(
             "stale_recharge",
             "stuck_dispute",
             "status_credit_mismatch",
-            "autorecharge_no_customer",
-            "unvoided_failed_recharge",
             "unjustified_suspension",
         },
     )

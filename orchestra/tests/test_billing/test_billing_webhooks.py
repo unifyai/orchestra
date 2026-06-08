@@ -2,15 +2,12 @@
 Billing webhook handler tests.
 
 Tests call the webhook handler functions directly (e.g.
-``process_checkout_session_event``, ``process_invoice_event``,
-``handle_event_core``) — **no live Stripe API**.
+``process_invoice_event``, ``handle_event_core``) — **no live Stripe API**.
 
 Sections:
-- CheckoutSessionEvent: checkout.session.completed for user & org
 - InvoiceEvent: invoice.payment_succeeded / failed idempotency
 - ChargeDispute: charge.dispute.created idempotency
 - WebhookIdempotency: duplicate event de-duplication
-- CheckoutEligibility: spending threshold tracking via checkout
 """
 
 from __future__ import annotations
@@ -19,17 +16,35 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Recharge, RechargeStatus, WebhookLog
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
+from orchestra.db.models.enums import CommitPeriod
+from orchestra.db.models.orchestra_models import (
+    DEFAULT_TEMPLATE_ID,
+    RECHARGE_TYPE_MONTHLY_COMMIT,
+    BillingPlanTemplate,
+    Recharge,
+    RechargeStatus,
+    WebhookLog,
+)
+from orchestra.lib.credit_grants import GRANT_KIND_PLAN, grant_expiring_credits
 from orchestra.settings import settings
 from orchestra.tests.test_billing.conftest import (
+    TIER_50_ID,
+    TIER_75_ID,
     make_org_with_billing,
     make_user_with_billing,
+    put_on_tier,
+    subscription_invoice_event,
+    template_by_name,
 )
 
 
@@ -92,287 +107,6 @@ def _signed_hdr(body: str) -> str:
         hashlib.sha256,
     ).hexdigest()
     return f"t={ts},v1={sig}"
-
-
-# ============================================================================
-# Checkout Session Events
-# ============================================================================
-
-
-class TestCheckoutSessionEvent:
-    """Direct tests for process_checkout_session_event."""
-
-    def test_user_checkout_adds_credits(self, dbsession, monkeypatch):
-        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "wh_user_ckout",
-            credits=0,
-            stripe_customer_id="cus_wh_user",
-        )
-        dbsession.commit()
-
-        event = {
-            "id": "evt_user_checkout",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": user.id,
-                    "amount_total": 5000,
-                    "customer": "cus_wh_user",
-                    "payment_intent": "pi_wh_user",
-                    "metadata": {},
-                },
-            },
-        }
-
-        response = process_checkout_session_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 50.0
-
-        recharge = (
-            dbsession.query(Recharge)
-            .filter_by(billing_account_id=ba.id, type="payment")
-            .first()
-        )
-        assert recharge is not None
-        assert recharge.quantity == Decimal("50")
-        assert recharge.amount_usd == Decimal("50")
-        assert recharge.status == RechargeStatus.PAID
-
-    def test_org_checkout_adds_credits(self, dbsession, monkeypatch):
-        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
-
-        org, org_ba = make_org_with_billing(
-            dbsession,
-            name="Checkout Org",
-            stripe_customer_id="cus_wh_org",
-            credits=0,
-        )
-        dbsession.commit()
-
-        event = {
-            "id": "evt_org_checkout",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": None,
-                    "amount_total": 10000,
-                    "customer": "cus_wh_org",
-                    "payment_intent": "pi_wh_org",
-                    "metadata": {"organization_id": str(org.id)},
-                },
-            },
-        }
-
-        response = process_checkout_session_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(org_ba)
-        assert float(org_ba.credits) == 100.0
-
-        recharge = (
-            dbsession.query(Recharge)
-            .filter_by(billing_account_id=org_ba.id, type="payment")
-            .first()
-        )
-        assert recharge is not None
-        assert recharge.quantity == Decimal("100")
-        assert recharge.status == RechargeStatus.PAID
-
-    def test_checkout_eligibility_counts_toward_autorecharge(
-        self,
-        dbsession,
-        monkeypatch,
-    ):
-        """Checkout-created Recharge counts toward auto-recharge eligibility."""
-        from orchestra.db.dao.billing_account_dao import (
-            MIN_SPEND_FOR_AUTO_RECHARGE,
-            BillingAccountDAO,
-        )
-        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "wh_elig_user",
-            credits=0,
-            stripe_customer_id="cus_wh_elig",
-        )
-        dbsession.commit()
-
-        ba_dao = BillingAccountDAO(dbsession)
-        assert not ba_dao.can_enable_auto_recharge(ba.id)
-
-        event = {
-            "id": "evt_elig_checkout",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": user.id,
-                    "amount_total": 120000,
-                    "customer": "cus_wh_elig",
-                    "payment_intent": "pi_wh_elig",
-                    "metadata": {},
-                },
-            },
-        }
-
-        process_checkout_session_event(event, dbsession)
-
-        total_spending = ba_dao.get_total_spending(ba.id)
-        assert float(total_spending) == 1200.0
-        assert total_spending >= MIN_SPEND_FOR_AUTO_RECHARGE
-        assert ba_dao.can_enable_auto_recharge(ba.id)
-
-    def test_user_checkout_adds_credits_with_negative_balance(
-        self,
-        dbsession,
-        monkeypatch,
-    ):
-        """User with negative balance buying credits stays ACTIVE; balance goes positive."""
-        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "wh_restore_user",
-            credits=-10,
-            stripe_customer_id="cus_wh_restore",
-            account_status="ACTIVE",
-        )
-        dbsession.commit()
-
-        event = {
-            "id": "evt_restore_user",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": user.id,
-                    "amount_total": 5000,
-                    "customer": "cus_wh_restore",
-                    "payment_intent": "pi_wh_restore",
-                    "metadata": {},
-                },
-            },
-        }
-
-        response = process_checkout_session_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 40.0
-        assert ba.account_status == "ACTIVE"
-
-    def test_user_checkout_stays_active_even_if_still_negative(
-        self,
-        dbsession,
-        monkeypatch,
-    ):
-        """User whose checkout doesn't cover the deficit stays ACTIVE with negative balance."""
-        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "wh_still_pd",
-            credits=-100,
-            stripe_customer_id="cus_wh_still_pd",
-            account_status="ACTIVE",
-        )
-        dbsession.commit()
-
-        event = {
-            "id": "evt_still_pd",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": user.id,
-                    "amount_total": 5000,
-                    "customer": "cus_wh_still_pd",
-                    "payment_intent": "pi_still_pd",
-                    "metadata": {},
-                },
-            },
-        }
-
-        response = process_checkout_session_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(ba)
-        assert float(ba.credits) == -50.0
-        assert ba.account_status == "ACTIVE"
-
-    def test_org_checkout_adds_credits_with_negative_balance(
-        self,
-        dbsession,
-        monkeypatch,
-    ):
-        """Org with negative balance buying credits stays ACTIVE."""
-        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
-
-        org, org_ba = make_org_with_billing(
-            dbsession,
-            name="Restore Org",
-            stripe_customer_id="cus_wh_org_restore",
-            credits=-5,
-        )
-        dbsession.commit()
-
-        event = {
-            "id": "evt_org_restore",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": None,
-                    "amount_total": 10000,
-                    "customer": "cus_wh_org_restore",
-                    "payment_intent": "pi_org_restore",
-                    "metadata": {"organization_id": str(org.id)},
-                },
-            },
-        }
-
-        response = process_checkout_session_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(org_ba)
-        assert float(org_ba.credits) == 95.0
-        assert org_ba.account_status == "ACTIVE"
-
-    def test_active_account_stays_active_after_checkout(self, dbsession, monkeypatch):
-        """Already-ACTIVE account stays ACTIVE (no status change)."""
-        from orchestra.web.api.webhooks.stripe import process_checkout_session_event
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "wh_already_active",
-            credits=10,
-            stripe_customer_id="cus_wh_active",
-            account_status="ACTIVE",
-        )
-        dbsession.commit()
-
-        event = {
-            "id": "evt_stay_active",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": user.id,
-                    "amount_total": 2000,
-                    "customer": "cus_wh_active",
-                    "payment_intent": "pi_stay_active",
-                    "metadata": {},
-                },
-            },
-        }
-
-        response = process_checkout_session_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 30.0
-        assert ba.account_status == "ACTIVE"
 
 
 # ============================================================================
@@ -533,22 +267,17 @@ class TestInvoiceSelfHealing:
     def test_self_heal_links_orphaned_recharges_on_failure(
         self,
         dbsession,
-        monkeypatch,
     ):
-        """payment_failed for unknown invoice_id resolves via metadata
-        and voids credits."""
+        """payment_failed for unknown invoice_id resolves the recharge via
+        metadata and marks it FAILED.
+
+        Final failure is a bookkeeping signal only: credits are NOT voided
+        and the account is left ACTIVE (the legacy postpaid credit-voiding
+        flow was retired with auto-recharge)."""
         import datetime as _dt
 
-        import orchestra.web.api.webhooks.stripe as wh_mod
         from orchestra.lib.time import month_end_utc
         from orchestra.web.api.webhooks.stripe import process_invoice_event
-
-        voided = []
-        mock_stripe = SimpleNamespace(
-            Invoice=SimpleNamespace(void_invoice=lambda iid: voided.append(iid)),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
 
         user, ba = make_user_with_billing(
             dbsession,
@@ -594,118 +323,43 @@ class TestInvoiceSelfHealing:
 
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
-        assert float(ba.credits) == 30  # 80 - 50 voided
-        assert voided == ["in_orphan_fail"]
+        assert float(ba.credits) == 80  # credits NOT voided on failure
 
 
-class TestInvoicePaymentFailedVoidsCredits:
-    """When an invoice payment definitively fails, the postpaid credits
-    that were granted during auto-recharge should be voided."""
+class TestInvoicePaymentFailedMarksFailed:
+    """Final (non-subscription) invoice failure marks the recharge rows
+    FAILED as a bookkeeping signal, without voiding credits or auto-voiding
+    the Stripe invoice (the legacy auto-recharge debt-settlement flow was
+    retired). The invoice represents real, already-incurred usage and is
+    left outstanding in Stripe for collection/retry."""
 
-    def test_final_failure_voids_credits_and_keeps_active(
-        self,
-        dbsession,
-        monkeypatch,
-    ):
-        import orchestra.web.api.webhooks.stripe as wh_mod
+    def test_final_failure_marks_failed_without_voiding(self, dbsession):
         from orchestra.web.api.webhooks.stripe import process_invoice_event
-
-        voided = []
-        mock_stripe = SimpleNamespace(
-            Invoice=SimpleNamespace(void_invoice=lambda iid: voided.append(iid)),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
 
         user, ba = make_user_with_billing(
             dbsession,
-            "wh_void_user",
+            "wh_fail_marks",
             credits=120,
-            stripe_customer_id="cus_void",
+            stripe_customer_id="cus_fail_marks",
         )
 
-        r1 = Recharge(
+        rec = Recharge(
             billing_account_id=ba.id,
             quantity=Decimal("50"),
             amount_usd=Decimal("50.00"),
             status=RechargeStatus.INVOICE_CREATED,
-            stripe_invoice_id="in_void_test",
-            type="auto",
-        )
-        r2 = Recharge(
-            billing_account_id=ba.id,
-            quantity=Decimal("30"),
-            amount_usd=Decimal("30.00"),
-            status=RechargeStatus.INVOICE_CREATED,
-            stripe_invoice_id="in_void_test",
-            type="auto",
-        )
-        dbsession.add_all([r1, r2])
-        dbsession.commit()
-
-        event = {
-            "id": "evt_void_final",
-            "type": "invoice.payment_failed",
-            "data": {
-                "object": {
-                    "id": "in_void_test",
-                    "status": "uncollectible",
-                    "metadata": {},
-                },
-            },
-        }
-
-        response = process_invoice_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(r1)
-        dbsession.refresh(r2)
-        assert r1.status == RechargeStatus.FAILED
-        assert r2.status == RechargeStatus.FAILED
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"
-        assert float(ba.credits) == 40  # 120 - (50 + 30) voided
-        assert voided == ["in_void_test"]
-
-    def test_void_stripe_error_is_non_fatal(self, dbsession, monkeypatch):
-        """If Stripe void fails, credits are still voided and the webhook
-        succeeds — the void is best-effort."""
-        import orchestra.web.api.webhooks.stripe as wh_mod
-        from orchestra.web.api.webhooks.stripe import process_invoice_event
-
-        def raise_stripe_error(iid):
-            raise Exception("Stripe API down")
-
-        mock_stripe = SimpleNamespace(
-            Invoice=SimpleNamespace(void_invoice=raise_stripe_error),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(wh_mod, "stripe", mock_stripe)
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "wh_void_err",
-            credits=100,
-            stripe_customer_id="cus_void_err",
-        )
-        rec = Recharge(
-            billing_account_id=ba.id,
-            quantity=Decimal("60"),
-            amount_usd=Decimal("60.00"),
-            status=RechargeStatus.INVOICE_CREATED,
-            stripe_invoice_id="in_void_err_test",
-            type="auto",
+            stripe_invoice_id="in_fail_marks",
+            type="monthly_commit",
         )
         dbsession.add(rec)
         dbsession.commit()
 
         event = {
-            "id": "evt_void_err",
+            "id": "evt_fail_marks",
             "type": "invoice.payment_failed",
             "data": {
                 "object": {
-                    "id": "in_void_err_test",
+                    "id": "in_fail_marks",
                     "status": "uncollectible",
                     "metadata": {},
                 },
@@ -720,59 +374,7 @@ class TestInvoicePaymentFailedVoidsCredits:
 
         dbsession.refresh(ba)
         assert ba.account_status == "ACTIVE"
-        assert float(ba.credits) == 40  # 100 - 60 voided despite void failure
-
-    def test_intermediate_failure_disables_autorecharge_but_keeps_credits(
-        self,
-        dbsession,
-    ):
-        """Non-final failures (Stripe still retrying) leave credits intact
-        but disable auto-recharge to prevent compounding debt."""
-        from orchestra.web.api.webhooks.stripe import process_invoice_event
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "wh_retry_user",
-            credits=100,
-            stripe_customer_id="cus_retry",
-        )
-        ba.autorecharge = True
-        ba.autorecharge_threshold = Decimal("10")
-        ba.autorecharge_qty = Decimal("50")
-
-        rec = Recharge(
-            billing_account_id=ba.id,
-            quantity=Decimal("50"),
-            amount_usd=Decimal("50.00"),
-            status=RechargeStatus.INVOICE_CREATED,
-            stripe_invoice_id="in_retry_test",
-            type="auto",
-        )
-        dbsession.add(rec)
-        dbsession.commit()
-
-        event = {
-            "id": "evt_retry_1",
-            "type": "invoice.payment_failed",
-            "data": {
-                "object": {
-                    "id": "in_retry_test",
-                    "status": "open",
-                    "metadata": {},
-                },
-            },
-        }
-
-        response = process_invoice_event(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(rec)
-        assert rec.status == RechargeStatus.INVOICE_CREATED  # unchanged
-
-        dbsession.refresh(ba)
-        assert ba.account_status == "ACTIVE"  # not degraded
-        assert float(ba.credits) == 100  # credits intact
-        assert ba.autorecharge is False  # disabled to prevent compounding
+        assert float(ba.credits) == 120  # credits untouched
 
 
 # ============================================================================
@@ -906,7 +508,6 @@ class TestDisputeCreated:
             credits=100,
             stripe_customer_id="cus_dp_dispute",
         )
-        ba.autorecharge = True
         rec = Recharge(
             billing_account_id=ba.id,
             quantity=Decimal("80"),
@@ -935,7 +536,6 @@ class TestDisputeCreated:
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
         assert ba.suspension_reason == "dispute"
-        assert ba.autorecharge is False
         assert float(ba.credits) == 20  # 100 - 80
 
         dbsession.refresh(rec)
@@ -968,7 +568,6 @@ class TestDisputeCreated:
             credits=200,
             stripe_customer_id="cus_inv_dispute",
         )
-        ba.autorecharge = True
         r1 = Recharge(
             billing_account_id=ba.id,
             quantity=Decimal("50"),
@@ -1005,7 +604,6 @@ class TestDisputeCreated:
         dbsession.refresh(ba)
         assert ba.account_status == "SUSPENDED"
         assert ba.suspension_reason == "dispute"
-        assert ba.autorecharge is False
         assert float(ba.credits) == 120  # 200 - (50 + 30)
 
         dbsession.refresh(r1)
@@ -1077,7 +675,6 @@ class TestDisputeClosed:
         )
         ba.account_status = "SUSPENDED"
         ba.suspension_reason = "dispute"
-        ba.autorecharge = False
         r = Recharge(
             billing_account_id=ba.id,
             quantity=Decimal("60"),
@@ -1789,37 +1386,6 @@ class TestCashBalanceTransactionEvent:
 class TestHandleEventCore:
     """Tests for the main event dispatcher."""
 
-    def test_routes_checkout_event(self, dbsession, monkeypatch):
-        from orchestra.web.api.webhooks.stripe import handle_event_core
-
-        user, ba = make_user_with_billing(
-            dbsession,
-            "core_checkout_user",
-            credits=0,
-            stripe_customer_id="cus_core",
-        )
-        dbsession.commit()
-
-        event = {
-            "id": "evt_core_checkout",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": user.id,
-                    "amount_total": 2500,
-                    "customer": "cus_core",
-                    "payment_intent": "pi_core",
-                    "metadata": {},
-                },
-            },
-        }
-
-        response = handle_event_core(event, dbsession)
-        assert response.status_code == 200
-
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 25.0
-
     def test_routes_invoice_event(self, dbsession):
         from orchestra.web.api.webhooks.stripe import handle_event_core
 
@@ -1874,3 +1440,1017 @@ class TestHandleEventCore:
         )
         assert log is not None
         assert log.event_type == "some.unknown.event"
+
+
+# ============================================================================
+# Self-serve subscription webhooks
+# ============================================================================
+
+
+class TestSelfServeSubscriptionWebhooks:
+    """Self-serve subscription lifecycle via the webhook handlers.
+
+    Calls ``process_invoice_event`` / ``process_subscription_event`` directly
+    with synthetic Stripe event dicts (no live Stripe): ``invoice.paid``
+    grant + cycle reset, ``invoice.payment_failed`` soft past-due,
+    ``customer.subscription.updated`` tier/status sync, and
+    ``customer.subscription.deleted`` revert. Seeded tiers: id 2 = tier_50,
+    id 3 = tier_75 (see the ``self_serve_subscription_tiers`` migration).
+    """
+
+    def test_invoice_paid_subscription_create_grants_credits(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_create",
+            stripe_customer_id="cus_sub_create",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_create")
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_sub_create",
+            subscription_id="sub_create",
+            billing_reason="subscription_create",
+        )
+        resp = process_invoice_event(event, dbsession)
+        assert resp.status_code == 200
+
+        dao = BillingAccountDAO(dbsession)
+        assert dao.get_credits(ba.id) == Decimal("50")
+
+        recharge = (
+            dbsession.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.type == RECHARGE_TYPE_MONTHLY_COMMIT,
+            )
+            .one()
+        )
+        assert recharge.status == RechargeStatus.PAID
+        assert recharge.quantity == Decimal("50")
+
+        # The next-renewal mirror is populated from the invoice period end.
+        dbsession.refresh(ba)
+        assert ba.current_period_end is not None
+
+    def test_invoice_paid_proration_records_recharge_without_granting(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A ``subscription_update`` (proration) invoice is recorded as a PAID
+        Recharge row so the in-app list matches Stripe, but does NOT move the
+        wallet (the tier-change endpoint already granted the delta inline)."""
+        from orchestra.db.models.orchestra_models import RECHARGE_TYPE_PRORATION
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_prorate",
+            stripe_customer_id="cus_sub_prorate",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_prorate")
+        credits_before = BillingAccountDAO(dbsession).get_credits(ba.id)
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_sub_prorate",
+            subscription_id="sub_prorate",
+            billing_reason="subscription_update",
+        )
+        # $24.00 prorated upgrade charge.
+        event["data"]["object"]["amount_paid"] = 2400
+        resp = process_invoice_event(event, dbsession)
+        assert resp.status_code == 200
+
+        # Wallet untouched — no grant on a proration invoice.
+        assert BillingAccountDAO(dbsession).get_credits(ba.id) == credits_before
+
+        # A PAID proration Recharge row was recorded for the invoice list.
+        recharge = (
+            dbsession.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.type == RECHARGE_TYPE_PRORATION,
+            )
+            .one()
+        )
+        assert recharge.status == RechargeStatus.PAID
+        assert recharge.amount_usd == Decimal("24")
+        assert recharge.stripe_invoice_id == "in_sub_prorate"
+
+        # Idempotent: redelivery of the same invoice doesn't duplicate the row
+        # (use a fresh event id so the webhook-log guard doesn't short-circuit).
+        event["id"] = "evt_invoice.paid_sub_prorate_again"
+        process_invoice_event(event, dbsession)
+        rows = (
+            dbsession.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.type == RECHARGE_TYPE_PRORATION,
+            )
+            .all()
+        )
+        assert len(rows) == 1
+
+    def test_invoice_paid_subscription_create_activates_tier_from_default(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """First paid invoice activates the tier — subscribe no longer does.
+
+        The account is still on the free/default tier (activation is deferred
+        to first payment so an abandoned checkout never looks subscribed); the
+        ``invoice.paid`` (subscription_create) carrying the tier rung activates
+        the plan and grants its credits.
+        """
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_defer",
+            stripe_customer_id="cus_sub_defer",
+        )
+        ba.stripe_subscription_id = "sub_defer"
+        dbsession.flush()
+
+        # Precondition: still on the default tier (not subscribed).
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == DEFAULT_TEMPLATE_ID
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_sub_defer",
+            subscription_id="sub_defer",
+            billing_reason="subscription_create",
+            quantity=50,
+        )
+        resp = process_invoice_event(event, dbsession)
+        assert resp.status_code == 200
+
+        # Tier activated from the invoice rung, and its credits granted.
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == TIER_50_ID
+        assert BillingAccountDAO(dbsession).get_credits(ba.id) == Decimal("50")
+
+    def test_invoice_paid_basil_schema_routes_and_grants(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A basil-API invoice (subscription id under ``parent``, no top-level
+        ``subscription``) still routes to the subscription handler, activates
+        the tier and grants credits.
+
+        Regression: the routing guard used ``invoice.subscription`` which the
+        2025-05-28 API removed, so first payments silently fell through to the
+        legacy no-op path and never granted the cycle's credits.
+        """
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_basil",
+            stripe_customer_id="cus_sub_basil",
+        )
+        ba.stripe_subscription_id = "sub_basil"
+        dbsession.flush()
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_sub_basil",
+            subscription_id="sub_basil",
+            billing_reason="subscription_create",
+            quantity=50,
+            basil=True,
+        )
+        # Sanity: this fixture carries no top-level subscription id.
+        assert event["data"]["object"].get("subscription") is None
+
+        resp = process_invoice_event(event, dbsession)
+        assert resp.status_code == 200
+
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == TIER_50_ID
+        assert BillingAccountDAO(dbsession).get_credits(ba.id) == Decimal("50")
+
+    def test_invoice_paid_basil_annual_grants_full_year(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """For a basil invoice the annual rung is inferred from the billing
+        period span (the line no longer carries a recurring interval), so an
+        annual subscription grants the full 12× bucket — not one month."""
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_basil_ann",
+            stripe_customer_id="cus_sub_basil_ann",
+        )
+        ba.stripe_subscription_id = "sub_basil_ann"
+        dbsession.flush()
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_sub_basil_ann",
+            subscription_id="sub_basil_ann",
+            billing_reason="subscription_create",
+            quantity=50,
+            annual=True,
+            basil=True,
+        )
+        resp = process_invoice_event(event, dbsession)
+        assert resp.status_code == 200
+
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        template = dbsession.get(BillingPlanTemplate, plan.template_id)
+        assert template is not None
+        assert template.commit_period == CommitPeriod.ANNUAL
+        # 12× the $50 monthly rung granted up front as a single bucket.
+        assert BillingAccountDAO(dbsession).get_credits(ba.id) == Decimal("600")
+
+    def test_invoice_paid_subscription_cycle_forfeits_then_regrants(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_cycle",
+            stripe_customer_id="cus_sub_cycle",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_cycle")
+        dao = BillingAccountDAO(dbsession)
+
+        # Prior cycle's plan grant, partially consumed.
+        grant_expiring_credits(
+            dbsession,
+            ba.id,
+            50,
+            grant_kind=GRANT_KIND_PLAN,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=2),
+        )
+        dao.deduct_credits(ba.id, 20, category="llm")
+        dbsession.flush()
+        assert dao.get_credits(ba.id) == Decimal("30")
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_sub_cycle",
+            subscription_id="sub_cycle",
+            billing_reason="subscription_cycle",
+        )
+        process_invoice_event(event, dbsession)
+
+        # Prior remainder (30) forfeited, fresh 50 granted → exactly 50.
+        assert dao.get_credits(ba.id) == Decimal("50")
+
+    def test_invoice_payment_failed_marks_past_due_soft(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """First failure is a *soft* past-due: flagged but still ACTIVE.
+
+        Service must not be cut off during Stripe's dunning/retry window.
+        """
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_fail",
+            stripe_customer_id="cus_sub_fail",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_fail")
+
+        event = subscription_invoice_event(
+            "invoice.payment_failed",
+            customer_id="cus_sub_fail",
+            subscription_id="sub_fail",
+            billing_reason="subscription_cycle",
+        )
+        process_invoice_event(event, dbsession)
+
+        dbsession.refresh(ba)
+        # Soft past-due records ``payment_past_due_at`` and keeps the account
+        # cleanly ACTIVE — ``suspension_reason`` stays NULL (reserved for an
+        # actual suspension).
+        assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
+        assert ba.payment_past_due_at is not None
+
+    def test_subscription_unpaid_suspends(self, dbsession: Session) -> None:
+        """Once Stripe exhausts retries (status=unpaid) the account suspends."""
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_unpaid",
+            stripe_customer_id="cus_sub_unpaid",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_unpaid")
+        ba.payment_past_due_at = datetime.now(timezone.utc)
+        dbsession.flush()
+
+        event = {
+            "id": "evt_sub_unpaid",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_unpaid",
+                    "customer": "cus_sub_unpaid",
+                    "status": "unpaid",
+                    "items": {"data": [{"quantity": 50}]},
+                },
+            },
+        }
+        process_subscription_event(event, dbsession)
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "SUSPENDED"
+        assert ba.suspension_reason == "past_due"
+        assert ba.payment_past_due_at is not None
+
+    def test_subscription_active_clears_past_due(self, dbsession: Session) -> None:
+        """A return to status=active lifts a past-due hold."""
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_recover_status",
+            stripe_customer_id="cus_sub_recover_status",
+            account_status="SUSPENDED",
+        )
+        ba.suspension_reason = "past_due"
+        ba.payment_past_due_at = datetime.now(timezone.utc)
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_recover_status")
+
+        event = {
+            "id": "evt_sub_recover_status",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_recover_status",
+                    "customer": "cus_sub_recover_status",
+                    "status": "active",
+                    "items": {"data": [{"quantity": 50}]},
+                },
+            },
+        }
+        process_subscription_event(event, dbsession)
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
+        assert ba.payment_past_due_at is None
+
+    def test_subscription_active_clears_soft_past_due(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A return to status=active clears a *soft* delinquency marker on an
+        account that never escalated to suspension."""
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_recover_soft",
+            stripe_customer_id="cus_sub_recover_soft",
+        )
+        ba.payment_past_due_at = datetime.now(timezone.utc)
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_recover_soft")
+
+        event = {
+            "id": "evt_sub_recover_soft",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_recover_soft",
+                    "customer": "cus_sub_recover_soft",
+                    "status": "active",
+                    "items": {"data": [{"quantity": 50}]},
+                },
+            },
+        }
+        process_subscription_event(event, dbsession)
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
+        assert ba.payment_past_due_at is None
+
+    def test_invoice_paid_clears_past_due(self, dbsession: Session) -> None:
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_recover",
+            stripe_customer_id="cus_sub_recover",
+            account_status="SUSPENDED",
+        )
+        ba.suspension_reason = "past_due"
+        ba.payment_past_due_at = datetime.now(timezone.utc)
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_recover")
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_sub_recover",
+            subscription_id="sub_recover",
+            billing_reason="subscription_cycle",
+        )
+        process_invoice_event(event, dbsession)
+
+        dbsession.refresh(ba)
+        assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
+        assert ba.payment_past_due_at is None
+
+    def test_subscription_deleted_reverts_to_default(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_del",
+            stripe_customer_id="cus_sub_del",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_del")
+        grant_expiring_credits(
+            dbsession,
+            ba.id,
+            50,
+            grant_kind=GRANT_KIND_PLAN,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=10),
+        )
+        dbsession.flush()
+
+        event = {
+            "id": "evt_sub_del",
+            "type": "customer.subscription.deleted",
+            "data": {"object": {"id": "sub_del", "customer": "cus_sub_del"}},
+        }
+        process_subscription_event(event, dbsession)
+
+        dbsession.refresh(ba)
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == DEFAULT_TEMPLATE_ID
+        assert ba.stripe_subscription_id is None
+        assert BillingAccountDAO(dbsession).get_credits(ba.id) == Decimal("0")
+
+    def test_subscription_incomplete_expired_reverts_to_default(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A new sub whose first payment never completed reverts to free."""
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_incexp",
+            stripe_customer_id="cus_sub_incexp",
+        )
+        # In practice the tier is never activated for an incomplete sub
+        # (activation is deferred to invoice.paid); we set it here anyway to
+        # prove the revert is robust and clears any lingering tier + sub id.
+        ba.stripe_subscription_id = "sub_incexp"
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_incexp")
+        dbsession.flush()
+
+        event = {
+            "id": "evt_sub_incexp",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_incexp",
+                    "customer": "cus_sub_incexp",
+                    "status": "incomplete_expired",
+                    "items": {"data": [{"quantity": 50}]},
+                },
+            },
+        }
+        process_subscription_event(event, dbsession)
+
+        dbsession.refresh(ba)
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == DEFAULT_TEMPLATE_ID
+        assert ba.stripe_subscription_id is None
+
+    def test_subscription_updated_syncs_tier(self, dbsession: Session) -> None:
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_upd",
+            stripe_customer_id="cus_sub_upd",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_upd")
+
+        event = {
+            "id": "evt_sub_upd",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_upd",
+                    "customer": "cus_sub_upd",
+                    "status": "active",
+                    "items": {"data": [{"quantity": 75}]},
+                },
+            },
+        }
+        process_subscription_event(event, dbsession)
+
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == TIER_75_ID
+
+    def test_subscription_updated_syncs_cancel_at_period_end(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """``cancel_at_period_end`` on the event mirrors onto the account and
+        clears again when the cancellation is undone (parity with Portal)."""
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_cap",
+            stripe_customer_id="cus_sub_cap",
+        )
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_cap")
+
+        def _event(cancel: bool) -> dict:
+            return {
+                "id": f"evt_sub_cap_{cancel}",
+                "type": "customer.subscription.updated",
+                "data": {
+                    "object": {
+                        "id": "sub_cap",
+                        "customer": "cus_sub_cap",
+                        "status": "active",
+                        "cancel_at_period_end": cancel,
+                        "items": {"data": [{"quantity": 50}]},
+                    },
+                },
+            }
+
+        process_subscription_event(_event(True), dbsession)
+        dbsession.refresh(ba)
+        assert ba.subscription_cancel_at_period_end is True
+
+        # Undo (e.g. via the Stripe Portal) clears the flag.
+        process_subscription_event(_event(False), dbsession)
+        dbsession.refresh(ba)
+        assert ba.subscription_cancel_at_period_end is False
+
+    def test_subscription_updated_incomplete_does_not_activate(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """An ``updated`` event while the sub is still ``incomplete`` (first
+        payment pending) must not activate/sync the tier — otherwise an
+        unpaid checkout would look subscribed."""
+        from orchestra.web.api.webhooks.stripe import process_subscription_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "sub_inc",
+            stripe_customer_id="cus_sub_inc",
+        )
+        ba.stripe_subscription_id = "sub_inc"
+        dbsession.flush()
+        # Precondition: on the default tier.
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == DEFAULT_TEMPLATE_ID
+
+        event = {
+            "id": "evt_sub_inc",
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_inc",
+                    "customer": "cus_sub_inc",
+                    "status": "incomplete",
+                    "items": {"data": [{"quantity": 50}]},
+                },
+            },
+        }
+        process_subscription_event(event, dbsession)
+
+        # Still on the default tier — no premature activation.
+        plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
+        assert plan.template_id == DEFAULT_TEMPLATE_ID
+
+    def test_annual_invoice_paid_grants_full_year_bucket(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Annual cycle grants 12× the monthly rung as a single bucket."""
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "ann_create",
+            stripe_customer_id="cus_ann_create",
+        )
+        tier_50_annual = template_by_name(dbsession, "tier_50_annual")
+        put_on_tier(dbsession, ba, tier_50_annual.id, "sub_ann_create")
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_ann_create",
+            subscription_id="sub_ann_create",
+            billing_reason="subscription_create",
+        )
+        process_invoice_event(event, dbsession)
+
+        # 50/mo rung billed annually grants 12 × 50 = 600 credits up front.
+        assert BillingAccountDAO(dbsession).get_credits(ba.id) == Decimal("600")
+
+        recharge = (
+            dbsession.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == ba.id,
+                Recharge.type == RECHARGE_TYPE_MONTHLY_COMMIT,
+            )
+            .one()
+        )
+        # Stripe quantity stays the rung (50); credits/grant are 12×.
+        assert recharge.quantity == Decimal("50")
+        dbsession.refresh(ba)
+        assert ba.plan_credits_granted_period == Decimal("600")
+
+
+# ============================================================================
+# Customer profile-flag webhooks — derived, non-PII flags only
+# ============================================================================
+#
+# After moving billing PII to Stripe, the only account-level facts we keep
+# locally are two *derived* booleans:
+#   * ``is_business`` — maintained by ``customer.tax_id.*`` (a present,
+#     non-``unverified`` tax ID flips it on; deletion flips it off).
+#   * ``billing_setup_complete`` — the subscribe/tax gate, recomputed from
+#     the live address on ``customer.updated`` so it can't go stale when the
+#     address is edited outside our PATCH endpoint (e.g. in the Stripe
+#     dashboard). The address / tax-ID *values* are never stored locally.
+# These handlers had no direct tests; the cases below pin them.
+
+
+_COMPLETE_ADDRESS = {
+    "line1": "1 Test St",
+    "city": "San Francisco",
+    "postal_code": "94105",
+    "country": "US",
+}
+
+
+def _tax_id_event(
+    event_type: str,
+    *,
+    customer_id: str | None,
+    value: str | None,
+    verification_status: str | None,
+    event_id: str,
+) -> dict:
+    """Synthetic ``customer.tax_id.*`` event dict."""
+    return {
+        "id": event_id,
+        "type": event_type,
+        "data": {
+            "object": {
+                "customer": customer_id,
+                "value": value,
+                "verification": (
+                    {"status": verification_status}
+                    if verification_status is not None
+                    else {}
+                ),
+            },
+        },
+    }
+
+
+def _customer_updated_event(
+    *,
+    customer_id: str | None,
+    address: dict | None,
+    event_id: str,
+) -> dict:
+    """Synthetic ``customer.updated`` event dict."""
+    return {
+        "id": event_id,
+        "type": "customer.updated",
+        "data": {"object": {"id": customer_id, "address": address}},
+    }
+
+
+class TestCustomerTaxIdWebhook:
+    """``customer.tax_id.*`` maintains only the derived ``is_business`` flag."""
+
+    def test_created_with_verified_tax_id_sets_is_business(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_tax_id_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "taxid_verified",
+            stripe_customer_id="cus_taxid_verified",
+        )
+        assert ba.is_business is False
+
+        resp = process_customer_tax_id_event(
+            _tax_id_event(
+                "customer.tax_id.created",
+                customer_id="cus_taxid_verified",
+                value="DE123456789",
+                verification_status="verified",
+                event_id="evt_taxid_verified",
+            ),
+            dbsession,
+        )
+        assert resp.status_code == 200
+        dbsession.refresh(ba)
+        assert ba.is_business is True
+
+    def test_created_pending_tax_id_still_counts_as_business(
+        self,
+        dbsession: Session,
+    ) -> None:
+        # Only an explicit ``unverified`` status suppresses the flag; a
+        # present ID awaiting verification (``pending``) is treated as a
+        # business so the business recurring price applies from the start.
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_tax_id_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "taxid_pending",
+            stripe_customer_id="cus_taxid_pending",
+        )
+
+        process_customer_tax_id_event(
+            _tax_id_event(
+                "customer.tax_id.created",
+                customer_id="cus_taxid_pending",
+                value="GB999999973",
+                verification_status="pending",
+                event_id="evt_taxid_pending",
+            ),
+            dbsession,
+        )
+        dbsession.refresh(ba)
+        assert ba.is_business is True
+
+    def test_created_unverified_tax_id_does_not_set_is_business(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_tax_id_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "taxid_unverified",
+            stripe_customer_id="cus_taxid_unverified",
+        )
+
+        process_customer_tax_id_event(
+            _tax_id_event(
+                "customer.tax_id.updated",
+                customer_id="cus_taxid_unverified",
+                value="XX000",
+                verification_status="unverified",
+                event_id="evt_taxid_unverified",
+            ),
+            dbsession,
+        )
+        dbsession.refresh(ba)
+        assert ba.is_business is False
+
+    def test_deleted_clears_is_business(self, dbsession: Session) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_tax_id_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "taxid_del",
+            stripe_customer_id="cus_taxid_del",
+        )
+        ba.is_business = True
+        dbsession.flush()
+
+        process_customer_tax_id_event(
+            _tax_id_event(
+                "customer.tax_id.deleted",
+                customer_id="cus_taxid_del",
+                value="DE123456789",
+                verification_status="verified",
+                event_id="evt_taxid_del",
+            ),
+            dbsession,
+        )
+        dbsession.refresh(ba)
+        assert ba.is_business is False
+
+    def test_unknown_customer_acks_without_error(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_tax_id_event,
+        )
+
+        resp = process_customer_tax_id_event(
+            _tax_id_event(
+                "customer.tax_id.created",
+                customer_id="cus_does_not_exist",
+                value="DE123456789",
+                verification_status="verified",
+                event_id="evt_taxid_unknown",
+            ),
+            dbsession,
+        )
+        # Acknowledged (no retry storm) even though there's no local account.
+        assert resp.status_code == 200
+
+    def test_redelivery_is_idempotent(self, dbsession: Session) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_tax_id_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "taxid_idem",
+            stripe_customer_id="cus_taxid_idem",
+        )
+        event = _tax_id_event(
+            "customer.tax_id.created",
+            customer_id="cus_taxid_idem",
+            value="DE123456789",
+            verification_status="verified",
+            event_id="evt_taxid_idem",
+        )
+        process_customer_tax_id_event(event, dbsession)
+        dbsession.refresh(ba)
+        assert ba.is_business is True
+
+        # A manual change followed by a redelivery of the SAME event id must
+        # be a no-op (the webhook-log guard short-circuits before reprocessing).
+        ba.is_business = False
+        dbsession.flush()
+        resp = process_customer_tax_id_event(event, dbsession)
+        assert resp.status_code == 200
+        dbsession.refresh(ba)
+        assert ba.is_business is False
+
+
+class TestCustomerUpdatedWebhook:
+    """``customer.updated`` recomputes ``billing_setup_complete`` from the
+    live address (self-healing) and never writes PII back."""
+
+    def test_complete_address_sets_setup_complete(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_updated_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "cust_addr_ok",
+            stripe_customer_id="cus_addr_ok",
+        )
+        assert ba.billing_setup_complete is False
+
+        resp = process_customer_updated_event(
+            _customer_updated_event(
+                customer_id="cus_addr_ok",
+                address=dict(_COMPLETE_ADDRESS),
+                event_id="evt_cust_addr_ok",
+            ),
+            dbsession,
+        )
+        assert resp.status_code == 200
+        dbsession.refresh(ba)
+        assert ba.billing_setup_complete is True
+
+    def test_removed_address_clears_stale_setup_complete(
+        self,
+        dbsession: Session,
+    ) -> None:
+        # The staleness case that motivated the self-heal: the holder deletes
+        # their address in the Stripe dashboard. The webhook must flip the
+        # gate back off so the subscribe flow re-collects a tax-resolvable
+        # address instead of trusting a now-stale ``true``.
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_updated_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "cust_addr_gone",
+            stripe_customer_id="cus_addr_gone",
+        )
+        ba.billing_setup_complete = True
+        dbsession.flush()
+
+        resp = process_customer_updated_event(
+            _customer_updated_event(
+                customer_id="cus_addr_gone",
+                address=None,
+                event_id="evt_cust_addr_gone",
+            ),
+            dbsession,
+        )
+        assert resp.status_code == 200
+        dbsession.refresh(ba)
+        assert ba.billing_setup_complete is False
+
+    def test_incomplete_address_clears_setup_complete(
+        self,
+        dbsession: Session,
+    ) -> None:
+        # A partial address (missing postal_code) is not tax-resolvable, so it
+        # counts as incomplete just like a missing one.
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_updated_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "cust_addr_partial",
+            stripe_customer_id="cus_addr_partial",
+        )
+        ba.billing_setup_complete = True
+        dbsession.flush()
+
+        partial = dict(_COMPLETE_ADDRESS)
+        partial.pop("postal_code")
+        resp = process_customer_updated_event(
+            _customer_updated_event(
+                customer_id="cus_addr_partial",
+                address=partial,
+                event_id="evt_cust_addr_partial",
+            ),
+            dbsession,
+        )
+        assert resp.status_code == 200
+        dbsession.refresh(ba)
+        assert ba.billing_setup_complete is False
+
+    def test_unknown_customer_acks_without_error(
+        self,
+        dbsession: Session,
+    ) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_updated_event,
+        )
+
+        resp = process_customer_updated_event(
+            _customer_updated_event(
+                customer_id="cus_no_such_account",
+                address=dict(_COMPLETE_ADDRESS),
+                event_id="evt_cust_unknown",
+            ),
+            dbsession,
+        )
+        assert resp.status_code == 200
+
+    def test_redelivery_is_idempotent(self, dbsession: Session) -> None:
+        from orchestra.web.api.webhooks.stripe import (
+            process_customer_updated_event,
+        )
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "cust_addr_idem",
+            stripe_customer_id="cus_addr_idem",
+        )
+        event = _customer_updated_event(
+            customer_id="cus_addr_idem",
+            address=dict(_COMPLETE_ADDRESS),
+            event_id="evt_cust_addr_idem",
+        )
+        process_customer_updated_event(event, dbsession)
+        dbsession.refresh(ba)
+        assert ba.billing_setup_complete is True
+
+        # Redelivering the same event id after a manual flip is a no-op.
+        ba.billing_setup_complete = False
+        dbsession.flush()
+        resp = process_customer_updated_event(event, dbsession)
+        assert resp.status_code == 200
+        dbsession.refresh(ba)
+        assert ba.billing_setup_complete is False

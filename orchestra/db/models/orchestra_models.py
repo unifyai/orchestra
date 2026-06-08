@@ -62,6 +62,7 @@ from orchestra.db.models.enums import (  # noqa: E402, F401
     RECHARGE_TYPE_OVERAGE_TRUEUP,
     RECHARGE_TYPE_PAYMENT,
     RECHARGE_TYPE_PROMO,
+    RECHARGE_TYPE_PRORATION,
     BillingMode,
     CollectionMethod,
     CommitPeriod,
@@ -83,7 +84,7 @@ class BillingAccount(Base):
     """
     Shared billing entity for User and Organization.
 
-    Consolidates all billing-related fields (credits, Stripe customer, autorecharge,
+    Consolidates all billing-related fields (credits, Stripe customer,
     account status) AND optional business profile fields (tax ID, address, business name)
     into a single table. Both User and Organization link here via FK.
 
@@ -97,23 +98,61 @@ class BillingAccount(Base):
     # === CORE BILLING ===
     credits = Column(Numeric, nullable=False, default=0, server_default="0")
     stripe_customer_id = Column(String, nullable=True, unique=True, index=True)
-    autorecharge = Column(
+    # === SELF-SERVE SUBSCRIPTION (CREDITS tier plans) ===
+    # The active Stripe Subscription backing a self-serve CREDITS account on
+    # one of the seeded tier templates (collection_method=STRIPE_SUBSCRIPTION).
+    # NULL for accounts that have never subscribed (free/unsubscribed state on
+    # the default template) and for METERED enterprise accounts (which invoice
+    # in arrears via ``monthly_metered_invoicer`` rather than a subscription).
+    # The subscription is the collection engine; the plan template stays the
+    # source of truth for the monthly credit grant.
+    stripe_subscription_id = Column(String, nullable=True, index=True)
+    # End of the current Stripe subscription period (next renewal / credit
+    # reset). Mirrored from Stripe ``current_period_end`` on each
+    # ``invoice.paid`` and ``customer.subscription.updated`` webhook so the
+    # console can render the next-renewal date without a Stripe round-trip.
+    # NULL for unsubscribed/free accounts and METERED enterprise accounts.
+    current_period_end = Column(TIMESTAMP(timezone=True), nullable=True)
+    # Whether the active subscription is scheduled to cancel at the end of the
+    # current period (Stripe ``cancel_at_period_end``). Set immediately on an
+    # in-app cancel and kept in sync from the ``customer.subscription.updated``
+    # webhook (so a Stripe-Dashboard/Portal cancel reflects too), and reset to
+    # False on (re)subscribe and on final cancellation. Lets the console render
+    # a persistent "cancels on X" indicator instead of only a transient toast.
+    subscription_cancel_at_period_end = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
     )
-    autorecharge_threshold = Column(
+    # Opt-in: when the wallet depletes (balance <= 0) auto-upgrade the
+    # subscription to the next tier up the ladder (capped at the top tier;
+    # never auto-downgrades). False = hard stop at depletion (manual upgrade).
+    auto_increment = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    # Per-period high-water-mark of plan credits already granted this cycle
+    # (in credits). Reset to the tier's grant on each paid cycle
+    # (``invoice.paid``); on a mid-cycle upgrade we only grant the amount
+    # *above* this mark, so repeatedly toggling upgrade/downgrade cannot mint
+    # free credits (a downgrade never lowers the mark and never claws back).
+    plan_credits_granted_period = Column(
         Numeric,
         nullable=False,
         default=0,
         server_default="0",
     )
-    autorecharge_qty = Column(
-        Numeric,
-        nullable=False,
-        default=25,
-        server_default="25",
+    # Idempotency stamp for the pre-expiry credit reminder
+    # (``orchestra.routines.credit_expiry_reminder``): the ``expires_at`` of
+    # the soonest grant we last emailed a "use-it-or-lose-it" reminder for.
+    # The daily routine skips an account whose soonest upcoming expiry still
+    # matches this value, so each distinct expiry triggers at most one email.
+    credit_expiry_reminded_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
     )
     account_status = Column(
         String,
@@ -125,19 +164,25 @@ class BillingAccount(Base):
         String,
         nullable=True,
         default=None,
-    )  # dispute, admin_freeze — NULL when ACTIVE
+    )  # dispute, admin_freeze, past_due — NULL when ACTIVE
+    # Delinquency marker for the *soft* dunning window: set to the moment of
+    # the first failed subscription payment and kept while Stripe retries
+    # (account stays ACTIVE — service is not cut off). Cleared the moment
+    # payment recovers; a fully-exhausted dunning cycle escalates to a hard
+    # suspension (``account_status='SUSPENDED'``, ``suspension_reason='past_due'``)
+    # instead. Kept separate from ``suspension_reason`` so that field keeps its
+    # "why is this account suspended" meaning (NULL while ACTIVE).
+    payment_past_due_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        default=None,
+    )
     billing_setup_complete = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
     )
-    tier = Column(
-        String,
-        nullable=False,
-        server_default="developer",
-    )  # developer, pro, enterprise (future)
-
     # === MANAGED BILLING v2 — current plan assignment ===
     # Points to the currently-active ``BillingPlanAssignment`` row (which in
     # turn references a ``BillingPlanTemplate``). Every account carries a
@@ -160,21 +205,30 @@ class BillingAccount(Base):
         index=True,
     )
 
-    # === BILLING PROFILE (optional — available to all billing entities) ===
-    # A personal user can add their name / tax details without creating an org.
-    # An org fills these in for proper business invoicing.
-    # All fields sync to the Stripe Customer when set.
-    # ``name`` is the display name — mapped to Stripe's individual_name (users)
-    # or business_name (orgs) via build_stripe_customer_name().
-    billing_email = Column(String, nullable=True)
-    name = Column(String(255), nullable=True)
-    tax_id = Column(String(100), nullable=True)
-    tax_id_type = Column(String(50), nullable=True)
-    tax_id_verification_status = Column(
-        String(20),
-        nullable=True,
-    )  # pending, verified, unverified, unavailable (from Stripe)
-    billing_address = Column(JSONB, nullable=True, default=dict)
+    # === BILLING PROFILE ===
+    # The editable billing profile (name, email, address, tax ID) is NOT
+    # stored here — Stripe is the single source of truth. We persist only
+    # two non-PII *derived flags* the hot/batch paths need without a live
+    # Stripe call:
+    #
+    #   * ``is_business`` — drives business-vs-personal recurring price and
+    #     tax treatment. Set when a tax ID is saved and refined by the
+    #     ``customer.tax_id.*`` webhook (flipped off if Stripe reports the
+    #     ID ``unverified``). Resolve via ``resolve_is_business``.
+    #   * ``billing_setup_complete`` — true once a complete, tax-resolvable
+    #     address has been synced to Stripe; gates self-serve subscribe.
+    #
+    # Everything identifying (name / billing_email / billing_address /
+    # tax_id / tax_id_type / verification status) lives only on the Stripe
+    # Customer and is fetched on demand (see
+    # ``fetch_billing_profile_from_stripe``). This removes the two-way
+    # reconciliation the webhooks used to perform.
+    is_business = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Per-customer override for the payment methods exposed on
     # ``send_invoice`` Stripe invoices. NULL means "use the invoicer's
@@ -488,7 +542,8 @@ class BillingPlanTemplate(Base):
             name="ck_plan_template_commit_schedule",
         ),
         sa.CheckConstraint(
-            "collection_method IN ('AUTO_CARD', 'SEND_INVOICE_NET_30')",
+            "collection_method IN "
+            "('AUTO_CARD', 'SEND_INVOICE_NET_30', 'STRIPE_SUBSCRIPTION')",
             name="ck_plan_template_collection_method",
         ),
         sa.CheckConstraint(
@@ -3117,16 +3172,27 @@ class ConflictEvent(Base):
 class CreditTransaction(Base):
     """Append-only ledger of every credit movement on a billing account.
 
-    Positive ``amount`` = credits added (recharge, promo, refund, dispute,
-    grant, carryover).
+    Positive ``amount`` = credits added. Inflow categories:
+      * ``recharge`` — one-off PAYG top-up (paid).
+      * ``subscription_recharge`` — subscription cycle / plan credits (paid;
+        the customer pays the subscription invoice that funds them).
+      * ``promo`` — promotional link/code redemption (free).
+      * ``grant`` — trial / goodwill award (free).
+      * ``refund`` / ``dispute`` / ``carryover`` — adjustments.
     Negative ``amount`` = credits spent (llm, hire, resources, media, seat,
-    subscription, forfeit_at_conversion).
+    subscription, forfeit / forfeit_at_conversion).
 
-    The public API constrains ``category`` to the canonical spending set
-    (``llm | hire | resources | media``) for debits and
-    (``recharge | promo | refund | dispute``) for credits.
-    Internal reconciliation routines may use additional diagnostic
-    categories (e.g. ``void``, ``stale_pending_recharge``).
+    The canonical spending set is ``llm | hire | resources | media`` (debits);
+    the canonical credit set is
+    ``recharge | subscription_recharge | promo | grant | refund | dispute``
+    (see ``orchestra.web.api.credits.schema``). Internal reconciliation
+    routines may use additional diagnostic categories (e.g. ``void``,
+    ``stale_pending_recharge``).
+
+    Note: subscription vs trial credits are *both* expiring grants tagged
+    ``detail.grant_kind`` (``"plan"`` / ``"trial"``); the forfeit/expiry logic
+    keys off that tag, not the ledger ``category`` — the category split is for
+    paid-vs-free reporting only.
 
     The ledger is intentionally billing-mode-agnostic: the same row shape
     serves CREDITS and METERED accounts. Drift between ledger and wallet

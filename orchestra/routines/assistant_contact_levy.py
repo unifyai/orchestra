@@ -47,7 +47,6 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     User,
 )
-from orchestra.lib.billing import queue_auto_recharge
 from orchestra.routines.assistant_contact_notifications import (
     LEVY_INSUFFICIENT_CREDITS_SUBJECT,
     build_insufficient_credits_email,
@@ -81,7 +80,6 @@ class LevyAccountResult:
     discord_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     credits_before: Decimal = field(default_factory=lambda: Decimal("0"))
     credits_after: Decimal = field(default_factory=lambda: Decimal("0"))
-    auto_recharge_triggered: bool = False
     marked_past_due: bool = False
     grace_period_contacts: int = 0
     insufficient_credits_notified: bool = False
@@ -97,7 +95,6 @@ class LevyResult:
     accounts_processed: int = 0
     accounts_failed: int = 0
     accounts_marked_past_due: int = 0
-    auto_recharges_triggered: int = 0
     notifications_sent: int = 0
     account_results: List[LevyAccountResult] = field(default_factory=list)
 
@@ -306,8 +303,6 @@ def _levy_in_session(
                 result.total_contacts_billed += account_result.contacts_billed
                 result.total_amount += account_result.total_amount
                 result.accounts_processed += 1
-                if account_result.auto_recharge_triggered:
-                    result.auto_recharges_triggered += 1
                 if account_result.marked_past_due:
                     result.accounts_marked_past_due += 1
                 if account_result.insufficient_credits_notified:
@@ -352,7 +347,6 @@ def _levy_in_session(
                 "total_contacts_billed": result.total_contacts_billed,
                 "total_amount": float(result.total_amount),
                 "accounts_marked_past_due": result.accounts_marked_past_due,
-                "auto_recharges_triggered": result.auto_recharges_triggered,
                 "notifications_sent": result.notifications_sent,
             },
         )
@@ -473,34 +467,17 @@ def _process_billing_account(
     # METERED accounts settle usage at month-end via the metered invoicer;
     # the wallet is frozen and may carry any leftover balance from a prior
     # CREDITS phase. Suspension on non-payment is webhook-driven
-    # (`invoice.payment_failed`), so neither the autorecharge gate nor the
-    # wallet-based grace-period trigger should fire for METERED.
+    # (`invoice.payment_failed`), so the wallet-based grace-period trigger
+    # should not fire for METERED.
     is_metered = (
         BillingAccountDAO(session).resolve_billing_mode(ba) == BillingMode.METERED
     )
 
-    # Auto-recharge check (isolated so a Stripe error doesn't prevent
-    # the levy deduction from being committed)
-    if (
-        not is_metered
-        and ba.autorecharge
-        and ba.stripe_customer_id
-        and ba.credits <= ba.autorecharge_threshold
-    ):
-        try:
-            ar.auto_recharge_triggered = queue_auto_recharge(
-                session,
-                ba,
-                int(ba.autorecharge_qty),
-                entity_label=f"billing_account {ba.id}",
-            )
-        except Exception:
-            logger.exception(
-                {
-                    "message": "Auto-recharge failed during levy (non-fatal)",
-                    "billing_account_id": ba.id,
-                },
-            )
+    # NOTE: CREDITS accounts are now forced onto monthly subscription plans
+    # (with opt-in auto-increment on depletion handled at the deduction
+    # path), so the levy never tops up a wallet here. METERED accounts
+    # settle in arrears regardless. Depletion simply drops the account into
+    # the grace-period path below.
 
     # Start grace period on active contacts if credits went negative
     if not is_metered and ba.credits < 0:

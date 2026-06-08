@@ -270,13 +270,13 @@ class TestSessionTrackedEvents:
             _flush_billing_events(session)
             mock_get.return_value.publish.assert_not_called()
 
-    def test_auto_recharge_prevents_exhausted_event(self):
-        """Deduction goes negative, then auto-recharge restores — no event."""
+    def test_credit_restore_prevents_exhausted_event(self):
+        """Deduction goes negative, then a credit top-up restores it — no event."""
         session = _make_mock_session()
         # DAO deduct_credits records initial snapshot
         track_balance_before(session, 1, Decimal("5.00"))
         track_balance_after(session, 1, Decimal("-0.50"))
-        # auto-recharge adds credits (updates final balance)
+        # a later top-up adds credits (updates final balance)
         track_balance_after(session, 1, Decimal("24.50"))
 
         with patch(

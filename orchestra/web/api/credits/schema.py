@@ -11,9 +11,27 @@ from pydantic import BaseModel, field_validator, validator
 SpendingCategory = Literal["llm", "hire", "resources", "media"]
 SPENDING_CATEGORIES: set[str] = {"llm", "hire", "resources", "media"}
 
-# Credit (inflow) categories — recharges, promos, dispute resolutions.
-CreditCategory = Literal["recharge", "promo", "refund", "dispute"]
-CREDIT_CATEGORIES: set[str] = {"recharge", "promo", "refund", "dispute"}
+# Credit (inflow) categories.
+#   Paid:  ``recharge`` (one-off PAYG top-up), ``subscription_recharge``
+#          (subscription cycle / plan credits).
+#   Free:  ``promo`` (promotional link/code), ``grant`` (trial / goodwill).
+#   Adjustments: ``refund``, ``dispute``.
+CreditCategory = Literal[
+    "recharge",
+    "subscription_recharge",
+    "promo",
+    "grant",
+    "refund",
+    "dispute",
+]
+CREDIT_CATEGORIES: set[str] = {
+    "recharge",
+    "subscription_recharge",
+    "promo",
+    "grant",
+    "refund",
+    "dispute",
+}
 
 # The union of both sets for reference; internal/reconciliation routines may
 # use free-form strings outside this set (e.g. "void", "stale_pending_recharge").

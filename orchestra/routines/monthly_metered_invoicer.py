@@ -1,7 +1,5 @@
 """Monthly invoicer for METERED billing accounts.
 
-Counterpart to ``monthly_credits_invoicer.invoice_month`` (which finalises the
-CREDITS-mode pipeline by aggregating ``PENDING_INVOICE`` Recharge rows).
 This routine produces invoices for METERED accounts whose period just
 closed.
 
@@ -126,8 +124,7 @@ For each eligible account, the routine:
    on dispute.
 
 Period boundaries are calendar months in UTC. The job is meant to run
-once per month (e.g. 00:10 on the 1st, after ``invoice_month`` has had
-its chance for CREDITS accounts).
+once per month (e.g. 00:10 on the 1st, after the period closes).
 
 Multi-currency: USD-denominated templates have ``fx_policy=NULL`` and
 no conversion happens. Non-USD templates carry an ``fx_policy``
@@ -210,7 +207,6 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.lib.fx import FxProviderError, fetch_period_average, fetch_spot
 from orchestra.lib.time import month_end_utc
 from orchestra.observability.prometheus_middleware import INVOICE_CREATED_TOTAL
-from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
@@ -453,9 +449,9 @@ def invoice_metered_month(
 ) -> MeteredInvoiceResult:
     """Invoice all eligible METERED accounts for the given period.
 
-    Defaults to the *previous* month if ``year``/``month`` aren't passed
-    (matching ``invoice_month`` semantics). Pass an explicit ``session``
-    in tests; production callers omit it and the routine builds its own.
+    Defaults to the *previous* month if ``year``/``month`` aren't passed.
+    Pass an explicit ``session`` in tests; production callers omit it and
+    the routine builds its own.
     """
     today = _dt.datetime.now(_dt.timezone.utc).date()
     if year is None or month is None:
@@ -790,6 +786,11 @@ def _process_one_account(
     detail = calc.to_audit_dict(period_start, period_end_exclusive)
     detail["account_status_at_invoice"] = billing_account.account_status
     detail["suspension_reason_at_invoice"] = billing_account.suspension_reason
+    detail["payment_past_due_at_invoice"] = (
+        billing_account.payment_past_due_at.isoformat()
+        if billing_account.payment_past_due_at
+        else None
+    )
 
     recharge = Recharge(
         billing_account_id=billing_account.id,
@@ -1436,20 +1437,11 @@ def _create_stripe_invoice(
             idempotency_key=f"{idem_base}-{line.kind}-item",
         )
 
-    # 2) Customer tax IDs, lifted from BillingAccount (matches the
-    #    CREDITS-mode invoicer's behaviour exactly).
-    customer_tax_ids = []
-    if billing_account.tax_id:
-        tax_id_type = billing_account.tax_id_type
-        if not tax_id_type:
-            country = None
-            if billing_account.billing_address and isinstance(
-                billing_account.billing_address,
-                dict,
-            ):
-                country = billing_account.billing_address.get("country")
-            tax_id_type = get_stripe_tax_id_type(country)
-        customer_tax_ids = [{"type": tax_id_type, "value": billing_account.tax_id}]
+    # Tax IDs are no longer mirrored locally — they live on the Stripe
+    # Customer. Stripe automatically applies the customer's saved tax IDs to
+    # invoices created against that customer (and ``automatic_tax`` resolves
+    # VAT/sales tax from the customer's address), so no explicit
+    # ``customer_tax_ids`` override is needed here.
 
     # ``currency`` is REQUIRED — without it, Stripe defaults to the
     # customer's / account's default currency, and
@@ -1510,9 +1502,6 @@ def _create_stripe_invoice(
 
     invoice_params["payment_settings"] = payment_settings
 
-    if customer_tax_ids:
-        invoice_params["customer_tax_ids"] = customer_tax_ids
-
     return stripe.Invoice.create(
         **invoice_params,
         idempotency_key=f"{idem_base}-invoice",
@@ -1554,11 +1543,23 @@ _EU_BANK_TRANSFER_COUNTRIES: frozenset[str] = frozenset(
 
 
 def _account_billing_country(billing_account: BillingAccount) -> Optional[str]:
-    """Return the ISO-3166 alpha-2 country from ``billing_address``, if any."""
-    address = billing_account.billing_address
-    if not isinstance(address, dict):
+    """Return the ISO-3166 alpha-2 billing country, read live from Stripe.
+
+    The address lives only on the Stripe Customer (no local PII copy), so we
+    fetch it on demand. This is only consulted for the ``customer_balance``
+    bank-transfer rail (enterprise / wire-pay accounts), which are
+    low-cardinality, so a per-account ``Customer.retrieve`` here is well
+    within Stripe's rate limits. Best-effort: returns ``None`` on any miss.
+    """
+    customer_id = billing_account.stripe_customer_id
+    if not customer_id:
         return None
-    country = address.get("country")
+    try:
+        customer = stripe.Customer.retrieve(customer_id)
+    except stripe.error.StripeError:
+        return None
+    address = customer.get("address") or {}
+    country = address.get("country") if isinstance(address, dict) else None
     if isinstance(country, str) and country.strip():
         return country.strip().upper()
     return None

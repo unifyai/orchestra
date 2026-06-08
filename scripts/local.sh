@@ -515,13 +515,15 @@ seed_test_user() {
 
   log_info "Creating test user..."
 
-  # Note: Billing fields (credits, stripe_customer_id, autorecharge, etc.)
-  # now live on the billing_account table. The 'user' table only holds
+  # Note: Billing fields (credits, stripe_customer_id, etc.) now live on
+  # the billing_account table. The 'user' table only holds
   # profile/identity fields plus a billing_account_id FK.
   docker exec "$db_container" psql -U orchestra -d orchestra -c "
 DO \$\$
 DECLARE
   _ba_id integer;
+  _default_template_id bigint;
+  _assignment_id bigint;
 BEGIN
   -- Seed the default plan_group that billing_account.plan_group_id points
   -- at by default (bigint DEFAULT 1 NOT NULL + FK). Production DBs have
@@ -539,9 +541,30 @@ BEGIN
   -- Only seed if user doesn't already exist
   IF NOT EXISTS (SELECT 1 FROM \"user\" WHERE id = '$test_user_id') THEN
     -- Create a billing_account for the test user
-    INSERT INTO billing_account (credits, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, tier)
-    VALUES (10000, false, 0, 25, 'ACTIVE', 'developer')
+    INSERT INTO billing_account (credits, account_status)
+    VALUES (10000, 'ACTIVE')
     RETURNING id INTO _ba_id;
+
+    -- Establish the v2 invariant: every account has an active default plan
+    -- assignment (signup normally does this via BillingAccountDAO.create →
+    -- assign_default_at_signup). This raw seed must mirror it, otherwise the
+    -- account has no 'current' plan and GET /billing/available-plans returns
+    -- an empty list — the self-serve plan picker then renders nothing.
+    SELECT id INTO _default_template_id
+    FROM billing_plan_template
+    WHERE name = 'default' AND is_active = true
+    ORDER BY id
+    LIMIT 1;
+
+    IF _default_template_id IS NULL THEN
+      RAISE EXCEPTION 'Missing default billing_plan_template while seeding test user (run migrations first)';
+    END IF;
+
+    INSERT INTO billing_plan_assignment (billing_account_id, template_id, change_reason)
+    VALUES (_ba_id, _default_template_id, 'seed test user bootstrap')
+    RETURNING id INTO _assignment_id;
+
+    UPDATE billing_account SET plan_assignment_id = _assignment_id WHERE id = _ba_id;
 
     -- Create user record linked to the billing_account
     INSERT INTO \"user\" (id, email, billing_account_id, store_prompts)
@@ -705,11 +728,16 @@ start_orchestra_server() {
   [[ -n "${SELF_HOST:-}" ]] && export SELF_HOST
   [[ -n "${STAGING:-}" ]] && export STAGING
 
-  # Start server (use setsid if available for proper process isolation)
+  # Start server (use setsid if available for proper process isolation).
+  # NB: $venv_python is left unquoted on purpose — when no in-project .venv
+  # exists, get_venv_executable falls back to the multi-word "poetry run
+  # python", which must word-split into separate argv entries (same pattern
+  # as $alembic_cmd above). Quoting it would exec the whole string as a
+  # single, non-existent binary ("poetry run python: not found").
   if command -v setsid &>/dev/null; then
-    setsid bash -c "ulimit -n $fd_limit; exec \"$venv_python\" -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
+    setsid bash -c "ulimit -n $fd_limit; exec $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
   else
-    bash -c "ulimit -n $fd_limit; exec \"$venv_python\" -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
+    bash -c "ulimit -n $fd_limit; exec $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
   fi
   local pid=$!
   disown $pid 2>/dev/null || true

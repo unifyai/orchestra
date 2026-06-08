@@ -261,15 +261,38 @@ class Settings(BaseSettings):
     stripe_unify_credits_price_id_business: Optional[str] = os.environ.get(
         "STRIPE_UNIFY_CREDITS_PRICE_ID_BUSINESS",
     )
-    stripe_default_credit_qty: int = int(
-        os.environ.get("STRIPE_DEFAULT_CREDIT_QTY", "25"),
+    # Recurring prices backing the self-serve subscription plans. Created by
+    # ``scripts/create_subscription_prices.py`` under the existing Unify
+    # Credits products. At 1 credit = $1 these are per-unit ($1/credit/month)
+    # prices; the tier is the subscription quantity.
+    stripe_unify_subscription_price_id_personal_monthly: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_SUBSCRIPTION_PRICE_ID_PERSONAL_MONTHLY",
     )
-    stripe_min_credit_qty: int = int(
-        os.environ.get("STRIPE_MIN_CREDIT_QTY", "5"),
+    stripe_unify_subscription_price_id_business_monthly: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_SUBSCRIPTION_PRICE_ID_BUSINESS_MONTHLY",
     )
-    stripe_max_credit_qty: int = int(
-        os.environ.get("STRIPE_MAX_CREDIT_QTY", "500"),
+    # Annual variants of the recurring subscription prices (interval=year,
+    # $12/credit/year so the annual list price == 12× the monthly tier).
+    # The annual *discount* is expressed as a Stripe coupon applied at
+    # subscribe time (price-only — the credit grant stays 12× the monthly
+    # tier), so the discount can be tuned without re-minting prices.
+    stripe_unify_subscription_price_id_personal_annual: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_SUBSCRIPTION_PRICE_ID_PERSONAL_ANNUAL",
     )
+    stripe_unify_subscription_price_id_business_annual: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_SUBSCRIPTION_PRICE_ID_BUSINESS_ANNUAL",
+    )
+    #: Stripe coupon id applied to annual subscriptions to express the
+    #: annual discount (e.g. "two months free"). Optional — when unset the
+    #: annual price is charged at its full list rate.
+    stripe_unify_annual_coupon_id: Optional[str] = os.environ.get(
+        "STRIPE_UNIFY_ANNUAL_COUPON_ID",
+    )
+    # NOTE: STRIPE_DEFAULT/MIN/MAX_CREDIT_QTY were retired with the one-time
+    # credit Checkout (``POST /v0/billing/checkout-session``) under the
+    # self-serve subscription model. Self-serve accounts now receive credits
+    # via their monthly subscription plan grant; there is no adjustable
+    # one-time top-up quantity any more.
 
     # Promo credits
     max_promo_amount: float = 100.0
@@ -277,6 +300,22 @@ class Settings(BaseSettings):
     # Signup credit grant (free credits for new users)
     signup_credit_grant: float = float(
         os.environ.get("SIGNUP_CREDIT_GRANT", "100"),
+    )
+
+    #: Display-only credit framing. The wallet/ledger denominate in
+    #: canonical USD value (1 internal unit = $1); customer-facing surfaces
+    #: (console + outbound emails) render *credits* = USD × this multiplier.
+    #: It is purely cosmetic — never used for settlement or anything sent to
+    #: Stripe. Keep in sync with the console ``DISPLAY_CREDITS_PER_USD``.
+    display_credits_per_usd: int = int(
+        os.environ.get("DISPLAY_CREDITS_PER_USD", "400"),
+    )
+
+    #: How many days before an expiring credit grant lapses to email the
+    #: account holder a "use-it-or-lose-it" reminder (see
+    #: ``orchestra.routines.credit_expiry_reminder``).
+    credit_expiry_reminder_days: int = int(
+        os.environ.get("CREDIT_EXPIRY_REMINDER_DAYS", "3"),
     )
 
     # Assistant creation

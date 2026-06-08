@@ -99,20 +99,17 @@ class PendingRechargesError(Exception):
 
     A ``Recharge`` row in ``PENDING_INVOICE`` represents money the
     customer owes for credits already granted on the wallet — it has
-    not yet been rolled into a Stripe invoice (that happens at
-    month-end via ``monthly_credits_invoicer``). Switching the account
+    not yet been rolled into a Stripe invoice. Switching the account
     to a different plan (typically CREDITS → METERED) before that
-    settles would silently orphan the row: the credits invoicer would
-    historically filter it out by live account mode, and the metered
-    invoicer never touches CREDITS-mode recharges. The customer would
-    walk away with the credits without paying for them.
+    settles would silently orphan the row: the metered invoicer never
+    touches CREDITS-mode recharges. The customer would walk away with
+    the credits without paying for them.
 
     Operators have two clean paths once they see this error:
 
-    1. Wait for the next month-end run (the recharge will invoice
-       under the prior plan and resolve via webhook), then retry.
-    2. Manually drain the row — void via Stripe + mark FAILED, or
-       force-bill via the admin invoice-month endpoint — and retry.
+    1. Wait for the row to settle under the prior plan (it resolves via
+       webhook), then retry.
+    2. Manually drain the row — void via Stripe + mark FAILED — and retry.
 
     The error carries the offending recharge ids in
     ``pending_recharge_ids`` so callers (admin endpoint, customer
@@ -126,7 +123,7 @@ class PendingRechargesError(Exception):
             f"BillingAccount {billing_account_id} has "
             f"{len(pending_recharge_ids)} pending recharge(s) waiting to be "
             f"invoiced (recharge ids={pending_recharge_ids}). Drain or wait "
-            "for the next monthly_credits_invoicer run before switching plans.",
+            "for them to settle before switching plans.",
         )
 
 

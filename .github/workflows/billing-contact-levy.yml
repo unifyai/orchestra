@@ -54,12 +54,11 @@ jobs:
         contacts=$(echo "$body" | jq -r '.total_contacts_billed // 0')
         total=$(echo "$body" | jq -r '.total_amount // 0')
         past_due=$(echo "$body" | jq -r '.accounts_marked_past_due // 0')
-        auto_recharges=$(echo "$body" | jq -r '.auto_recharges_triggered // 0')
 
         echo "::notice::Billing month: $month"
         echo "::notice::Processed: $accounts accounts, $contacts contacts billed"
         echo "::notice::Total charged: \$$total"
-        echo "::notice::Accounts marked past due: $past_due | Auto-recharges triggered: $auto_recharges"
+        echo "::notice::Accounts marked past due: $past_due"
 
         if [ "$past_due" -gt 0 ]; then
           echo "::warning::$past_due accounts marked PAST_DUE after contact levy"

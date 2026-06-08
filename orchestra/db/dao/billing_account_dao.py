@@ -6,7 +6,7 @@ import decimal
 import logging
 from typing import Any, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
@@ -23,15 +23,6 @@ from orchestra.db.models.orchestra_models import (
 
 logger = logging.getLogger(__name__)
 
-
-# Minimum auto-recharge amount ($25 to avoid tiny invoices)
-MIN_AUTORECHARGE_AMOUNT = decimal.Decimal("25")
-
-# Minimum cumulative spending (in USD) required before a billing account
-# can enable auto-recharge.  This is a fraud-prevention measure to stop
-# bot accounts from setting up very low, repeated automatic top-ups and
-# then disputing the charges.
-MIN_SPEND_FOR_AUTO_RECHARGE = decimal.Decimal("1000")
 
 # Valid account status values
 VALID_ACCOUNT_STATUSES = {"ACTIVE", "SUSPENDED", "CLOSED"}
@@ -114,6 +105,22 @@ class BillingAccountDAO:
             .filter(BillingAccount.id == billing_account_id)
             .first()
         )
+
+    def set_auto_increment(
+        self,
+        billing_account_id: int,
+        enabled: bool,
+    ) -> Optional[BillingAccount]:
+        """Set the auto-increment-on-depletion opt-in flag.
+
+        Returns the updated account (``None`` if it does not exist). The
+        caller is responsible for committing.
+        """
+        ba = self.get(billing_account_id)
+        if ba is None:
+            return None
+        ba.auto_increment = bool(enabled)
+        return ba
 
     def get_for_update(self, billing_account_id: int) -> Optional[BillingAccount]:
         """
@@ -539,77 +546,6 @@ class BillingAccountDAO:
         return True
 
     # =========================================================================
-    # AUTORECHARGE
-    # =========================================================================
-
-    def get_autorecharge_settings(
-        self,
-        billing_account_id: int,
-    ) -> Optional[dict]:
-        """
-        Get autorecharge settings.
-
-        :param billing_account_id: BillingAccount ID.
-        :return: Dict with autorecharge settings, or None.
-        """
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return None
-
-        return {
-            "autorecharge": ba.autorecharge,
-            "autorecharge_threshold": float(ba.autorecharge_threshold),
-            "autorecharge_qty": float(ba.autorecharge_qty),
-        }
-
-    def set_autorecharge(
-        self,
-        billing_account_id: int,
-        enabled: bool,
-    ) -> bool:
-        """Enable or disable autorecharge."""
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        ba.autorecharge = enabled
-        return True
-
-    def set_autorecharge_threshold(
-        self,
-        billing_account_id: int,
-        threshold: float,
-    ) -> bool:
-        """Set the autorecharge threshold."""
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        ba.autorecharge_threshold = decimal.Decimal(str(threshold))
-        return True
-
-    def set_autorecharge_qty(
-        self,
-        billing_account_id: int,
-        qty: float,
-    ) -> bool:
-        """
-        Set the autorecharge quantity.
-
-        :raises ValueError: If qty is below minimum.
-        """
-        qty_decimal = decimal.Decimal(str(qty))
-        if qty_decimal < MIN_AUTORECHARGE_AMOUNT:
-            raise ValueError(
-                f"Minimum auto-recharge amount is "
-                f"${MIN_AUTORECHARGE_AMOUNT}. Got ${qty_decimal}.",
-            )
-
-        ba = self.get(billing_account_id)
-        if ba is None:
-            return False
-        ba.autorecharge_qty = qty_decimal
-        return True
-
-    # =========================================================================
     # ACCOUNT STATUS
     # =========================================================================
 
@@ -638,115 +574,41 @@ class BillingAccountDAO:
         return True
 
     # =========================================================================
-    # AUTO-RECHARGE ELIGIBILITY (fraud prevention)
-    # =========================================================================
-
-    def get_total_spending(self, billing_account_id: int) -> decimal.Decimal:
-        """
-        Calculate the cumulative amount (USD) a billing account has spent.
-
-        Only considers recharges with status PAID and types 'payment' and
-        'auto' (i.e. real money transactions – not promos).
-
-        :param billing_account_id: BillingAccount ID.
-        :return: Total spending in USD.
-        """
-        result = (
-            self.session.query(func.coalesce(func.sum(Recharge.amount_usd), 0))
-            .filter(
-                Recharge.billing_account_id == billing_account_id,
-                Recharge.status == RechargeStatus.PAID,
-                Recharge.type.in_(["payment", "auto", "invoice"]),
-            )
-            .scalar()
-        )
-        return decimal.Decimal(str(result))
-
-    def can_enable_auto_recharge(self, billing_account_id: int) -> bool:
-        """
-        Check whether a billing account is eligible to enable auto-recharge.
-
-        The account must have spent at least ``MIN_SPEND_FOR_AUTO_RECHARGE``
-        in real-money transactions.  This prevents bot accounts from setting
-        up very low, repeated automatic top-ups and then disputing the
-        charges.
-
-        :param billing_account_id: BillingAccount ID.
-        :return: True if cumulative spending meets the threshold.
-        """
-        total = self.get_total_spending(billing_account_id)
-        return total >= MIN_SPEND_FOR_AUTO_RECHARGE
-
-    def has_unpaid_auto_recharges(self, billing_account_id: int) -> bool:
-        """Return True if the account has auto-recharge credits that
-        are still awaiting payment.
-
-        Checks for ``PENDING_INVOICE`` (invoice not yet created by
-        Stripe) and ``INVOICE_CREATED`` (invoice created, collection
-        in progress).
-
-        ``FAILED`` is intentionally excluded: by the time a recharge
-        reaches FAILED, the credits have already been voided and the
-        Stripe invoice has been voided — the debt is settled.  Keeping
-        FAILED here would permanently block auto-recharge after a
-        single payment failure with no self-service recovery path.
-        """
-        return (
-            self.session.query(Recharge)
-            .filter(
-                Recharge.billing_account_id == billing_account_id,
-                Recharge.type == "auto",
-                Recharge.status.in_(
-                    [RechargeStatus.PENDING_INVOICE, RechargeStatus.INVOICE_CREATED],
-                ),
-            )
-            .first()
-            is not None
-        )
-
-    # =========================================================================
     # BILLING PROFILE
     # =========================================================================
 
-    def update_billing_profile(
+    def set_billing_flags(
         self,
         billing_account_id: int,
-        billing_email: Optional[str] = None,
-        name: Optional[str] = None,
-        tax_id: Optional[str] = None,
-        tax_id_type: Optional[str] = None,
-        billing_address: Optional[dict] = None,
+        *,
+        is_business: Optional[bool] = None,
+        billing_setup_complete: Optional[bool] = None,
     ) -> bool:
-        """
-        Update the business profile.
+        """Update the locally-cached, non-PII billing flags.
 
-        Only updates fields that are provided (not None).
-        Works identically for personal users and organizations.
+        The editable billing profile (name / email / address / tax ID) is
+        no longer stored locally — it lives only on the Stripe Customer
+        (see ``fetch_billing_profile_from_stripe`` /
+        ``sync_billing_profile_to_stripe``). Only the two derived flags the
+        hot/batch paths need without a Stripe round-trip are persisted here.
+
+        Only updates flags that are provided (not None).
 
         :param billing_account_id: BillingAccount ID.
-        :param billing_email: Email for invoices.
-        :param name: Display name (individual or business).
-        :param tax_id: Tax identification number.
-        :param tax_id_type: Stripe tax ID type code.
-        :param billing_address: JSONB address dict.
+        :param is_business: Whether the account is billed as a business
+            (drives the recurring price + tax treatment).
+        :param billing_setup_complete: Whether a complete, tax-resolvable
+            address has been synced to Stripe.
         :return: True if successful, False if not found.
         """
         ba = self.get(billing_account_id)
         if ba is None:
             return False
 
-        if billing_email is not None:
-            ba.billing_email = billing_email
-        if name is not None:
-            ba.name = name
-        if tax_id is not None:
-            ba.tax_id = tax_id
-        if tax_id_type is not None:
-            ba.tax_id_type = tax_id_type
-        if billing_address is not None:
-            # Merge with existing address if partial update
-            existing = ba.billing_address or {}
-            ba.billing_address = {**existing, **billing_address}
+        if is_business is not None:
+            ba.is_business = is_business
+        if billing_setup_complete is not None:
+            ba.billing_setup_complete = billing_setup_complete
 
         return True
 
@@ -754,6 +616,10 @@ class BillingAccountDAO:
         self,
         billing_account_id: int,
         credit_amount: float,
+        *,
+        grant_kind: str | None = None,
+        expires_at: Optional[Any] = None,
+        description: str = "Promotional credit grant",
     ) -> Recharge:
         """
         Apply a promotional credit grant to a billing account.
@@ -768,8 +634,17 @@ class BillingAccountDAO:
         is published after the session commits if the balance crossed
         zero in either direction.
 
+        When ``grant_kind`` and ``expires_at`` are supplied the ledger
+        row is stamped with ``detail = {"grant_kind": ..., "expires_at":
+        "<ISO-8601 UTC>"}`` so the credit-grant expiry sweep can forfeit
+        the unconsumed remainder once it expires (see
+        :mod:`orchestra.lib.credit_grants`). Untagged grants never expire.
+
         :param billing_account_id: BillingAccount ID.
         :param credit_amount: Amount of credits to grant.
+        :param grant_kind: Optional expiring-grant kind (``"trial"``).
+        :param expires_at: Optional ``datetime`` the grant expires.
+        :param description: Ledger description.
         :return: The created Recharge record.
         :raises ValueError: If the billing account is not found.
         """
@@ -789,11 +664,19 @@ class BillingAccountDAO:
         ba.credits = ba.credits + amount
         track_balance_after(self.session, billing_account_id, ba.credits)
 
+        detail: dict[str, Any] | None = None
+        if grant_kind is not None and expires_at is not None:
+            expires_iso = expires_at
+            if hasattr(expires_at, "isoformat"):
+                expires_iso = expires_at.isoformat()
+            detail = {"grant_kind": grant_kind, "expires_at": expires_iso}
+
         self._record_transaction(
             billing_account_id=billing_account_id,
             amount=amount,
             category="promo",
-            description="Promotional credit grant",
+            description=description,
+            detail=detail,
             plan_assignment_id=ba.plan_assignment_id,
         )
 
@@ -808,24 +691,78 @@ class BillingAccountDAO:
         self.session.flush()
         return recharge
 
-    def get_billing_profile(self, billing_account_id: int) -> Optional[dict]:
+    def grant_signup_credits(
+        self,
+        user_id: str,
+        selected_type: str,
+        organization_id: Optional[int] = None,
+    ) -> Optional[Recharge]:
         """
-        Get the billing profile.
+        Grant one-time signup promo credits to the appropriate billing account.
 
-        :param billing_account_id: BillingAccount ID.
-        :return: Dict with billing profile data, or None.
-            The ``name`` key is entity-agnostic; callers should map it
-            to ``individual_name`` or ``business_name`` as appropriate.
+        Called when a user completes the onboarding workspace-selection step.
+        Credits go to the user's personal billing account when *selected_type*
+        is ``"personal"``, or to the organization's billing account when it is
+        ``"organization"``.
+
+        Idempotent: silently returns ``None`` if the target billing account
+        already has any promo recharge, so the grant is safe to call on
+        retries, auto-complete, or when multiple org members complete
+        onboarding for the same organization.
+
+        :param user_id: The user completing onboarding.
+        :param selected_type: ``"personal"`` or ``"organization"``.
+        :param organization_id: Required when *selected_type* is
+            ``"organization"``.
+        :return: The created Recharge, or ``None`` if skipped.
         """
-        ba = self.get(billing_account_id)
-        if ba is None:
+        from orchestra.settings import settings
+
+        credit_amount = settings.signup_credit_grant
+        if credit_amount <= 0:
             return None
 
-        return {
-            "billing_email": ba.billing_email,
-            "name": ba.name,
-            "tax_id": ba.tax_id,
-            "tax_id_type": ba.tax_id_type,
-            "billing_address": ba.billing_address or {},
-            "billing_setup_complete": ba.billing_setup_complete,
-        }
+        if selected_type == "organization":
+            if organization_id is None:
+                return None
+            org = (
+                self.session.query(Organization)
+                .filter(Organization.id == organization_id)
+                .first()
+            )
+            if not org or not org.billing_account_id:
+                return None
+            target_ba_id = org.billing_account_id
+        else:
+            user = self.session.query(User).filter(User.id == user_id).first()
+            if not user or not user.billing_account_id:
+                return None
+            target_ba_id = user.billing_account_id
+
+        existing_promo = (
+            self.session.query(Recharge)
+            .filter(
+                Recharge.billing_account_id == target_ba_id,
+                Recharge.type == RECHARGE_TYPE_PROMO,
+            )
+            .first()
+        )
+        if existing_promo:
+            return None
+
+        # Signup credits are a *trial* grant: they expire one week after
+        # signup and the unconsumed remainder is forfeited by the
+        # credit-grant expiry sweep (self-serve subscription model).
+        from orchestra.lib.credit_grants import (
+            GRANT_KIND_TRIAL,
+            signup_trial_expiry,
+        )
+
+        return self.apply_credit_grant(
+            target_ba_id,
+            credit_amount,
+            grant_kind=GRANT_KIND_TRIAL,
+            expires_at=signup_trial_expiry(),
+            description="Signup trial credit grant",
+        )
+
