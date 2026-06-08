@@ -62,6 +62,8 @@ def enforce_unify_members_only(email: str | None) -> None:
     the registration middleware, and the verification-token redemption
     endpoint so the gate is consistent end-to-end.
     """
+    if settings.is_self_host:
+        return
     if settings.is_staging and not is_staging_allowed_email(email):
         raise staging_restricted
 
