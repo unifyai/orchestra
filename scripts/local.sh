@@ -701,11 +701,15 @@ start_orchestra_server() {
   fi
   log_info "Setting file descriptor limit to $fd_limit"
 
+  export ORCHESTRA_WORKERS_COUNT="$workers"
+  [[ -n "${SELF_HOST:-}" ]] && export SELF_HOST
+  [[ -n "${STAGING:-}" ]] && export STAGING
+
   # Start server (use setsid if available for proper process isolation)
   if command -v setsid &>/dev/null; then
-    setsid bash -c "ulimit -n $fd_limit; exec env ORCHESTRA_WORKERS_COUNT=$workers $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
+    setsid bash -c "ulimit -n $fd_limit; exec \"$venv_python\" -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
   else
-    bash -c "ulimit -n $fd_limit; exec env ORCHESTRA_WORKERS_COUNT=$workers $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
+    bash -c "ulimit -n $fd_limit; exec \"$venv_python\" -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
   fi
   local pid=$!
   disown $pid 2>/dev/null || true
