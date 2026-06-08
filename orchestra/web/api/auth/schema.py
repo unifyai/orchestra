@@ -170,6 +170,8 @@ class AuthRegisterResponse(BaseModel):
 
     email: str
     requires_verification: bool = True
+    id: Optional[str] = None
+    name: Optional[str] = None
 
 
 class AuthVerifyResponse(BaseModel):

@@ -39,8 +39,8 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_dao import (
-    AuthDAO,
     MAX_ATTEMPTS,
+    AuthDAO,
     check_user_agent,
     decode_verification_token,
     generate_verification_code,
@@ -96,6 +96,64 @@ admin_router = APIRouter()
 router = APIRouter()
 logger = logging.getLogger(__name__)
 ph = PasswordHasher()
+
+
+async def _provision_email_password_user(
+    session: Session,
+    *,
+    email: str,
+    name: str | None,
+    last_name: str | None,
+    password_hash: str,
+):
+    """Create a verified email/password user with onboarding and Coordinator."""
+    user_dao = UserDAO(session)
+    auth_dao = AuthDAO(session)
+    created_coordinator = False
+    coordinator_id: int | None = None
+
+    try:
+        user = user_dao.create(
+            email=email,
+            name=name,
+            last_name=last_name,
+        )
+        session.flush()
+
+        api_key_dao = ApiKeyDAO(session)
+        from orchestra.web.api.users.views import generate_key
+
+        api_key_dao.create(key=generate_key(), name="", user_id=user.id)
+
+        try:
+            from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+
+            DefaultTasksSeeder.seed(session, user_id=str(user.id))
+        except Exception as exc:
+            logger.warning("Failed to seed default tasks for user %s: %s", user.id, exc)
+
+        auth_dao.create_email_credentials(
+            user_id=user.id,
+            password_hash=password_hash,
+            email_verified=True,
+        )
+
+        onboarding_dao = OnboardingStatusDAO(session)
+        onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
+
+        coordinator, created_coordinator = (
+            await ensure_personal_coordinator_provisioned(
+                session,
+                user_id=str(user.id),
+            )
+        )
+        coordinator_id = coordinator.agent_id
+        return user
+    except Exception:
+        session.rollback()
+        if created_coordinator and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+        raise
 
 
 # =============================================================================
@@ -163,6 +221,24 @@ async def register(
             },
         )
 
+    password_hash = ph.hash(body.password)
+
+    if settings.is_self_host:
+        user = await _provision_email_password_user(
+            session,
+            email=email,
+            name=body.name,
+            last_name=body.last_name,
+            password_hash=password_hash,
+        )
+        session.commit()
+        return AuthRegisterResponse(
+            email=email,
+            requires_verification=False,
+            id=str(user.id),
+            name=user.name,
+        )
+
     # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new registrations
     remote_ip = request.client.host if request.client else None
     captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
@@ -174,9 +250,6 @@ async def register(
                 "message": "CAPTCHA verification failed. Please try again.",
             },
         )
-
-    # 3. Hash the password
-    password_hash = ph.hash(body.password)
 
     # 4. Create verification entry (overwrites any existing pending signup)
     auth_dao = AuthDAO(session)
@@ -363,58 +436,17 @@ async def create_user_after_verification(
         )
     verification.token_jti = None
 
-    created_coordinator = False
-    coordinator_id: int | None = None
     try:
-        # Create User + EmailAccount in a single transaction
-        user = user_dao.create(
+        user = await _provision_email_password_user(
+            session,
             email=email,
             name=verification.name,
             last_name=verification.last_name,
-        )
-        session.flush()  # Get user.id
-
-        api_key_dao = ApiKeyDAO(session)
-        from orchestra.web.api.users.views import generate_key
-
-        new_api_key = generate_key()
-        api_key_dao.create(key=new_api_key, name="", user_id=user.id)
-
-        # Seed default project for the new user.
-        # DefaultTasksSeeder.seed() uses session.flush() (not commit), so it's safe
-        # to call within the current transaction — no savepoint needed.
-        try:
-            from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
-
-            DefaultTasksSeeder.seed(session, user_id=str(user.id))
-        except Exception as e:
-            logger.warning(f"Failed to seed default tasks for user {user.id}: {e}")
-
-        auth_dao.create_email_credentials(
-            user_id=user.id,
             password_hash=verification.password_hash,
-            email_verified=True,
         )
-
-        # Initialize onboarding status for the new user
-        onboarding_dao = OnboardingStatusDAO(session)
-        onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
-
-        coordinator, created_coordinator = (
-            await ensure_personal_coordinator_provisioned(
-                session,
-                user_id=str(user.id),
-            )
-        )
-        coordinator_id = coordinator.agent_id
-
-        # Delete the verification entry
         auth_dao.delete_verification(verification.id)
         session.commit()
     except Exception:
-        session.rollback()
-        if created_coordinator and coordinator_id is not None:
-            await delete_pubsub_topic(str(coordinator_id))
         raise
 
     return AuthVerifyResponse(
