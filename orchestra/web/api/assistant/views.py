@@ -675,7 +675,7 @@ def _is_hidden_workspace_coordinator_for_user(
     response_model=InfoResponse[AssistantRead],
     status_code=status.HTTP_200_OK,
     summary="Create a new assistant",
-    description="Creates a new assistant for the authenticated user with the specified configuration. This action will deduct credits from the user account.",
+    description="Creates a new assistant for the authenticated user with the specified configuration.",
     tags=["Assistant Management"],
     responses={
         200: {
@@ -755,8 +755,7 @@ async def create_assistant(
     attributes like name, age, and operational limits. Each assistant is tied
     to the authenticated user's account. When called with an organization API
     key, the assistant lives inside that organization but still records the
-    caller as its creator/lifecycle owner. Creating an assistant incurs a
-    credit cost.
+    caller as its creator/lifecycle owner.
     """
     user_id = request.state.user_id
     user_dao = UserDAO(session)
@@ -798,7 +797,7 @@ async def create_assistant(
                     detail="You do not have permission to create assistants in this organization.",
                 )
 
-        if settings.charges_billing:
+        if settings.charges_billing and total_creation_cost > 0:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -1135,8 +1134,9 @@ async def create_assistant(
             detail="Failed to create assistant",
         )
 
-    # Phase 2: Deduct credits from the correct billing account (user or org).
-    if settings.charges_billing:
+    # Phase 2: Deduct credits from the correct billing account (user or org)
+    # when a creation cost is configured.
+    if settings.charges_billing and total_creation_cost > 0:
         try:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 

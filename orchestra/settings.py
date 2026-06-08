@@ -319,7 +319,7 @@ class Settings(BaseSettings):
     )
 
     # Assistant creation
-    assistant_creation_cost: float = 10.0
+    assistant_creation_cost: float = 0.0
 
     # Assistant photo generation
     photo_generation_cost: float = (
