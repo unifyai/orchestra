@@ -60,8 +60,14 @@ class Settings(BaseSettings):
 
     # Current environment
     environment: str = "dev"
-    is_staging: bool = os.environ.get("STAGING", "False") == "True"
-    is_self_host: bool = os.environ.get("SELF_HOST", "0") == "1"
+
+    @property
+    def is_staging(self) -> bool:
+        return os.environ.get("STAGING", "False") == "True"
+
+    @property
+    def is_self_host(self) -> bool:
+        return os.environ.get("SELF_HOST", "0") == "1"
 
     @property
     def charges_billing(self) -> bool:
