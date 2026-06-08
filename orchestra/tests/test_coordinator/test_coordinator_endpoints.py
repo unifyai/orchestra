@@ -517,7 +517,7 @@ async def test_reset_clears_only_coordinator_contexts(
     project = _assistants_project(dbsession, coordinator=coordinator)
     for suffix, data in (
         ("Coordinator/State", {"mode": "working"}),
-        ("Coordinator/Checklist", {"title": "Connect HubSpot", "mode": "ready_to_go"}),
+        ("Coordinator/Checklist", {}),
         ("Transcripts", {"role": "assistant", "content": "Welcome."}),
         ("Exchanges", {"value": "exchange"}),
     ):
@@ -787,7 +787,7 @@ async def test_coordinator_state_patch_rejects_invalid_values(
     }, create.json()
     coordinator_id = int(create.json()["coordinator_id"])
 
-    # Checklist-mode vocabulary must NOT be accepted on Coordinator/State.
+    # ``ready_to_go`` is not a valid Coordinator/State mode.
     bad_mode = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
         json={"mode": "ready_to_go"},
