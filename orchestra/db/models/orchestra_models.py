@@ -2066,7 +2066,10 @@ class AssistantContact(Base):
             "contact_value",
             unique=True,
             postgresql_where=text(
-                "status != 'deleted' AND contact_type NOT IN ('whatsapp', 'discord')",
+                "status != 'deleted' "
+                "AND contact_type NOT IN ('whatsapp', 'discord') "
+                "AND NOT (contact_type = 'email' "
+                "AND (metadata ->> 'universal_unity') = 'true')",
             ),
         ),
         sa.CheckConstraint(

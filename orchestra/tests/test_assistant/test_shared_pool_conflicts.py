@@ -52,6 +52,10 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.settings import settings
+from orchestra.services.universal_unity_email import (
+    ensure_coordinator_universal_email_contact,
+    get_universal_unity_email_address,
+)
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 # ============================================================================
@@ -156,6 +160,25 @@ def _enable_discord(
         contact_type="discord",
         contact_value=pool_bot.number,
         status="active",
+    )
+    dbsession.add(contact)
+    dbsession.flush()
+    return contact
+
+
+def _enable_shared_email(
+    dbsession: Session,
+    assistant: Assistant,
+    email_address: str,
+) -> AssistantContact:
+    contact = AssistantContact(
+        assistant_id=assistant.agent_id,
+        contact_type="email",
+        contact_value=email_address,
+        provider="google_workspace",
+        provisioned_by="platform",
+        status="active",
+        metadata_={"universal_unity": True},
     )
     dbsession.add(contact)
     dbsession.flush()
@@ -3423,6 +3446,148 @@ class TestCallSessionEndpoints:
             .count()
             == 1
         )
+
+
+class TestSharedCoordinatorEmailRouting:
+    """Shared coordinator email routing uses the universal owner model."""
+
+    def test_universal_email_contact_can_be_shared_by_coordinators(
+        self,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user1 = _make_user(dbsession, "shared-email-owner-1@test.com")
+        user2 = _make_user(dbsession, "shared-email-owner-2@test.com")
+        coordinator1 = _make_assistant(
+            dbsession,
+            user1,
+            "Unity",
+            is_coordinator=True,
+        )
+        coordinator2 = _make_assistant(
+            dbsession,
+            user2,
+            "Unity",
+            is_coordinator=True,
+        )
+
+        contact1 = ensure_coordinator_universal_email_contact(
+            dbsession,
+            coordinator=coordinator1,
+        )
+        contact2 = ensure_coordinator_universal_email_contact(
+            dbsession,
+            coordinator=coordinator2,
+        )
+        dbsession.flush()
+
+        assert contact1.contact_value == email_address
+        assert contact2.contact_value == email_address
+        assert contact1.metadata_ == {"universal_unity": True}
+        assert contact2.metadata_ == {"universal_unity": True}
+
+    async def test_email_resolve_routes_verified_owner(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user = _make_user(dbsession, "shared-email-owner@test.com")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_shared_email(dbsession, coordinator, email_address)
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={"mailbox": email_address, "sender": user.email},
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == {
+            "assistant_id": coordinator.agent_id,
+            "role": "owner",
+            "action": None,
+        }
+
+    async def test_email_resolve_rejects_unknown_sender(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user = _make_user(dbsession, "shared-email-cold-owner@test.com")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_shared_email(dbsession, coordinator, email_address)
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={"mailbox": email_address, "sender": "cold-sender@test.com"},
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["action"] == "reject_cold"
+
+    async def test_email_resolve_rejects_ambiguous_owned_coordinators(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user = _make_user(dbsession, "shared-email-ambiguous@test.com")
+        personal = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        organization = _make_org(dbsession, user)
+        org_scoped = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            org_id=organization.id,
+            is_coordinator=True,
+        )
+        _enable_shared_email(dbsession, personal, email_address)
+        _enable_shared_email(dbsession, org_scoped, email_address)
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={"mailbox": email_address, "sender": user.email},
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["action"] == "reject_ambiguous"
+
+    async def test_email_resolve_404_for_non_shared_mailbox(
+        self,
+        client: AsyncClient,
+    ):
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={
+                "mailbox": "specialist@unify.ai",
+                "sender": "owner@test.com",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 # ============================================================================

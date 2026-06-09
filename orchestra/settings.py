@@ -323,6 +323,11 @@ class Settings(BaseSettings):
     unity_whatsapp_pool_number: Optional[str] = os.environ.get(
         "UNITY_WHATSAPP_POOL_NUMBER"
     ) or os.environ.get("ORCHESTRA_UNITY_WHATSAPP_POOL_NUMBER")
+    unity_coordinator_email_address: Optional[str] = (
+        os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
+        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
+        or "marty@unify.ai"
+    )
 
     # Assistant photo generation
     photo_generation_cost: float = (

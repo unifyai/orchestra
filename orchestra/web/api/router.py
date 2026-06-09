@@ -31,6 +31,7 @@ from orchestra.web.api.dependencies import (
 )
 from orchestra.web.api.desktop import router as desktop_router
 from orchestra.web.api.discord import admin_router as discord_admin_router
+from orchestra.web.api.email import admin_router as email_admin_router
 from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.messages import admin_router as messages_admin_router
 from orchestra.web.api.messages import router as messages_router
@@ -178,6 +179,13 @@ api_router.include_router(
     whatsapp_admin_router,
     prefix="/admin",
     tags=["WhatsApp"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    email_admin_router,
+    prefix="/admin",
+    tags=["Email"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

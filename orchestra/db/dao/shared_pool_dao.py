@@ -32,6 +32,10 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.universal_unity_whatsapp import (
     is_universal_unity_whatsapp_number,
 )
+from orchestra.services.shared_coordinator_routing import (
+    find_user_by_shared_identity,
+    resolve_shared_coordinator_owner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -247,13 +251,11 @@ class SharedPoolDAO:
         return None
 
     def _find_user_by_platform_identity(self, sender: str) -> User | None:
-        if self.platform == "whatsapp":
-            return (
-                self.session.query(User).filter(User.whatsapp_number == sender).first()
-            )
-        elif self.platform == "discord":
-            return self.session.query(User).filter(User.discord_id == sender).first()
-        return None
+        return find_user_by_shared_identity(
+            self.session,
+            platform=self.platform,
+            sender=sender,
+        )
 
     def _touch_inbound(
         self,
@@ -322,19 +324,13 @@ class SharedPoolDAO:
         pool_number: str,
         sender: str,
     ) -> dict:
-        user = self._find_user_by_platform_identity(sender)
-        if user is None:
-            return {"action": "reject_cold"}
-
-        candidates = self._find_owned_universal_unity_assistants(
-            user.id,
-            pool_number,
+        return resolve_shared_coordinator_owner(
+            self.session,
+            platform=self.platform,
+            contact_type=self.platform,
+            contact_value=pool_number,
+            sender=sender,
         )
-        if len(candidates) == 1:
-            return {"assistant_id": candidates[0], "role": "owner"}
-        if len(candidates) > 1:
-            return {"action": "reject_ambiguous"}
-        return {"action": "reject_cold"}
 
     def _find_owned_universal_unity_assistants(
         self,

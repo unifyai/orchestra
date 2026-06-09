@@ -35,6 +35,9 @@ from orchestra.services.contact_membership_service import (
     ensure_personal_contact_memberships,
 )
 from orchestra.services.coordinator_personas import COORDINATOR_BIO
+from orchestra.services.universal_unity_email import (
+    ensure_coordinator_universal_email_contact,
+)
 from orchestra.services.universal_unity_whatsapp import (
     ensure_coordinator_universal_whatsapp_contact,
 )
@@ -288,6 +291,7 @@ def _repair_existing_coordinator_state(
     _ensure_coordinator_default_desktop_mode(coordinator)
     ensure_personal_contact_memberships(session, [coordinator.agent_id])
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
+    ensure_coordinator_universal_email_contact(session, coordinator=coordinator)
     ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
     # Backfill the state row for Coordinators provisioned before the
     # onboarding-mode flow shipped. New rows arrive via the create path
@@ -333,6 +337,7 @@ def create_workspace_coordinator(
         organization_id=organization_id,
     )
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
+    ensure_coordinator_universal_email_contact(session, coordinator=assistant)
     ensure_coordinator_universal_whatsapp_contact(session, coordinator=assistant)
     # Seed the starting Coordinator/State row so the assistants page can
     # decide between the onboarding view and the regular view from a
