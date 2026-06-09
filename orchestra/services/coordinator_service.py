@@ -41,6 +41,9 @@ from orchestra.services.universal_unity_email import (
 from orchestra.services.universal_unity_whatsapp import (
     ensure_coordinator_universal_whatsapp_contact,
 )
+from orchestra.services.universal_unity_phone import (
+    ensure_coordinator_universal_phone_contact,
+)
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 from orchestra.web.api.utils.assistant_infra import (
@@ -285,6 +288,7 @@ def _repair_existing_coordinator_state(
     session: Session,
     *,
     coordinator: Assistant,
+    preferred_phone_country: str | None = None,
 ) -> None:
     """Repair Coordinator defaults and required owner-facing overlays."""
     _ensure_coordinator_default_nationality(coordinator)
@@ -293,6 +297,12 @@ def _repair_existing_coordinator_state(
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
     ensure_coordinator_universal_email_contact(session, coordinator=coordinator)
     ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
+    ensure_coordinator_universal_phone_contact(
+        session,
+        coordinator=coordinator,
+        preferred_country=preferred_phone_country,
+        assignment_source="geo" if preferred_phone_country else "repair",
+    )
     # Backfill the state row for Coordinators provisioned before the
     # onboarding-mode flow shipped. New rows arrive via the create path
     # below; this branch picks up the long tail of pre-existing
@@ -306,6 +316,7 @@ def create_workspace_coordinator(
     *,
     user_id: str,
     organization_id: int | None,
+    preferred_phone_country: str | None = None,
 ) -> tuple[Assistant, bool]:
     """Create or return the user's Coordinator for one workspace.
 
@@ -318,7 +329,11 @@ def create_workspace_coordinator(
         organization_id=organization_id,
     )
     if existing is not None:
-        _repair_existing_coordinator_state(session, coordinator=existing)
+        _repair_existing_coordinator_state(
+            session,
+            coordinator=existing,
+            preferred_phone_country=preferred_phone_country,
+        )
         return existing, False
 
     assistant = create_coordinator_assistant(
@@ -339,6 +354,12 @@ def create_workspace_coordinator(
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
     ensure_coordinator_universal_email_contact(session, coordinator=assistant)
     ensure_coordinator_universal_whatsapp_contact(session, coordinator=assistant)
+    ensure_coordinator_universal_phone_contact(
+        session,
+        coordinator=assistant,
+        preferred_country=preferred_phone_country,
+        assignment_source="geo" if preferred_phone_country else "auto",
+    )
     # Seed the starting Coordinator/State row so the assistants page can
     # decide between the onboarding view and the regular view from a
     # single read. Freshly-created Coordinators land in
@@ -350,12 +371,14 @@ def create_workspace_coordinator(
 def create_personal_coordinator(
     session: Session,
     user_id: str,
+    preferred_phone_country: str | None = None,
 ) -> tuple[Assistant, bool]:
     """Create or return the user's personal Coordinator."""
     return create_workspace_coordinator(
         session,
         user_id=user_id,
         organization_id=None,
+        preferred_phone_country=preferred_phone_country,
     )
 
 
@@ -364,6 +387,7 @@ async def ensure_workspace_coordinator_provisioned(
     *,
     user_id: str,
     organization_id: int | None,
+    preferred_phone_country: str | None = None,
 ) -> tuple[Assistant, bool]:
     """Ensure workspace Coordinator row and pubsub topic both exist.
 
@@ -374,6 +398,7 @@ async def ensure_workspace_coordinator_provisioned(
         session,
         user_id=user_id,
         organization_id=organization_id,
+        preferred_phone_country=preferred_phone_country,
     )
     pubsub_response = await create_pubsub_topic(
         str(coordinator.agent_id),
@@ -388,12 +413,14 @@ async def ensure_personal_coordinator_provisioned(
     session: Session,
     *,
     user_id: str,
+    preferred_phone_country: str | None = None,
 ) -> tuple[Assistant, bool]:
     """Ensure personal Coordinator row and pubsub topic both exist."""
     return await ensure_workspace_coordinator_provisioned(
         session,
         user_id=user_id,
         organization_id=None,
+        preferred_phone_country=preferred_phone_country,
     )
 
 

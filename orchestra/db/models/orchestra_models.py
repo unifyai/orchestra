@@ -2068,7 +2068,7 @@ class AssistantContact(Base):
             postgresql_where=text(
                 "status != 'deleted' "
                 "AND contact_type NOT IN ('whatsapp', 'discord') "
-                "AND NOT (contact_type = 'email' "
+                "AND NOT (contact_type IN ('email', 'phone') "
                 "AND (metadata ->> 'universal_unity') = 'true')",
             ),
         ),
@@ -3014,13 +3014,18 @@ class SharedPoolNumber(Base):
         default="whatsapp",
         server_default="whatsapp",
     )
-    number = Column(String, nullable=False, unique=True)
+    number = Column(String, nullable=False)
     status = Column(String, nullable=False, default="active", server_default="active")
     twilio_sender_sid = Column(String, nullable=True)
     auth_token = Column(String, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     __table_args__ = (
+        UniqueConstraint(
+            "platform",
+            "number",
+            name="uq_shared_pool_number_platform_number",
+        ),
         sa.CheckConstraint(
             "status IN ('active', 'inactive')",
             name="ck_shared_pool_number_status",

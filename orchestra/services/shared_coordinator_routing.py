@@ -17,6 +17,8 @@ def find_user_by_shared_identity(
         return session.query(User).filter(User.whatsapp_number == sender).first()
     if platform == "email":
         return session.query(User).filter(User.email == sender).first()
+    if platform == "phone":
+        return session.query(User).filter(User.phone_number == sender).first()
     if platform == "discord":
         return session.query(User).filter(User.discord_id == sender).first()
     return None

@@ -1208,6 +1208,7 @@ async def create_personal_coordinator_endpoint(
     request: Request,
     response: Response,
     organization_id: int | None = Query(None),
+    preferred_phone_country: str | None = Query(None),
     session: Session = Depends(get_db_session),
 ) -> dict:
     """Create or return the authenticated user's workspace Coordinator."""
@@ -1257,6 +1258,7 @@ async def create_personal_coordinator_endpoint(
                 session,
                 user_id=user_id,
                 organization_id=organization_id,
+                preferred_phone_country=preferred_phone_country,
             )
         )
         coordinator_id = coordinator.agent_id
@@ -1282,6 +1284,7 @@ async def create_personal_coordinator_endpoint(
             session,
             user_id=user_id,
             organization_id=organization_id,
+            preferred_phone_country=preferred_phone_country,
         )
         if coordinator is None:
             raise HTTPException(

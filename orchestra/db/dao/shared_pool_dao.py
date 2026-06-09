@@ -32,6 +32,9 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.universal_unity_whatsapp import (
     is_universal_unity_whatsapp_number,
 )
+from orchestra.services.universal_unity_phone import (
+    is_universal_unity_phone_number,
+)
 from orchestra.services.shared_coordinator_routing import (
     find_user_by_shared_identity,
     resolve_shared_coordinator_owner,
@@ -975,9 +978,11 @@ class SharedPoolDAO:
         return user_ids
 
     def _is_universal_unity_pool(self, pool_number: str | None) -> bool:
-        return self.platform == "whatsapp" and is_universal_unity_whatsapp_number(
-            pool_number,
-        )
+        if self.platform == "whatsapp":
+            return is_universal_unity_whatsapp_number(pool_number)
+        if self.platform == "phone":
+            return is_universal_unity_phone_number(pool_number)
+        return False
 
     def _is_universal_unity_contact(self, contact: AssistantContact) -> bool:
         if not self._is_universal_unity_pool(contact.contact_value):
@@ -998,7 +1003,7 @@ class SharedPoolDAO:
         target_user = self._find_user_by_platform_identity(contact_number)
         if target_user is None:
             raise ValueError(
-                "Universal Unity WhatsApp can only message verified platform users.",
+                "Universal Unity routes can only message verified platform users.",
             )
 
         candidates = self._find_owned_universal_unity_assistants(
@@ -1007,7 +1012,7 @@ class SharedPoolDAO:
         )
         if candidates != [contact.assistant_id]:
             raise ValueError(
-                "Universal Unity WhatsApp routes require an unambiguous contact.",
+                "Universal Unity routes require an unambiguous contact.",
             )
 
         return SharedPlatformRoute(
@@ -1020,6 +1025,8 @@ class SharedPoolDAO:
     def _get_user_platform_identity(self, user: User) -> str | None:
         if self.platform == "whatsapp":
             return user.whatsapp_number
+        elif self.platform == "phone":
+            return user.phone_number
         elif self.platform == "discord":
             return user.discord_id
         return None

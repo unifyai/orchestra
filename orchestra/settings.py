@@ -328,6 +328,15 @@ class Settings(BaseSettings):
         or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
         or "marty@unify.ai"
     )
+    unity_coordinator_phone_numbers: Optional[str] = (
+        os.environ.get("UNITY_COORDINATOR_PHONE_NUMBERS")
+        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_NUMBERS")
+    )
+    unity_coordinator_default_phone_country: str = (
+        os.environ.get("UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        or "US"
+    )
 
     # Assistant photo generation
     photo_generation_cost: float = (
