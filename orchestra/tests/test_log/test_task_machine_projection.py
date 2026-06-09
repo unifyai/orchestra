@@ -364,6 +364,71 @@ def test_reconcile_deletes_unarmed_scheduled_delivery(monkeypatch):
     assert posts[0]["body"]["activation_revision"] == "rev-1"
 
 
+def test_post_task_activation_request_skips_in_self_host_mode(monkeypatch):
+    """Self-host uses Unity's LocalActivationScheduler instead of Communication."""
+
+    posts: list[tuple] = []
+
+    class _FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, *args, **kwargs):
+            posts.append((args, kwargs))
+
+    monkeypatch.setenv("SELF_HOST", "1")
+    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
+    monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
+
+    task_machine_state_service._post_task_activation_request(
+        path=task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH,
+        body={"assistant_id": "42", "task_id": 101},
+    )
+
+    assert posts == []
+
+
+def test_post_task_activation_request_posts_when_not_self_host(monkeypatch):
+    """Hosted deployments still mirror scheduled activations into Communication."""
+
+    posts: list[tuple] = []
+
+    class _FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, url, **kwargs):
+            posts.append((url, kwargs))
+            return SimpleNamespace(
+                status_code=200,
+                text='{"success": true}',
+                raise_for_status=lambda: None,
+            )
+
+    monkeypatch.delenv("SELF_HOST", raising=False)
+    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
+    monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
+
+    task_machine_state_service._post_task_activation_request(
+        path=task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH,
+        body={"assistant_id": "42", "task_id": 101},
+    )
+
+    assert len(posts) == 1
+    url, kwargs = posts[0]
+    assert url == "http://comms.test/infra/task-activation/upsert"
+    assert kwargs["json"] == {"assistant_id": "42", "task_id": 101}
+    assert kwargs["headers"]["Authorization"] == "Bearer test-admin-key"
+
+
 @pytest.mark.anyio
 async def test_task_create_projects_scheduled_activation(
     client: AsyncClient,

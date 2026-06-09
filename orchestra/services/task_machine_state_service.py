@@ -36,6 +36,7 @@ from orchestra.db.models.orchestra_models import (
     Team,
     TeamAssistantMembership,
 )
+from orchestra.settings import settings
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
 TASKS_CONTEXT_NAME = "Tasks"
@@ -1674,7 +1675,19 @@ def _is_scheduled_activation_payload(activation: Mapping[str, Any] | None) -> bo
 
 
 def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None:
-    """Send one activation sync request to Communication when configured."""
+    """Send one activation sync request to Communication when configured.
+
+    Self-host deployments skip this sync: scheduled activations are projected
+    into Orchestra and fired in-process by Unity's LocalActivationScheduler
+    instead of Communication's Cloud Tasks queues.
+    """
+
+    if settings.is_self_host:
+        logger.info(
+            "Skipping task activation sync in self-host mode; "
+            "Unity LocalActivationScheduler owns scheduled delivery.",
+        )
+        return
 
     comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
