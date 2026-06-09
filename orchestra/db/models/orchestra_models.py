@@ -3121,6 +3121,52 @@ class DecommissionedRoute(Base):
     )
 
 
+class CommunicationCallSession(Base):
+    """Durable routing state for provider voice-call callbacks."""
+
+    __tablename__ = "communication_call_sessions"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String, nullable=False)
+    provider_call_sid = Column(String, nullable=False)
+    channel = Column(String, nullable=False)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    from_number = Column(String, nullable=False)
+    to_number = Column(String, nullable=False)
+    pool_number = Column(String, nullable=True)
+    conference_name = Column(String, nullable=False)
+    livekit_room = Column(String, nullable=False)
+    status = Column(String, nullable=False, server_default="created")
+    recording_url = Column(String, nullable=True)
+    metadata_ = Column("metadata", JSONB, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), onupdate=func.now())
+
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_call_sid",
+            name="uq_communication_call_sessions_provider_sid",
+        ),
+        Index(
+            "ix_communication_call_sessions_assistant_channel",
+            "assistant_id",
+            "channel",
+            "created_at",
+        ),
+        Index(
+            "ix_communication_call_sessions_livekit_room",
+            "livekit_room",
+        ),
+    )
+
+
 class ConflictEvent(Base):
     """Audit log for shared-pool conflict resolutions.
 

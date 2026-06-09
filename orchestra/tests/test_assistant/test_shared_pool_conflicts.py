@@ -41,6 +41,7 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
     BillingAccount,
+    CommunicationCallSession,
     ConflictEvent,
     DecommissionedRoute,
     Organization,
@@ -3334,6 +3335,94 @@ class TestCallPermissionEndpoints:
         )
         assert resp.status_code == status.HTTP_200_OK
         assert resp.json()["permitted"] is False
+
+
+class TestCallSessionEndpoints:
+    """Endpoint-level tests for WhatsApp call-session persistence."""
+
+    @pytest.fixture
+    async def test_user(self, client: AsyncClient):
+        return await create_test_user(client, "call_session@test.com")
+
+    @pytest.fixture
+    async def test_assistant(self, test_user, dbsession: Session):
+        assistant = Assistant(user_id=test_user["id"], first_name="CallSessionBot")
+        dbsession.add(assistant)
+        dbsession.commit()
+        return assistant
+
+    async def test_create_lookup_update_and_upsert_call_session(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        test_assistant: Assistant,
+    ):
+        payload = {
+            "provider": "twilio",
+            "provider_call_sid": "CA_test_call_session",
+            "channel": "whatsapp_call",
+            "assistant_id": test_assistant.agent_id,
+            "from_number": "+15550100001",
+            "to_number": "+15550100002",
+            "pool_number": "+15550100002",
+            "conference_name": "unity_wa_conf_CA_test_call_session",
+            "livekit_room": "unity_wa_room_1_CA_test_call_session",
+            "status": "created",
+            "metadata": {"sip_dispatch_rule_id": "rule-1"},
+        }
+
+        create_resp = await client.post(
+            "/v0/admin/whatsapp/call-session",
+            json=payload,
+            headers=ADMIN_HEADERS,
+        )
+        assert create_resp.status_code == status.HTTP_200_OK, create_resp.text
+        created = create_resp.json()
+        assert created["provider_call_sid"] == payload["provider_call_sid"]
+        assert created["assistant_id"] == test_assistant.agent_id
+        assert created["metadata"]["sip_dispatch_rule_id"] == "rule-1"
+
+        lookup_resp = await client.get(
+            "/v0/admin/whatsapp/call-session/CA_test_call_session",
+            headers=ADMIN_HEADERS,
+        )
+        assert lookup_resp.status_code == status.HTTP_200_OK
+        assert lookup_resp.json()["livekit_room"] == payload["livekit_room"]
+
+        update_resp = await client.patch(
+            "/v0/admin/whatsapp/call-session",
+            json={
+                "provider": "twilio",
+                "provider_call_sid": "CA_test_call_session",
+                "status": "recording_ready",
+                "recording_url": "https://storage.googleapis.com/bucket/call.mp3",
+                "metadata": {"egress_id": "egress-1"},
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert update_resp.status_code == status.HTTP_200_OK, update_resp.text
+        updated = update_resp.json()
+        assert updated["status"] == "recording_ready"
+        assert updated["recording_url"].endswith("/call.mp3")
+        assert updated["metadata"] == {
+            "sip_dispatch_rule_id": "rule-1",
+            "egress_id": "egress-1",
+        }
+
+        upsert_resp = await client.post(
+            "/v0/admin/whatsapp/call-session",
+            json={**payload, "status": "in-progress"},
+            headers=ADMIN_HEADERS,
+        )
+        assert upsert_resp.status_code == status.HTTP_200_OK, upsert_resp.text
+        assert upsert_resp.json()["id"] == created["id"]
+        assert upsert_resp.json()["status"] == "in-progress"
+        assert (
+            dbsession.query(CommunicationCallSession)
+            .filter_by(provider="twilio", provider_call_sid="CA_test_call_session")
+            .count()
+            == 1
+        )
 
 
 # ============================================================================
