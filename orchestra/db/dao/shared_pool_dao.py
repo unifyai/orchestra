@@ -29,6 +29,9 @@ from orchestra.db.models.orchestra_models import (
     SharedPoolNumber,
     User,
 )
+from orchestra.services.universal_unity_whatsapp import (
+    is_universal_unity_whatsapp_number,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +170,9 @@ class SharedPoolDAO:
         or ``None`` for unknown senders on dedicated pools.
         """
         now = datetime.now(timezone.utc)
+
+        if self._is_universal_unity_pool(pool_number):
+            return self._resolve_universal_unity_inbound(pool_number, sender)
 
         # Tier 1: platform-specific user identity match
         user = self._find_user_by_platform_identity(sender)
@@ -311,6 +317,48 @@ class SharedPoolDAO:
         )
         return [r[0] for r in rows]
 
+    def _resolve_universal_unity_inbound(
+        self,
+        pool_number: str,
+        sender: str,
+    ) -> dict:
+        user = self._find_user_by_platform_identity(sender)
+        if user is None:
+            return {"action": "reject_cold"}
+
+        candidates = self._find_owned_universal_unity_assistants(
+            user.id,
+            pool_number,
+        )
+        if len(candidates) == 1:
+            return {"assistant_id": candidates[0], "role": "owner"}
+        if len(candidates) > 1:
+            return {"action": "reject_ambiguous"}
+        return {"action": "reject_cold"}
+
+    def _find_owned_universal_unity_assistants(
+        self,
+        user_id: str,
+        pool_number: str,
+    ) -> list[int]:
+        rows = (
+            self.session.query(Assistant.agent_id)
+            .join(
+                AssistantContact,
+                AssistantContact.assistant_id == Assistant.agent_id,
+            )
+            .filter(
+                Assistant.user_id == user_id,
+                Assistant.is_coordinator.is_(True),
+                AssistantContact.contact_type == self.platform,
+                AssistantContact.contact_value == pool_number,
+                AssistantContact.status == "active",
+            )
+            .order_by(Assistant.agent_id.asc())
+            .all()
+        )
+        return [r[0] for r in rows]
+
     # ------------------------------------------------------------------
     # Pool assignment (activation)
     # ------------------------------------------------------------------
@@ -329,6 +377,11 @@ class SharedPoolDAO:
             .order_by(SharedPoolNumber.id)
             .all()
         )
+        active_pool = [
+            pool
+            for pool in active_pool
+            if not self._is_universal_unity_pool(pool.number)
+        ]
 
         eligible = []
         for pool in active_pool:
@@ -394,6 +447,17 @@ class SharedPoolDAO:
         pool = self.get_pool_number_by_value(contact.contact_value)
         if not pool:
             raise ValueError(f"Pool number {contact.contact_value} not found.")
+
+        is_universal_unity_contact = self._is_universal_unity_contact(contact)
+        if is_universal_unity_contact:
+            return (
+                self._build_universal_unity_owner_route(
+                    contact,
+                    pool,
+                    contact_number,
+                ),
+                None,
+            )
 
         # Existing route for this assistant → return it
         existing = (
@@ -656,7 +720,11 @@ class SharedPoolDAO:
         """
         # Personal assistants for this user with active pool contacts
         personal_assistants = (
-            self.session.query(Assistant.agent_id, AssistantContact.contact_value)
+            self.session.query(
+                Assistant.agent_id,
+                AssistantContact.contact_value,
+                Assistant.is_coordinator,
+            )
             .join(
                 AssistantContact,
                 AssistantContact.assistant_id == Assistant.agent_id,
@@ -672,7 +740,11 @@ class SharedPoolDAO:
 
         # Org assistants with active pool contacts
         org_assistants = (
-            self.session.query(Assistant.agent_id, AssistantContact.contact_value)
+            self.session.query(
+                Assistant.agent_id,
+                AssistantContact.contact_value,
+                Assistant.is_coordinator,
+            )
             .join(
                 AssistantContact,
                 AssistantContact.assistant_id == Assistant.agent_id,
@@ -686,13 +758,20 @@ class SharedPoolDAO:
         )
 
         conflicts = []
-        org_pool_map = {cv: aid for aid, cv in org_assistants}
-        for personal_aid, personal_cv in personal_assistants:
+        org_pool_map = {
+            cv: (aid, is_coordinator) for aid, cv, is_coordinator in org_assistants
+        }
+        for personal_aid, personal_cv, personal_is_coordinator in personal_assistants:
             if personal_cv in org_pool_map:
+                org_aid, org_is_coordinator = org_pool_map[personal_cv]
+                if self._is_universal_unity_pool(personal_cv) and (
+                    personal_is_coordinator or org_is_coordinator
+                ):
+                    continue
                 pool = self.get_pool_number_by_value(personal_cv)
                 if pool:
                     conflicts.append(
-                        (personal_aid, org_pool_map[personal_cv], pool),
+                        (personal_aid, org_aid, pool),
                     )
         return conflicts
 
@@ -898,6 +977,49 @@ class SharedPoolDAO:
                 if uid not in user_ids:
                     user_ids.append(uid)
         return user_ids
+
+    def _is_universal_unity_pool(self, pool_number: str | None) -> bool:
+        return self.platform == "whatsapp" and is_universal_unity_whatsapp_number(
+            pool_number,
+        )
+
+    def _is_universal_unity_contact(self, contact: AssistantContact) -> bool:
+        if not self._is_universal_unity_pool(contact.contact_value):
+            return False
+        assistant = (
+            self.session.query(Assistant)
+            .filter(Assistant.agent_id == contact.assistant_id)
+            .first()
+        )
+        return bool(assistant and assistant.is_coordinator)
+
+    def _build_universal_unity_owner_route(
+        self,
+        contact: AssistantContact,
+        pool: SharedPoolNumber,
+        contact_number: str,
+    ) -> SharedPlatformRoute:
+        target_user = self._find_user_by_platform_identity(contact_number)
+        if target_user is None:
+            raise ValueError(
+                "Universal Unity WhatsApp can only message verified platform users.",
+            )
+
+        candidates = self._find_owned_universal_unity_assistants(
+            target_user.id,
+            pool.number,
+        )
+        if candidates != [contact.assistant_id]:
+            raise ValueError(
+                "Universal Unity WhatsApp routes require an unambiguous contact.",
+            )
+
+        return SharedPlatformRoute(
+            pool_number_id=pool.id,
+            pool_number=pool,
+            contact_number=contact_number,
+            assistant_id=contact.assistant_id,
+        )
 
     def _get_user_platform_identity(self, user: User) -> str | None:
         if self.platform == "whatsapp":

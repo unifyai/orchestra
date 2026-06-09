@@ -50,6 +50,7 @@ from orchestra.db.models.orchestra_models import (
     SharedPoolNumber,
     User,
 )
+from orchestra.settings import settings
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 # ============================================================================
@@ -115,11 +116,13 @@ def _make_assistant(
     user: User,
     name: str = "Bot",
     org_id: int | None = None,
+    is_coordinator: bool = False,
 ) -> Assistant:
     assistant = Assistant(
         user_id=user.id,
         first_name=name,
         organization_id=org_id,
+        is_coordinator=is_coordinator,
     )
     dbsession.add(assistant)
     dbsession.flush()
@@ -999,6 +1002,174 @@ class TestColdMessages:
         result = dao.resolve_inbound(pool_numbers[0].number, "+15550529999")
         assert result["assistant_id"] == a1.agent_id
         assert result["role"] == "contact"
+
+
+class TestUniversalUnityWhatsApp:
+    def test_verified_owner_routes_to_single_owned_unity(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-owner@test.com", "+15550610001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        result = dao.resolve_inbound(pool_numbers[0].number, user.whatsapp_number)
+
+        assert result == {"assistant_id": coordinator.agent_id, "role": "owner"}
+        assert (
+            dbsession.query(SharedPlatformRoute)
+            .filter(
+                SharedPlatformRoute.pool_number_id == pool_numbers[0].id,
+                SharedPlatformRoute.contact_number == user.whatsapp_number,
+            )
+            .first()
+            is None
+        )
+
+    def test_unknown_universal_sender_fails_closed(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-known@test.com", "+15550620001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        result = dao.resolve_inbound(pool_numbers[0].number, "+15550629999")
+
+        assert result == {"action": "reject_cold"}
+
+    def test_multiple_owned_unities_fail_closed(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-ambiguous@test.com", "+15550630001")
+        org = _make_org(dbsession, user, "UnityAmbiguous")
+        personal = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        org_coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            org.id,
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, personal, pool_numbers[0])
+        _enable_whatsapp(dbsession, org_coordinator, pool_numbers[0])
+
+        result = dao.resolve_inbound(pool_numbers[0].number, user.whatsapp_number)
+
+        assert result == {"action": "reject_ambiguous"}
+
+    def test_universal_pool_is_excluded_from_generic_assignment(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "regular-assignment@test.com", "+15550640001")
+        assistant = _make_assistant(dbsession, user, "Regular")
+
+        pool = dao.assign_pool_number(assistant.agent_id, [user.id])
+
+        assert pool.number == pool_numbers[1].number
+
+    def test_universal_unity_owner_route_is_ephemeral(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-owner-route@test.com", "+15550650001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        route, resolution = dao.get_or_create_route(
+            coordinator.agent_id,
+            user.whatsapp_number,
+        )
+
+        assert resolution is None
+        assert route.pool_number.number == pool_numbers[0].number
+        assert route.assistant_id == coordinator.agent_id
+        assert (
+            dbsession.query(SharedPlatformRoute)
+            .filter(
+                SharedPlatformRoute.pool_number_id == pool_numbers[0].id,
+                SharedPlatformRoute.contact_number == user.whatsapp_number,
+            )
+            .first()
+            is None
+        )
+
+    def test_universal_unity_external_route_fails_without_reassigning(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-external-route@test.com", "+15550660001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        contact = _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        with pytest.raises(ValueError, match="verified platform users"):
+            dao.get_or_create_route(coordinator.agent_id, "+15550669999")
+
+        dbsession.refresh(contact)
+        assert contact.contact_value == pool_numbers[0].number
 
 
 # ============================================================================

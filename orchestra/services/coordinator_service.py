@@ -35,6 +35,9 @@ from orchestra.services.contact_membership_service import (
     ensure_personal_contact_memberships,
 )
 from orchestra.services.coordinator_personas import COORDINATOR_BIO
+from orchestra.services.universal_unity_whatsapp import (
+    ensure_coordinator_universal_whatsapp_contact,
+)
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 from orchestra.web.api.utils.assistant_infra import (
@@ -155,7 +158,7 @@ def create_coordinator_assistant(
     """Create a Coordinator assistant row for one workspace scope."""
     assistant = AssistantDAO(session).create_assistant(
         user_id=owner_user_id,
-        first_name="Coordinator",
+        first_name="Unity",
         surname=None,
         age=None,
         nationality=COORDINATOR_DEFAULT_NATIONALITY,
@@ -174,7 +177,7 @@ def create_coordinator_assistant(
         is_local=False,
         is_coordinator=True,
         deploy_env=None,
-        job_title="Coordinator",
+        job_title="Unity",
     )
     session.flush()
     return assistant
@@ -285,6 +288,7 @@ def _repair_existing_coordinator_state(
     _ensure_coordinator_default_desktop_mode(coordinator)
     ensure_personal_contact_memberships(session, [coordinator.agent_id])
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
+    ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
     # Backfill the state row for Coordinators provisioned before the
     # onboarding-mode flow shipped. New rows arrive via the create path
     # below; this branch picks up the long tail of pre-existing
@@ -329,6 +333,7 @@ def create_workspace_coordinator(
         organization_id=organization_id,
     )
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
+    ensure_coordinator_universal_whatsapp_contact(session, coordinator=assistant)
     # Seed the starting Coordinator/State row so the assistants page can
     # decide between the onboarding view and the regular view from a
     # single read. Freshly-created Coordinators land in
