@@ -6,7 +6,7 @@ The old single ``assistants.user_desktop_id`` column (and the assistant-level
 ``user_desktop_filesys_sync`` flag) are migrated into the new join table.
 
 Revision ID: 2026_assistant_user_desktops
-Revises: 2026_retire_spaces
+Revises: billing_pii_to_stripe
 Create Date: 2026-06-08 12:00:00.000000
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "2026_assistant_user_desktops"
-down_revision = "2026_retire_spaces"
+down_revision = "billing_pii_to_stripe"
 branch_labels = None
 depends_on = None
 
