@@ -74,6 +74,43 @@ class Settings(BaseSettings):
         """Whether credit pre-checks and deductions run for billable actions."""
         return not self.is_staging and not self.is_self_host
 
+    @property
+    def billing_enabled(self) -> bool:
+        """Whether billing/checkout is operational on this deployment.
+
+        Orchestra owns the authoritative billing credentials (Stripe secret +
+        subscription prices), so it is the source of truth for whether the
+        billing experience should be surfaced at all. Consumers (e.g. Console)
+        read this via ``GET /v0/features`` instead of guessing from their own
+        partial env. Distinct from ``charges_billing``, which governs credit
+        metering rather than whether the billing UI can transact.
+        """
+        return bool(self.stripe_secret_key) and bool(
+            self.stripe_unify_subscription_price_id_personal_monthly) and bool(
+            self.stripe_unify_subscription_price_id_personal_annual) and bool(
+            self.stripe_unify_subscription_price_id_business_monthly) and bool(
+            self.stripe_unify_subscription_price_id_business_annual) and bool (
+            self.stripe_unify_annual_coupon_id)
+
+    @property
+    def workspace_google_enabled(self) -> bool:
+        """Whether assistants can connect a Google workspace (BYOD OAuth).
+
+        Orchestra holds the Google OAuth client ID used to build the
+        authorization URL, so it is the source of truth for whether the
+        connect-Google-workspace flow can run. Consumers read this via
+        ``GET /v0/features`` rather than checking their own env.
+        """
+        return bool(self.google_oauth_client_id)
+
+    @property
+    def workspace_microsoft_enabled(self) -> bool:
+        """Whether assistants can connect a Microsoft workspace (BYOD OAuth).
+
+        Mirrors ``workspace_google_enabled`` for the Microsoft 365 client ID.
+        """
+        return bool(self.microsoft_byod_client_id)
+
     log_level: LogLevel = LogLevel.INFO
     # Variables for the database
     db_host: str = "localhost"

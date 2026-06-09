@@ -155,6 +155,51 @@ def _env_suffix(deploy_env: str | None = None) -> str:
     return "-staging" if is_staging else ""
 
 
+_COMMS_FEATURES_TTL_SECONDS = 60.0
+_comms_features_cache: dict[str, Any] = {"expires_at": 0.0, "value": None}
+
+
+async def fetch_comms_features() -> dict[str, bool]:
+    """Per-channel availability reported by the communication gateway.
+
+    Orchestra owns the authoritative view of what the deployment can do and
+    re-exposes it via ``/v0/features``; channel credentials (Twilio, Discord,
+    Slack, …) live in the comms layer, so we probe its ``/features`` endpoint
+    rather than re-deriving from Orchestra's partial env.
+
+    Cached briefly to avoid a round-trip on every features read. On any error
+    (comms unreachable, malformed payload) the last good value is returned, or an
+    empty dict on a cold failure — callers treat absent keys as "off" so a
+    deployment without a comms layer simply shows no channel UI.
+    """
+    now = time.monotonic()
+    cached = _comms_features_cache
+    if cached["value"] is not None and now < cached["expires_at"]:
+        return cached["value"]
+
+    comms_url = _comms_url_for()
+    if not comms_url:
+        return cached["value"] or {}
+
+    try:
+        client = get_async_client()
+        response = await client.get(f"{comms_url}/features", timeout=2.0)
+        if response.status_code != 200:
+            return cached["value"] or {}
+        data = response.json()
+    except Exception:  # noqa: BLE001 - features probe must never break /features
+        logging.debug("comms features probe failed", exc_info=True)
+        return cached["value"] or {}
+
+    if not isinstance(data, dict):
+        return cached["value"] or {}
+
+    value = {key: bool(val) for key, val in data.items() if isinstance(val, bool)}
+    cached["value"] = value
+    cached["expires_at"] = now + _COMMS_FEATURES_TTL_SECONDS
+    return value
+
+
 async def create_phone_number(
     phone_country: str = "US",
     deploy_env: str | None = None,
