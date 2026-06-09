@@ -52,7 +52,7 @@ def _make_assistant(
     assistant = Assistant(
         user_id=owner.id,
         organization_id=organization.id if organization else None,
-        first_name="Unity",
+        first_name="Marty",
         surname="Assistant",
         is_coordinator=is_coordinator,
     )
