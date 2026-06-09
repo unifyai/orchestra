@@ -45,7 +45,7 @@ def _fake_coordinator(agent_id: int = 1, *, is_coord: bool = True) -> SimpleName
         organization_id=None,
         is_coordinator=is_coord,
         deploy_env=None,
-        first_name="Coordinator",
+        first_name="Unity",
         surname=None,
     )
 
