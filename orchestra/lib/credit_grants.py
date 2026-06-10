@@ -317,9 +317,7 @@ def forfeit_expired_grants(
     """
     moment = _utc(now) if now is not None else datetime.now(timezone.utc)
     lots = compute_grant_lots(session, billing_account.id)
-    expired = [
-        lot for lot in lots if lot.remaining > 0 and lot.expires_at <= moment
-    ]
+    expired = [lot for lot in lots if lot.remaining > 0 and lot.expires_at <= moment]
     if not expired:
         return Decimal("0")
     return _post_forfeit(session, billing_account, expired, reason="grant_expiry")
@@ -337,9 +335,7 @@ def forfeit_plan_grant_remainder(
     """
     lots = compute_grant_lots(session, billing_account.id)
     plan_lots = [
-        lot
-        for lot in lots
-        if lot.remaining > 0 and lot.grant_kind == GRANT_KIND_PLAN
+        lot for lot in lots if lot.remaining > 0 and lot.grant_kind == GRANT_KIND_PLAN
     ]
     if not plan_lots:
         return Decimal("0")

@@ -125,9 +125,9 @@ def _invoice_subscription_id(invoice: Dict) -> Optional[str]:
     """
     sub = invoice.get("subscription")
     if not sub:
-        sub = (
-            (invoice.get("parent") or {}).get("subscription_details") or {}
-        ).get("subscription")
+        sub = ((invoice.get("parent") or {}).get("subscription_details") or {}).get(
+            "subscription",
+        )
     if isinstance(sub, dict):
         return sub.get("id")
     return sub or None
@@ -155,9 +155,9 @@ def _resolve_ba_for_subscription(
     # subscription objects under ``metadata``.
     meta = (
         (data.get("subscription_details") or {}).get("metadata")
-        or (
-            (data.get("parent") or {}).get("subscription_details") or {}
-        ).get("metadata")
+        or ((data.get("parent") or {}).get("subscription_details") or {}).get(
+            "metadata",
+        )
         or data.get("metadata")
         or {}
     )

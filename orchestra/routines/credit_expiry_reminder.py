@@ -156,7 +156,9 @@ def _resolve_recipient(session: Session, ba: BillingAccount) -> Optional[str]:
 
     org = (
         session.execute(
-            select(Organization).where(Organization.billing_account_id == ba.id).limit(1),
+            select(Organization)
+            .where(Organization.billing_account_id == ba.id)
+            .limit(1),
         )
         .scalars()
         .first()
@@ -180,7 +182,10 @@ def _deliver(recipient: str, subject: str, body: str) -> bool:
     # Send from the shared hello@ role mailbox rather than the personal
     # ONBOARDING_EMAIL mailbox. ONBOARDING_EMAIL is still required as the
     # impersonation fallback / mail config presence check.
-    if not settings.google_service_account_key_path or not settings.google_service_sender_email:
+    if (
+        not settings.google_service_account_key_path
+        or not settings.google_service_sender_email
+    ):
         logger.warning(
             "Email not configured; skipping credit-expiry reminder to %s",
             recipient,
@@ -298,9 +303,7 @@ def _run_with_session(
             subject, body = build_reminder_email(
                 expiring_credits=expiring_credits,
                 expires_at=soonest,
-                has_trial=any(
-                    lot.grant_kind == GRANT_KIND_TRIAL for lot in batch
-                ),
+                has_trial=any(lot.grant_kind == GRANT_KIND_TRIAL for lot in batch),
             )
             if not _deliver(recipient, subject, body):
                 # Delivery failed — don't stamp, so the next run retries.

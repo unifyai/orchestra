@@ -753,10 +753,7 @@ class BillingAccountDAO:
         # Signup credits are a *trial* grant: they expire one week after
         # signup and the unconsumed remainder is forfeited by the
         # credit-grant expiry sweep (self-serve subscription model).
-        from orchestra.lib.credit_grants import (
-            GRANT_KIND_TRIAL,
-            signup_trial_expiry,
-        )
+        from orchestra.lib.credit_grants import GRANT_KIND_TRIAL, signup_trial_expiry
 
         return self.apply_credit_grant(
             target_ba_id,
@@ -765,4 +762,3 @@ class BillingAccountDAO:
             expires_at=signup_trial_expiry(),
             description="Signup trial credit grant",
         )
-

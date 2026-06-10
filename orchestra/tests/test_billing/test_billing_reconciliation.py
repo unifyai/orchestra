@@ -579,8 +579,7 @@ class TestCreditBalanceIntegrity:
         integrity = [
             d
             for d in result.discrepancies
-            if d.category == "status_credit_mismatch"
-            and d.billing_account_id == ba.id
+            if d.category == "status_credit_mismatch" and d.billing_account_id == ba.id
         ]
         assert len(integrity) == 0
 

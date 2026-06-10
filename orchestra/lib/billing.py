@@ -26,10 +26,7 @@ import stripe
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-from orchestra.db.models.orchestra_models import (
-    BillingAccount,
-    BillingMode,
-)
+from orchestra.db.models.orchestra_models import BillingAccount, BillingMode
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -704,16 +701,18 @@ def fetch_billing_profile_from_stripe(
         "tax_id": None,
         "tax_id_type": None,
         "tax_id_verification_status": None,
-        "billing_address": {
-            "line1": address.get("line1") or "",
-            "line2": address.get("line2") or "",
-            "city": address.get("city") or "",
-            "state": address.get("state") or "",
-            "postal_code": address.get("postal_code") or "",
-            "country": address.get("country") or "",
-        }
-        if address
-        else {},
+        "billing_address": (
+            {
+                "line1": address.get("line1") or "",
+                "line2": address.get("line2") or "",
+                "city": address.get("city") or "",
+                "state": address.get("state") or "",
+                "postal_code": address.get("postal_code") or "",
+                "country": address.get("country") or "",
+            }
+            if address
+            else {}
+        ),
     }
 
     try:
@@ -800,8 +799,14 @@ def list_payment_methods(customer_id: str) -> list[dict]:
     cards: list[dict] = []
     for pm in data or []:
         pm_id = pm.get("id") if isinstance(pm, dict) else pm.id
-        card = (pm.get("card") if isinstance(pm, dict) else getattr(pm, "card", None)) or {}
-        get = card.get if isinstance(card, dict) else (lambda k, c=card: getattr(c, k, None))
+        card = (
+            pm.get("card") if isinstance(pm, dict) else getattr(pm, "card", None)
+        ) or {}
+        get = (
+            card.get
+            if isinstance(card, dict)
+            else (lambda k, c=card: getattr(c, k, None))
+        )
         cards.append(
             {
                 "id": pm_id,
@@ -841,7 +846,11 @@ def resolve_default_payment_method(customer_id: str) -> Optional[str]:
         else getattr(invoice_settings, "default_payment_method", None)
     )
     if default_pm:
-        return default_pm if isinstance(default_pm, str) else getattr(default_pm, "id", None)
+        return (
+            default_pm
+            if isinstance(default_pm, str)
+            else getattr(default_pm, "id", None)
+        )
 
     methods = stripe.PaymentMethod.list(customer=customer_id, type="card")
     data = methods.get("data", []) if isinstance(methods, dict) else methods.data
