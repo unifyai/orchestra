@@ -33,13 +33,6 @@ ph = PasswordHasher()
 
 SELF_HOST_OWNER_EMAIL = "owner@selfhost.dev"
 SELF_HOST_OWNER_NAME = "Local Owner"
-SELF_HOST_DEFAULT_VOICE_PROVIDER = "cartesia"
-# Cartesia preset voice
-SELF_HOST_DEFAULT_VOICE_ID = "bf0a246a-8642-498a-9950-80c35e9276b5"
-SELF_HOST_DEFAULT_VOICE_NAME = "English Woman Calm 1"
-SELF_HOST_DEFAULT_VOICE_DESCRIPTION = (
-    "Calm and relaxing voice of an english-speaking woman"
-)
 
 
 @dataclass(frozen=True)
@@ -121,66 +114,6 @@ def _resolve_password() -> str:
     return generated
 
 
-def _apply_self_host_coordinator_voice(
-    session: Session,
-    *,
-    user_id: str,
-    coordinator_agent_id: int,
-) -> None:
-    """Register a Cartesia preset voice and attach it to the Coordinator."""
-    provider = (
-        os.environ.get("SELF_HOST_DEFAULT_VOICE_PROVIDER", "").strip()
-        or SELF_HOST_DEFAULT_VOICE_PROVIDER
-    )
-    voice_id = (
-        os.environ.get("SELF_HOST_DEFAULT_VOICE_ID", "").strip()
-        or SELF_HOST_DEFAULT_VOICE_ID
-    )
-    if not voice_id:
-        logger.warning(
-            "Skipping Coordinator voice setup: SELF_HOST_DEFAULT_VOICE_ID is empty",
-        )
-        return
-
-    session.execute(
-        text(
-            """
-            INSERT INTO voices (
-                voice_id, user_id, name, description, gender, language, is_preset, provider
-            )
-            VALUES (
-                :voice_id, :user_id, :name, :description, :gender, :language, true, :provider
-            )
-            ON CONFLICT DO NOTHING
-            """,
-        ),
-        {
-            "voice_id": voice_id,
-            "user_id": user_id,
-            "name": SELF_HOST_DEFAULT_VOICE_NAME,
-            "description": SELF_HOST_DEFAULT_VOICE_DESCRIPTION,
-            "gender": "female",
-            "language": "en",
-            "provider": provider,
-        },
-    )
-    session.execute(
-        text(
-            """
-            UPDATE assistants
-            SET voice_provider = :provider, voice_id = :voice_id
-            WHERE agent_id = :agent_id AND is_coordinator IS TRUE
-            """,
-        ),
-        {
-            "provider": provider,
-            "voice_id": voice_id,
-            "agent_id": coordinator_agent_id,
-        },
-    )
-    session.flush()
-
-
 async def bootstrap_self_host_owner(session: Session) -> SelfHostBootstrapResult:
     """Create or repair the self-host owner account and personal Coordinator."""
     ensure_platform_billing_defaults(session)
@@ -250,11 +183,6 @@ async def bootstrap_self_host_owner(session: Session) -> SelfHostBootstrapResult
                 session,
                 user_id=str(user.id),
             )
-        )
-        _apply_self_host_coordinator_voice(
-            session,
-            user_id=str(user.id),
-            coordinator_agent_id=coordinator.agent_id,
         )
         session.commit()
     except Exception as exc:
