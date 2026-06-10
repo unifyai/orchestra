@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "2026_assistant_user_desktops"
-down_revision = "billing_pii_to_stripe"
+down_revision = "coordinator_fixed_voice"
 branch_labels = None
 depends_on = None
 
