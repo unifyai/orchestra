@@ -869,6 +869,12 @@ cmd_start() {
     return 1
   fi
 
+  if ! seed_local_billing_catalog; then
+    log_error "Failed to seed local billing catalog"
+    echo "export UNIFY_BASE_URL='$STAGING_URL'"
+    return 1
+  fi
+
   # Always seed test user for local development (required for authentication)
   if ! seed_test_user; then
     log_warn "Failed to seed test user (tests may fail without auth)"
