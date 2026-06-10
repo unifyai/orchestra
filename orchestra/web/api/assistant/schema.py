@@ -962,6 +962,7 @@ class AssistantUpdate(BaseModel):
         description="Monthly spending limit in dollars. Set to null to remove the limit.",
         example=100.00,
     )
+
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, v: Optional[str]) -> Optional[str]:

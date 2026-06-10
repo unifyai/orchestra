@@ -1873,8 +1873,5 @@ async def fan_out_contact_sync_for_org(
     if not org_assistants:
         return
     await asyncio.gather(
-        *(
-            trigger_contact_sync_safe(a.agent_id)
-            for a in org_assistants
-        ),
+        *(trigger_contact_sync_safe(a.agent_id) for a in org_assistants),
     )
