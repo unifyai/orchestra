@@ -39,21 +39,18 @@ from orchestra.integrations.providers import (
     get_provider_adapter,
 )
 from orchestra.web.api.integrations.schema import (
-    ComposioCatalogSyncRequest,
-    ComposioCatalogSyncResponse,
     DynamicIntegrationAppResponse,
     IntegrationAppDetailResponse,
+    IntegrationCatalogSyncRequest,
+    IntegrationCatalogSyncResponse,
     IntegrationConnectionResponse,
     IntegrationToolPolicyItem,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
-    PipedreamCatalogSyncRequest,
-    PipedreamCatalogSyncResponse,
     ProviderAppGetRequest,
     ProviderAppGetResponse,
     ProviderAppSearchRequest,
     ProviderAppSearchResult,
-    ProviderCatalogSyncRequest,
     ProviderToolGetRequest,
     ProviderToolGetResponse,
     ProviderToolRunRequest,
@@ -400,9 +397,26 @@ def _valid_confirmation_token(
     return hmac.compare_digest(signature, expected)
 
 
-def sync_provider_catalog(
+def sync_integrations(
     session: Session,
-    body: ProviderCatalogSyncRequest,
+    body: IntegrationCatalogSyncRequest,
+) -> IntegrationCatalogSyncResponse:
+    """Sync native and provider-backed integration catalogs through one path."""
+
+    handler = LIVE_CATALOG_SYNC_HANDLERS.get(body.backend_id)
+    if handler and not body.apps and not body.tools:
+        return handler(session, body)
+    summary = _sync_catalog_rows(session, body)
+    return IntegrationCatalogSyncResponse(
+        apps_upserted=summary["apps_upserted"],
+        tools_upserted=summary["tools_upserted"],
+        cache_version=body.cache_version,
+    )
+
+
+def _sync_catalog_rows(
+    session: Session,
+    body: IntegrationCatalogSyncRequest,
 ) -> dict[str, int]:
     """Import normalized provider apps/actions into the dynamic catalog."""
 
@@ -551,11 +565,11 @@ def sync_provider_catalog(
     return {"apps_upserted": apps_upserted, "tools_upserted": tools_upserted}
 
 
-def sync_composio_catalog(
+def _composio_live_catalog_handler(
     session: Session,
-    body: ComposioCatalogSyncRequest,
-) -> ComposioCatalogSyncResponse:
-    """Fetch and normalize a curated Composio catalog into provider tables."""
+    body: IntegrationCatalogSyncRequest,
+) -> IntegrationCatalogSyncResponse:
+    """Fetch and normalize a bounded Composio catalog into provider tables."""
 
     seed_default_provider_catalog(session)
     backend = IntegrationProviderDAO(session).get_backend("composio")
@@ -677,29 +691,34 @@ def sync_composio_catalog(
                 },
             )
 
-    summary = sync_provider_catalog(
-        session,
-        ProviderCatalogSyncRequest(
-            backend_id="composio",
-            cache_version=body.cache_version,
-            apps=apps,
-            tools=tools,
+    sync_body = IntegrationCatalogSyncRequest(
+        backend_id="composio",
+        cache_version=(
+            body.cache_version
+            if body.cache_version != "provider-sync-v1"
+            else "composio-live-v1"
         ),
+        apps=apps,
+        tools=tools,
     )
-    return ComposioCatalogSyncResponse(
+    summary = _sync_catalog_rows(
+        session,
+        sync_body,
+    )
+    return IntegrationCatalogSyncResponse(
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
         skipped_apps=skipped_apps,
         auth_configs_created=auth_configs_created,
         auth_configs_reused=auth_configs_reused,
-        cache_version=body.cache_version,
+        cache_version=sync_body.cache_version,
     )
 
 
-def sync_pipedream_catalog(
+def _pipedream_live_catalog_handler(
     session: Session,
-    body: PipedreamCatalogSyncRequest,
-) -> PipedreamCatalogSyncResponse:
+    body: IntegrationCatalogSyncRequest,
+) -> IntegrationCatalogSyncResponse:
     """Fetch and normalize Pipedream apps/actions through bounded provider pagination."""
 
     seed_default_provider_catalog(session)
@@ -812,21 +831,35 @@ def sync_pipedream_catalog(
                 },
             )
 
-    summary = sync_provider_catalog(
-        session,
-        ProviderCatalogSyncRequest(
-            backend_id="pipedream",
-            cache_version=body.cache_version,
-            apps=apps,
-            tools=tools,
+    sync_body = IntegrationCatalogSyncRequest(
+        backend_id="pipedream",
+        cache_version=(
+            body.cache_version
+            if body.cache_version != "provider-sync-v1"
+            else "pipedream-live-v1"
         ),
+        apps=apps,
+        tools=tools,
     )
-    return PipedreamCatalogSyncResponse(
+    summary = _sync_catalog_rows(
+        session,
+        sync_body,
+    )
+    return IntegrationCatalogSyncResponse(
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
         skipped_apps=skipped_apps,
-        cache_version=body.cache_version,
+        cache_version=sync_body.cache_version,
     )
+
+
+LIVE_CATALOG_SYNC_HANDLERS: dict[
+    str,
+    Callable[[Session, IntegrationCatalogSyncRequest], IntegrationCatalogSyncResponse],
+] = {
+    "composio": _composio_live_catalog_handler,
+    "pipedream": _pipedream_live_catalog_handler,
+}
 
 
 def _capability_ids(capabilities: list[Any]) -> list[str]:

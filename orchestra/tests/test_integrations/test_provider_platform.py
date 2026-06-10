@@ -47,7 +47,7 @@ def _owner_query(assistant_id: int, user_id: str = "api-user") -> str:
     return f"owner_scope=assistant&assistant_id={assistant_id}&user_id={user_id}"
 
 
-async def _sync_catalog(
+async def _sync_integrations(
     client: AsyncClient,
     *,
     backend_id: str = "composio",
@@ -244,7 +244,7 @@ async def test_admin_backend_config_and_catalog_sync_routes(
         headers=ADMIN_HEADERS,
         json={"status": "enabled"},
     )
-    sync_response = await _sync_catalog(
+    sync_response = await _sync_integrations(
         client,
         backend_id="pipedream",
         app_slug="linear",
@@ -252,14 +252,15 @@ async def test_admin_backend_config_and_catalog_sync_routes(
         tool_name="list_issues",
         tool_display_name="List Linear issues",
     )
-    assert sync_response == {"apps_upserted": 1, "tools_upserted": 1}
+    assert sync_response["apps_upserted"] == 1
+    assert sync_response["tools_upserted"] == 1
 
 
 @pytest.mark.anyio
 async def test_backend_status_is_the_only_catalog_visibility_gate(
     client: AsyncClient,
 ) -> None:
-    await _sync_catalog(
+    await _sync_integrations(
         client,
         backend_id="pipedream",
         app_slug="linear",
@@ -311,7 +312,7 @@ async def test_backend_status_is_the_only_catalog_visibility_gate(
 async def test_native_app_sync_search_and_connection_rejection(
     client: AsyncClient,
 ) -> None:
-    await _sync_catalog(
+    await _sync_integrations(
         client,
         backend_id="unity_native",
         app_slug="matterport",
@@ -358,7 +359,7 @@ async def test_connection_tool_pagination_run_policy_and_audit(
     dbsession: Session,
 ) -> None:
     assistant_id = 77_000 + (uuid.uuid4().int % 1000)
-    await _sync_catalog(
+    await _sync_integrations(
         client,
         app_slug="hubspot",
         display_name="HubSpot",
@@ -454,7 +455,7 @@ async def test_connection_tool_pagination_run_policy_and_audit(
 @pytest.mark.anyio
 async def test_run_tool_confirmation_envelope(client: AsyncClient) -> None:
     assistant_id = 88_000 + (uuid.uuid4().int % 1000)
-    await _sync_catalog(
+    await _sync_integrations(
         client,
         app_slug="slack",
         display_name="Slack",

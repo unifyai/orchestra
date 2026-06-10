@@ -217,48 +217,36 @@ class IntegrationHealthResponse(BaseModel):
     reconnect_reason: Optional[str] = None
 
 
-class ProviderCatalogSyncRequest(BaseModel):
+class IntegrationCatalogSyncRequest(BaseModel):
+    """Single admin sync request for native and provider-backed integrations.
+
+    ``backend_id`` selects the backend. Native/custom direct catalog publishes
+    send ``apps``/``tools``. Live provider imports for backends such as Composio
+    and Pipedream use the same route with provider-specific operational fields;
+    Orchestra dispatches internally so callers do not need provider-specific
+    endpoints or helper functions.
+    """
+
     backend_id: str
     cache_version: str = "provider-sync-v1"
     source_type: IntegrationSourceType = "third_party"
     apps: list[dict[str, Any]] = Field(default_factory=list)
     tools: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class ProviderCatalogSyncResponse(BaseModel):
-    apps_upserted: int
-    tools_upserted: int
-
-
-class ComposioCatalogSyncRequest(BaseModel):
     app_slugs: list[str] = Field(default_factory=list)
     tool_limit_per_app: int = Field(0, ge=0, le=1000)
+    component_limit_per_app: int = Field(0, ge=0, le=1000)
     include_all_managed_apps: bool = False
+    include_all_apps: bool = False
     create_auth_configs: bool = True
-    cache_version: str = "composio-live-v1"
 
 
-class ComposioCatalogSyncResponse(BaseModel):
+class IntegrationCatalogSyncResponse(BaseModel):
     apps_upserted: int
     tools_upserted: int
     skipped_apps: list[dict[str, str]] = Field(default_factory=list)
     auth_configs_created: int = 0
     auth_configs_reused: int = 0
-    cache_version: str = "composio-live-v1"
-
-
-class PipedreamCatalogSyncRequest(BaseModel):
-    app_slugs: list[str] = Field(default_factory=list)
-    component_limit_per_app: int = Field(0, ge=0, le=1000)
-    include_all_apps: bool = True
-    cache_version: str = "pipedream-live-v1"
-
-
-class PipedreamCatalogSyncResponse(BaseModel):
-    apps_upserted: int
-    tools_upserted: int
-    skipped_apps: list[dict[str, str]] = Field(default_factory=list)
-    cache_version: str = "pipedream-live-v1"
+    cache_version: str = "provider-sync-v1"
 
 
 class ProviderToolSearchRequest(BaseModel):

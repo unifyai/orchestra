@@ -32,20 +32,19 @@ from orchestra.web.api.integrations.operations import (
     search_tools,
     seed_default_provider_catalog,
     start_connection,
-    sync_composio_catalog,
-    sync_pipedream_catalog,
-    sync_provider_catalog,
-    test_connection,
-    update_connection,
 )
+from orchestra.web.api.integrations.operations import (
+    sync_integrations as sync_integrations_operation,
+)
+from orchestra.web.api.integrations.operations import test_connection, update_connection
 from orchestra.web.api.integrations.schema import (
-    ComposioCatalogSyncRequest,
-    ComposioCatalogSyncResponse,
     DynamicIntegrationAppResponse,
     IntegrationAppDetailResponse,
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
     IntegrationBackendResponse,
+    IntegrationCatalogSyncRequest,
+    IntegrationCatalogSyncResponse,
     IntegrationConnectCompleteByProviderRequest,
     IntegrationConnectCompleteRequest,
     IntegrationConnectionPatchRequest,
@@ -55,14 +54,10 @@ from orchestra.web.api.integrations.schema import (
     IntegrationHealthResponse,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
-    PipedreamCatalogSyncRequest,
-    PipedreamCatalogSyncResponse,
     ProviderAppGetRequest,
     ProviderAppGetResponse,
     ProviderAppSearchRequest,
     ProviderAppSearchResult,
-    ProviderCatalogSyncRequest,
-    ProviderCatalogSyncResponse,
     ProviderToolGetRequest,
     ProviderToolGetResponse,
     ProviderToolRunRequest,
@@ -137,27 +132,18 @@ def patch_integration_backend(
 
 
 @admin_router.post("/sync")
-def sync_integration_catalog(
-    body: ProviderCatalogSyncRequest,
+def sync_integrations(
+    body: IntegrationCatalogSyncRequest,
     session: Session = Depends(get_db_session),
-) -> ProviderCatalogSyncResponse:
-    return ProviderCatalogSyncResponse(**sync_provider_catalog(session, body))
+) -> IntegrationCatalogSyncResponse:
+    """Sync integrations through one admin contract.
 
+    Native/custom publishers pass normalized ``apps``/``tools`` directly.
+    Provider live syncs pass ``backend_id`` plus bounded provider options; the
+    provider-specific API pagination and normalization stays inside Orchestra.
+    """
 
-@admin_router.post("/sync/composio")
-def sync_composio_integration_catalog(
-    body: ComposioCatalogSyncRequest,
-    session: Session = Depends(get_db_session),
-) -> ComposioCatalogSyncResponse:
-    return sync_composio_catalog(session, body)
-
-
-@admin_router.post("/sync/pipedream")
-def sync_pipedream_integration_catalog(
-    body: PipedreamCatalogSyncRequest,
-    session: Session = Depends(get_db_session),
-) -> PipedreamCatalogSyncResponse:
-    return sync_pipedream_catalog(session, body)
+    return sync_integrations_operation(session, body)
 
 
 @router.get("/apps")

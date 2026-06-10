@@ -1,4 +1,4 @@
-"""Composio adapter tests and API-level catalog sync coverage."""
+"""Provider adapter invariants and unified integration catalog sync coverage."""
 
 from __future__ import annotations
 
@@ -246,7 +246,7 @@ def test_composio_adapter_rejects_repeated_pagination_cursor(
 
 
 @pytest.mark.anyio
-async def test_composio_sync_route_imports_all_provider_apps_without_default_allowlist(
+async def test_sync_route_imports_all_composio_apps_without_default_allowlist(
     client: AsyncClient,
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -257,9 +257,13 @@ async def test_composio_sync_route_imports_all_provider_apps_without_default_all
     )
 
     response = await client.post(
-        "/v0/admin/integrations/sync/composio",
+        "/v0/admin/integrations/sync",
         headers=ADMIN_HEADERS,
-        json={"tool_limit_per_app": 10, "create_auth_configs": True},
+        json={
+            "backend_id": "composio",
+            "tool_limit_per_app": 10,
+            "create_auth_configs": True,
+        },
     )
 
     assert response.status_code == status.HTTP_200_OK, response.json()
@@ -286,7 +290,7 @@ async def test_composio_sync_route_imports_all_provider_apps_without_default_all
 
 
 @pytest.mark.anyio
-async def test_composio_sync_route_honors_explicit_subset_and_reports_missing(
+async def test_sync_route_honors_explicit_composio_subset_and_reports_missing(
     client: AsyncClient,
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -297,9 +301,13 @@ async def test_composio_sync_route_honors_explicit_subset_and_reports_missing(
     )
 
     response = await client.post(
-        "/v0/admin/integrations/sync/composio",
+        "/v0/admin/integrations/sync",
         headers=ADMIN_HEADERS,
-        json={"app_slugs": ["DISCORD", "UNKNOWN_APP"], "tool_limit_per_app": 1},
+        json={
+            "backend_id": "composio",
+            "app_slugs": ["DISCORD", "UNKNOWN_APP"],
+            "tool_limit_per_app": 1,
+        },
     )
 
     assert response.status_code == status.HTTP_200_OK, response.json()
@@ -322,7 +330,7 @@ async def test_composio_sync_route_honors_explicit_subset_and_reports_missing(
 
 
 @pytest.mark.anyio
-async def test_pipedream_sync_route_imports_apps_and_actions(
+async def test_sync_route_imports_pipedream_apps_and_actions(
     client: AsyncClient,
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -333,9 +341,13 @@ async def test_pipedream_sync_route_imports_apps_and_actions(
     )
 
     response = await client.post(
-        "/v0/admin/integrations/sync/pipedream",
+        "/v0/admin/integrations/sync",
         headers=ADMIN_HEADERS,
-        json={"app_slugs": ["slack", "missing"], "component_limit_per_app": 10},
+        json={
+            "backend_id": "pipedream",
+            "app_slugs": ["slack", "missing"],
+            "component_limit_per_app": 10,
+        },
     )
 
     assert response.status_code == status.HTTP_200_OK, response.json()
