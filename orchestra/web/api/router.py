@@ -9,6 +9,7 @@ from orchestra.web.api import (  # noqa: WPS235
     billing,
     context,
     credits,
+    integrations,
     interface,
     log,
     organization,
@@ -213,6 +214,12 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
+api_router.include_router(
+    integrations.admin_router,
+    prefix="/admin",
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
 # API_KEY_AUTH endpoints
 
 api_router.include_router(
@@ -278,6 +285,10 @@ api_router.include_router(
     interface.router,
     tags=["Configs"],
     include_in_schema=False,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    integrations.router,
     dependencies=API_KEY_AUTH,
 )
 
