@@ -29,7 +29,6 @@ import stripe
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
 from orchestra.db.models.enums import CollectionMethod
 from orchestra.db.models.orchestra_models import (
@@ -323,9 +322,7 @@ def create_subscription(
     subscription = stripe.Subscription.create(**create_kwargs)
 
     subscription_id = (
-        subscription.get("id")
-        if isinstance(subscription, dict)
-        else subscription.id
+        subscription.get("id") if isinstance(subscription, dict) else subscription.id
     )
     billing_account.stripe_subscription_id = subscription_id
     # A brand-new subscription is never scheduled to cancel (covers the
@@ -939,9 +936,7 @@ def change_subscription_tier(
         billing_account_id=billing_account.id,
         template_id=new_template.id,
         created_by_user_id=user_id,
-        change_reason=(
-            f"self-serve tier change {old_grant}->{new_grant} credits"
-        ),
+        change_reason=(f"self-serve tier change {old_grant}->{new_grant} credits"),
         effective_at=now,
     )
 
@@ -962,9 +957,7 @@ def change_subscription_tier(
     delta = Decimal("0")
     if full_delta > 0:
         period_end = billing_account.current_period_end
-        expires_at = period_end or (
-            add_one_year(now) if annual else add_one_month(now)
-        )
+        expires_at = period_end or (add_one_year(now) if annual else add_one_month(now))
         fraction = remaining_period_fraction(period_end, now, annual=annual)
         # Floor to whole credits so we never over-grant relative to the
         # prorated charge; the rounding crumb settles at the next cycle.

@@ -1778,6 +1778,74 @@ class UserDesktop(Base):
     )
 
 
+class AssistantUserDesktop(Base):
+    """Per-user link between an assistant and a registered user desktop.
+
+    A user links their own machine to the assistants they interact with.  The
+    relationship is many-to-many: a single machine can serve several of the
+    user's assistants, and a shared (org) assistant can be linked to a separate
+    machine for each user who works with it.  Two uniqueness rules apply:
+
+    - ``(assistant_id, owner_user_id)`` -- at most one desktop per assistant
+      *per user*, so the runtime can resolve a single target for whoever is
+      currently talking to the assistant.
+    - ``(assistant_id, user_desktop_id)`` -- a given desktop is linked to a
+      given assistant at most once.
+
+    ``owner_user_id`` is denormalised from ``user_desktops.user_id`` so the
+    per-user uniqueness constraint and runtime lookups stay single-table.
+    """
+
+    __tablename__ = "assistant_user_desktops"
+
+    id = Column(Integer, primary_key=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_desktop_id = Column(
+        Integer,
+        ForeignKey("user_desktops.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    owner_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    filesys_sync = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    desktop = relationship("UserDesktop")
+    assistant = relationship("Assistant", back_populates="user_desktop_links")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "assistant_id",
+            "owner_user_id",
+            name="uq_assistant_user_desktop_owner",
+        ),
+        UniqueConstraint(
+            "assistant_id",
+            "user_desktop_id",
+            name="uq_assistant_user_desktop_pair",
+        ),
+    )
+
+
 class Assistant(Base):
     """Model class for the assistants table.
 
@@ -1812,13 +1880,6 @@ class Assistant(Base):
     profile_video = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
     desktop_filesync_sshkey = Column(String, nullable=True)
-    user_desktop_id = Column(
-        Integer,
-        ForeignKey("user_desktops.id", ondelete="SET NULL"),
-        nullable=True,
-        unique=True,
-    )
-    user_desktop_filesys_sync = Column(Boolean, nullable=False, default=False)
     about = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
@@ -1884,6 +1945,11 @@ class Assistant(Base):
     )
     team_memberships = relationship(
         "TeamAssistantMembership",
+        back_populates="assistant",
+        passive_deletes=True,
+    )
+    user_desktop_links = relationship(
+        "AssistantUserDesktop",
         back_populates="assistant",
         passive_deletes=True,
     )

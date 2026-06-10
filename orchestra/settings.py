@@ -85,12 +85,14 @@ class Settings(BaseSettings):
         partial env. Distinct from ``charges_billing``, which governs credit
         metering rather than whether the billing UI can transact.
         """
-        return bool(self.stripe_secret_key) and bool(
-            self.stripe_unify_subscription_price_id_personal_monthly) and bool(
-            self.stripe_unify_subscription_price_id_personal_annual) and bool(
-            self.stripe_unify_subscription_price_id_business_monthly) and bool(
-            self.stripe_unify_subscription_price_id_business_annual) and bool (
-            self.stripe_unify_annual_coupon_id)
+        return (
+            bool(self.stripe_secret_key)
+            and bool(self.stripe_unify_subscription_price_id_personal_monthly)
+            and bool(self.stripe_unify_subscription_price_id_personal_annual)
+            and bool(self.stripe_unify_subscription_price_id_business_monthly)
+            and bool(self.stripe_unify_subscription_price_id_business_annual)
+            and bool(self.stripe_unify_annual_coupon_id)
+        )
 
     @property
     def workspace_google_enabled(self) -> bool:
@@ -358,17 +360,16 @@ class Settings(BaseSettings):
     # Assistant creation
     assistant_creation_cost: float = 0.0
     unity_whatsapp_pool_number: Optional[str] = os.environ.get(
-        "UNITY_WHATSAPP_POOL_NUMBER"
+        "UNITY_WHATSAPP_POOL_NUMBER",
     ) or os.environ.get("ORCHESTRA_UNITY_WHATSAPP_POOL_NUMBER")
     unity_coordinator_email_address: Optional[str] = (
         os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
         or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
         or "marty@unify.ai"
     )
-    unity_coordinator_phone_numbers: Optional[str] = (
-        os.environ.get("UNITY_COORDINATOR_PHONE_NUMBERS")
-        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_NUMBERS")
-    )
+    unity_coordinator_phone_numbers: Optional[str] = os.environ.get(
+        "UNITY_COORDINATOR_PHONE_NUMBERS",
+    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_NUMBERS")
     unity_coordinator_default_phone_country: str = (
         os.environ.get("UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")

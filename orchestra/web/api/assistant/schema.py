@@ -143,16 +143,6 @@ class AssistantCreate(BaseModel):
         description="Desktop operating system mode for assistant's VM type",
         example="windows",
     )
-    user_desktop_id: Optional[int] = Field(
-        None,
-        description="ID of the registered user desktop to assign to this assistant",
-        example=1,
-    )
-    user_desktop_filesys_sync: Optional[bool] = Field(
-        False,
-        description="Whether to enable filesystem sync with user's desktop",
-        example=False,
-    )
     about: OptionalSafeText = Field(
         None,
         description="Brief description about the assistant",
@@ -262,8 +252,6 @@ class AssistantCreate(BaseModel):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_mode": "windows",
-                "user_desktop_id": 1,
-                "user_desktop_filesys_sync": False,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "timezone": "America/New_York",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
@@ -314,6 +302,15 @@ class AssistantContactIdentityRoot(BaseModel):
     )
 
 
+class AssistantUserDesktopLink(BaseModel):
+    """A single user's desktop linked to an assistant (admin/runtime view)."""
+
+    owner_user_id: str = Field(..., description="User who owns the linked desktop")
+    url: str = Field(..., description="Public tunnel URL of the linked desktop")
+    os: str = Field(..., description="Operating system of the linked desktop")
+    filesys_sync: bool = Field(..., description="Whether filesystem sync is enabled")
+
+
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
@@ -332,12 +329,27 @@ class AssistantRead(AssistantCreate):
 
     user_desktop_url: Optional[str] = Field(
         None,
-        description="Resolved URL of the assigned user desktop (from device registry)",
+        description=(
+            "Resolved URL of the requesting user's own desktop linked to this "
+            "assistant (from device registry), or null if they haven't linked one"
+        ),
         example="https://abc123.tunnel.unify.ai",
+    )
+    user_desktop_filesys_sync: Optional[bool] = Field(
+        None,
+        description="Whether filesystem sync is enabled for the requesting user's linked desktop",
+        example=False,
+    )
+    user_desktops: List[AssistantUserDesktopLink] = Field(
+        default_factory=list,
+        description=(
+            "All per-user desktops linked to this assistant (admin/runtime only). "
+            "Maps each user to their own machine for an assistant several users share."
+        ),
     )
     user_desktop_mode: Optional[str] = Field(
         None,
-        description="Resolved OS of the assigned user desktop (from device registry)",
+        description="Resolved OS of the requesting user's own desktop linked to this assistant",
         example="macos",
     )
     agent_id: str = Field(
@@ -516,8 +528,6 @@ class AssistantRead(AssistantCreate):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_mode": "windows",
-                "user_desktop_id": 1,
-                "user_desktop_filesys_sync": False,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -900,16 +910,6 @@ class AssistantUpdate(BaseModel):
         description="Desktop operating system mode for VM type",
         example="macos",
     )
-    user_desktop_id: Optional[int] = Field(
-        None,
-        description="ID of the registered user desktop to assign to this assistant",
-        example=1,
-    )
-    user_desktop_filesys_sync: Optional[bool] = Field(
-        None,
-        description="Whether to enable filesystem sync with user's desktop",
-        example=False,
-    )
     about: OptionalSafeText = Field(
         None,
         description="Brief description about the assistant",
@@ -1045,8 +1045,6 @@ class AssistantUpdate(BaseModel):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada_new.mp4",
                 "desktop_mode": "macos",
-                "user_desktop_id": 1,
-                "user_desktop_filesys_sync": True,
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",

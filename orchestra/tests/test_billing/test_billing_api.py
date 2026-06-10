@@ -48,7 +48,6 @@ from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
 from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
 from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
-from orchestra.lib.credit_grants import GRANT_KIND_PLAN, grant_expiring_credits
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.models.orchestra_models import (
     DEFAULT_TEMPLATE_ID,
@@ -63,11 +62,12 @@ from orchestra.db.models.orchestra_models import (
     RechargeStatus,
     User,
 )
+from orchestra.lib.credit_grants import GRANT_KIND_PLAN, grant_expiring_credits
 from orchestra.settings import settings
 from orchestra.tests.test_billing.conftest import (
-    TIER_30000_ID,
     TIER_50_ID,
     TIER_75_ID,
+    TIER_30000_ID,
     make_user_with_billing,
     mock_stripe_subscription,
     put_on_tier,
@@ -1765,7 +1765,9 @@ class TestBillingProfile:
 
     @pytest.mark.anyio
     async def test_get_org_without_tax_id_is_not_business(
-        self, client: AsyncClient, dbsession
+        self,
+        client: AsyncClient,
+        dbsession,
     ):
         # Business treatment is keyed off the billing profile's tax ID, not
         # org membership: an org that hasn't supplied a tax ID is billed as
@@ -3462,10 +3464,7 @@ class TestAccountInfoSubscriptionFields:
     ):
         from datetime import datetime, timedelta, timezone
 
-        from orchestra.lib.credit_grants import (
-            GRANT_KIND_TRIAL,
-            grant_expiring_credits,
-        )
+        from orchestra.lib.credit_grants import GRANT_KIND_TRIAL, grant_expiring_credits
 
         user = await create_test_user(client, "acctinfo_trial@test.com")
         user_dao = UserDAO(dbsession)
@@ -4095,7 +4094,9 @@ class TestInternationalAddress:
 
     @pytest.mark.anyio
     async def test_partial_update_preserves_address(
-        self, client: AsyncClient, dbsession
+        self,
+        client: AsyncClient,
+        dbsession,
     ):
         """A profile update that omits the address preserves what's on Stripe.
 
@@ -4879,7 +4880,11 @@ class TestSelfServeSubscriptionLifecycle:
 
         # Override the stubbed Stripe so the tier-change modify is declined.
         def _declined_modify(sid, **kw):
-            raise real_stripe.error.CardError("Your card was declined.", None, "card_declined")
+            raise real_stripe.error.CardError(
+                "Your card was declined.",
+                None,
+                "card_declined",
+            )
 
         monkeypatch.setattr(
             sub_mod,
@@ -5183,7 +5188,11 @@ class TestSelfServeSubscriptionLifecycle:
         plan = BillingPlanAssignmentDAO(dbsession).resolve_effective_plan(ba.id)
         assert plan.template_id == TIER_50_ID
 
-    def test_reactivate_without_subscription_raises(self, dbsession, monkeypatch) -> None:
+    def test_reactivate_without_subscription_raises(
+        self,
+        dbsession,
+        monkeypatch,
+    ) -> None:
         from orchestra.lib.subscription_billing import (
             SubscriptionError,
             reactivate_subscription,
@@ -5327,13 +5336,17 @@ class TestSelfServeSubscriptionLifecycle:
 
         monkeypatch.setattr(sub_mod, "configure_stripe", lambda: None)
         monkeypatch.setattr(
-            sub_mod, "ensure_stripe_customer", lambda *a, **k: "cus_coupon"
+            sub_mod,
+            "ensure_stripe_customer",
+            lambda *a, **k: "cus_coupon",
         )
         # The off-session subscribe path resolves the customer's saved card;
         # stub it so the unit test stays offline and doesn't hit a real
         # Customer.retrieve / PaymentMethod.list.
         monkeypatch.setattr(
-            sub_mod, "resolve_default_payment_method", lambda cid: "pm_default"
+            sub_mod,
+            "resolve_default_payment_method",
+            lambda cid: "pm_default",
         )
         monkeypatch.setattr(
             sub_mod,
@@ -5391,19 +5404,19 @@ class TestSelfServeSubscriptionLifecycle:
 
         monkeypatch.setattr(sub_mod, "configure_stripe", lambda: None)
         monkeypatch.setattr(
-            sub_mod, "ensure_stripe_customer", lambda *a, **k: "cus_nocard"
+            sub_mod,
+            "ensure_stripe_customer",
+            lambda *a, **k: "cus_nocard",
         )
         # No saved card on the customer.
-        monkeypatch.setattr(
-            sub_mod, "resolve_default_payment_method", lambda cid: None
-        )
+        monkeypatch.setattr(sub_mod, "resolve_default_payment_method", lambda cid: None)
         monkeypatch.setattr(
             sub_mod,
             "stripe",
             SimpleNamespace(
                 Subscription=SimpleNamespace(
-                    create=lambda **kw: created.append(kw) or {"id": "sub_x"}
-                )
+                    create=lambda **kw: created.append(kw) or {"id": "sub_x"},
+                ),
             ),
         )
         monkeypatch.setattr(
@@ -5414,7 +5427,9 @@ class TestSelfServeSubscriptionLifecycle:
         )
 
         _user, ba = make_user_with_billing(
-            dbsession, "nocard_user", stripe_customer_id="cus_nocard"
+            dbsession,
+            "nocard_user",
+            stripe_customer_id="cus_nocard",
         )
         tier_50 = template_by_name(dbsession, "tier_50")
 
@@ -5461,7 +5476,12 @@ class TestValidateAddressTaxLocation:
         monkeypatch.setattr(billing_mod, "stripe", fake)
 
         err = billing_mod.validate_address_tax_location(
-            {"line1": "1 St", "city": "Nowhere", "postal_code": "00000", "country": "US"}
+            {
+                "line1": "1 St",
+                "city": "Nowhere",
+                "postal_code": "00000",
+                "country": "US",
+            },
         )
         assert err is not None
         assert "billing address" in err.lower()
@@ -5479,7 +5499,13 @@ class TestValidateAddressTaxLocation:
         monkeypatch.setattr(billing_mod, "stripe", fake)
 
         err = billing_mod.validate_address_tax_location(
-            {"line1": "1 St", "city": "SF", "state": "CA", "postal_code": "94105", "country": "US"}
+            {
+                "line1": "1 St",
+                "city": "SF",
+                "state": "CA",
+                "postal_code": "94105",
+                "country": "US",
+            },
         )
         assert err is None
         # Probe customer is cleaned up so nothing is persisted.
@@ -5511,7 +5537,12 @@ class TestValidateAddressTaxLocation:
         # Transient/unexpected failures must not block a profile save.
         assert (
             billing_mod.validate_address_tax_location(
-                {"line1": "1 St", "city": "SF", "postal_code": "94105", "country": "US"}
+                {
+                    "line1": "1 St",
+                    "city": "SF",
+                    "postal_code": "94105",
+                    "country": "US",
+                },
             )
             is None
         )
@@ -5539,7 +5570,8 @@ class TestPaymentMethodHelpers:
             return {"client_secret": "seti_123_secret"}
 
         billing_mod = self._patch(
-            monkeypatch, SetupIntent=SimpleNamespace(create=_create)
+            monkeypatch,
+            SetupIntent=SimpleNamespace(create=_create),
         )
 
         secret = billing_mod.create_setup_intent("cus_1")
@@ -5571,7 +5603,7 @@ class TestPaymentMethodHelpers:
                         "exp_year": 2031,
                     },
                 },
-            ]
+            ],
         }
         billing_mod = self._patch(
             monkeypatch,
@@ -5592,10 +5624,10 @@ class TestPaymentMethodHelpers:
         billing_mod = self._patch(
             monkeypatch,
             Customer=SimpleNamespace(
-                modify=lambda cid, **kw: calls.__setitem__("customer", (cid, kw))
+                modify=lambda cid, **kw: calls.__setitem__("customer", (cid, kw)),
             ),
             Subscription=SimpleNamespace(
-                modify=lambda sid, **kw: calls.__setitem__("subscription", (sid, kw))
+                modify=lambda sid, **kw: calls.__setitem__("subscription", (sid, kw)),
             ),
         )
 
@@ -5611,10 +5643,10 @@ class TestPaymentMethodHelpers:
         billing_mod = self._patch(
             monkeypatch,
             Customer=SimpleNamespace(
-                modify=lambda cid, **kw: calls.__setitem__("customer", (cid, kw))
+                modify=lambda cid, **kw: calls.__setitem__("customer", (cid, kw)),
             ),
             Subscription=SimpleNamespace(
-                modify=lambda *a, **k: calls.__setitem__("subscription", True)
+                modify=lambda *a, **k: calls.__setitem__("subscription", True),
             ),
         )
 

@@ -118,6 +118,7 @@ from orchestra.web.api.assistant.schema import (
     AssistantTransferToOrgRequest,
     AssistantTransferToPersonalRequest,
     AssistantUpdate,
+    AssistantUserDesktopLink,
     AssistantVideoUploadResponse,
     ConnectRequest,
     ConnectResponse,
@@ -210,8 +211,6 @@ RUNTIME_FACING_ASSISTANT_UPDATE_FIELDS = frozenset(
         "about",
         "timezone",
         "desktop_mode",
-        "user_desktop_id",
-        "user_desktop_filesys_sync",
         "voice_id",
         "voice_provider",
     },
@@ -518,6 +517,7 @@ def _build_assistant_read(
     contacts: Optional[list] = None,
     secrets: Optional[dict] = None,
     include_internal: bool = False,
+    requesting_user_id: Optional[str] = None,
 ) -> AssistantRead:
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
 
@@ -535,14 +535,37 @@ def _build_assistant_read(
             ``AssistantContactDAO.get_active_contacts_for_assistants()`` and pass them in to
             avoid N+1 queries.
     """
+    # Resolve the requesting user's *own* desktop linked to this assistant.
+    # A shared assistant can be linked to a different machine per user, so the
+    # read reflects whoever is asking (falling back to the owner for internal
+    # callers that don't carry a requesting identity).
     desktop_dao = DesktopDAO(session)
     user_desktop_url = None
     user_desktop_mode = None
-    if a.user_desktop_id is not None:
-        desktop = desktop_dao.get_by_id(a.user_desktop_id, a.user_id)
-        if desktop:
-            user_desktop_url = desktop.url
-            user_desktop_mode = desktop.os
+    user_desktop_filesys_sync = None
+    link_row = desktop_dao.get_link_for_user(
+        a.agent_id,
+        requesting_user_id or a.user_id,
+    )
+    if link_row is not None:
+        link, desktop = link_row
+        user_desktop_url = desktop.url
+        user_desktop_mode = desktop.os
+        user_desktop_filesys_sync = link.filesys_sync
+
+    # The full per-user desktop map is admin/runtime-only so members of a shared
+    # assistant don't see each other's machine URLs.
+    user_desktops: list[AssistantUserDesktopLink] = []
+    if include_internal:
+        for link, desktop in desktop_dao.list_links_for_assistant(a.agent_id):
+            user_desktops.append(
+                AssistantUserDesktopLink(
+                    owner_user_id=link.owner_user_id,
+                    url=desktop.url,
+                    os=desktop.os,
+                    filesys_sync=link.filesys_sync,
+                ),
+            )
 
     team_dao = TeamDAO(session)
     if team_ids is None:
@@ -606,10 +629,10 @@ def _build_assistant_read(
         profile_photo=a.profile_photo,
         profile_video=a.profile_video,
         desktop_mode=a.desktop_mode,
-        user_desktop_id=a.user_desktop_id,
-        user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+        user_desktop_filesys_sync=user_desktop_filesys_sync,
         user_desktop_url=user_desktop_url,
         user_desktop_mode=user_desktop_mode,
+        user_desktops=user_desktops,
         about=a.about,
         phone_country=(phone_contact.country_code if phone_contact else None),
         weekly_limit=(float(a.weekly_limit) if a.weekly_limit is not None else None),
@@ -847,8 +870,6 @@ async def create_assistant(
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
             desktop_mode=assistant_in.desktop_mode,
-            user_desktop_id=assistant_in.user_desktop_id,
-            user_desktop_filesys_sync=assistant_in.user_desktop_filesys_sync or False,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -1645,6 +1666,7 @@ def list_assistants(
                         a.agent_id,
                         [],
                     ),
+                    requesting_user_id=user_id,
                 )
                 for a in assistants
             ],
@@ -3013,7 +3035,7 @@ async def update_assistant_contact(
         )
 
     return InfoResponse(
-        info=_build_assistant_read(assistant, session),
+        info=_build_assistant_read(assistant, session, requesting_user_id=user_id),
     )
 
 

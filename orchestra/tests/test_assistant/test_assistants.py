@@ -665,31 +665,33 @@ async def test_assign_user_desktop_to_assistant(client: AsyncClient):
         "weekly_limit": 12.0,
         "max_parallel": 2,
         "nationality": "Germany",
-        "about": "An assistant for testing user_desktop_id.",
+        "about": "An assistant for testing user desktop links.",
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
     agent_id = created_data["agent_id"]
-    assert created_data["user_desktop_id"] is None
     assert created_data["user_desktop_url"] is None
     assert created_data["user_desktop_mode"] is None
 
-    # Assign desktop to assistant
-    update_payload = {"user_desktop_id": desktop_id, "create_infra": False}
-    patch_resp = await client.patch(
-        f"/v0/assistant/{agent_id}/config",
-        json=update_payload,
+    # Link the caller's own desktop to the assistant
+    link_resp = await client.post(
+        "/v0/desktop/link",
+        json={"assistant_id": int(agent_id), "desktop_id": desktop_id},
         headers=HEADERS,
     )
+    assert link_resp.status_code == 200
+    assert link_resp.json()["info"]["desktop_id"] == desktop_id
 
-    assert patch_resp.status_code == 200
-    updated_data = patch_resp.json()["info"]
-    assert updated_data["user_desktop_id"] == desktop_id
-    assert updated_data["user_desktop_url"] == "https://abc123.tunnel.unify.ai"
-    assert updated_data["user_desktop_mode"] == "macos"
-    assert updated_data["desktop_mode"] is None
+    # Reading the assistant resolves the caller's linked desktop
+    read_resp = await client.get("/v0/assistant", headers=HEADERS)
+    assistant_data = [a for a in read_resp.json()["info"] if a["agent_id"] == agent_id][
+        0
+    ]
+    assert assistant_data["user_desktop_url"] == "https://abc123.tunnel.unify.ai"
+    assert assistant_data["user_desktop_mode"] == "macos"
+    assert assistant_data["desktop_mode"] is None
 
 
 @pytest.mark.anyio
@@ -708,7 +710,7 @@ async def test_create_assistant_with_desktop_fields(client: AsyncClient):
     assert desktop_resp.status_code == 200
     desktop_id = desktop_resp.json()["info"]["id"]
 
-    # Create an assistant with desktop fields set
+    # Create an assistant with its own VM desktop mode set
     payload = {
         "first_name": "FullDesktop",
         "surname": "Tester",
@@ -718,18 +720,34 @@ async def test_create_assistant_with_desktop_fields(client: AsyncClient):
         "nationality": "Canada",
         "about": "An assistant with full desktop configuration.",
         "desktop_mode": "ubuntu",
-        "user_desktop_id": desktop_id,
-        "user_desktop_filesys_sync": True,
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
+    agent_id = created_data["agent_id"]
     assert created_data["desktop_mode"] == "ubuntu"
-    assert created_data["user_desktop_id"] == desktop_id
-    assert created_data["user_desktop_mode"] == "macos"
-    assert created_data["user_desktop_filesys_sync"] is True
-    assert created_data["user_desktop_url"] == "https://my-desktop.example.com"
+
+    # Link the caller's desktop with filesystem sync enabled
+    link_resp = await client.post(
+        "/v0/desktop/link",
+        json={
+            "assistant_id": int(agent_id),
+            "desktop_id": desktop_id,
+            "filesys_sync": True,
+        },
+        headers=HEADERS,
+    )
+    assert link_resp.status_code == 200
+    assert link_resp.json()["info"]["filesys_sync"] is True
+
+    read_resp = await client.get("/v0/assistant", headers=HEADERS)
+    assistant_data = [a for a in read_resp.json()["info"] if a["agent_id"] == agent_id][
+        0
+    ]
+    assert assistant_data["user_desktop_mode"] == "macos"
+    assert assistant_data["user_desktop_filesys_sync"] is True
+    assert assistant_data["user_desktop_url"] == "https://my-desktop.example.com"
 
 
 @pytest.mark.anyio

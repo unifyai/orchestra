@@ -33,7 +33,6 @@ from orchestra.lib.billing import (
     set_default_payment_method,
     sync_billing_profile_to_stripe,
 )
-from orchestra.settings import settings
 from orchestra.web.api.billing.schema import (
     AccountInfoResponse,
     AutoIncrementResponse,
@@ -429,7 +428,10 @@ def create_payment_method_setup_intent(
     """Create a SetupIntent and return its client secret for Stripe Elements."""
     _init_stripe()
     ba = _resolve_billing_customer(
-        session, request_fastapi, "billing:write", create_if_missing=True
+        session,
+        request_fastapi,
+        "billing:write",
+        create_if_missing=True,
     )
     try:
         client_secret = create_setup_intent(ba.stripe_customer_id)
@@ -1258,10 +1260,7 @@ def list_available_plans(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
 ) -> AvailablePlansResponse:
-    from orchestra.db.dao.billing_plan_assignment_dao import (
-        BillingPlanAssignmentDAO,
-        next_month_boundary_utc,
-    )
+    from orchestra.db.dao.billing_plan_assignment_dao import next_month_boundary_utc
     from orchestra.db.dao.billing_plan_group_dao import BillingPlanGroupDAO
 
     user_id: str = request_fastapi.state.user_id
@@ -1375,9 +1374,7 @@ def list_available_plans(
     current_interval = current_member.commit_period if current_member else None
     if current_interval in ("MONTHLY", "ANNUAL"):
         items = [
-            it
-            for it in items
-            if it.commit_period == current_interval or it.is_current
+            it for it in items if it.commit_period == current_interval or it.is_current
         ]
 
     has_current = any(item.is_current for item in items)
@@ -1430,10 +1427,7 @@ def switch_plan(
         PlanGroupMemberError,
     )
     from orchestra.db.models.enums import CollectionMethod
-    from orchestra.db.models.orchestra_models import (
-        BillingMode,
-        BillingPlanTemplate,
-    )
+    from orchestra.db.models.orchestra_models import BillingMode, BillingPlanTemplate
     from orchestra.lib.billing import ensure_stripe_customer
     from orchestra.lib.subscription_billing import resolve_is_business
 
@@ -1533,8 +1527,7 @@ def switch_plan(
     if (
         ba.stripe_subscription_id
         and target_template.billing_mode == BillingMode.CREDITS
-        and target_template.collection_method
-        == CollectionMethod.STRIPE_SUBSCRIPTION
+        and target_template.collection_method == CollectionMethod.STRIPE_SUBSCRIPTION
     ):
         from orchestra.lib.subscription_billing import (
             SubscriptionError,
@@ -1833,7 +1826,11 @@ def subscribe(
         # state). Surface a clean, actionable 400 instead of a 502.
         msg = str(exc)
         logger.warning(f"Stripe rejected subscription (invalid request): {msg}")
-        if "location" in msg.lower() or "address" in msg.lower() or "tax" in msg.lower():
+        if (
+            "location" in msg.lower()
+            or "address" in msg.lower()
+            or "tax" in msg.lower()
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=(

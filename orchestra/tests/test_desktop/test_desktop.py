@@ -42,7 +42,7 @@ async def test_register_desktop(client: AsyncClient):
     assert data["name"] == "My MacBook"
     assert data["url"] == "https://abc.tunnel.unify.ai"
     assert data["os"] == "macos"
-    assert data["assigned_to_assistant_id"] is None
+    assert data["assigned_to_assistant_ids"] == []
     assert "id" in data
     assert "created_at" in data
 
@@ -186,17 +186,18 @@ async def test_list_desktop_shows_assignment(client: AsyncClient):
     )
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    await client.patch(
-        f"/v0/assistant/{agent_id}/config",
-        json={"user_desktop_id": desktop_id, "create_infra": False},
+    link_resp = await client.post(
+        "/v0/desktop/link",
+        json={"assistant_id": int(agent_id), "desktop_id": desktop_id},
         headers=HEADERS,
     )
+    assert link_resp.status_code == 200
 
     list_resp = await client.get("/v0/desktop", headers=HEADERS)
     desktops = list_resp.json()["info"]
     matched = [d for d in desktops if d["id"] == desktop_id]
     assert len(matched) == 1
-    assert matched[0]["assigned_to_assistant_id"] == int(agent_id)
+    assert matched[0]["assigned_to_assistant_ids"] == [int(agent_id)]
 
 
 # =============================================================================
@@ -224,17 +225,19 @@ async def test_delete_assigned_desktop_unlinks_assistant(client: AsyncClient):
     )
     agent_id = create_resp.json()["info"]["agent_id"]
 
-    patch_resp = await client.patch(
-        f"/v0/assistant/{agent_id}/config",
-        json={"user_desktop_id": desktop_id, "create_infra": False},
+    link_resp = await client.post(
+        "/v0/desktop/link",
+        json={"assistant_id": int(agent_id), "desktop_id": desktop_id},
         headers=HEADERS,
     )
-    assert patch_resp.status_code == 200
-    assert patch_resp.json()["info"]["user_desktop_id"] == desktop_id
-    assert (
-        patch_resp.json()["info"]["user_desktop_url"]
-        == "https://unlink.tunnel.unify.ai"
-    )
+    assert link_resp.status_code == 200
+    assert link_resp.json()["info"]["desktop_id"] == desktop_id
+
+    assistants_resp = await client.get("/v0/assistant", headers=HEADERS)
+    assistant_data = [
+        a for a in assistants_resp.json()["info"] if a["agent_id"] == agent_id
+    ][0]
+    assert assistant_data["user_desktop_url"] == "https://unlink.tunnel.unify.ai"
 
     del_resp = await client.delete(f"/v0/desktop/{desktop_id}", headers=HEADERS)
     assert del_resp.status_code == 200
@@ -243,7 +246,6 @@ async def test_delete_assigned_desktop_unlinks_assistant(client: AsyncClient):
     assistant_data = [
         a for a in assistants_resp.json()["info"] if a["agent_id"] == agent_id
     ][0]
-    assert assistant_data["user_desktop_id"] is None
     assert assistant_data["user_desktop_url"] is None
     assert assistant_data["user_desktop_mode"] is None
 
