@@ -1,7 +1,7 @@
 """Integration provider platform tables.
 
 Revision ID: 2026_provider_integrations
-Revises: 2026_plot_table_context_fks
+Revises: drop_deploy_env_columns
 Create Date: 2026-06-04 18:30:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "2026_provider_integrations"
-down_revision = "2026_plot_table_context_fks"
+down_revision = "drop_deploy_env_columns"
 branch_labels = None
 depends_on = None
 
