@@ -620,7 +620,6 @@ def _build_assistant_read(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
         organization_id=a.organization_id,
-        deploy_env=a.deploy_env,
         first_name=a.first_name,
         surname=a.surname,
         job_title=a.job_title,
@@ -878,7 +877,6 @@ async def create_assistant(
             timezone=assistant_in.timezone,
             organization_id=organization_id,
             is_local=assistant_in.is_local or False,
-            deploy_env=assistant_in.deploy_env,
             job_title=assistant_in.job_title,
         )
         ensure_personal_contact_memberships(
@@ -1028,7 +1026,6 @@ async def create_assistant(
                 current_infra_step = "create_pubsub_topic"
                 pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
-                    deploy_env=assistant.deploy_env,
                 )
                 if "detail" in pubsub_response:
                     raise Exception(
@@ -1086,7 +1083,6 @@ async def create_assistant(
                 if created_pubsub:
                     result = await delete_pubsub_topic(
                         str(assistant_id),
-                        deploy_env=assistant.deploy_env,
                     )
                     if not result.get("success"):
                         rollback_errors.append(
@@ -1197,7 +1193,6 @@ async def create_assistant(
     if not assistant_in.is_local:
         response = await wake_up_assistant(
             assistant.agent_id,
-            deploy_env=assistant.deploy_env,
         )
         if response.status_code != 200:
             logging.error(f"Failed to wake up assistant: {response.text}")
@@ -1218,7 +1213,6 @@ async def create_assistant(
             await log_pre_hire_chat(
                 assistant_id=str(assistant.agent_id),
                 messages=chat_messages,
-                deploy_env=assistant.deploy_env,
             )
         except Exception as e_log:
             # We don't rollback the whole assistant creation for a logging failure,
@@ -1432,7 +1426,6 @@ async def delegate_to_colleague_endpoint(
         intent=request_body.intent,
         dedupe_key=request_body.dedupe_key,
         related_context=request_body.related_context,
-        deploy_env=target.deploy_env,
     )
     return InfoResponse(
         info=CoordinatorDelegateResponse(
@@ -1769,7 +1762,6 @@ async def delete_assistant_contact(
                 if contact_type == "phone" and contact.contact_value:
                     await delete_phone_number(
                         contact.contact_value,
-                        deploy_env=assistant.deploy_env,
                     )
                 elif contact_type == "whatsapp":
                     from orchestra.web.api.utils.assistant_infra import (
@@ -1799,7 +1791,6 @@ async def delete_assistant_contact(
         try:
             await reawaken_assistant(
                 str(updated_assistant.agent_id),
-                deploy_env=updated_assistant.deploy_env,
             )
         except Exception as e:
             # Log the error but don't fail the request, as the main action succeeded
@@ -2028,7 +2019,6 @@ async def create_assistant_contact(
         try:
             await reawaken_assistant(
                 str(assistant_id),
-                deploy_env=assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(
@@ -2095,7 +2085,6 @@ async def create_assistant_contact(
             phone_country = contact_request.phone_country or "US"
             phone_response = await create_phone_number(
                 phone_country=phone_country,
-                deploy_env=assistant.deploy_env,
             )
             if "detail" in phone_response:
                 raise Exception(
@@ -2118,7 +2107,6 @@ async def create_assistant_contact(
             # Register the Twilio sender (idempotent if already registered)
             await register_whatsapp_sender(
                 created_value,
-                deploy_env=assistant.deploy_env,
             )
 
         elif contact_type == "discord":
@@ -2136,7 +2124,6 @@ async def create_assistant_contact(
             await register_discord_bot(
                 created_value,
                 assistant_id,
-                deploy_env=assistant.deploy_env,
                 bot_token=pool_result.get("auth_token"),
             )
 
@@ -2215,7 +2202,6 @@ async def create_assistant_contact(
             if contact_type == "phone":
                 await delete_phone_number(
                     created_value,
-                    deploy_env=assistant.deploy_env,
                 )
         except Exception as rollback_error:
             logging.error(
@@ -2230,7 +2216,6 @@ async def create_assistant_contact(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -2649,7 +2634,6 @@ async def disconnect_assistant_account(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -3027,7 +3011,6 @@ async def update_assistant_contact(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -3528,7 +3511,6 @@ async def update_assistant_config(
             try:
                 await reawaken_assistant(
                     str(assistant_id),
-                    deploy_env=updated.deploy_env,
                 )
             except Exception as e:
                 logging.warning(
@@ -3867,7 +3849,7 @@ async def transfer_assistant_to_org(
 
         # Refresh the moved assistant's Contacts so it picks up the destination
         # org's members and drops anything tied to the personal scope.
-        await trigger_contact_sync_safe(assistant_id, deploy_env=assistant.deploy_env)
+        await trigger_contact_sync_safe(assistant_id)
 
         return InfoResponse(
             info=AssistantTransferResponse(
@@ -4040,7 +4022,7 @@ async def transfer_assistant_to_personal(
 
         # Refresh the moved assistant's Contacts so it drops org-scoped rows
         # and reseeds for its new personal owner.
-        await trigger_contact_sync_safe(assistant_id, deploy_env=assistant.deploy_env)
+        await trigger_contact_sync_safe(assistant_id)
 
         return InfoResponse(
             info=AssistantTransferResponse(
@@ -6101,10 +6083,6 @@ def admin_update_assistant(
         assistant.desktop_filesync_sshkey = request_body.desktop_filesync_sshkey
         updated_fields.append("desktop_filesync_sshkey")
 
-    if request_body.deploy_env is not None:
-        assistant.deploy_env = request_body.deploy_env
-        updated_fields.append("deploy_env")
-
     if "console_config" in request_body.model_fields_set:
         if request_body.console_config is None:
             if assistant.console_config is not None:
@@ -7119,7 +7097,6 @@ async def create_demo_assistant(
             monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),
             # Link to demo metadata
             demo_id=demo_meta.id,
-            deploy_env=source_assistant.deploy_env,
         )
         session.add(demo_assistant)
         session.flush()  # Get the agent_id
@@ -7131,7 +7108,6 @@ async def create_demo_assistant(
         try:
             phone_response = await create_phone_number(
                 phone_country=phone_country,
-                deploy_env=demo_assistant.deploy_env,
             )
             if "detail" in phone_response:
                 raise Exception(f"Phone creation failed: {phone_response['detail']}")
@@ -7147,7 +7123,6 @@ async def create_demo_assistant(
         try:
             await create_pubsub_topic(
                 str(demo_assistant.agent_id),
-                deploy_env=demo_assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
@@ -7177,7 +7152,6 @@ async def create_demo_assistant(
         try:
             await wake_up_assistant(
                 str(demo_assistant.agent_id),
-                deploy_env=demo_assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(f"Failed to wake up demo assistant: {e}")

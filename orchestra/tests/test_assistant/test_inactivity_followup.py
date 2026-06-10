@@ -710,7 +710,7 @@ class TestDispatchHelper:
                 "test-admin-key",
             ),
             patch(
-                "orchestra.web.api.utils.assistant_infra._adapters_url_for",
+                "orchestra.web.api.utils.assistant_infra._adapters_url",
                 return_value="http://adapters.test",
             ),
             patch(
@@ -718,10 +718,7 @@ class TestDispatchHelper:
                 return_value=fake_client,
             ),
         ):
-            await rt._dispatch_inactivity_followup_event(
-                agent_id=42,
-                deploy_env=None,
-            )
+            await rt._dispatch_inactivity_followup_event(agent_id=42)
 
         fake_client.post.assert_awaited_once()
         kwargs = fake_client.post.await_args.kwargs
@@ -742,7 +739,7 @@ class TestDispatchHelper:
         with (
             patch("orchestra.web.api.utils.assistant_infra.ADMIN_KEY", None),
             patch(
-                "orchestra.web.api.utils.assistant_infra._adapters_url_for",
+                "orchestra.web.api.utils.assistant_infra._adapters_url",
                 return_value="http://adapters.test",
             ),
             patch(
@@ -750,10 +747,7 @@ class TestDispatchHelper:
                 return_value=fake_client,
             ),
         ):
-            await rt._dispatch_inactivity_followup_event(
-                agent_id=42,
-                deploy_env=None,
-            )
+            await rt._dispatch_inactivity_followup_event(agent_id=42)
 
         fake_client.post.assert_not_awaited()
 

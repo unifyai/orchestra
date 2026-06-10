@@ -7,6 +7,8 @@ from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from yarl import URL
 
+from orchestra.lib.deploy_env import resolve_deploy_env
+
 TEMP_DIR = Path(gettempdir())
 
 
@@ -63,7 +65,7 @@ class Settings(BaseSettings):
 
     @property
     def is_staging(self) -> bool:
-        return os.environ.get("STAGING", "False") == "True"
+        return resolve_deploy_env() == "staging"
 
     @property
     def is_self_host(self) -> bool:

@@ -136,11 +136,11 @@ async def test_add_member_with_admin_role(
 
 
 @pytest.mark.anyio
-async def test_add_member_propagates_deploy_env_for_pool_conflicts(
+async def test_add_member_runs_pool_conflict_followups(
     client: AsyncClient,
     dbsession,
 ):
-    """Personal assistants should notify/reawaken via the correct stack on pool conflicts."""
+    """Personal assistants should be notified and reawakened on pool conflicts."""
     owner = await create_test_user(client, "pool_conflict_owner@test.com")
     joiner = await create_test_user(client, "pool_conflict_joiner@test.com")
 
@@ -223,11 +223,7 @@ async def test_add_member_propagates_deploy_env_for_pool_conflicts(
     assert moved_contact.contact_value == "+15550100014"
 
     mock_notify.assert_awaited_once()
-    assert mock_notify.await_args.kwargs["deploy_env"] is None
-    mock_reawaken.assert_awaited_once_with(
-        str(personal_assistant.agent_id),
-        deploy_env=None,
-    )
+    mock_reawaken.assert_awaited_once_with(str(personal_assistant.agent_id))
 
 
 @pytest.mark.anyio

@@ -319,8 +319,6 @@ def plan_teardown(
 async def execute_plan(
     session: Session,
     plan: TeardownPlan,
-    *,
-    deploy_env: str | None,
 ) -> TeardownResult:
     """Apply one TeardownPlan to the DB + Communication service."""
     result = TeardownResult(
@@ -337,15 +335,9 @@ async def execute_plan(
     #    endpoints treat already-absent mailboxes as success.
     try:
         if plan.effective_provider == "microsoft_365":
-            comms_resp = await delete_outlook_email(
-                plan.contact_value,
-                deploy_env=deploy_env,
-            )
+            comms_resp = await delete_outlook_email(plan.contact_value)
         else:
-            comms_resp = await delete_email(
-                plan.contact_value,
-                deploy_env=deploy_env,
-            )
+            comms_resp = await delete_email(plan.contact_value)
         result.deprovision_status = "ok"
         result.deprovision_detail = json.dumps(comms_resp)[:500]
     except Exception as exc:  # noqa: BLE001
@@ -442,11 +434,7 @@ async def amain(args: argparse.Namespace) -> int:
                 plan.contact_value,
                 plan.assistant_id,
             )
-            result = await execute_plan(
-                session,
-                plan,
-                deploy_env=args.deploy_env,
-            )
+            result = await execute_plan(session, plan)
             results.append(result)
             logger.info("→ %s", json.dumps(result.to_dict(), default=str))
             if result.error:
@@ -515,15 +503,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Keep going if one row fails (default: stop on first failure).",
     )
-    p.add_argument(
-        "--deploy-env",
-        default=None,
-        help=(
-            "Optional deploy_env hint forwarded to delete_email / "
-            "delete_outlook_email. Usually inferred from UNITY_COMMS_URL."
-        ),
-    )
-
     args = p.parse_args(argv)
     if args.apply:
         args.dry_run = False

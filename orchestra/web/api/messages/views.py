@@ -29,10 +29,6 @@ ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def _adapters_url_for_deploy_env(deploy_env: str | None = None) -> str | None:
-    return ADAPTERS_URL
-
-
 def _generate_signed_url(gs_url: str) -> str | None:
     """Best-effort signed URL generation for a gs:// URI. Returns None on failure."""
     try:
@@ -76,14 +72,13 @@ async def _dispatch_to_adapters(
     api_message_id: str,
     body: str,
     is_local: bool,
-    deploy_env: str | None = None,
     attachments: list[dict] | None = None,
     tags: list[str] | None = None,
 ) -> None:
     if is_local:
         logger.info("Skipping adapter dispatch for local assistant %s", assistant_id)
         return
-    adapters_url = _adapters_url_for_deploy_env(deploy_env)
+    adapters_url = ADAPTERS_URL
     if not adapters_url:
         logger.warning("UNITY_ADAPTERS_URL not set, skipping adapter dispatch")
         return
@@ -163,7 +158,7 @@ async def upload_attachment(
             detail="Assistant not found.",
         )
 
-    adapters_url = _adapters_url_for_deploy_env(assistant.deploy_env)
+    adapters_url = ADAPTERS_URL
     if not adapters_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -245,7 +240,6 @@ async def send_message(
         api_message_id=api_message.id,
         body=body.message,
         is_local=assistant.is_local,
-        deploy_env=assistant.deploy_env,
         attachments=attachments_dicts,
         tags=body.tags,
     )

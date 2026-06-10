@@ -359,7 +359,6 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
         == CleanupSource.USER_DELETE
     )
     org_spec = org_assistant_specs[0]
-    assert org_spec.deploy_env is None
     assert org_spec.desktop_mode == "windows"
     assert [
         (contact.contact_type, contact.contact_value) for contact in org_spec.contacts

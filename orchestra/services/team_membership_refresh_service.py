@@ -16,7 +16,7 @@ from orchestra.web.api.utils.assistant_infra import reawaken_assistant
 logger = logging.getLogger(__name__)
 
 MEMBERSHIP_REFRESH_CONCURRENCY = 10
-MembershipRefreshPayload = tuple[int, str | None, dict[str, str]]
+MembershipRefreshPayload = tuple[int, dict[str, str]]
 
 
 def membership_refresh_payloads(
@@ -37,7 +37,6 @@ def membership_refresh_payloads(
     return [
         (
             assistant_id,
-            assistants_by_id[assistant_id].deploy_env,
             {
                 "assistant_id": str(assistant_id),
                 "team_ids": json.dumps(
@@ -67,12 +66,11 @@ async def publish_membership_refreshes_best_effort(
     semaphore = asyncio.Semaphore(MEMBERSHIP_REFRESH_CONCURRENCY)
 
     async def _publish(payload: MembershipRefreshPayload) -> None:
-        assistant_id, deploy_env, data = payload
+        assistant_id, data = payload
         async with semaphore:
             try:
                 await reawaken_assistant(
                     str(assistant_id),
-                    deploy_env=deploy_env,
                     data=data,
                 )
             except Exception:

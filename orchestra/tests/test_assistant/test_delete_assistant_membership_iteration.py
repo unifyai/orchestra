@@ -169,11 +169,10 @@ def _ensure_organization(dbsession: Session, *, owner_id: str) -> Organization:
 def membership_update(monkeypatch):
     calls = []
 
-    async def _publish(assistant_id: str, deploy_env=None, *, data=None):
+    async def _publish(assistant_id: str, *, data=None):
         calls.append(
             {
                 "assistant_id": assistant_id,
-                "deploy_env": deploy_env,
                 "data": data,
             },
         )
@@ -193,7 +192,7 @@ def comms_client(monkeypatch):
     monkeypatch.setattr(team_cleanup_service, "ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(
         team_cleanup_service,
-        "_comms_url_for",
+        "_comms_url",
         lambda: "https://comms.test",
     )
     monkeypatch.setattr(team_cleanup_service, "get_async_client", lambda: client)
@@ -213,7 +212,6 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
     org = _ensure_organization(dbsession, owner_id=owner["id"])
     assistant = _make_assistant(dbsession, owner_id=owner["id"])
     assistant_id = assistant.agent_id
-    assistant_deploy_env = assistant.deploy_env
     first_team = _make_team_membership(
         dbsession,
         owner_id=owner["id"],
@@ -267,7 +265,6 @@ async def test_delete_assistant_cleans_memberships_before_row_delete(
     assert membership_update == [
         {
             "assistant_id": str(assistant_id),
-            "deploy_env": assistant_deploy_env,
             "data": {
                 "assistant_id": str(assistant_id),
                 "team_ids": "[]",
@@ -291,7 +288,7 @@ async def test_delete_assistant_membership_cleanup_failure_rolls_back(
     monkeypatch.setattr(team_cleanup_service, "ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(
         team_cleanup_service,
-        "_comms_url_for",
+        "_comms_url",
         lambda: "https://comms.test",
     )
     monkeypatch.setattr(team_cleanup_service, "get_async_client", lambda: comms_client)

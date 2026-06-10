@@ -24,6 +24,8 @@ from typing import Union
 
 from sqlalchemy import event as sa_event
 
+from orchestra.lib.deploy_env import env_suffix
+
 logger = logging.getLogger(__name__)
 
 _PUBLISHER = None
@@ -55,18 +57,12 @@ def _get_publisher():
     return _PUBLISHER
 
 
-def _env_suffix() -> str:
-    if os.environ.get("STAGING", "False") == "True":
-        return "-staging"
-    return ""
-
-
 def _topic_path(billing_account_id: int):
     publisher = _get_publisher()
     if publisher is None:
         return None
     project_id = os.environ.get("GCP_PROJECT_ID", "gcp-project-saas")
-    topic_name = f"billing-account-{billing_account_id}{_env_suffix()}"
+    topic_name = f"billing-account-{billing_account_id}{env_suffix()}"
     return publisher.topic_path(project_id, topic_name)
 
 

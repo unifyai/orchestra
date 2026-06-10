@@ -44,7 +44,6 @@ def _fake_coordinator(agent_id: int = 1, *, is_coord: bool = True) -> SimpleName
         user_id="user-1",
         organization_id=None,
         is_coordinator=is_coord,
-        deploy_env=None,
         first_name="Marty",
         surname=None,
     )
@@ -63,7 +62,6 @@ def _fake_specialist(agent_id: int = 2) -> SimpleNamespace:
         user_id="user-1",
         organization_id=None,
         is_coordinator=False,
-        deploy_env=None,
         first_name="Specialist",
         surname="One",
     )

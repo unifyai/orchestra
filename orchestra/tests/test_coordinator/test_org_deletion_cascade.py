@@ -106,7 +106,7 @@ def org_delete_boundaries(monkeypatch: pytest.MonkeyPatch) -> _CommsClient:
     monkeypatch.setattr(team_cleanup_service, "ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(
         team_cleanup_service,
-        "_comms_url_for",
+        "_comms_url",
         lambda: "https://comms.test",
     )
     monkeypatch.setattr(

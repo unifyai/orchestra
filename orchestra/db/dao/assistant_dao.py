@@ -87,7 +87,6 @@ class AssistantDAO:
         organization_id: Optional[int] = None,
         is_local: bool = False,
         is_coordinator: bool = False,
-        deploy_env: str | None = None,
         job_title: Optional[str] = None,
     ) -> Assistant:
         """
@@ -125,7 +124,6 @@ class AssistantDAO:
             timezone=timezone,
             is_local=is_local,
             is_coordinator=is_coordinator,
-            deploy_env=deploy_env,
         )
         self.session.add(assistant)
         self.session.flush()

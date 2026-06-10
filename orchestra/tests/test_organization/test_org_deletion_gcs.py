@@ -194,7 +194,7 @@ async def test_org_deletion_deprovisions_contacts_and_persists_cleanup_tasks(
         )
 
     assert del_resp.status_code == status.HTTP_204_NO_CONTENT
-    mock_delete_phone.assert_awaited_once_with("+15553334444", deploy_env=None)
+    mock_delete_phone.assert_awaited_once_with("+15553334444")
     mock_delete_routes.assert_called_once_with(agent_id)
 
     dbsession.expire_all()

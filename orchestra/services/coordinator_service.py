@@ -48,7 +48,7 @@ from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 from orchestra.web.api.utils.assistant_infra import (
     ADMIN_KEY,
-    _adapters_url_for,
+    _adapters_url,
     _post_unity_system_event,
     create_pubsub_topic,
 )
@@ -180,7 +180,6 @@ def create_coordinator_assistant(
         organization_id=organization_id,
         is_local=False,
         is_coordinator=True,
-        deploy_env=None,
         job_title="Unity",
     )
     session.flush()
@@ -400,7 +399,6 @@ async def ensure_workspace_coordinator_provisioned(
     )
     pubsub_response = await create_pubsub_topic(
         str(coordinator.agent_id),
-        deploy_env=coordinator.deploy_env,
     )
     if pubsub_topic_response_failed(pubsub_response):
         raise ValueError(f"Coordinator topic provisioning failed: {pubsub_response}")
@@ -1316,8 +1314,6 @@ def _build_onboarding_event_payload(
 
 def _fire_and_forget_onboarding_event(
     payload: dict[str, Any],
-    *,
-    deploy_env: str | None,
 ) -> None:
     """Best-effort sync POST used by non-async trigger sites.
 
@@ -1328,7 +1324,7 @@ def _fire_and_forget_onboarding_event(
     are caught + logged on the worker thread so a transient adapters
     outage never reaches the user.
     """
-    url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
+    url = f"{_adapters_url()}/unity/system-event"
     headers = {
         "Authorization": f"Bearer {ADMIN_KEY}",
         "Content-Type": "application/json",
@@ -1358,7 +1354,6 @@ async def notify_coordinator_onboarding_event(
     subtype: str,
     message: str,
     details: dict[str, Any] | None = None,
-    deploy_env: str | None = None,
 ) -> bool:
     """Emit one onboarding narration event for the Coordinator.
 
@@ -1390,7 +1385,6 @@ async def notify_coordinator_onboarding_event(
             event_type=payload["event_type"],
             message=payload["message"],
             extra_event_fields=payload["extra_event_fields"],
-            deploy_env=deploy_env,
         )
     except Exception as exc:
         logger.warning(
@@ -1411,7 +1405,6 @@ def notify_coordinator_onboarding_event_safe_sync(
     subtype: str,
     message: str,
     details: dict[str, Any] | None = None,
-    deploy_env: str | None = None,
 ) -> bool:
     """Sync wrapper around :func:`notify_coordinator_onboarding_event`.
 
@@ -1432,7 +1425,7 @@ def notify_coordinator_onboarding_event_safe_sync(
         message=message,
         details=details,
     )
-    _fire_and_forget_onboarding_event(payload, deploy_env=deploy_env)
+    _fire_and_forget_onboarding_event(payload)
     return True
 
 
@@ -1443,7 +1436,6 @@ async def maybe_notify_for_assistant_async(
     subtype: str,
     message: str,
     details: dict[str, Any] | None = None,
-    deploy_env: str | None = None,
 ) -> bool:
     """Resolve the target Coordinator from ``assistant`` then emit (async).
 
@@ -1463,7 +1455,6 @@ async def maybe_notify_for_assistant_async(
         subtype=subtype,
         message=message,
         details=details,
-        deploy_env=deploy_env,
     )
 
 
@@ -1474,7 +1465,6 @@ def maybe_notify_for_assistant_sync(
     subtype: str,
     message: str,
     details: dict[str, Any] | None = None,
-    deploy_env: str | None = None,
 ) -> bool:
     """Resolve target Coordinator + emit, sync flavour.
 
@@ -1492,7 +1482,6 @@ def maybe_notify_for_assistant_sync(
         subtype=subtype,
         message=message,
         details=details,
-        deploy_env=deploy_env,
     )
 
 
@@ -1552,7 +1541,6 @@ async def emit_secret_landed_event(
         subtype=subtype,
         message=message,
         details={"secret_name": secret_name},
-        deploy_env=getattr(assistant, "deploy_env", None),
     )
 
 
@@ -1610,5 +1598,4 @@ async def emit_onboarding_session_started_event(
         subtype=SUBTYPE_ONBOARDING_SESSION_STARTED,
         message=message,
         details=details,
-        deploy_env=getattr(coordinator, "deploy_env", None),
     )

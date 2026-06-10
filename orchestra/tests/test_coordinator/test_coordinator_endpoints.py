@@ -101,6 +101,36 @@ def _assistant_context_name(coordinator: Assistant, suffix: str) -> str:
     return f"{coordinator.user_id}/{coordinator.agent_id}/{suffix}"
 
 
+@pytest.mark.anyio
+async def test_personal_coordinator_endpoint_repairs_existing_pubsub(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await _create_user(client, "repair-existing-pubsub")
+    coordinator = dbsession.scalars(
+        select(Assistant).where(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    ).one()
+    create_pubsub_topic = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        create_pubsub_topic,
+    )
+
+    response = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert response.json() == {"coordinator_id": str(coordinator.agent_id)}
+    create_pubsub_topic.assert_awaited_once_with(str(coordinator.agent_id))
+
+
 def _assistants_project(
     dbsession: Session,
     *,
@@ -1164,7 +1194,6 @@ async def test_delegate_to_colleague_dispatches_without_target_owned_rows(
         intent="schedule_task",
         dedupe_key="renewal-risk-42",
         related_context={"source": "coordinator"},
-        deploy_env=target.deploy_env,
     )
     leaked_contexts = dbsession.scalars(
         select(Context).where(

@@ -28,7 +28,7 @@ from orchestra.services.team_membership_refresh_service import (
     membership_refresh_payloads,
     publish_membership_refreshes_best_effort,
 )
-from orchestra.web.api.utils.assistant_infra import ADMIN_KEY, _comms_url_for
+from orchestra.web.api.utils.assistant_infra import ADMIN_KEY, _comms_url
 from orchestra.web.api.utils.http_client import get_async_client
 
 TASK_ACTIVATION_DELETE_PATH = "/infra/task-activation/delete"
@@ -171,7 +171,7 @@ async def _delete_scheduled_activation(activation: Mapping[str, Any]) -> None:
     if body is None:
         return
 
-    comms_url = _comms_url_for().rstrip("/")
+    comms_url = _comms_url().rstrip("/")
     if not comms_url or not ADMIN_KEY:
         raise RuntimeError("Communication admin endpoint is not configured")
 

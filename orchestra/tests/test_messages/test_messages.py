@@ -85,7 +85,6 @@ async def test_send_message_dispatches_to_adapter(
         api_message_id=resp.json()["info"]["message_id"],
         body="Check dispatch",
         is_local=False,
-        deploy_env=None,
         attachments=[],
         tags=[],
     )

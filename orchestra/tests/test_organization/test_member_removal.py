@@ -623,7 +623,7 @@ async def test_member_removal_deprovisions_contacts_before_deleting_unshared_ass
         )
 
     assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
-    mock_delete_phone.assert_awaited_once_with("+15551110000", deploy_env=None)
+    mock_delete_phone.assert_awaited_once_with("+15551110000")
     mock_delete_routes.assert_called_once_with(agent_id)
 
     dbsession.expire_all()

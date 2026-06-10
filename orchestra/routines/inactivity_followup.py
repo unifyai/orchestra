@@ -112,7 +112,6 @@ class InactivityFollowupResult:
 
 async def _dispatch_inactivity_followup_event(
     agent_id: int,
-    deploy_env: Optional[str],
 ) -> None:
     """Signal the Unity brain that this assistant should compose a follow-up.
 
@@ -126,10 +125,10 @@ async def _dispatch_inactivity_followup_event(
     not configured (typical in local dev), so the routine remains safe
     to run there.
     """
-    from orchestra.web.api.utils.assistant_infra import ADMIN_KEY, _adapters_url_for
+    from orchestra.web.api.utils.assistant_infra import ADMIN_KEY, _adapters_url
     from orchestra.web.api.utils.http_client import get_async_client
 
-    adapters_url = _adapters_url_for(deploy_env)
+    adapters_url = _adapters_url()
     if not adapters_url or not ADMIN_KEY:
         logger.warning(
             "Inactivity follow-up dispatch skipped for assistant %d: "
@@ -274,7 +273,6 @@ async def _dispatch_followup_for_assistant(
                 await asyncio.sleep(random.uniform(0, jitter_seconds))
             await _dispatch_inactivity_followup_event(
                 agent_id=int(assistant.agent_id),
-                deploy_env=assistant.deploy_env,
             )
         else:
             sent = await _send_console_redirect_followup(session, assistant)

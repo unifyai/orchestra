@@ -26,12 +26,6 @@ T = TypeVar("T")
 VALID_TIMEZONES = available_timezones()
 
 
-def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
-    if v is not None:
-        raise ValueError("deploy_env is no longer supported; must be null.")
-    return None
-
-
 def _normalize_job_title(v: Optional[str]) -> Optional[str]:
     """Trim whitespace and treat empty strings as ``None``.
 
@@ -181,11 +175,6 @@ class AssistantCreate(BaseModel):
         ),
         exclude=True,
     )
-    deploy_env: Optional[str] = Field(
-        None,
-        description="Deprecated. Must be null.",
-        example=None,
-    )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
         description="A list of chat messages from the pre-hire conversation to be logged.",
@@ -202,11 +191,6 @@ class AssistantCreate(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
-
-    @field_validator("deploy_env")
-    @classmethod
-    def validate_deploy_env(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_deploy_env(v)
 
     @field_validator("job_title")
     @classmethod
@@ -541,7 +525,6 @@ class AssistantRead(AssistantCreate):
                 "agent_id": "12345",
                 "user_id": "123",
                 "organization_id": None,
-                "deploy_env": None,
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
@@ -979,22 +962,12 @@ class AssistantUpdate(BaseModel):
         description="Monthly spending limit in dollars. Set to null to remove the limit.",
         example=100.00,
     )
-    deploy_env: Optional[str] = Field(
-        None,
-        description="Deprecated. Must be null.",
-    )
-
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
-
-    @field_validator("deploy_env")
-    @classmethod
-    def validate_update_deploy_env(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_deploy_env(v)
 
     @field_validator("job_title")
     @classmethod
@@ -1981,10 +1954,6 @@ class AdminUpdateAssistant(BaseModel):
         None,
         description="SSH private key for desktop filesystem sync.",
     )
-    deploy_env: Optional[str] = Field(
-        None,
-        description="Deprecated. Must be null.",
-    )
     console_config: Optional[Dict[str, Any]] = Field(
         None,
         description="Per-assistant UI/UX configuration (layout, tabs, theme). "
@@ -1997,11 +1966,6 @@ class AdminUpdateAssistant(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
-
-    @field_validator("deploy_env")
-    @classmethod
-    def validate_admin_deploy_env(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_deploy_env(v)
 
     @field_validator("job_title")
     @classmethod

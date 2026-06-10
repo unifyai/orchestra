@@ -1889,7 +1889,6 @@ class Assistant(Base):
     # When the spending cap was last changed (for notification deduplication)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
     max_parallel = Column(Integer, nullable=True)
-    deploy_env = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     # Re-engagement tracking. last_correspondence_at is touched on any
@@ -3381,7 +3380,6 @@ class AssistantCleanupTask(Base):
 
     id = Column(Integer, primary_key=True)
     assistant_id = Column(Integer, nullable=False)
-    deploy_env = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
     source_flow = Column(String, nullable=False)
     cleanup_payload = Column(

@@ -370,7 +370,7 @@ class UserAccountCleanupService:
         assistant_rows = self.session.execute(
             text(
                 """
-                SELECT agent_id, deploy_env, desktop_mode, profile_photo, profile_video
+                SELECT agent_id, desktop_mode, profile_photo, profile_video
                 FROM assistants
                 WHERE user_id = :uid
                 """,
@@ -406,10 +406,9 @@ class UserAccountCleanupService:
         return [
             AssistantCleanupSpec(
                 assistant_id=int(row[0]),
-                deploy_env=row[1],
-                desktop_mode=row[2],
-                profile_photo=row[3],
-                profile_video=row[4],
+                desktop_mode=row[1],
+                profile_photo=row[2],
+                profile_video=row[3],
                 contacts=contacts_by_assistant_id.get(int(row[0]), []),
             )
             for row in assistant_rows

@@ -389,12 +389,9 @@ async def test_execute_plan_happy_path_microsoft(dbsession: Session):
         "orchestra.workers.teardown_platform_mailboxes.delete_email",
         new_callable=AsyncMock,
     ) as mock_gmail:
-        result = await execute_plan(dbsession, plan, deploy_env=None)
+        result = await execute_plan(dbsession, plan)
 
-    mock_outlook.assert_awaited_once_with(
-        "user@tenant.onmicrosoft.com",
-        deploy_env=None,
-    )
+    mock_outlook.assert_awaited_once_with("user@tenant.onmicrosoft.com")
     mock_gmail.assert_not_called()
     assert result.deprovision_status == "ok"
     assert result.soft_delete_status == "ok"
@@ -440,7 +437,7 @@ async def test_execute_plan_routes_mismatched_row_to_outlook(dbsession: Session)
         "orchestra.workers.teardown_platform_mailboxes.delete_email",
         new_callable=AsyncMock,
     ) as mock_gmail:
-        result = await execute_plan(dbsession, plan, deploy_env=None)
+        result = await execute_plan(dbsession, plan)
 
     mock_outlook.assert_awaited_once()
     mock_gmail.assert_not_called()
@@ -468,7 +465,7 @@ async def test_execute_plan_skips_db_changes_when_deprovision_fails(
         new_callable=AsyncMock,
         side_effect=RuntimeError("comms 502"),
     ):
-        result = await execute_plan(dbsession, plan, deploy_env=None)
+        result = await execute_plan(dbsession, plan)
 
     assert result.deprovision_status == "error"
     assert "comms 502" in (result.error or "")

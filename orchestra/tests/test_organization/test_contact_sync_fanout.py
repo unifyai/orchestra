@@ -217,17 +217,16 @@ async def test_transfer_assistant_to_org_triggers_contact_sync(
     assert transfer_resp.status_code == status.HTTP_200_OK
 
     mocked_infra["trigger"].assert_awaited_once()
-    args, kwargs = mocked_infra["trigger"].call_args
+    args, _kwargs = mocked_infra["trigger"].call_args
     assert args[0] == agent_id
-    assert "deploy_env" in kwargs
 
 
 @pytest.mark.anyio
 async def test_fan_out_helper_iterates_every_org_assistant_and_tolerates_failures():
     """Helper must trigger contact sync per assistant and not abort on errors."""
-    assistant_a = MagicMock(agent_id=101, deploy_env="staging")
-    assistant_b = MagicMock(agent_id=202, deploy_env=None)
-    assistant_c = MagicMock(agent_id=303, deploy_env="production")
+    assistant_a = MagicMock(agent_id=101)
+    assistant_b = MagicMock(agent_id=202)
+    assistant_c = MagicMock(agent_id=303)
 
     fake_dao = MagicMock()
     fake_dao.list_all_org_assistants.return_value = [
@@ -237,7 +236,7 @@ async def test_fan_out_helper_iterates_every_org_assistant_and_tolerates_failure
     ]
     fake_session = MagicMock()
 
-    async def trigger_side_effect(agent_id, deploy_env=None):
+    async def trigger_side_effect(agent_id):
         if agent_id == 202:
             raise RuntimeError("simulated webhook failure")
         return {"status": "ok"}
@@ -256,10 +255,6 @@ async def test_fan_out_helper_iterates_every_org_assistant_and_tolerates_failure
     assert mock_trigger.await_count == 3
     awaited_ids = {call.args[0] for call in mock_trigger.await_args_list}
     assert awaited_ids == {101, 202, 303}
-    awaited_envs = {
-        call.kwargs.get("deploy_env") for call in mock_trigger.await_args_list
-    }
-    assert awaited_envs == {"staging", None, "production"}
 
 
 @pytest.mark.anyio
@@ -295,6 +290,5 @@ async def test_transfer_assistant_to_personal_triggers_contact_sync(
     assert transfer_resp.status_code == status.HTTP_200_OK
 
     mocked_infra["trigger"].assert_awaited_once()
-    args, kwargs = mocked_infra["trigger"].call_args
+    args, _kwargs = mocked_infra["trigger"].call_args
     assert args[0] == agent_id
-    assert "deploy_env" in kwargs

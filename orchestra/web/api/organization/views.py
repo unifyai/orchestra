@@ -101,11 +101,7 @@ async def _run_pool_resolution_followups(
     pool_resolutions: List[ConflictResolution],
     session: Session,
 ) -> None:
-    """Send notifications and runtime refreshes for assistants moved post-commit.
-
-    The follow-up calls use the affected assistant's ``deploy_env`` for
-    environment-aware routing.
-    """
+    """Send notifications and runtime refreshes for assistants moved post-commit."""
     if not pool_resolutions:
         return
 
@@ -118,7 +114,6 @@ async def _run_pool_resolution_followups(
         for aid in res.affected_assistant_ids:
             old_num = res.old_pool_assignments.get(aid, "")
             new_num = res.new_pool_assignments.get(aid, "")
-            deploy_env = res.assistant_deploy_envs.get(aid)
             try:
                 await notify_pool_reassignment(
                     res.conflict_event_id,
@@ -126,7 +121,6 @@ async def _run_pool_resolution_followups(
                     new_num,
                     res.notification_recipients,
                     session,
-                    deploy_env=deploy_env,
                 )
             except Exception as e_notify:
                 logger.warning(
@@ -136,7 +130,7 @@ async def _run_pool_resolution_followups(
                     e_notify,
                 )
             try:
-                await reawaken_assistant(str(aid), deploy_env=deploy_env)
+                await reawaken_assistant(str(aid))
             except Exception as e_reawaken:
                 logger.warning(
                     "Failed to reawaken assistant %d after " "pool reassignment: %s",

@@ -7,9 +7,12 @@ from typing import Any, List
 import httpx
 from sqlalchemy.orm import Session
 
+from orchestra.lib.deploy_env import env_suffix
 from orchestra.web.api.utils.http_client import get_async_client
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
+COMMUNICATION_URL = os.environ.get("COMMUNICATION_URL")
+COMMS_URL_LEGACY = os.environ.get("COMMS_URL")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 LOCAL_ADAPTERS_URL = os.environ.get("LOCAL_ADAPTERS_URL")
 UNITY_GATEWAY_URL = os.environ.get("UNITY_GATEWAY_URL")
@@ -129,10 +132,10 @@ def _runtime_has_live_resources(runtime_status: dict[str, Any]) -> bool:
     )
 
 
-def _comms_url_for(deploy_env: str | None = None) -> str:
-    del deploy_env
-    if COMMS_URL:
-        return COMMS_URL.rstrip("/")
+def _comms_url() -> str:
+    for url in (COMMS_URL, COMMUNICATION_URL, COMMS_URL_LEGACY):
+        if url:
+            return url.rstrip("/")
     if LOCAL_ADAPTERS_URL:
         return LOCAL_ADAPTERS_URL.rstrip("/")
     if UNITY_GATEWAY_URL:
@@ -143,16 +146,10 @@ def _comms_url_for(deploy_env: str | None = None) -> str:
     return ""
 
 
-def _adapters_url_for(deploy_env: str | None = None) -> str:
-    del deploy_env
+def _adapters_url() -> str:
     if ADAPTERS_URL:
         return ADAPTERS_URL.rstrip("/")
-    return _comms_url_for()
-
-
-def _env_suffix(deploy_env: str | None = None) -> str:
-    is_staging = os.environ.get("STAGING", "False") == "True"
-    return "-staging" if is_staging else ""
+    return _comms_url()
 
 
 _COMMS_FEATURES_TTL_SECONDS = 60.0
@@ -177,7 +174,7 @@ async def fetch_comms_features() -> dict[str, bool]:
     if cached["value"] is not None and now < cached["expires_at"]:
         return cached["value"]
 
-    comms_url = _comms_url_for()
+    comms_url = _comms_url()
     if not comms_url:
         return cached["value"] or {}
 
@@ -202,20 +199,18 @@ async def fetch_comms_features() -> dict[str, bool]:
 
 async def create_phone_number(
     phone_country: str = "US",
-    deploy_env: str | None = None,
 ):
     """
     Create a phone number for the user by making a POST request to the comms endpoint.
 
     Args:
         phone_country (str): The country code for phone number provisioning (e.g., "US", "GB").
-        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         JSON response from the phone creation endpoint
     """
-    comms_url = _comms_url_for(deploy_env)
-    adapters_url = _adapters_url_for(deploy_env)
+    comms_url = _comms_url()
+    adapters_url = _adapters_url()
     voice_url = adapters_url + "/twilio/call"
     sms_url = adapters_url + "/twilio/sms"
     status_callback = adapters_url + "/twilio/call-status"
@@ -276,15 +271,14 @@ async def assign_whatsapp_pool_number(
 
 async def register_whatsapp_sender(
     phone_number: str,
-    deploy_env: str | None = None,
 ) -> dict:
     """Register a WhatsApp sender with Twilio via the Communication service.
 
     This calls the existing ``POST /whatsapp/create`` on the Communication
     service to set up the Twilio Messaging Channel Sender and webhook.
     """
-    comms_url = _comms_url_for(deploy_env)
-    callback_url = _adapters_url_for(deploy_env) + "/twilio/whatsapp"
+    comms_url = _comms_url()
+    callback_url = _adapters_url() + "/twilio/whatsapp"
     client = get_async_client()
     response = await client.post(
         f"{comms_url}/whatsapp/create",
@@ -318,14 +312,13 @@ async def notify_pool_reassignment(
     new_number: str,
     recipients: list[dict],
     session,
-    deploy_env: str | None = None,
 ) -> dict:
     """Send template-based WhatsApp notifications for a pool number change.
 
     Each recipient dict must contain: ``to``, ``user_name``, ``agent_name``.
     Returns per-recipient message SIDs for delivery tracking.
     """
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     client = get_async_client()
     response = await client.post(
         f"{comms_url}/whatsapp/notify",
@@ -385,11 +378,10 @@ async def assign_discord_pool_bot(
 async def register_discord_bot(
     bot_id: str,
     assistant_id: int,
-    deploy_env: str | None = None,
     bot_token: str | None = None,
 ) -> dict:
     """Register a Discord bot-to-assistant mapping with the Communication service."""
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     payload: dict = {
         "bot_id": bot_id,
         "assistant_id": assistant_id,
@@ -420,7 +412,7 @@ async def delete_discord_routes(
     return dao.delete_routes_for_assistant(assistant_id)
 
 
-async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
+async def delete_phone_number(phone_number: str):
     """
     Delete a phone number by making a DELETE request to the comms endpoint.
 
@@ -430,7 +422,7 @@ async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
     Returns:
         JSON response from the phone deletion endpoint
     """
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     client = get_async_client()
     response = await client.request(
         "DELETE",
@@ -454,7 +446,7 @@ async def delete_phone_number(phone_number: str, deploy_env: str | None = None):
 # stragglers).
 
 
-async def delete_email(email: str, deploy_env: str | None = None):
+async def delete_email(email: str):
     """Delete a Google Workspace user via the Communication service.
 
     Used only by the one-shot platform-mailbox teardown worker
@@ -462,7 +454,7 @@ async def delete_email(email: str, deploy_env: str | None = None):
     Communication returns ``{"already_absent": true}`` for users that
     have already been removed.
     """
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     client = get_async_client()
     response = await client.request(
         "DELETE",
@@ -475,13 +467,13 @@ async def delete_email(email: str, deploy_env: str | None = None):
     return response.json()
 
 
-async def delete_outlook_email(email: str, deploy_env: str | None = None):
+async def delete_outlook_email(email: str):
     """Delete an MS365 user/mailbox via the Communication service.
 
     Used only by the one-shot platform-mailbox teardown worker
     (``orchestra.workers.teardown_platform_mailboxes``).  Idempotent.
     """
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     client = get_async_client()
     response = await client.request(
         "DELETE",
@@ -494,19 +486,18 @@ async def delete_outlook_email(email: str, deploy_env: str | None = None):
     return response.json()
 
 
-async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
+async def create_pubsub_topic(assistant_id: str):
     """
     Create a pubsub topic for the assistant by making a POST request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
-        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         JSON response from the pubsub topic creation endpoint
     """
-    comms_url = _comms_url_for(deploy_env)
-    topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
+    comms_url = _comms_url()
+    topic_name = f"unity-{assistant_id}{env_suffix()}"
     client = get_async_client()
     try:
         response = await client.post(
@@ -525,7 +516,6 @@ async def create_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
 async def _request_cleanup_step(
     *,
     name: str,
-    deploy_env: str | None,
     method: str,
     path: str,
     data: dict[str, Any] | None = None,
@@ -533,7 +523,7 @@ async def _request_cleanup_step(
     timeout: float = PERMANENT_CLEANUP_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Execute one async cleanup request and capture timeout/error state."""
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     if not comms_url or not ADMIN_KEY:
         return _cleanup_step_result(
             name,
@@ -581,7 +571,6 @@ async def _request_cleanup_step(
 def _request_cleanup_step_sync(
     *,
     name: str,
-    deploy_env: str | None,
     method: str,
     path: str,
     data: dict[str, Any] | None = None,
@@ -589,7 +578,7 @@ def _request_cleanup_step_sync(
     timeout: float = PERMANENT_CLEANUP_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Synchronous variant of ``_request_cleanup_step`` for blocking callers."""
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     if not comms_url or not ADMIN_KEY:
         return _cleanup_step_result(
             name,
@@ -635,21 +624,19 @@ def _request_cleanup_step_sync(
         return _cleanup_step_result(name, success=False, error=str(exc))
 
 
-async def delete_pubsub_topic(assistant_id: str, deploy_env: str | None = None):
+async def delete_pubsub_topic(assistant_id: str):
     """
     Delete a pubsub topic for the assistant by making a DELETE request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
-        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
-    topic_name = f"unity-{assistant_id}{_env_suffix(deploy_env)}"
+    topic_name = f"unity-{assistant_id}{env_suffix()}"
     return await _request_cleanup_step(
         name="delete_pubsub_topic",
-        deploy_env=deploy_env,
         method="DELETE",
         path="/infra/pubsub/topic",
         data={"topic_name": topic_name},
@@ -663,7 +650,6 @@ async def release_pool_vm(
     vm_name: str | None = None,
     job_name: str | None = None,
     release_generation: int | None = None,
-    deploy_env: str | None = None,
 ):
     """Release a pool VM using the binding-scoped comms contract."""
 
@@ -682,7 +668,6 @@ async def release_pool_vm(
         payload["release_generation"] = release_generation
     return await _request_cleanup_step(
         name="release_pool_vm",
-        deploy_env=deploy_env,
         method="POST",
         path="/infra/vm/pool/release",
         json_body=payload,
@@ -697,7 +682,6 @@ def release_pool_vm_sync(
     vm_name: str | None = None,
     job_name: str | None = None,
     release_generation: int | None = None,
-    deploy_env: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous binding-scoped pool release helper."""
 
@@ -716,7 +700,6 @@ def release_pool_vm_sync(
         payload["release_generation"] = release_generation
     return _request_cleanup_step_sync(
         name="release_pool_vm",
-        deploy_env=deploy_env,
         method="POST",
         path="/infra/vm/pool/release",
         json_body=payload,
@@ -726,24 +709,21 @@ def release_pool_vm_sync(
 
 async def stop_assistant_session_runtime(
     assistant_id: str,
-    deploy_env: str | None = None,
 ):
     """Patch the AssistantSession desired state to ``Stopped``."""
 
     return await _request_cleanup_step(
         name="stop_assistant_session_runtime",
-        deploy_env=deploy_env,
         method="POST",
         path=f"/infra/session/{assistant_id}/stop",
         timeout=20.0,
     )
 
 
-async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None):
+async def delete_assistant_disk(assistant_id: str):
     """Delete an assistant's persistent disk (permanent unhire cleanup)."""
     return await _request_cleanup_step(
         name="delete_assistant_disk",
-        deploy_env=deploy_env,
         method="DELETE",
         path=f"/infra/vm/pool/disk/{assistant_id}",
     )
@@ -751,7 +731,6 @@ async def delete_assistant_disk(assistant_id: str, deploy_env: str | None = None
 
 async def delete_assistant_pool_archive(
     assistant_id: str,
-    deploy_env: str | None = None,
 ):
     """Delete an assistant's GCS workspace archive (permanent unhire cleanup).
 
@@ -765,7 +744,6 @@ async def delete_assistant_pool_archive(
     """
     return await _request_cleanup_step(
         name="delete_assistant_pool_archive",
-        deploy_env=deploy_env,
         method="DELETE",
         path=f"/infra/vm/pool/archive/{assistant_id}",
     )
@@ -777,7 +755,7 @@ async def get_social_platforms_costs():
     """
     client = get_async_client()
     response = await client.get(
-        f"{_comms_url_for()}/social/available-platforms",
+        f"{_comms_url()}/social/available-platforms",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         timeout=20,
     )
@@ -789,19 +767,17 @@ RUNTIME_JOB_LOOKBACK_HOURS = 36
 
 async def get_running_jobs(
     assistant_id: str,
-    deploy_env: str | None = None,
 ) -> List[str]:
     """
     Get running jobs for the assistant by querying K8s via the comms service.
 
     Args:
         assistant_id: The assistant ID to find running jobs for
-        deploy_env: Reserved for future use; currently ignored.
 
     Returns:
         List of job names that are currently running for this assistant
     """
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     if not comms_url or not ADMIN_KEY:
         return []
 
@@ -838,11 +814,10 @@ async def get_running_jobs(
 
 async def get_runtime_status(
     assistant_id: str,
-    deploy_env: str | None = None,
 ) -> dict[str, Any] | None:
     """Read the Comms runtime aggregate for one assistant."""
 
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     if not comms_url or not ADMIN_KEY:
         return None
 
@@ -869,7 +844,6 @@ async def get_runtime_status(
 
 async def stop_jobs(
     assistant_id: str,
-    deploy_env: str | None = None,
 ):
     """
     Stop any running Unity job for the assistant.
@@ -880,7 +854,7 @@ async def stop_jobs(
     assistant_id = str(assistant_id)
     steps: dict[str, dict[str, Any]] = {}
     job_names: list[str] = []
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
 
     if not comms_url or not ADMIN_KEY:
         skipped = _cleanup_step_result(
@@ -1005,12 +979,10 @@ def _requires_assistant_disk_cleanup(desktop_mode: str | None) -> bool:
 
 async def delete_assistant_session(
     assistant_id: str,
-    deploy_env: str | None = None,
 ):
     """Delete the AssistantSession CR for an assistant as a tracked step."""
     return await _request_cleanup_step(
         name="delete_assistant_session",
-        deploy_env=deploy_env,
         method="DELETE",
         path=f"/infra/session/{assistant_id}",
         timeout=20,
@@ -1019,14 +991,11 @@ async def delete_assistant_session(
 
 async def _cleanup_sessionless_runtime(
     assistant_id: str,
-    *,
-    deploy_env: str | None = None,
 ) -> dict[str, Any]:
     """Best-effort fallback when runtime exists without a current session."""
 
     runtime_status_step = await _request_cleanup_step(
         name="runtime_status",
-        deploy_env=deploy_env,
         method="GET",
         path=f"/infra/runtime/{assistant_id}",
         timeout=20,
@@ -1069,7 +1038,7 @@ async def _cleanup_sessionless_runtime(
             },
         )
 
-    stop_jobs_result = await stop_jobs(assistant_id, deploy_env=deploy_env)
+    stop_jobs_result = await stop_jobs(assistant_id)
     release_steps: list[dict[str, Any]] = []
     fallback_errors = list(stop_jobs_result.get("errors", []))
     for vm_ref in _runtime_vm_refs(runtime_status):
@@ -1077,7 +1046,6 @@ async def _cleanup_sessionless_runtime(
             assistant_id,
             vm_ref["binding_id"],
             vm_name=vm_ref["vm_name"],
-            deploy_env=deploy_env,
         )
         release_steps.append(
             {
@@ -1105,15 +1073,13 @@ async def _cleanup_sessionless_runtime(
 
 def _stop_jobs_sync(
     assistant_id: str,
-    *,
-    deploy_env: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous variant of ``stop_jobs`` used by blocking cleanup callers."""
 
     assistant_id = str(assistant_id)
     steps: dict[str, dict[str, Any]] = {}
     job_names: list[str] = []
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
 
     if not comms_url or not ADMIN_KEY:
         skipped = _cleanup_step_result(
@@ -1234,14 +1200,11 @@ def _stop_jobs_sync(
 
 def _cleanup_sessionless_runtime_sync(
     assistant_id: str,
-    *,
-    deploy_env: str | None = None,
 ) -> dict[str, Any]:
     """Blocking fallback when runtime exists without a current session."""
 
     runtime_status_step = _request_cleanup_step_sync(
         name="runtime_status",
-        deploy_env=deploy_env,
         method="GET",
         path=f"/infra/runtime/{assistant_id}",
         timeout=20,
@@ -1284,7 +1247,7 @@ def _cleanup_sessionless_runtime_sync(
             },
         )
 
-    stop_jobs_result = _stop_jobs_sync(assistant_id, deploy_env=deploy_env)
+    stop_jobs_result = _stop_jobs_sync(assistant_id)
     release_steps: list[dict[str, Any]] = []
     fallback_errors = list(stop_jobs_result.get("errors", []))
     for vm_ref in _runtime_vm_refs(runtime_status):
@@ -1292,7 +1255,6 @@ def _cleanup_sessionless_runtime_sync(
             assistant_id,
             vm_ref["binding_id"],
             vm_name=vm_ref["vm_name"],
-            deploy_env=deploy_env,
         )
         release_steps.append(
             {
@@ -1320,7 +1282,6 @@ def _cleanup_sessionless_runtime_sync(
 
 async def wait_for_runtime_cleanup(
     assistant_id: str,
-    deploy_env: str | None = None,
     *,
     timeout: float = RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS,
     poll_interval: float = RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS,
@@ -1332,7 +1293,6 @@ async def wait_for_runtime_cleanup(
     while True:
         status_step = await _request_cleanup_step(
             name="runtime_status",
-            deploy_env=deploy_env,
             method="GET",
             path=f"/infra/runtime/{assistant_id}",
             timeout=20,
@@ -1372,14 +1332,12 @@ async def wait_for_runtime_cleanup(
 
 async def teardown_assistant_runtime(
     assistant_id: str | int,
-    deploy_env: str | None = None,
     desktop_mode: str | None = None,
 ) -> dict:
     """Runtime teardown with explicit step-level incomplete states."""
     assistant_id = str(assistant_id)
     stop_session_step = await stop_assistant_session_runtime(
         assistant_id,
-        deploy_env=deploy_env,
     )
     fallback_step = _cleanup_step_result(
         "sessionless_runtime_fallback",
@@ -1429,13 +1387,11 @@ async def teardown_assistant_runtime(
         if _stop_requires_sessionless_fallback(stop_session_step):
             fallback_step = await _cleanup_sessionless_runtime(
                 assistant_id,
-                deploy_env=deploy_env,
             )
-        wait_step = await wait_for_runtime_cleanup(assistant_id, deploy_env=deploy_env)
+        wait_step = await wait_for_runtime_cleanup(assistant_id)
         if wait_step.get("success"):
             session_step = await delete_assistant_session(
                 assistant_id,
-                deploy_env=deploy_env,
             )
         else:
             session_step = _cleanup_step_result(
@@ -1446,12 +1402,11 @@ async def teardown_assistant_runtime(
             )
 
     if wait_step.get("success") and session_step.get("success"):
-        topic_step = await delete_pubsub_topic(assistant_id, deploy_env=deploy_env)
+        topic_step = await delete_pubsub_topic(assistant_id)
         if _requires_assistant_disk_cleanup(desktop_mode):
-            disk_step = await delete_assistant_disk(assistant_id, deploy_env=deploy_env)
+            disk_step = await delete_assistant_disk(assistant_id)
             archive_step = await delete_assistant_pool_archive(
                 assistant_id,
-                deploy_env=deploy_env,
             )
         else:
             disk_step = _cleanup_step_result(
@@ -1506,7 +1461,6 @@ async def teardown_assistant_runtime(
 
 def _wait_for_runtime_cleanup_sync(
     assistant_id: str,
-    deploy_env: str | None = None,
     *,
     timeout: float = RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS,
     poll_interval: float = RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS,
@@ -1518,7 +1472,6 @@ def _wait_for_runtime_cleanup_sync(
     while True:
         status_step = _request_cleanup_step_sync(
             name="runtime_status",
-            deploy_env=deploy_env,
             method="GET",
             path=f"/infra/runtime/{assistant_id}",
             timeout=20,
@@ -1558,12 +1511,11 @@ def _wait_for_runtime_cleanup_sync(
 
 def teardown_assistant_runtime_sync(
     assistant_id: str | int,
-    deploy_env: str | None = None,
     desktop_mode: str | None = None,
 ) -> dict:
     """Blocking version of runtime teardown with explicit step states."""
     assistant_id = str(assistant_id)
-    comms_url = _comms_url_for(deploy_env)
+    comms_url = _comms_url()
     if not comms_url or not ADMIN_KEY:
         return {
             "success": True,
@@ -1577,7 +1529,6 @@ def teardown_assistant_runtime_sync(
     steps: dict[str, dict[str, Any]] = {}
     steps["stop_assistant_session_runtime"] = _request_cleanup_step_sync(
         name="stop_assistant_session_runtime",
-        deploy_env=deploy_env,
         method="POST",
         path=f"/infra/session/{assistant_id}/stop",
         timeout=20,
@@ -1613,16 +1564,13 @@ def teardown_assistant_runtime_sync(
         ):
             steps["sessionless_runtime_fallback"] = _cleanup_sessionless_runtime_sync(
                 assistant_id,
-                deploy_env=deploy_env,
             )
         steps["wait_for_runtime_cleanup"] = _wait_for_runtime_cleanup_sync(
             assistant_id,
-            deploy_env=deploy_env,
         )
         if steps["wait_for_runtime_cleanup"].get("success"):
             steps["delete_assistant_session"] = _request_cleanup_step_sync(
                 name="delete_assistant_session",
-                deploy_env=deploy_env,
                 method="DELETE",
                 path=f"/infra/session/{assistant_id}",
                 timeout=20,
@@ -1640,21 +1588,18 @@ def teardown_assistant_runtime_sync(
     ].get("success"):
         steps["delete_pubsub_topic"] = _request_cleanup_step_sync(
             name="delete_pubsub_topic",
-            deploy_env=deploy_env,
             method="DELETE",
             path="/infra/pubsub/topic",
-            data={"topic_name": f"unity-{assistant_id}{_env_suffix(deploy_env)}"},
+            data={"topic_name": f"unity-{assistant_id}{env_suffix()}"},
         )
         if _requires_assistant_disk_cleanup(desktop_mode):
             steps["delete_assistant_disk"] = _request_cleanup_step_sync(
                 name="delete_assistant_disk",
-                deploy_env=deploy_env,
                 method="DELETE",
                 path=f"/infra/vm/pool/disk/{assistant_id}",
             )
             steps["delete_assistant_pool_archive"] = _request_cleanup_step_sync(
                 name="delete_assistant_pool_archive",
-                deploy_env=deploy_env,
                 method="DELETE",
                 path=f"/infra/vm/pool/archive/{assistant_id}",
             )
@@ -1700,14 +1645,14 @@ def teardown_assistant_runtime_sync(
     }
 
 
-async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
+async def wake_up_assistant(assistant_id: str):
     """Post the wakeup webhook and return the adapter-edge response.
 
     A ``200`` from adapters only means the wakeup request was accepted there.
     AssistantSession creation and runtime convergence continue asynchronously in
     communication after this call returns.
     """
-    wake_up_url = _adapters_url_for(deploy_env) + "/assistant/wakeup"
+    wake_up_url = _adapters_url() + "/assistant/wakeup"
     client = get_async_client()
     return await client.post(
         wake_up_url,
@@ -1719,7 +1664,6 @@ async def wake_up_assistant(assistant_id: str, deploy_env: str | None = None):
 
 async def reawaken_assistant(
     assistant_id: str,
-    deploy_env: str | None = None,
     *,
     data: dict | None = None,
 ):
@@ -1731,12 +1675,11 @@ async def reawaken_assistant(
 
     Args:
         assistant_id (str): The ID of the assistant to reawaken.
-        deploy_env: Reserved for future use; currently ignored.
         data: Optional form payload for specialized update requests.
     Returns:
         The JSON response from the webhook.
     """
-    reawaken_url = _adapters_url_for(deploy_env) + "/assistant/update"
+    reawaken_url = _adapters_url() + "/assistant/update"
     client = get_async_client()
     payload = data or {"assistant_id": assistant_id}
     response = await client.post(
@@ -1757,11 +1700,10 @@ async def delegate_to_colleague_runtime(
     intent: str = "general",
     dedupe_key: str | None = None,
     related_context: dict | None = None,
-    deploy_env: str | None = None,
 ) -> dict:
     """Ask Adapters to deliver a Coordinator delegation wake reason."""
 
-    url = f"{_adapters_url_for(deploy_env)}/assistant/coordinator-delegate"
+    url = f"{_adapters_url()}/assistant/coordinator-delegate"
     payload: dict[str, Any] = {
         "assistant_id": str(assistant_id),
         "requested_by_assistant_id": str(requested_by_assistant_id),
@@ -1790,18 +1732,16 @@ async def delegate_to_colleague_runtime(
 async def log_pre_hire_chat(
     assistant_id: str,
     messages: list,
-    deploy_env: str | None = None,
 ):
     """
     Logs pre-hire chat messages for an assistant using the webhook.
     Args:
         assistant_id (str): The ID of the assistant.
         messages (list): A list of chat message dictionaries.
-        deploy_env: Reserved for future use; currently ignored.
     Returns:
         The JSON response from the webhook.
     """
-    log_pre_hire_chat_url = _adapters_url_for(deploy_env) + "/unity/pre-hire"
+    log_pre_hire_chat_url = _adapters_url() + "/unity/pre-hire"
     payload = {"assistant_id": assistant_id, "body": messages}
     client = get_async_client()
     response = await client.post(
@@ -1819,7 +1759,6 @@ async def log_pre_hire_chat(
 
 async def _trigger_contact_sync(
     assistant_id: int,
-    deploy_env: str | None = None,
 ) -> dict:
     """Hit the Adapters ``sync_contacts`` system-event webhook.
 
@@ -1828,7 +1767,7 @@ async def _trigger_contact_sync(
     user-facing responses must always go through the safe wrappers so a
     transient Adapters failure does not surface as a 500.
     """
-    url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
+    url = f"{_adapters_url()}/unity/system-event"
     client = get_async_client()
     response = await client.post(
         url,
@@ -1853,7 +1792,6 @@ async def _post_unity_system_event(
     event_type: str,
     message: str,
     extra_event_fields: dict | None = None,
-    deploy_env: str | None = None,
 ) -> None:
     """Post a generic ``unity_system_event`` to the Adapters webhook.
 
@@ -1870,7 +1808,7 @@ async def _post_unity_system_event(
     try/except (or use a ``_safe`` wrapper) so a transient Adapters
     outage cannot break the surrounding request.
     """
-    url = f"{_adapters_url_for(deploy_env)}/unity/system-event"
+    url = f"{_adapters_url()}/unity/system-event"
     client = get_async_client()
     payload: dict[str, Any] = {
         "assistant_id": assistant_id,
@@ -1893,7 +1831,6 @@ async def _post_unity_system_event(
 
 async def trigger_contact_sync_safe(
     assistant_id: int,
-    deploy_env: str | None = None,
 ) -> None:
     """Kick a single-assistant Contacts re-derivation, swallowing failures.
 
@@ -1904,7 +1841,7 @@ async def trigger_contact_sync_safe(
     at worst.
     """
     try:
-        await _trigger_contact_sync(assistant_id, deploy_env=deploy_env)
+        await _trigger_contact_sync(assistant_id)
         logging.info("Triggered contact sync for assistant %s", assistant_id)
     except Exception as exc:
         logging.warning(
@@ -1937,7 +1874,7 @@ async def fan_out_contact_sync_for_org(
         return
     await asyncio.gather(
         *(
-            trigger_contact_sync_safe(a.agent_id, deploy_env=a.deploy_env)
+            trigger_contact_sync_safe(a.agent_id)
             for a in org_assistants
         ),
     )

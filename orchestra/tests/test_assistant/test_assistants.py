@@ -94,7 +94,6 @@ async def test_create_assistant_success(client: AsyncClient):
     assert data["nationality"] == payload["nationality"]
     assert data["profile_photo"] == payload["profile_photo"]
     assert data["about"] == payload["about"]
-    assert data["deploy_env"] is None
     assert data["phone"] is None
     assert data["email"] is None
     assert isinstance(data.get("created_at"), str)
@@ -116,7 +115,6 @@ async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_
     assert resp.status_code == 200
     data = resp.json()["info"]
     assert data["is_local"] is True
-    assert data["deploy_env"] is None
     assert data["first_name"] == "LocalDev"
     mock_wake_up.assert_not_called()
 
@@ -135,18 +133,6 @@ async def test_create_assistant_ignores_unknown_fields(client: AsyncClient):
     assert data["first_name"] == "Desktop"
     assert data["surname"] == "Flow"
     assert data["is_local"] is False
-
-
-@pytest.mark.anyio
-async def test_create_assistant_rejects_deploy_env(client: AsyncClient):
-    payload = {
-        "first_name": "Rejected",
-        "surname": "Assistant",
-        "deploy_env": "preview",
-        "create_infra": False,
-    }
-    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == 422
 
 
 @pytest.mark.anyio
@@ -435,7 +421,7 @@ async def test_update_about_only(client: AsyncClient, mock_assistant_infra_calls
     assert updated["nationality"] == payload["nationality"]
     assert updated["phone"] is None
     assert updated["email"] is None
-    mock_reawaken.assert_called_once_with(str(aid), deploy_env=None)
+    mock_reawaken.assert_called_once_with(str(aid))
 
 
 @pytest.mark.anyio
@@ -1312,7 +1298,6 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     call_args, call_kwargs = mock_log_pre_hire_chat.call_args
     assert call_kwargs["assistant_id"] == str(assistant_id)
     assert call_kwargs["messages"] == pre_hire_chat_payload["pre_hire_chat"]
-    assert "deploy_env" in call_kwargs
 
 
 @pytest.mark.anyio
@@ -1517,7 +1502,7 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         assert (
             phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
         )  # Unchanged
-        mock_delete_phone.assert_called_once_with("+15558675309", deploy_env=None)
+        mock_delete_phone.assert_called_once_with("+15558675309")
 
         # 6. Delete WhatsApp contact
         delete_whatsapp_payload = {"contact_type": "whatsapp"}
@@ -1668,7 +1653,7 @@ async def test_delete_assistant_contact_reawakens(
     mock_reawaken.assert_called_once()
     assert mock_reawaken.call_args[0][0] == str(assistant_id)
     # Also assert the mock for deleting the phone number was called
-    mock_delete_phone.assert_called_once_with("+15552223333", deploy_env=None)
+    mock_delete_phone.assert_called_once_with("+15552223333")
 
 
 # ==== Voice Configuration Validation Tests ====
