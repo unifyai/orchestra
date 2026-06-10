@@ -670,7 +670,12 @@ start_orchestra_server() {
   cd "$repo_path"
 
   # Set environment variables
-  export ORCHESTRA_HOST=127.0.0.1
+  # Self-host desktop containers reach Orchestra via host.docker.internal.
+  if [[ "${SELF_HOST:-0}" == "1" ]]; then
+    export ORCHESTRA_HOST=0.0.0.0
+  else
+    export ORCHESTRA_HOST=127.0.0.1
+  fi
   export ORCHESTRA_PORT="$ORCHESTRA_PORT"
   export ORCHESTRA_DB_HOST=localhost
   export ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT"
