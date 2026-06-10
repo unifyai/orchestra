@@ -5,7 +5,7 @@ env-pinned and resolves its environment from process configuration
 (see ``orchestra.lib.deploy_env``).
 
 Revision ID: drop_deploy_env_columns
-Revises: universal_coordinator_phone
+Revises: 2026_assistant_user_desktops
 Create Date: 2026-06-14 00:00:00.000000
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "drop_deploy_env_columns"
-down_revision = "universal_coordinator_phone"
+down_revision = "2026_assistant_user_desktops"
 branch_labels = None
 depends_on = None
 
