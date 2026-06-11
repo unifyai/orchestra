@@ -321,11 +321,28 @@ remove_db_container() {
   return 0
 }
 
+_db_container_host_port() {
+  local container="${1:-$ORCHESTRA_DB_CONTAINER}"
+  docker port "$container" 5432/tcp 2>/dev/null | head -1 | sed 's/.*://'
+}
+
 start_db_container() {
   log_info "Starting PostgreSQL container with pgvector..."
 
   if is_db_container_running; then
-    log_success "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' already running"
+    local mapped_port
+    mapped_port="$(_db_container_host_port "$ORCHESTRA_DB_CONTAINER")"
+    if [[ -n "$mapped_port" && "$mapped_port" == "$ORCHESTRA_DB_PORT" ]]; then
+      log_success "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' already running on port $ORCHESTRA_DB_PORT"
+      return 0
+    fi
+    log_error "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' is running on port ${mapped_port:-unknown}, but ORCHESTRA_DB_PORT=$ORCHESTRA_DB_PORT"
+    log_info "Re-run with ORCHESTRA_DB_PORT=${mapped_port:-5432}, or stop the container and re-run setup"
+    return 1
+  fi
+
+  if is_compatible_db_running; then
+    log_success "Using compatible PostgreSQL on port $ORCHESTRA_DB_PORT"
     return 0
   fi
 
