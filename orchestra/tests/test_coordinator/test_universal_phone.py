@@ -49,11 +49,8 @@ def _active_phone_contact(
 
 @pytest.fixture(autouse=True)
 def universal_phone_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        settings,
-        "unity_coordinator_phone_numbers",
-        '{"US":"+14155552671","GB":"+447911123456"}',
-    )
+    monkeypatch.setattr(settings, "unity_coordinator_phone_us", "+14155552671")
+    monkeypatch.setattr(settings, "unity_coordinator_phone_uk", "+447911123456")
     monkeypatch.setattr(settings, "unity_coordinator_default_phone_country", "US")
 
 

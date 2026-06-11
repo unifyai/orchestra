@@ -369,14 +369,29 @@ class Settings(BaseSettings):
         or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
         or "marty@unify.ai"
     )
-    unity_coordinator_phone_numbers: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_PHONE_NUMBERS",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_NUMBERS")
+    # Discrete per-country Coordinator phone numbers. The UK number is keyed
+    # under ISO country code "GB". The correct prod/staging value is mounted
+    # from Secret Manager per service.
+    unity_coordinator_phone_uk: Optional[str] = os.environ.get(
+        "UNITY_COORDINATOR_PHONE_UK",
+    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_UK")
+    unity_coordinator_phone_us: Optional[str] = os.environ.get(
+        "UNITY_COORDINATOR_PHONE_US",
+    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_US")
     unity_coordinator_default_phone_country: str = (
         os.environ.get("UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or "US"
     )
+    # Universal Coordinator Discord bot. The bot ID is a Discord snowflake;
+    # the token authenticates the Gateway connection. Unity pulls both from
+    # Orchestra's shared pool, so the secrets only live in this project.
+    unity_coordinator_discord_id: Optional[str] = os.environ.get(
+        "UNITY_COORDINATOR_DISCORD_ID",
+    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DISCORD_ID")
+    unity_coordinator_discord_token: Optional[str] = os.environ.get(
+        "UNITY_COORDINATOR_DISCORD_TOKEN",
+    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DISCORD_TOKEN")
 
     # Assistant photo generation
     photo_generation_cost: float = (

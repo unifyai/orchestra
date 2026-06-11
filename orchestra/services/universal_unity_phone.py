@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import re
-from typing import Any
 
 import phonenumbers
 from phonenumbers import PhoneNumberFormat
@@ -41,24 +39,18 @@ def _normalize_phone_number(number: str) -> str:
 
 
 def get_universal_unity_phone_numbers() -> dict[str, str]:
-    raw = settings.unity_coordinator_phone_numbers
-    if not raw:
-        return {}
-
-    parsed: Any = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("UNITY_COORDINATOR_PHONE_NUMBERS must be a JSON object.")
-
+    # Discrete per-country Coordinator phone numbers, mounted per environment
+    # from Secret Manager. The UK number is keyed under its ISO country code
+    # ("GB") so it lines up with the country resolved from the visitor's IP by
+    # the console.
+    candidates = {
+        "GB": settings.unity_coordinator_phone_uk,
+        "US": settings.unity_coordinator_phone_us,
+    }
     numbers: dict[str, str] = {}
-    for country, number in parsed.items():
-        country_code = _normalize_country(str(country))
-        if country_code is None:
-            raise ValueError(f"Invalid Coordinator phone country: {country}")
-        if not isinstance(number, str):
-            raise ValueError(
-                f"Coordinator phone number for {country_code} must be a string."
-            )
-        numbers[country_code] = _normalize_phone_number(number)
+    for country_code, number in candidates.items():
+        if number and number.strip():
+            numbers[country_code] = _normalize_phone_number(number)
     return numbers
 
 

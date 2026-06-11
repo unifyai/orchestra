@@ -41,6 +41,9 @@ from orchestra.services.universal_unity_email import (
 from orchestra.services.universal_unity_whatsapp import (
     ensure_coordinator_universal_whatsapp_contact,
 )
+from orchestra.services.universal_unity_discord import (
+    ensure_coordinator_universal_discord_contact,
+)
 from orchestra.services.universal_unity_phone import (
     ensure_coordinator_universal_phone_contact,
 )
@@ -294,6 +297,7 @@ def _repair_existing_coordinator_state(
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
     ensure_coordinator_universal_email_contact(session, coordinator=coordinator)
     ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
+    ensure_coordinator_universal_discord_contact(session, coordinator=coordinator)
     ensure_coordinator_universal_phone_contact(
         session,
         coordinator=coordinator,
@@ -351,6 +355,7 @@ def create_workspace_coordinator(
     _ensure_coordinator_owner_contact_row(session, coordinator=assistant)
     ensure_coordinator_universal_email_contact(session, coordinator=assistant)
     ensure_coordinator_universal_whatsapp_contact(session, coordinator=assistant)
+    ensure_coordinator_universal_discord_contact(session, coordinator=assistant)
     ensure_coordinator_universal_phone_contact(
         session,
         coordinator=assistant,

@@ -1241,6 +1241,23 @@ async def create_personal_coordinator_endpoint(
                 detail="Cannot create a Coordinator outside your workspaces.",
             )
 
+    from orchestra.db.models.orchestra_models import SharedPoolNumber
+    from orchestra.services.universal_unity_discord import (
+        get_universal_unity_discord_bot_id,
+        notify_comms_discord_sync,
+    )
+
+    universal_discord_bot_id = get_universal_unity_discord_bot_id()
+    discord_pool_existed_before = bool(universal_discord_bot_id) and (
+        session.query(SharedPoolNumber)
+        .filter(
+            SharedPoolNumber.platform == "discord",
+            SharedPoolNumber.number == universal_discord_bot_id,
+        )
+        .first()
+        is not None
+    )
+
     existing = get_workspace_coordinator(
         session,
         user_id=user_id,
@@ -1311,6 +1328,15 @@ async def create_personal_coordinator_endpoint(
         if created_coordinator and coordinator_id is not None:
             await delete_pubsub_topic(str(coordinator_id))
         raise
+
+    # Ask Unity to (re)connect the shared Coordinator Discord bot when this
+    # request either created a new Coordinator or seeded the universal pool
+    # row for the first time. Unity reads committed pool state over the admin
+    # API, so this must run after the commits above. Best-effort.
+    if universal_discord_bot_id and (
+        created_coordinator or not discord_pool_existed_before
+    ):
+        await notify_comms_discord_sync()
 
     return {"coordinator_id": str(coordinator.agent_id)}
 

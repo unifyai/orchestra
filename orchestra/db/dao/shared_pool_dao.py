@@ -35,6 +35,9 @@ from orchestra.services.universal_unity_whatsapp import (
 from orchestra.services.universal_unity_phone import (
     is_universal_unity_phone_number,
 )
+from orchestra.services.universal_unity_discord import (
+    is_universal_unity_discord_bot,
+)
 from orchestra.services.shared_coordinator_routing import (
     find_user_by_shared_identity,
     resolve_shared_coordinator_owner,
@@ -975,6 +978,8 @@ class SharedPoolDAO:
             return is_universal_unity_whatsapp_number(pool_number)
         if self.platform == "phone":
             return is_universal_unity_phone_number(pool_number)
+        if self.platform == "discord":
+            return is_universal_unity_discord_bot(pool_number)
         return False
 
     def _is_universal_unity_contact(self, contact: AssistantContact) -> bool:
