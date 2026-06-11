@@ -19,6 +19,7 @@ from sqlalchemy.orm import Query, Session
 from orchestra.db.models.integration_provider_models import (
     DynamicProviderApp,
     IntegrationBackend,
+    IntegrationBootstrapState,
     IntegrationConnection,
     IntegrationOverlay,
     ProviderActionAudit,
@@ -107,6 +108,42 @@ class IntegrationProviderDAO:
             .filter_by(backend_id=backend_id)
             .one_or_none()
         )
+
+    def get_bootstrap_state(
+        self,
+        *,
+        environment: str,
+        backend_id: str,
+    ) -> IntegrationBootstrapState | None:
+        return (
+            self.session.query(IntegrationBootstrapState)
+            .filter_by(environment=environment, backend_id=backend_id)
+            .one_or_none()
+        )
+
+    def upsert_bootstrap_state(
+        self,
+        *,
+        environment: str,
+        backend_id: str,
+        values: dict[str, Any],
+    ) -> IntegrationBootstrapState:
+        state = self.get_bootstrap_state(
+            environment=environment,
+            backend_id=backend_id,
+        )
+        if state:
+            for key, value in values.items():
+                setattr(state, key, value)
+        else:
+            state = IntegrationBootstrapState(
+                environment=environment,
+                backend_id=backend_id,
+                **values,
+            )
+            self.session.add(state)
+        self.session.flush()
+        return state
 
     def active_backend_ids(self) -> set[str]:
         return {

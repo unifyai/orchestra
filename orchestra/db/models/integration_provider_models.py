@@ -55,6 +55,41 @@ class IntegrationBackend(Base):
     )
 
 
+class IntegrationBootstrapState(Base):
+    """Last applied cloud bootstrap manifest state for a provider backend."""
+
+    __tablename__ = "integration_bootstrap_state"
+
+    id = Column(Integer, primary_key=True)
+    environment = Column(String, nullable=False, index=True)
+    backend_id = Column(String, nullable=False, index=True)
+    desired_hash = Column(String, nullable=False)
+    desired_config_json = Column(
+        JSONB,
+        nullable=False,
+        server_default=JSON_EMPTY_OBJECT,
+    )
+    last_status = Column(String, nullable=False, server_default="pending", index=True)
+    last_error = Column(Text, nullable=True)
+    apps_upserted = Column(Integer, nullable=False, server_default="0")
+    tools_upserted = Column(Integer, nullable=False, server_default="0")
+    last_synced_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "environment",
+            "backend_id",
+            name="uq_integration_bootstrap_state_env_backend",
+        ),
+    )
+
+
 class DynamicProviderApp(Base):
     """Cached app metadata fetched from provider catalogs plus Unify overlays."""
 
