@@ -73,6 +73,11 @@ class IntegrationBootstrapState(Base):
     last_error = Column(Text, nullable=True)
     apps_upserted = Column(Integer, nullable=False, server_default="0")
     tools_upserted = Column(Integer, nullable=False, server_default="0")
+    last_sync_diagnostics_json = Column(
+        JSONB,
+        nullable=False,
+        server_default=JSON_EMPTY_OBJECT,
+    )
     last_synced_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(

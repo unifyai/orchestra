@@ -408,8 +408,16 @@ def sync_integrations(
         return handler(session, body)
     summary = _sync_catalog_rows(session, body)
     return IntegrationCatalogSyncResponse(
+        status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
+        requested_app_slugs=body.app_slugs,
+        matched_app_slugs=[
+            str(app.get("canonical_app_slug") or app.get("provider_app_id") or "")
+            for app in body.apps
+            if app.get("canonical_app_slug") or app.get("provider_app_id")
+        ],
+        sync_mode=body.sync_mode,
         cache_version=body.cache_version,
     )
 
@@ -608,6 +616,20 @@ def _composio_live_catalog_handler(
         for slug in requested_slugs
         if slug not in toolkits_by_slug
     ]
+    if requested_slugs and not selected_toolkit_slugs:
+        error_message = "No requested Composio apps matched the live provider catalog."
+        return IntegrationCatalogSyncResponse(
+            status="failed",
+            apps_upserted=0,
+            tools_upserted=0,
+            skipped_apps=skipped_apps,
+            requested_app_slugs=requested_slugs,
+            matched_app_slugs=[],
+            sync_mode=body.sync_mode or "partial",
+            error=error_message,
+            warning=error_message,
+            cache_version=body.cache_version,
+        )
     apps: list[dict[str, Any]] = []
     tools: list[dict[str, Any]] = []
     auth_configs_created = 0
@@ -706,9 +728,16 @@ def _composio_live_catalog_handler(
         sync_body,
     )
     return IntegrationCatalogSyncResponse(
+        status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
         skipped_apps=skipped_apps,
+        requested_app_slugs=requested_slugs,
+        matched_app_slugs=[
+            _composio_canonical_app_slug(slug) for slug in selected_toolkit_slugs
+        ],
+        sync_mode=body.sync_mode
+        or ("full" if body.include_all_managed_apps else "partial"),
         auth_configs_created=auth_configs_created,
         auth_configs_reused=auth_configs_reused,
         cache_version=sync_body.cache_version,
@@ -748,6 +777,20 @@ def _pipedream_live_catalog_handler(
         for slug in sorted(requested_slugs)
         if slug not in seen_slugs
     ]
+    if requested_slugs and not selected_apps:
+        error_message = "No requested Pipedream apps matched the live provider catalog."
+        return IntegrationCatalogSyncResponse(
+            status="failed",
+            apps_upserted=0,
+            tools_upserted=0,
+            skipped_apps=skipped_apps,
+            requested_app_slugs=sorted(requested_slugs),
+            matched_app_slugs=[],
+            sync_mode=body.sync_mode or "partial",
+            error=error_message,
+            warning=error_message,
+            cache_version=body.cache_version,
+        )
     apps: list[dict[str, Any]] = []
     tools: list[dict[str, Any]] = []
     component_limit = (
@@ -846,9 +889,13 @@ def _pipedream_live_catalog_handler(
         sync_body,
     )
     return IntegrationCatalogSyncResponse(
+        status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
         skipped_apps=skipped_apps,
+        requested_app_slugs=sorted(requested_slugs),
+        matched_app_slugs=[_pipedream_app_slug(app) for app in selected_apps],
+        sync_mode=body.sync_mode or ("full" if body.include_all_apps else "partial"),
         cache_version=sync_body.cache_version,
     )
 

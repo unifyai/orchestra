@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from orchestra.db.models.integration_provider_models import (
@@ -120,6 +120,19 @@ class IntegrationProviderDAO:
             .filter_by(environment=environment, backend_id=backend_id)
             .one_or_none()
         )
+
+    def list_bootstrap_states(
+        self,
+        *,
+        environment: str | None = None,
+    ) -> list[IntegrationBootstrapState]:
+        query = self.session.query(IntegrationBootstrapState)
+        if environment:
+            query = query.filter_by(environment=environment)
+        return query.order_by(
+            IntegrationBootstrapState.environment.asc(),
+            IntegrationBootstrapState.backend_id.asc(),
+        ).all()
 
     def upsert_bootstrap_state(
         self,
@@ -280,6 +293,28 @@ class IntegrationProviderDAO:
 
     def list_all_apps(self) -> list[DynamicProviderApp]:
         return self.session.query(DynamicProviderApp).all()
+
+    def catalog_counts_by_backend(self) -> dict[str, dict[str, int]]:
+        counts: dict[str, dict[str, int]] = {}
+        for backend_id, count in (
+            self.session.query(
+                DynamicProviderApp.backend_id,
+                func.count(DynamicProviderApp.id),
+            )
+            .group_by(DynamicProviderApp.backend_id)
+            .all()
+        ):
+            counts.setdefault(backend_id, {})["apps"] = int(count)
+        for backend_id, count in (
+            self.session.query(
+                ProviderToolCatalog.backend_id,
+                func.count(ProviderToolCatalog.id),
+            )
+            .group_by(ProviderToolCatalog.backend_id)
+            .all()
+        ):
+            counts.setdefault(backend_id, {})["tools"] = int(count)
+        return counts
 
     def tool_count_for_app(self, canonical_app_slug: str) -> int:
         return (

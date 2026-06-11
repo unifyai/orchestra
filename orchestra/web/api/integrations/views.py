@@ -45,6 +45,7 @@ from orchestra.web.api.integrations.schema import (
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
     IntegrationBackendResponse,
+    IntegrationBackendStatusResponse,
     IntegrationBootstrapStateRequest,
     IntegrationBootstrapStateResponse,
     IntegrationCatalogSyncRequest,
@@ -92,19 +93,71 @@ def _owner_from_query(
 
 
 def _bootstrap_state_response(state) -> IntegrationBootstrapStateResponse:
+    desired_config = state.desired_config_json or {}
+    sync_config = desired_config.get("sync") if isinstance(desired_config, dict) else {}
+    if not isinstance(sync_config, dict):
+        sync_config = {}
+    diagnostics = state.last_sync_diagnostics_json or {}
+    sync_mode = diagnostics.get("sync_mode") or sync_config.get("mode")
+    requested_app_slugs = (
+        diagnostics.get("requested_app_slugs") or sync_config.get("app_slugs") or []
+    )
     return IntegrationBootstrapStateResponse(
         id=state.id,
         environment=state.environment,
         backend_id=state.backend_id,
         desired_hash=state.desired_hash,
-        desired_config=state.desired_config_json or {},
+        desired_config=desired_config,
         last_status=state.last_status,
         last_error=state.last_error,
         apps_upserted=state.apps_upserted,
         tools_upserted=state.tools_upserted,
+        sync_mode=str(sync_mode) if sync_mode else None,
+        requested_app_slugs=[str(slug) for slug in requested_app_slugs],
+        matched_app_slugs=[
+            str(slug) for slug in diagnostics.get("matched_app_slugs", [])
+        ],
+        skipped_apps=diagnostics.get("skipped_apps", []),
+        auth_configs_created=int(diagnostics.get("auth_configs_created", 0) or 0),
+        auth_configs_reused=int(diagnostics.get("auth_configs_reused", 0) or 0),
+        cache_version=diagnostics.get("cache_version"),
+        last_sync_warning=diagnostics.get("warning")
+        or diagnostics.get("last_sync_warning"),
+        last_sync_diagnostics=diagnostics,
         last_synced_at=state.last_synced_at,
         created_at=state.created_at,
         updated_at=state.updated_at,
+    )
+
+
+def _backend_status_response(
+    *,
+    backend,
+    state,
+    catalog_counts: dict[str, dict[str, int]],
+) -> IntegrationBackendStatusResponse:
+    bootstrap_state = _bootstrap_state_response(state) if state else None
+    counts = catalog_counts.get(backend.backend_id, {})
+    return IntegrationBackendStatusResponse(
+        backend=IntegrationBackendResponse.model_validate(backend),
+        bootstrap_state=bootstrap_state,
+        catalog_app_count=int(counts.get("apps", 0)),
+        catalog_tool_count=int(counts.get("tools", 0)),
+        desired_hash=bootstrap_state.desired_hash if bootstrap_state else None,
+        sync_mode=bootstrap_state.sync_mode if bootstrap_state else None,
+        requested_app_slugs=(
+            bootstrap_state.requested_app_slugs if bootstrap_state else []
+        ),
+        matched_app_slugs=bootstrap_state.matched_app_slugs if bootstrap_state else [],
+        skipped_apps=bootstrap_state.skipped_apps if bootstrap_state else [],
+        last_status=bootstrap_state.last_status if bootstrap_state else None,
+        last_error=bootstrap_state.last_error if bootstrap_state else None,
+        last_sync_warning=(
+            bootstrap_state.last_sync_warning if bootstrap_state else None
+        ),
+        apps_upserted=bootstrap_state.apps_upserted if bootstrap_state else 0,
+        tools_upserted=bootstrap_state.tools_upserted if bootstrap_state else 0,
+        last_synced_at=bootstrap_state.last_synced_at if bootstrap_state else None,
     )
 
 
@@ -118,6 +171,37 @@ def get_integration_backends(
         IntegrationBackendResponse.model_validate(backend)
         for backend in dao.list_backends()
     ]
+
+
+@admin_router.get("/backends/status")
+def get_integration_backend_status(
+    environment: str | None = None,
+    session: Session = Depends(get_db_session),
+) -> list[IntegrationBackendStatusResponse]:
+    seed_default_provider_catalog(session)
+    dao = IntegrationProviderDAO(session)
+    states_by_backend: dict[object, object] = {}
+    for state in dao.list_bootstrap_states(environment=environment):
+        states_by_backend.setdefault(state.backend_id, state)
+        if environment is None:
+            states_by_backend[(state.backend_id, state.environment)] = state
+    catalog_counts = dao.catalog_counts_by_backend()
+    responses: list[IntegrationBackendStatusResponse] = []
+    for backend in dao.list_backends():
+        state = states_by_backend.get(backend.backend_id)
+        if environment is None:
+            state = (
+                states_by_backend.get((backend.backend_id, backend.environment))
+                or state
+            )
+        responses.append(
+            _backend_status_response(
+                backend=backend,
+                state=state,
+                catalog_counts=catalog_counts,
+            ),
+        )
+    return responses
 
 
 @admin_router.post("/backends")
@@ -181,9 +265,11 @@ def put_integration_bootstrap_state(
     environment = payload.pop("environment")
     backend_id = payload.pop("backend_id")
     desired_config = payload.pop("desired_config")
+    diagnostics = payload.pop("last_sync_diagnostics", {}) or {}
     values = {
         **payload,
         "desired_config_json": desired_config,
+        "last_sync_diagnostics_json": diagnostics,
     }
     if body.last_status == "success":
         values["last_synced_at"] = datetime.now(timezone.utc)

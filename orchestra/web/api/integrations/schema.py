@@ -83,6 +83,7 @@ class IntegrationBootstrapStateRequest(BaseModel):
     last_error: Optional[str] = None
     apps_upserted: int = 0
     tools_upserted: int = 0
+    last_sync_diagnostics: dict[str, Any] = Field(default_factory=dict)
 
 
 class IntegrationBootstrapStateResponse(BaseModel):
@@ -95,9 +96,38 @@ class IntegrationBootstrapStateResponse(BaseModel):
     last_error: Optional[str] = None
     apps_upserted: int = 0
     tools_upserted: int = 0
+    sync_mode: Optional[str] = None
+    requested_app_slugs: list[str] = Field(default_factory=list)
+    matched_app_slugs: list[str] = Field(default_factory=list)
+    skipped_apps: list[dict[str, str]] = Field(default_factory=list)
+    auth_configs_created: int = 0
+    auth_configs_reused: int = 0
+    cache_version: Optional[str] = None
+    last_sync_warning: Optional[str] = None
+    last_sync_diagnostics: dict[str, Any] = Field(default_factory=dict)
     last_synced_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class IntegrationBackendStatusResponse(BaseModel):
+    """Admin status view combining backend config and bootstrap/catalog state."""
+
+    backend: IntegrationBackendResponse
+    bootstrap_state: Optional[IntegrationBootstrapStateResponse] = None
+    catalog_app_count: int = 0
+    catalog_tool_count: int = 0
+    desired_hash: Optional[str] = None
+    sync_mode: Optional[str] = None
+    requested_app_slugs: list[str] = Field(default_factory=list)
+    matched_app_slugs: list[str] = Field(default_factory=list)
+    skipped_apps: list[dict[str, str]] = Field(default_factory=list)
+    last_status: Optional[str] = None
+    last_error: Optional[str] = None
+    last_sync_warning: Optional[str] = None
+    apps_upserted: int = 0
+    tools_upserted: int = 0
+    last_synced_at: Optional[datetime] = None
 
 
 class DynamicIntegrationAppResponse(BaseModel):
@@ -262,6 +292,7 @@ class IntegrationCatalogSyncRequest(BaseModel):
     apps: list[dict[str, Any]] = Field(default_factory=list)
     tools: list[dict[str, Any]] = Field(default_factory=list)
     app_slugs: list[str] = Field(default_factory=list)
+    sync_mode: Optional[str] = None
     tool_limit_per_app: int = Field(0, ge=0, le=1000)
     component_limit_per_app: int = Field(0, ge=0, le=1000)
     include_all_managed_apps: bool = False
@@ -270,9 +301,15 @@ class IntegrationCatalogSyncRequest(BaseModel):
 
 
 class IntegrationCatalogSyncResponse(BaseModel):
+    status: BootstrapStatus = "success"
     apps_upserted: int
     tools_upserted: int
     skipped_apps: list[dict[str, str]] = Field(default_factory=list)
+    requested_app_slugs: list[str] = Field(default_factory=list)
+    matched_app_slugs: list[str] = Field(default_factory=list)
+    sync_mode: Optional[str] = None
+    error: Optional[str] = None
+    warning: Optional[str] = None
     auth_configs_created: int = 0
     auth_configs_reused: int = 0
     cache_version: str = "provider-sync-v1"

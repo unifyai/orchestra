@@ -28,6 +28,10 @@ SYNC_PASSTHROUGH_FIELDS = {
 }
 
 
+class SyncFailed(RuntimeError):
+    """Raised after a structured failed sync result has already been persisted."""
+
+
 @dataclass(frozen=True)
 class ProviderPlan:
     backend_id: str
@@ -99,6 +103,7 @@ def _sync_payload(
     payload: dict[str, Any] = {
         "backend_id": backend_id,
         "app_slugs": [] if mode == "full" else list(sync.get("app_slugs") or []),
+        "sync_mode": mode,
     }
     for field in SYNC_PASSTHROUGH_FIELDS:
         if field in sync:
@@ -124,11 +129,17 @@ def _provider_plan(
         config=config,
     )
     sync_payload = _sync_payload(backend_id=backend_id, config=config)
+    desired_sync_config = None
+    if sync_payload:
+        desired_sync_config = {
+            **sync_payload,
+            "mode": sync_payload.get("sync_mode", "partial"),
+        }
     desired_config = {
         "schema_version": manifest.get("schema_version", 1),
         "environment": environment,
         "backend": backend_payload,
-        "sync": sync_payload,
+        "sync": desired_sync_config,
     }
     desired_hash = hashlib.sha256(_json_dumps(desired_config).encode()).hexdigest()
     if sync_payload:
@@ -232,6 +243,9 @@ class AdminClient:
         result: dict[str, Any] | None = None,
         error_message: str | None = None,
     ) -> None:
+        diagnostics = _sync_diagnostics(plan=plan, result=result)
+        if error_message:
+            diagnostics["error"] = error_message[:1000]
         payload = {
             "environment": environment,
             "backend_id": plan.backend_id,
@@ -241,8 +255,62 @@ class AdminClient:
             "last_error": error_message[:1000] if error_message else None,
             "apps_upserted": int((result or {}).get("apps_upserted", 0)),
             "tools_upserted": int((result or {}).get("tools_upserted", 0)),
+            "last_sync_diagnostics": diagnostics,
         }
         self.request("PUT", "/admin/integrations/bootstrap-state", payload)
+
+
+def _sync_diagnostics(
+    *,
+    plan: ProviderPlan,
+    result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    sync_config = plan.desired_config.get("sync") or {}
+    diagnostics: dict[str, Any] = {
+        "sync_mode": sync_config.get("mode") or sync_config.get("sync_mode"),
+        "requested_app_slugs": list(sync_config.get("app_slugs") or []),
+    }
+    if result:
+        for field in (
+            "status",
+            "skipped_apps",
+            "requested_app_slugs",
+            "matched_app_slugs",
+            "sync_mode",
+            "error",
+            "warning",
+            "auth_configs_created",
+            "auth_configs_reused",
+            "cache_version",
+        ):
+            if field in result:
+                diagnostics[field] = result[field]
+    return diagnostics
+
+
+def _print_sync_result(backend_id: str, result: dict[str, Any]) -> None:
+    skipped_apps = result.get("skipped_apps") or []
+    print(
+        f"{backend_id}: sync result "
+        f"status={result.get('status', 'success')} "
+        f"apps={result.get('apps_upserted', 0)} "
+        f"tools={result.get('tools_upserted', 0)} "
+        f"matched={len(result.get('matched_app_slugs') or [])} "
+        f"skipped={len(skipped_apps)} "
+        f"cache_version={result.get('cache_version')}",
+    )
+    if skipped_apps:
+        preview = ", ".join(
+            f"{item.get('slug')}:{item.get('reason')}"
+            for item in skipped_apps[:5]
+            if isinstance(item, dict)
+        )
+        print(f"{backend_id}: skipped_apps={preview}")
+    if result.get("error") or result.get("warning"):
+        print(
+            f"{backend_id}: sync diagnostic "
+            f"error={result.get('error')} warning={result.get('warning')}",
+        )
 
 
 def apply_plan(
@@ -255,6 +323,7 @@ def apply_plan(
 ) -> str:
     print("=" * 80)
     print(f"{plan.backend_id}: bootstrap start")
+    print(f"{plan.backend_id}: environment={environment}")
     print(f"{plan.backend_id}: desired_hash={plan.desired_hash[:12]}")
     print(
         f"{plan.backend_id}: backend status={plan.backend_payload.get('status')} "
@@ -288,7 +357,9 @@ def apply_plan(
         print(
             f"{plan.backend_id}: previous state "
             f"status={state.get('last_status')} "
-            f"hash={str(state.get('desired_hash') or '')[:12]}",
+            f"hash={str(state.get('desired_hash') or '')[:12]} "
+            f"apps={state.get('apps_upserted', 0)} "
+            f"tools={state.get('tools_upserted', 0)}",
         )
     else:
         print(f"{plan.backend_id}: no previous bootstrap state")
@@ -296,10 +367,39 @@ def apply_plan(
     if (
         state
         and state.get("desired_hash") == plan.desired_hash
-        and state.get("last_status") == BOOTSTRAP_STATUS_SUCCESS
+        and state.get("last_status") in {BOOTSTRAP_STATUS_SUCCESS, "skipped"}
         and not force
     ):
         print(f"{plan.backend_id}: sync skipped, manifest hash already applied")
+        if not dry_run:
+            client.put_bootstrap_state(
+                environment=environment,
+                plan=plan,
+                status="skipped",
+                result={
+                    "status": "skipped",
+                    "apps_upserted": state.get("apps_upserted", 0),
+                    "tools_upserted": state.get("tools_upserted", 0),
+                    "skipped_apps": (
+                        (state.get("last_sync_diagnostics") or {}).get(
+                            "skipped_apps",
+                            [],
+                        )
+                    ),
+                    "matched_app_slugs": (
+                        (state.get("last_sync_diagnostics") or {}).get(
+                            "matched_app_slugs",
+                            [],
+                        )
+                    ),
+                    "cache_version": (
+                        (state.get("last_sync_diagnostics") or {}).get(
+                            "cache_version",
+                        )
+                    ),
+                    "warning": "Manifest hash already applied; catalog sync skipped.",
+                },
+            )
         return "skipped"
 
     if dry_run:
@@ -312,6 +412,7 @@ def apply_plan(
         print(
             f"{plan.backend_id}: app_count="
             f"{len(plan.sync_payload.get('app_slugs') or [])} "
+            f"sync_mode={plan.sync_payload.get('sync_mode')} "
             f"cache_version={plan.sync_payload.get('cache_version')}",
         )
         result = client.request(
@@ -322,16 +423,18 @@ def apply_plan(
         client.put_bootstrap_state(
             environment=environment,
             plan=plan,
-            status=BOOTSTRAP_STATUS_SUCCESS,
+            status=result.get("status") or BOOTSTRAP_STATUS_SUCCESS,
             result=result,
         )
-        print(
-            f"{plan.backend_id}: sync complete "
-            f"apps={result.get('apps_upserted', 0)} "
-            f"tools={result.get('tools_upserted', 0)}",
-        )
+        _print_sync_result(plan.backend_id, result)
+        if result.get("status") == "failed":
+            raise SyncFailed(
+                result.get("error") or f"{plan.backend_id}: integration sync failed",
+            )
         return "synced"
     except Exception as exc:
+        if isinstance(exc, SyncFailed):
+            raise
         client.put_bootstrap_state(
             environment=environment,
             plan=plan,
