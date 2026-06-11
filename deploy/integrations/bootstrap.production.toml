@@ -30,7 +30,7 @@ include_all_managed_apps = false
 create_auth_configs = true
 
 [providers.pipedream]
-status = "enabled"
+status = "disabled"
 display_name = "Pipedream"
 default_priority = 20
 
