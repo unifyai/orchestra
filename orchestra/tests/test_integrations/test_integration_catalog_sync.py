@@ -368,6 +368,44 @@ async def test_sync_route_imports_pipedream_apps_and_actions(
 
 
 @pytest.mark.anyio
+async def test_sync_route_marks_all_missing_pipedream_subset_failed(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "orchestra.web.api.integrations.operations.get_provider_adapter",
+        lambda *_args, **_kwargs: FakePipedreamCatalogAdapter(),
+    )
+
+    response = await client.post(
+        "/v0/admin/integrations/sync",
+        headers=ADMIN_HEADERS,
+        json={
+            "backend_id": "pipedream",
+            "app_slugs": ["missing"],
+            "sync_mode": "partial",
+            "component_limit_per_app": 10,
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["apps_upserted"] == 0
+    assert payload["tools_upserted"] == 0
+    assert payload["requested_app_slugs"] == ["missing"]
+    assert payload["matched_app_slugs"] == []
+    assert payload["skipped_apps"] == [
+        {"slug": "missing", "reason": "not_found"},
+    ]
+    assert (
+        dbsession.query(DynamicProviderApp).filter_by(backend_id="pipedream").count()
+        == 0
+    )
+
+
+@pytest.mark.anyio
 async def test_live_composio_oauth_connect_route_uses_backend_config(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

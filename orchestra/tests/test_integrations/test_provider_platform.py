@@ -224,6 +224,15 @@ async def test_bootstrap_state_admin_api_round_trips(client: AsyncClient) -> Non
         "last_status": "success",
         "apps_upserted": 3,
         "tools_upserted": 12,
+        "last_sync_diagnostics": {
+            "sync_mode": "partial",
+            "requested_app_slugs": ["SLACK", "MISSING"],
+            "matched_app_slugs": ["slack"],
+            "skipped_apps": [{"slug": "MISSING", "reason": "not_found"}],
+            "auth_configs_created": 1,
+            "cache_version": "test-cache",
+            "warning": "one app skipped",
+        },
     }
 
     saved = await client.put(
@@ -242,6 +251,15 @@ async def test_bootstrap_state_admin_api_round_trips(client: AsyncClient) -> Non
     )
     assert fetched.status_code == status.HTTP_200_OK, fetched.json()
     assert fetched.json()["desired_config"] == payload["desired_config"]
+    assert fetched.json()["sync_mode"] == "partial"
+    assert fetched.json()["requested_app_slugs"] == ["SLACK", "MISSING"]
+    assert fetched.json()["matched_app_slugs"] == ["slack"]
+    assert fetched.json()["skipped_apps"] == [
+        {"slug": "MISSING", "reason": "not_found"},
+    ]
+    assert fetched.json()["auth_configs_created"] == 1
+    assert fetched.json()["cache_version"] == "test-cache"
+    assert fetched.json()["last_sync_warning"] == "one app skipped"
 
     updated_payload = {
         **payload,
@@ -282,6 +300,8 @@ def test_cloud_bootstrap_manifest_hash_is_stable() -> None:
 
     assert first.desired_hash == second.desired_hash
     assert first.sync_payload is not None
+    assert first.sync_payload["sync_mode"] == "partial"
+    assert first.desired_config["sync"]["mode"] == "partial"
     assert first.sync_payload["cache_version"].startswith(
         "cloud-bootstrap-staging-composio-",
     )
@@ -334,6 +354,7 @@ def test_cloud_bootstrap_skips_unchanged_successful_sync() -> None:
     class FakeClient:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str]] = []
+            self.state_updates: list[dict] = []
 
         def request(self, method: str, path: str, payload=None):
             self.calls.append((method, path))
@@ -347,8 +368,8 @@ def test_cloud_bootstrap_skips_unchanged_successful_sync() -> None:
                 "last_status": "success",
             }
 
-        def put_bootstrap_state(self, **_kwargs):
-            raise AssertionError("unchanged successful sync should not update state")
+        def put_bootstrap_state(self, **kwargs):
+            self.state_updates.append(kwargs)
 
     client = FakeClient()
 
@@ -360,6 +381,11 @@ def test_cloud_bootstrap_skips_unchanged_successful_sync() -> None:
 
     assert result == "skipped"
     assert client.calls == [("POST", "/admin/integrations/backends")]
+    assert client.state_updates[0]["status"] == "skipped"
+    assert (
+        client.state_updates[0]["result"]["warning"]
+        == "Manifest hash already applied; catalog sync skipped."
+    )
 
 
 @pytest.mark.anyio
@@ -404,6 +430,55 @@ async def test_admin_backend_config_and_catalog_sync_routes(
     )
     assert sync_response["apps_upserted"] == 1
     assert sync_response["tools_upserted"] == 1
+
+    bootstrap = await client.put(
+        "/v0/admin/integrations/bootstrap-state",
+        headers=ADMIN_HEADERS,
+        json={
+            "environment": "prod",
+            "backend_id": "pipedream",
+            "desired_hash": "pipedream-hash",
+            "desired_config": {
+                "schema_version": 1,
+                "environment": "prod",
+                "backend": backend_response.json(),
+                "sync": {
+                    "mode": "partial",
+                    "app_slugs": ["linear"],
+                    "component_limit_per_app": 0,
+                },
+            },
+            "last_status": "success",
+            "apps_upserted": 1,
+            "tools_upserted": 1,
+            "last_sync_diagnostics": {
+                "sync_mode": "partial",
+                "requested_app_slugs": ["linear"],
+                "matched_app_slugs": ["linear"],
+                "skipped_apps": [],
+                "cache_version": "test-cache",
+            },
+        },
+    )
+    assert bootstrap.status_code == status.HTTP_200_OK, bootstrap.json()
+
+    status_response = await client.get(
+        "/v0/admin/integrations/backends/status",
+        headers=ADMIN_HEADERS,
+        params={"environment": "prod"},
+    )
+    assert status_response.status_code == status.HTTP_200_OK, status_response.json()
+    pipedream_status = next(
+        item
+        for item in status_response.json()
+        if item["backend"]["backend_id"] == "pipedream"
+    )
+    assert pipedream_status["desired_hash"] == "pipedream-hash"
+    assert pipedream_status["sync_mode"] == "partial"
+    assert pipedream_status["requested_app_slugs"] == ["linear"]
+    assert pipedream_status["matched_app_slugs"] == ["linear"]
+    assert pipedream_status["catalog_app_count"] == 1
+    assert pipedream_status["catalog_tool_count"] == 1
 
 
 @pytest.mark.anyio
