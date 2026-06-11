@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 BackendKind = Literal["composio", "pipedream", "first_party", "custom"]
 BackendStatus = Literal["enabled", "disabled"]
+BootstrapStatus = Literal["pending", "skipped", "success", "failed"]
 ConnectionStatus = Literal[
     "connected",
     "pending",
@@ -69,6 +70,34 @@ class IntegrationBackendPatchRequest(BaseModel):
     allowed_orgs_or_tenants: Optional[list[str]] = None
     default_priority: Optional[int] = None
     config_json: Optional[dict[str, Any]] = None
+
+
+class IntegrationBootstrapStateRequest(BaseModel):
+    """Deployment bootstrap state written after cloud provider sync decisions."""
+
+    environment: str
+    backend_id: str
+    desired_hash: str
+    desired_config: dict[str, Any] = Field(default_factory=dict)
+    last_status: BootstrapStatus
+    last_error: Optional[str] = None
+    apps_upserted: int = 0
+    tools_upserted: int = 0
+
+
+class IntegrationBootstrapStateResponse(BaseModel):
+    id: int
+    environment: str
+    backend_id: str
+    desired_hash: str
+    desired_config: dict[str, Any] = Field(default_factory=dict)
+    last_status: str
+    last_error: Optional[str] = None
+    apps_upserted: int = 0
+    tools_upserted: int = 0
+    last_synced_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class DynamicIntegrationAppResponse(BaseModel):

@@ -7,6 +7,8 @@ discovery, provider tool search, schema lookup, and governed invocation.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -43,6 +45,8 @@ from orchestra.web.api.integrations.schema import (
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
     IntegrationBackendResponse,
+    IntegrationBootstrapStateRequest,
+    IntegrationBootstrapStateResponse,
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
     IntegrationConnectCompleteByProviderRequest,
@@ -84,6 +88,23 @@ def _owner_from_query(
         team_id=team_id,
         user_id=user_id,
         assistant_id=assistant_id,
+    )
+
+
+def _bootstrap_state_response(state) -> IntegrationBootstrapStateResponse:
+    return IntegrationBootstrapStateResponse(
+        id=state.id,
+        environment=state.environment,
+        backend_id=state.backend_id,
+        desired_hash=state.desired_hash,
+        desired_config=state.desired_config_json or {},
+        last_status=state.last_status,
+        last_error=state.last_error,
+        apps_upserted=state.apps_upserted,
+        tools_upserted=state.tools_upserted,
+        last_synced_at=state.last_synced_at,
+        created_at=state.created_at,
+        updated_at=state.updated_at,
     )
 
 
@@ -129,6 +150,50 @@ def patch_integration_backend(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+
+
+@admin_router.get("/bootstrap-state")
+def get_integration_bootstrap_state(
+    environment: str,
+    backend_id: str,
+    session: Session = Depends(get_db_session),
+) -> IntegrationBootstrapStateResponse:
+    state = IntegrationProviderDAO(session).get_bootstrap_state(
+        environment=environment,
+        backend_id=backend_id,
+    )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Unknown integration bootstrap state: " f"{environment}/{backend_id}"
+            ),
+        )
+    return _bootstrap_state_response(state)
+
+
+@admin_router.put("/bootstrap-state")
+def put_integration_bootstrap_state(
+    body: IntegrationBootstrapStateRequest,
+    session: Session = Depends(get_db_session),
+) -> IntegrationBootstrapStateResponse:
+    payload = body.model_dump()
+    environment = payload.pop("environment")
+    backend_id = payload.pop("backend_id")
+    desired_config = payload.pop("desired_config")
+    values = {
+        **payload,
+        "desired_config_json": desired_config,
+    }
+    if body.last_status == "success":
+        values["last_synced_at"] = datetime.now(timezone.utc)
+    state = IntegrationProviderDAO(session).upsert_bootstrap_state(
+        environment=environment,
+        backend_id=backend_id,
+        values=values,
+    )
+    session.commit()
+    return _bootstrap_state_response(state)
 
 
 @admin_router.post("/sync")
