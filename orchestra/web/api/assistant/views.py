@@ -1885,6 +1885,17 @@ async def create_assistant_contact(
             detail="Assistant not found.",
         )
 
+    # Coordinator contacts are platform-managed (shared universal email /
+    # phone / WhatsApp pools provisioned by the ``ensure_coordinator_*``
+    # helpers). Manual contact creation — including BYOD — is never valid
+    # for a Coordinator, so reject it here rather than letting a row land
+    # that the repair path would later clobber.
+    if assistant.is_coordinator:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="coordinator_contacts_are_platform_managed",
+        )
+
     # Permission check for org assistants
     if organization_id is not None:
         resource_access_dao = ResourceAccessDAO(session)
@@ -2369,6 +2380,16 @@ async def connect_assistant_account(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
+        )
+
+    # Coordinator contacts are platform-managed (shared universal pools), so
+    # BYOD suite OAuth (email / calendar / drive) must never attach to a
+    # Coordinator. The console hides this flow for Coordinators; enforce it
+    # server-side too so a direct API call can't slip a personal mailbox in.
+    if assistant.is_coordinator:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="coordinator_contacts_are_platform_managed",
         )
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)

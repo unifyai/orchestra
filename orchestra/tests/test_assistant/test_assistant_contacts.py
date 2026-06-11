@@ -5397,6 +5397,60 @@ class TestConnectEndpointOrg:
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.anyio
+    async def test_coordinator_owner_cannot_connect_byod(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Even the owner can't BYOD-connect a Coordinator — contacts are
+        platform-managed (shared universal pools)."""
+        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = "test-google-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+            mock_settings.charges_billing = False
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "google", "features": ["email"]},
+                headers=owner["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_409_CONFLICT
+        assert resp.json()["detail"] == "coordinator_contacts_are_platform_managed"
+
+    @pytest.mark.anyio
+    async def test_coordinator_owner_cannot_create_contact(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Manual contact creation on a Coordinator is rejected — the platform
+        provisions its shared contacts via the ``ensure_coordinator_*`` path."""
+        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+
+        resp = await client.post(
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "phone"},
+            headers=owner["headers"],
+        )
+
+        assert resp.status_code == status.HTTP_409_CONFLICT
+        assert resp.json()["detail"] == "coordinator_contacts_are_platform_managed"
+
+    @pytest.mark.anyio
     async def test_org_member_cannot_write_secret_for_other_members_workspace_coordinator(
         self,
         client: AsyncClient,
