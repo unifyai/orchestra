@@ -311,7 +311,7 @@ steps:
       echo "ORCHESTRA_URL is not set on Cloud Run service $_SERVICE_NAME" >&2
       exit 1
     fi
-    python3 scripts/cloud_bootstrap_provider_integrations.py \
+    PYTHONUNBUFFERED=1 python3 -u scripts/cloud_bootstrap_provider_integrations.py \
       --manifest "$_INTEGRATION_BOOTSTRAP_MANIFEST"
   waitFor:
   - 'Route Orchestra Traffic'
