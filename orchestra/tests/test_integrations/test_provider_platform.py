@@ -388,6 +388,83 @@ def test_cloud_bootstrap_skips_unchanged_successful_sync() -> None:
     )
 
 
+def test_cloud_bootstrap_batches_composio_full_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = {
+        "schema_version": 1,
+        "environment": "staging",
+        "providers": {
+            "composio": {
+                "status": "enabled",
+                "sync": {
+                    "mode": "full",
+                    "include_all_managed_apps": True,
+                    "tool_limit_per_app": 0,
+                    "create_auth_configs": False,
+                },
+            },
+        },
+    }
+    plan = provider_plans(manifest)[0]
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str, dict | None]] = []
+            self.state_updates: list[dict] = []
+
+        def request(self, method: str, path: str, payload=None):
+            self.requests.append((method, path, payload))
+            if path == "/admin/integrations/backends":
+                return {}
+            if payload.get("sync_tools") is False:
+                return {
+                    "status": "success",
+                    "apps_upserted": 3,
+                    "tools_upserted": 0,
+                    "matched_app_slugs": ["alpha", "beta", "gamma"],
+                    "sync_mode": "full",
+                    "cache_version": payload["cache_version"],
+                }
+            return {
+                "status": "success",
+                "apps_upserted": len(payload["app_slugs"]),
+                "tools_upserted": len(payload["app_slugs"]) * 10,
+                "matched_app_slugs": payload["app_slugs"],
+                "sync_mode": "partial",
+                "cache_version": payload["cache_version"],
+            }
+
+        def bootstrap_state(self, *, environment: str, backend_id: str):
+            return None
+
+        def put_bootstrap_state(self, **kwargs):
+            self.state_updates.append(kwargs)
+
+    monkeypatch.setenv("ORCHESTRA_INTEGRATION_BOOTSTRAP_BATCH_SIZE", "2")
+    client = FakeClient()
+
+    result = apply_plan(
+        client=client,
+        environment="staging",
+        plan=plan,
+    )
+
+    sync_requests = [
+        payload
+        for _method, path, payload in client.requests
+        if path == "/admin/integrations/sync"
+    ]
+    assert result == "synced"
+    assert len(sync_requests) == 3
+    assert sync_requests[0]["sync_tools"] is False
+    assert sync_requests[1]["app_slugs"] == ["alpha", "beta"]
+    assert sync_requests[2]["app_slugs"] == ["gamma"]
+    assert len(client.state_updates) >= 3
+    assert client.state_updates[-1]["result"]["apps_upserted"] == 3
+    assert client.state_updates[-1]["result"]["tools_upserted"] == 30
+
+
 @pytest.mark.anyio
 async def test_admin_backend_config_and_catalog_sync_routes(
     client: AsyncClient,
@@ -494,10 +571,10 @@ async def test_backend_status_is_the_only_catalog_visibility_gate(
         tool_display_name="List Linear issues",
     )
 
-    hidden = await client.post(
+    hidden = await client.get(
         "/v0/integrations/apps/search",
         headers=HEADERS,
-        json={"query": "Linear"},
+        params={"query": "Linear"},
     )
     assert hidden.status_code == status.HTTP_200_OK, hidden.json()
     assert hidden.json() == []
@@ -524,10 +601,10 @@ async def test_backend_status_is_the_only_catalog_visibility_gate(
     )
     assert enabled.status_code == status.HTTP_200_OK, enabled.json()
 
-    visible = await client.post(
+    visible = await client.get(
         "/v0/integrations/apps/search",
         headers=HEADERS,
-        json={"query": "Linear"},
+        params={"query": "Linear"},
     )
     assert visible.status_code == status.HTTP_200_OK, visible.json()
     assert visible.json()[0]["canonical_app_slug"] == "linear"
@@ -545,20 +622,20 @@ async def test_native_app_sync_search_and_connection_rejection(
         source_type="native",
     )
 
-    page = await client.post(
-        "/v0/integrations/apps/get",
+    page = await client.get(
+        "/v0/integrations/apps",
         headers=HEADERS,
-        json={"source_type": "native", "query": "Matterport"},
+        params={"source_type": "native", "query": "Matterport"},
     )
     assert page.status_code == status.HTTP_200_OK, page.json()
     assert page.json()["total"] == 1
     assert page.json()["items"][0]["source_label"] == "Native"
     assert page.json()["items"][0]["native_metadata"]["tier"] == "api"
 
-    third_party_page = await client.post(
-        "/v0/integrations/apps/get",
+    third_party_page = await client.get(
+        "/v0/integrations/apps",
         headers=HEADERS,
-        json={"source_type": "third_party", "query": "Matterport"},
+        params={"source_type": "third_party", "query": "Matterport"},
     )
     assert third_party_page.status_code == status.HTTP_200_OK, third_party_page.json()
     assert third_party_page.json()["total"] == 0
@@ -576,6 +653,23 @@ async def test_native_app_sync_search_and_connection_rejection(
     )
     assert rejected.status_code == status.HTTP_404_NOT_FOUND
     assert "Native Unity-deploy integrations" in rejected.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_post_read_integration_routes_are_removed(client: AsyncClient) -> None:
+    removed_routes = [
+        ("/v0/integrations/apps/get", {"limit": 1}),
+        ("/v0/integrations/apps/search", {"query": "Slack"}),
+        ("/v0/integrations/tools/get", {"limit": 1}),
+        ("/v0/integrations/tools/search", {"query": "Slack"}),
+    ]
+
+    for path, payload in removed_routes:
+        response = await client.post(path, headers=HEADERS, json=payload)
+        assert response.status_code in {
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_405_METHOD_NOT_ALLOWED,
+        }, (path, response.status_code, response.text)
 
 
 @pytest.mark.anyio
@@ -608,10 +702,10 @@ async def test_connection_tool_pagination_run_policy_and_audit(
     assert start_response.status_code == status.HTTP_200_OK, start_response.json()
     connection_id = start_response.json()["connection"]["connection_id"]
 
-    tools = await client.post(
-        "/v0/integrations/tools/get",
+    tools = await client.get(
+        "/v0/integrations/tools",
         headers=HEADERS,
-        json={
+        params={
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "hubspot",
             "activation_state": "connected_ready",
@@ -704,10 +798,10 @@ async def test_run_tool_confirmation_envelope(client: AsyncClient) -> None:
     assert start_response.status_code == status.HTTP_200_OK, start_response.json()
     connection_id = start_response.json()["connection"]["connection_id"]
 
-    tools = await client.post(
+    tools = await client.get(
         "/v0/integrations/tools/search",
         headers=HEADERS,
-        json={
+        params={
             **_owner_payload(assistant_id=assistant_id),
             "query": "Slack message",
             "include_unconnected": True,

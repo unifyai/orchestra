@@ -25,7 +25,6 @@ from orchestra.web.api.integrations.operations import (
     get_connection_tool_policy,
     get_tool_schema,
     get_tools,
-    list_apps,
     list_connections,
     patch_connection_tool_policy,
     reconnect_connection,
@@ -40,7 +39,6 @@ from orchestra.web.api.integrations.operations import (
 )
 from orchestra.web.api.integrations.operations import test_connection, update_connection
 from orchestra.web.api.integrations.schema import (
-    DynamicIntegrationAppResponse,
     IntegrationAppDetailResponse,
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
@@ -299,35 +297,60 @@ def sync_integrations(
 
 @router.get("/apps")
 def get_integration_apps(
-    query: str = "",
+    query: str | None = Query(None),
+    source_type: str | None = None,
     owner_scope: str = Query("assistant"),
     org_id: int | None = None,
     team_id: int | None = None,
     user_id: str | None = None,
     assistant_id: int | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
-) -> list[DynamicIntegrationAppResponse]:
-    return list_apps(
+) -> ProviderAppGetResponse:
+    return get_apps(
         session,
-        query_text=query,
-        owner=_owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id),
+        ProviderAppGetRequest(
+            query=query,
+            source_type=source_type,
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            limit=limit,
+            offset=offset,
+        ),
     )
 
 
-@router.post("/apps/get")
-def get_integration_apps_page(
-    body: ProviderAppGetRequest,
-    session: Session = Depends(get_db_session),
-) -> ProviderAppGetResponse:
-    return get_apps(session, body)
-
-
-@router.post("/apps/search")
+@router.get("/apps/search")
 def search_integration_apps(
-    body: ProviderAppSearchRequest,
+    query: str | None = Query(None),
+    source_type: str | None = None,
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> list[ProviderAppSearchResult]:
-    return search_apps(session, body)
+    return search_apps(
+        session,
+        ProviderAppSearchRequest(
+            query=query,
+            source_type=source_type,
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get("/apps/{canonical_app_slug}")
@@ -577,20 +600,66 @@ def patch_integration_tool_policy(
         ) from exc
 
 
-@router.post("/tools/search")
+@router.get("/tools/search")
 def search_provider_tools(
-    body: ProviderToolSearchRequest,
+    query: str | None = Query(None),
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    canonical_app_slug: str | None = None,
+    include_unconnected: bool = False,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> list[ProviderToolSearchResult]:
-    return search_tools(session, body)
+    return search_tools(
+        session,
+        ProviderToolSearchRequest(
+            query=query,
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            canonical_app_slug=canonical_app_slug,
+            include_unconnected=include_unconnected,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
-@router.post("/tools/get")
+@router.get("/tools")
 def get_provider_tools(
-    body: ProviderToolGetRequest,
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    canonical_app_slug: str | None = None,
+    activation_state: str | None = None,
+    include_unconnected: bool = False,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> ProviderToolGetResponse:
-    return get_tools(session, body)
+    return get_tools(
+        session,
+        ProviderToolGetRequest(
+            owner_scope=owner_scope,
+            org_id=org_id,
+            team_id=team_id,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            canonical_app_slug=canonical_app_slug,
+            activation_state=activation_state,
+            include_unconnected=include_unconnected,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get("/tools/{tool_id}/schema")
