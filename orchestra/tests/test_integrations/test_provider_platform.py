@@ -7,7 +7,11 @@ import uuid
 import pytest
 from fastapi import status
 from httpx import AsyncClient
-from scripts.cloud_bootstrap_provider_integrations import apply_plan, provider_plans
+from scripts.cloud_bootstrap_provider_integrations import (
+    _sync_diagnostics,
+    apply_plan,
+    provider_plans,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -422,6 +426,7 @@ def test_cloud_bootstrap_batches_composio_full_sync(
                     "status": "success",
                     "apps_upserted": 3,
                     "tools_upserted": 0,
+                    "requested_app_slugs": [],
                     "matched_app_slugs": ["alpha", "beta", "gamma"],
                     "sync_mode": "full",
                     "cache_version": payload["cache_version"],
@@ -430,6 +435,7 @@ def test_cloud_bootstrap_batches_composio_full_sync(
                 "status": "success",
                 "apps_upserted": len(payload["app_slugs"]),
                 "tools_upserted": len(payload["app_slugs"]) * 10,
+                "requested_app_slugs": payload["app_slugs"],
                 "matched_app_slugs": payload["app_slugs"],
                 "sync_mode": "partial",
                 "cache_version": payload["cache_version"],
@@ -458,11 +464,41 @@ def test_cloud_bootstrap_batches_composio_full_sync(
     assert result == "synced"
     assert len(sync_requests) == 3
     assert sync_requests[0]["sync_tools"] is False
-    assert sync_requests[1]["app_slugs"] == ["alpha", "beta"]
-    assert sync_requests[2]["app_slugs"] == ["gamma"]
+    assert sync_requests[1]["app_slugs"] == ["ALPHA", "BETA"]
+    assert sync_requests[2]["app_slugs"] == ["GAMMA"]
     assert len(client.state_updates) >= 3
     assert client.state_updates[-1]["result"]["apps_upserted"] == 3
     assert client.state_updates[-1]["result"]["tools_upserted"] == 30
+    assert client.state_updates[-1]["result"]["sync_mode"] == "full"
+    assert client.state_updates[-1]["result"]["requested_app_slugs"] == []
+    final_diagnostics = _sync_diagnostics(
+        plan=plan,
+        result=client.state_updates[-1]["result"],
+    )
+    assert final_diagnostics["sync_mode"] == "full"
+    assert final_diagnostics["requested_app_slugs"] == []
+    assert "matched_app_slugs" not in final_diagnostics
+
+    partial_plan = provider_plans(
+        {
+            "schema_version": 1,
+            "environment": "staging",
+            "providers": {
+                "composio": {
+                    "status": "enabled",
+                    "sync": {
+                        "mode": "partial",
+                        "app_slugs": ["hubspot"],
+                    },
+                },
+            },
+        },
+    )[0]
+    partial_diagnostics = _sync_diagnostics(
+        plan=partial_plan,
+        result={"status": "success", "matched_app_slugs": ["hubspot"]},
+    )
+    assert partial_diagnostics["matched_app_slugs"] == ["hubspot"]
 
 
 @pytest.mark.anyio

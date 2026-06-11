@@ -9,18 +9,25 @@ those credential values.
 from __future__ import annotations
 
 import argparse
+import builtins
 import hashlib
 import json
 import os
 import sys
+import threading
+import time
 import tomllib
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 from urllib import error, parse, request
+
+print = partial(builtins.print, flush=True)
 
 BOOTSTRAP_STATUS_SUCCESS = "success"
 DEFAULT_SYNC_BATCH_SIZE = 25
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
+REQUEST_HEARTBEAT_SECONDS = 30
 SYNC_PASSTHROUGH_FIELDS = {
     "tool_limit_per_app",
     "component_limit_per_app",
@@ -205,6 +212,12 @@ class AdminClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
+        started_at = time.perf_counter()
+        context = self._request_context(payload)
+        print(
+            f"admin request start method={method} path={path} "
+            f"timeout={self.timeout_seconds}s{context}",
+        )
         req = request.Request(
             f"{self.base_url}/{path.lstrip('/')}",
             data=data,
@@ -215,15 +228,70 @@ class AdminClient:
                 "accept": "application/json",
             },
         )
+        done = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._request_heartbeat,
+            args=(done, method, path, started_at),
+            daemon=True,
+        )
+        heartbeat.start()
         try:
             with request.urlopen(req, timeout=self.timeout_seconds) as response:
                 body = response.read().decode("utf-8")
+                elapsed = time.perf_counter() - started_at
+                print(
+                    f"admin request complete method={method} path={path} "
+                    f"status={response.status} elapsed={elapsed:.1f}s",
+                )
                 return json.loads(body) if body else {}
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            elapsed = time.perf_counter() - started_at
+            print(
+                f"admin request failed method={method} path={path} "
+                f"status={exc.code} elapsed={elapsed:.1f}s",
+            )
             raise RuntimeError(
                 f"{method} {path} failed with HTTP {exc.code}: {detail}",
             ) from exc
+        finally:
+            done.set()
+
+    @staticmethod
+    def _request_context(payload: dict[str, Any] | None) -> str:
+        if not payload:
+            return ""
+        parts: list[str] = []
+        for field in (
+            "backend_id",
+            "sync_mode",
+            "sync_tools",
+            "include_all_managed_apps",
+            "include_all_apps",
+        ):
+            if field in payload:
+                parts.append(f"{field}={payload[field]}")
+        if "app_slugs" in payload:
+            parts.append(f"app_slugs={len(payload.get('app_slugs') or [])}")
+        if "apps" in payload:
+            parts.append(f"apps={len(payload.get('apps') or [])}")
+        if "tools" in payload:
+            parts.append(f"tools={len(payload.get('tools') or [])}")
+        return f" {' '.join(parts)}" if parts else ""
+
+    @staticmethod
+    def _request_heartbeat(
+        done: threading.Event,
+        method: str,
+        path: str,
+        started_at: float,
+    ) -> None:
+        while not done.wait(REQUEST_HEARTBEAT_SECONDS):
+            elapsed = time.perf_counter() - started_at
+            print(
+                f"admin request waiting method={method} path={path} "
+                f"elapsed={elapsed:.1f}s",
+            )
 
     def bootstrap_state(
         self,
@@ -276,17 +344,15 @@ def _sync_diagnostics(
     result: dict[str, Any] | None,
 ) -> dict[str, Any]:
     sync_config = plan.desired_config.get("sync") or {}
+    sync_mode = sync_config.get("mode") or sync_config.get("sync_mode")
     diagnostics: dict[str, Any] = {
-        "sync_mode": sync_config.get("mode") or sync_config.get("sync_mode"),
+        "sync_mode": sync_mode,
         "requested_app_slugs": list(sync_config.get("app_slugs") or []),
     }
     if result:
         for field in (
             "status",
             "skipped_apps",
-            "requested_app_slugs",
-            "matched_app_slugs",
-            "sync_mode",
             "error",
             "warning",
             "auth_configs_created",
@@ -295,6 +361,8 @@ def _sync_diagnostics(
         ):
             if field in result:
                 diagnostics[field] = result[field]
+        if sync_mode != "full" and "matched_app_slugs" in result:
+            diagnostics["matched_app_slugs"] = result["matched_app_slugs"]
     return diagnostics
 
 
@@ -354,8 +422,6 @@ def _merge_sync_results(
     }
     merged["matched_app_slugs"] = sorted(matched)
     for field in (
-        "requested_app_slugs",
-        "sync_mode",
         "cache_version",
         "warning",
         "error",
@@ -406,6 +472,8 @@ def _batched_composio_sync(
     app_result = client.request("POST", "/admin/integrations/sync", app_payload)
     app_count = int(app_result.get("apps_upserted", 0) or 0)
     aggregate = _merge_sync_results(base=None, batch=app_result, app_count=app_count)
+    aggregate["sync_mode"] = plan.sync_payload.get("sync_mode") or "full"
+    aggregate["requested_app_slugs"] = list(plan.sync_payload.get("app_slugs") or [])
     client.put_bootstrap_state(
         environment=environment,
         plan=plan,
@@ -431,7 +499,7 @@ def _batched_composio_sync(
         batch_payload = {
             **plan.sync_payload,
             "sync_mode": "partial",
-            "app_slugs": batch_slugs,
+            "app_slugs": [slug.upper() for slug in batch_slugs],
             "include_all_managed_apps": False,
             "sync_tools": True,
         }
