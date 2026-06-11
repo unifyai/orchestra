@@ -12,21 +12,9 @@ max_pages = 250
 max_items = 50000
 
 [providers.composio.sync]
-mode = "partial"
-app_slugs = [
-  "SLACK",
-  "GITHUB",
-  "HUBSPOT",
-  "GMAIL",
-  "GOOGLEDRIVE",
-  "GOOGLECALENDAR",
-  "GOOGLESHEETS",
-  "GOOGLEDOCS",
-  "DISCORD",
-  "NOTION"
-]
+mode = "full"
 tool_limit_per_app = 0
-include_all_managed_apps = false
+include_all_managed_apps = true
 create_auth_configs = true
 
 [providers.pipedream]
