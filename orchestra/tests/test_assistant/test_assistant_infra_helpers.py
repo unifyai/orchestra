@@ -82,6 +82,31 @@ def test_comms_url_prefers_unity_comms_url(
 
 
 @pytest.mark.anyio
+async def test_create_pubsub_topic_skips_comms_in_self_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("SELF_HOST", "1")
+    monkeypatch.setenv("DEPLOY_ENV", "staging")
+    post = AsyncMock()
+    monkeypatch.setattr(
+        assistant_infra,
+        "get_async_client",
+        lambda: SimpleNamespace(post=post),
+    )
+
+    result = await assistant_infra.create_pubsub_topic("2101")
+
+    assert result == {
+        "success": True,
+        "skipped": True,
+        "reason": "self_host_local_provisioning",
+        "topic_name": "unity-2101-staging",
+    }
+    post.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_create_pubsub_topic_uses_staging_topic_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

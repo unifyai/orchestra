@@ -8,6 +8,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from orchestra.lib.deploy_env import env_suffix
+from orchestra.settings import settings
 from orchestra.web.api.utils.http_client import get_async_client
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
@@ -496,8 +497,16 @@ async def create_pubsub_topic(assistant_id: str):
     Returns:
         JSON response from the pubsub topic creation endpoint
     """
-    comms_url = _comms_url()
     topic_name = f"unity-{assistant_id}{env_suffix()}"
+    if settings.is_self_host:
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "self_host_local_provisioning",
+            "topic_name": topic_name,
+        }
+
+    comms_url = _comms_url()
     client = get_async_client()
     try:
         response = await client.post(
@@ -634,6 +643,14 @@ async def delete_pubsub_topic(assistant_id: str):
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
+    if settings.is_self_host:
+        return _cleanup_step_result(
+            name="delete_pubsub_topic",
+            success=True,
+            skipped=True,
+            reason="self_host_local_provisioning",
+        )
+
     topic_name = f"unity-{assistant_id}{env_suffix()}"
     return await _request_cleanup_step(
         name="delete_pubsub_topic",
