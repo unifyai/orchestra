@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -311,6 +312,62 @@ def test_composio_connect_lazily_creates_missing_auth_config(
     assert adapter.created_for == ["DISCORD"]
     assert app.raw_provider_metadata_json["auth_config_id"] == "authcfg_discord"
     assert conn.provider_connection_id == "ca_discord"
+
+
+def test_composio_connect_logs_auth_config_creation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeApp:
+        canonical_app_slug = "discord"
+        raw_provider_metadata_json = {}
+
+    class FakeConnection:
+        backend_id = "composio"
+        provider_app_id = "DISCORD"
+        canonical_app_slug = "discord"
+        connection_id = "ic_failure"
+
+    class FakeProviderResponse:
+        status_code = 400
+        text = '{"message":"invalid toolkit auth config"}'
+
+    class FakeAdapter:
+        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+            exc = RuntimeError(f"provider rejected {toolkit_slug}")
+            exc.response = FakeProviderResponse()
+            raise exc
+
+        def create_auth_link(self, **kwargs):
+            raise AssertionError("auth link should not be created after config failure")
+
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+    caplog.set_level(logging.ERROR, logger=operations.__name__)
+
+    with pytest.raises(RuntimeError, match="provider rejected DISCORD"):
+        operations._provider_connect_url(
+            backend=FakeBackend(),
+            app=FakeApp(),
+            owner=operations.OwnerContext(owner_scope="assistant", user_id="user-1"),
+            connection=FakeConnection(),
+            redirect_url="https://console.example/callback",
+        )
+
+    assert "Composio connect failure stage=auth_config_create" in caplog.text
+    assert "backend_id=composio" in caplog.text
+    assert "provider_app_id=DISCORD" in caplog.text
+    assert "canonical_app_slug=discord" in caplog.text
+    assert "connection_id=ic_failure" in caplog.text
+    assert "provider_status_code=400" in caplog.text
+    assert "invalid toolkit auth config" in caplog.text
 
 
 def test_composio_adapter_fetches_catalog_and_manages_auth_configs(

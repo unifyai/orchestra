@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import time
 import uuid
@@ -71,6 +72,7 @@ CATALOG_ARTIFACT_EMBEDDINGS = ArtifactEmbeddingRuntime(key=CATALOG_SEARCH_KEY)
 INTEGRATION_APP_EMBEDDING_NAMESPACE = "integration_app"
 INTEGRATION_TOOL_EMBEDDING_NAMESPACE = "integration_tool"
 GLOBAL_CATALOG_SEMANTIC_SCORE_CUTOFF = 0.35
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1092,6 +1094,37 @@ def _owner_tokens(owner: OwnerContext) -> set[str]:
     return tokens
 
 
+def _provider_exception_details(exc: Exception) -> tuple[int | None, str]:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    response_text = getattr(response, "text", "") if response is not None else ""
+    return status_code, str(response_text or "")[:1000]
+
+
+def _log_composio_connect_failure(
+    *,
+    stage: str,
+    connection: IntegrationConnection,
+    owner: OwnerContext,
+    app: DynamicProviderApp | None,
+    exc: Exception,
+) -> None:
+    status_code, response_text = _provider_exception_details(exc)
+    logger.exception(
+        "Composio connect failure stage=%s backend_id=%s provider_app_id=%s "
+        "canonical_app_slug=%s connection_id=%s owner_scope=%s "
+        "provider_status_code=%s provider_response=%s",
+        stage,
+        connection.backend_id,
+        connection.provider_app_id,
+        app.canonical_app_slug if app else connection.canonical_app_slug,
+        connection.connection_id,
+        owner.owner_scope,
+        status_code,
+        response_text,
+    )
+
+
 def _provider_connect_url(
     *,
     backend: IntegrationBackend | None,
@@ -1125,10 +1158,34 @@ def _provider_connect_url(
                     raise ValueError(
                         f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
                     )
-                auth_config_id = adapter.get_or_create_auth_config(
-                    connection.provider_app_id,
-                )
+                try:
+                    auth_config_id = adapter.get_or_create_auth_config(
+                        connection.provider_app_id,
+                    )
+                except Exception as exc:
+                    _log_composio_connect_failure(
+                        stage="auth_config_create",
+                        connection=connection,
+                        owner=owner,
+                        app=app,
+                        exc=exc,
+                    )
+                    raise
                 if not auth_config_id:
+                    logger.warning(
+                        "Composio auth config creation returned no id backend_id=%s "
+                        "provider_app_id=%s canonical_app_slug=%s connection_id=%s "
+                        "owner_scope=%s",
+                        connection.backend_id,
+                        connection.provider_app_id,
+                        (
+                            app.canonical_app_slug
+                            if app
+                            else connection.canonical_app_slug
+                        ),
+                        connection.connection_id,
+                        owner.owner_scope,
+                    )
                     raise ValueError(
                         f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
                     )
@@ -1137,13 +1194,34 @@ def _provider_connect_url(
                         **(app.raw_provider_metadata_json or {}),
                         "auth_config_id": str(auth_config_id),
                     }
-            connect_url, connected_account_id, error = adapter.create_auth_link(
-                user_id=external_user_id,
-                auth_config_id=str(auth_config_id),
-                callback_url=callback_url,
-                alias=connection.connection_id,
-            )
+            try:
+                connect_url, connected_account_id, error = adapter.create_auth_link(
+                    user_id=external_user_id,
+                    auth_config_id=str(auth_config_id),
+                    callback_url=callback_url,
+                    alias=connection.connection_id,
+                )
+            except Exception as exc:
+                _log_composio_connect_failure(
+                    stage="auth_link_create",
+                    connection=connection,
+                    owner=owner,
+                    app=app,
+                    exc=exc,
+                )
+                raise
             if error:
+                logger.warning(
+                    "Composio auth link returned provider error backend_id=%s "
+                    "provider_app_id=%s canonical_app_slug=%s connection_id=%s "
+                    "owner_scope=%s error=%s",
+                    connection.backend_id,
+                    connection.provider_app_id,
+                    app.canonical_app_slug if app else connection.canonical_app_slug,
+                    connection.connection_id,
+                    owner.owner_scope,
+                    error,
+                )
                 raise ValueError(error["message"])
             if connected_account_id:
                 connection.provider_connection_id = connected_account_id
