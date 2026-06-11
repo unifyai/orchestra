@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
@@ -57,10 +58,13 @@ from orchestra.web.api.integrations.schema import (
     IntegrationHealthResponse,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
+    ProviderAppDetailLevel,
     ProviderAppGetRequest,
     ProviderAppGetResponse,
     ProviderAppSearchRequest,
     ProviderAppSearchResult,
+    ProviderAppStatus,
+    ProviderAppStatusGroup,
     ProviderToolGetRequest,
     ProviderToolGetResponse,
     ProviderToolRunRequest,
@@ -72,6 +76,40 @@ from orchestra.web.api.integrations.schema import (
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 admin_router = APIRouter(prefix="/integrations", tags=["Integration Admin"])
+
+_APP_STATUS_ADAPTER = TypeAdapter(list[ProviderAppStatus])
+_APP_STATUS_GROUP_ADAPTER = TypeAdapter(list[ProviderAppStatusGroup])
+
+
+def _split_query_list(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    parsed: list[str] = []
+    for value in values:
+        parsed.extend(part.strip() for part in value.split(",") if part.strip())
+    return parsed
+
+
+def _validate_app_statuses(values: list[str] | None) -> list[ProviderAppStatus]:
+    try:
+        return _APP_STATUS_ADAPTER.validate_python(_split_query_list(values))
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from exc
+
+
+def _validate_app_status_groups(
+    values: list[str] | None,
+) -> list[ProviderAppStatusGroup]:
+    try:
+        return _APP_STATUS_GROUP_ADAPTER.validate_python(_split_query_list(values))
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from exc
 
 
 def _owner_from_query(
@@ -299,6 +337,9 @@ def sync_integrations(
 def get_integration_apps(
     query: str | None = Query(None),
     source_type: str | None = None,
+    status: list[str] | None = Query(None),
+    status_group: list[str] | None = Query(None),
+    detail_level: ProviderAppDetailLevel = Query("full"),
     owner_scope: str = Query("assistant"),
     org_id: int | None = None,
     team_id: int | None = None,
@@ -313,6 +354,9 @@ def get_integration_apps(
         ProviderAppGetRequest(
             query=query,
             source_type=source_type,
+            status=_validate_app_statuses(status),
+            status_group=_validate_app_status_groups(status_group),
+            detail_level=detail_level,
             owner_scope=owner_scope,
             org_id=org_id,
             team_id=team_id,

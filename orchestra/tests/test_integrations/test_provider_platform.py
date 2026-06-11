@@ -692,6 +692,240 @@ async def test_native_app_sync_search_and_connection_rejection(
 
 
 @pytest.mark.anyio
+async def test_app_catalog_status_filters_facets_and_summary_payload(
+    client: AsyncClient,
+) -> None:
+    assistant_id = 90_000 + (uuid.uuid4().int % 1000)
+    app_specs = [
+        ("asana", "Asana Tasks", "list_tasks", ["tasks.read"]),
+        ("dropbox", "Dropbox Files", "list_files", ["files.read"]),
+        ("hubspot", "HubSpot CRM", "search_contacts", ["crm.objects.contacts.read"]),
+        ("jira", "Jira Issues", "list_issues", ["issues.read"]),
+        ("notion", "Notion Docs", "list_pages", ["pages.read"]),
+        ("slack", "Slack Chat", "send_message", ["chat:write"]),
+    ]
+    for slug, display_name, tool_name, scopes in app_specs:
+        await _sync_integrations(
+            client,
+            app_slug=slug,
+            display_name=display_name,
+            tool_name=tool_name,
+            tool_display_name=f"{display_name} tool",
+            required_scopes=scopes,
+        )
+    await _sync_integrations(
+        client,
+        app_slug="matterport",
+        display_name="Matterport Native",
+        source_type="native",
+    )
+
+    configured_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "hubspot",
+            "backend_id": "composio",
+            "requested_scopes": ["crm.objects.contacts.read"],
+            "auth_mode": "api_key",
+            "api_key_fields": {"token": "secret"},
+        },
+    )
+    assert configured_start.status_code == status.HTTP_200_OK, configured_start.json()
+
+    connected_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "slack",
+            "backend_id": "composio",
+            "requested_scopes": ["chat:write"],
+            "auth_mode": "oauth",
+        },
+    )
+    assert connected_start.status_code == status.HTTP_200_OK, connected_start.json()
+    connected_id = connected_start.json()["connection"]["connection_id"]
+    connected_complete = await client.post(
+        f"/v0/integrations/connections/{connected_id}/complete",
+        headers=HEADERS,
+        json={
+            "provider_connection_id": "provider-slack",
+            "granted_scopes": ["chat:write"],
+            "status": "connected",
+        },
+    )
+    assert (
+        connected_complete.status_code == status.HTTP_200_OK
+    ), connected_complete.json()
+
+    missing_scope_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "jira",
+            "backend_id": "composio",
+            "requested_scopes": [],
+            "auth_mode": "oauth",
+        },
+    )
+    assert (
+        missing_scope_start.status_code == status.HTTP_200_OK
+    ), missing_scope_start.json()
+    missing_scope_id = missing_scope_start.json()["connection"]["connection_id"]
+    missing_scope_complete = await client.post(
+        f"/v0/integrations/connections/{missing_scope_id}/complete",
+        headers=HEADERS,
+        json={
+            "provider_connection_id": "provider-jira",
+            "granted_scopes": [],
+            "status": "connected",
+        },
+    )
+    assert (
+        missing_scope_complete.status_code == status.HTTP_200_OK
+    ), missing_scope_complete.json()
+
+    pending_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "notion",
+            "backend_id": "composio",
+            "requested_scopes": ["pages.read"],
+            "auth_mode": "oauth",
+        },
+    )
+    assert pending_start.status_code == status.HTTP_200_OK, pending_start.json()
+
+    connected_page = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params=[
+            ("owner_scope", "assistant"),
+            ("assistant_id", str(assistant_id)),
+            ("user_id", "api-user"),
+            ("source_type", "third_party"),
+            ("status", "connected"),
+            ("status", "configured"),
+            ("limit", "100"),
+            ("offset", "0"),
+        ],
+    )
+    assert connected_page.status_code == status.HTTP_200_OK, connected_page.json()
+    connected_body = connected_page.json()
+    assert connected_body["total"] == 2
+    assert {item["connection_status"] for item in connected_body["items"]} == {
+        "connected",
+        "configured",
+    }
+
+    comma_page = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "source_type": "third_party",
+            "status": "connected,configured",
+        },
+    )
+    assert comma_page.status_code == status.HTTP_200_OK, comma_page.json()
+    assert comma_page.json()["total"] == 2
+
+    grouped_page = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "source_type": "third_party",
+            "status_group": "connected",
+        },
+    )
+    assert grouped_page.status_code == status.HTTP_200_OK, grouped_page.json()
+    assert grouped_page.json()["total"] == 2
+
+    attention_page = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "query": "Jira",
+            "source_type": "third_party",
+            "status_group": "needs_attention",
+        },
+    )
+    assert attention_page.status_code == status.HTTP_200_OK, attention_page.json()
+    assert attention_page.json()["total"] == 1
+    assert attention_page.json()["items"][0]["canonical_app_slug"] == "jira"
+    assert attention_page.json()["items"][0]["connection_status"] == "missing_scope"
+
+    not_connected_page = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "source_type": "third_party",
+            "status_group": "not_connected",
+            "limit": 1,
+            "offset": 1,
+        },
+    )
+    assert (
+        not_connected_page.status_code == status.HTTP_200_OK
+    ), not_connected_page.json()
+    assert not_connected_page.json()["total"] == 2
+    assert not_connected_page.json()["items"][0]["canonical_app_slug"] == "dropbox"
+    assert not_connected_page.json()["items"][0]["connection_status"] == "not_connected"
+
+    facets = connected_body["facets"]
+    assert facets["total"] == 6
+    assert facets["source_type"] == {"native": 0, "third_party": 6}
+    assert facets["status"]["connected"] == 1
+    assert facets["status"]["configured"] == 1
+    assert facets["status"]["pending"] == 1
+    assert facets["status"]["missing_scope"] == 1
+    assert facets["status"]["not_connected"] == 2
+    assert facets["status_group"] == {
+        "connected": 2,
+        "needs_attention": 2,
+        "not_connected": 2,
+    }
+
+    summary_page = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "status_group": "connected",
+            "detail_level": "summary",
+            "limit": 1,
+        },
+    )
+    assert summary_page.status_code == status.HTTP_200_OK, summary_page.json()
+    summary_item = summary_page.json()["items"][0]
+    assert summary_item["available_actions"] == []
+    assert summary_item["available_scopes"] == []
+    assert summary_item["tool_count"] == 1
+    assert summary_item["connection_status"] in {"connected", "configured"}
+
+    invalid_status = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params={**_owner_payload(assistant_id=assistant_id), "status": "bogus"},
+    )
+    assert invalid_status.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    invalid_group = await client.get(
+        "/v0/integrations/apps",
+        headers=HEADERS,
+        params={**_owner_payload(assistant_id=assistant_id), "status_group": "bogus"},
+    )
+    assert invalid_group.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
 async def test_post_read_integration_routes_are_removed(client: AsyncClient) -> None:
     removed_routes = [
         ("/v0/integrations/apps/get", {"limit": 1}),

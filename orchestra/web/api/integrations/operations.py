@@ -18,6 +18,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -63,6 +64,19 @@ from orchestra.web.api.integrations.schema import (
 
 READY_STATUSES = {"connected"}
 EXPIRED_STATUSES = {"expired", "revoked", "error"}
+APP_STATUS_GROUP_STATUSES = {
+    "connected": ("connected", "configured"),
+    "needs_attention": (
+        "pending",
+        "missing_scope",
+        "missing_secrets",
+        "needs_reconnect",
+        "expired",
+        "revoked",
+        "error",
+    ),
+    "not_connected": ("not_connected",),
+}
 SemanticToolScoreProvider = Callable[
     [Session, str, list[ProviderToolCatalog]],
     dict[str, float | tuple[float, str]],
@@ -1529,9 +1543,12 @@ def _app_response_from_preloaded(
     conn: IntegrationConnection | None,
     overlay: IntegrationOverlay | None,
     tool_count: int,
+    effective_status: str | None = None,
+    detail_level: str = "full",
 ) -> DynamicIntegrationAppResponse:
     metadata = _app_metadata(app)
     source_type = _app_source_type(app)
+    include_full_details = detail_level == "full"
     return DynamicIntegrationAppResponse(
         backend_id=app.backend_id,
         provider_app_id=app.provider_app_id,
@@ -1543,16 +1560,24 @@ def _app_response_from_preloaded(
         category=app.category,
         icon_url=app.icon_url,
         auth_modes=app.auth_modes or [],
-        available_scopes=app.available_scopes_json or [],
+        available_scopes=(
+            (app.available_scopes_json or []) if include_full_details else []
+        ),
         available_actions=[],
         tool_count=tool_count,
         api_key_schema=metadata.get("api_key_schema"),
-        connection_status=conn.status if conn else None,
+        connection_status=effective_status or (conn.status if conn else None),
         connection_id=conn.connection_id if conn else None,
         external_account_label=conn.external_account_label if conn else None,
-        overlay=overlay.display_overrides_json if overlay else {},
+        overlay=(
+            overlay.display_overrides_json
+            if overlay and (include_full_details or source_type != "native")
+            else {}
+        ),
         native_metadata=(
-            metadata.get("native_metadata") if source_type == "native" else {}
+            metadata.get("native_metadata")
+            if source_type == "native" and include_full_details
+            else {}
         ),
     )
 
@@ -1720,19 +1745,39 @@ def _app_responses_from_preloaded(
     apps: list[DynamicProviderApp],
     owner: OwnerContext,
     overlays: dict[str, IntegrationOverlay],
+    detail_level: str = "full",
 ) -> list[DynamicIntegrationAppResponse]:
     slugs = [app.canonical_app_slug for app in apps]
     tool_counts = dao.tool_counts_by_app(slugs)
     connections = dao.best_connections_by_app(owner=owner, canonical_app_slugs=slugs)
+    effective_statuses = dao.effective_app_statuses_by_slug(
+        owner=owner,
+        canonical_app_slugs=slugs,
+    )
     return [
         _app_response_from_preloaded(
             app=app,
             conn=connections.get(app.canonical_app_slug),
             overlay=overlays.get(app.canonical_app_slug),
             tool_count=tool_counts.get(app.canonical_app_slug, 0),
+            effective_status=effective_statuses.get(
+                app.canonical_app_slug,
+                "not_connected",
+            ),
+            detail_level=detail_level,
         )
         for app in apps
     ]
+
+
+def _expand_app_status_filters(
+    statuses: list[str],
+    status_groups: list[str],
+) -> list[str]:
+    expanded = list(statuses)
+    for group in status_groups:
+        expanded.extend(APP_STATUS_GROUP_STATUSES[group])
+    return list(dict.fromkeys(expanded))
 
 
 def get_apps(session: Session, body: ProviderAppGetRequest) -> ProviderAppGetResponse:
@@ -1746,9 +1791,12 @@ def get_apps(session: Session, body: ProviderAppGetRequest) -> ProviderAppGetRes
         assistant_id=body.assistant_id,
     )
     overlays = dao.list_overlays_by_slug()
+    status_filters = _expand_app_status_filters(body.status, body.status_group)
     apps = dao.list_enabled_apps_page(
         query_text=body.query or "",
         source_type=body.source_type,
+        owner=owner,
+        statuses=status_filters,
         limit=body.limit,
         offset=body.offset,
     )
@@ -1757,16 +1805,27 @@ def get_apps(session: Session, body: ProviderAppGetRequest) -> ProviderAppGetRes
         apps=apps,
         owner=owner,
         overlays=overlays,
+        detail_level=body.detail_level,
     )
     total = dao.count_enabled_apps(
         query_text=body.query or "",
         source_type=body.source_type,
+        owner=owner,
+        statuses=status_filters,
+    )
+    facets = dao.app_catalog_facets(
+        query_text=body.query or "",
+        source_type=body.source_type,
+        owner=owner,
     )
     return ProviderAppGetResponse(
         items=items,
         total=total,
         limit=body.limit,
         offset=body.offset,
+        facets=facets,
+        catalog_version=dao.app_catalog_version(),
+        generated_at=datetime.now(timezone.utc),
     )
 
 

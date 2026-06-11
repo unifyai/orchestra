@@ -435,7 +435,7 @@ def test_get_apps_uses_sql_page_and_batched_response_lookups(
             self.category = None
             self.icon_url = None
             self.auth_modes = ["oauth"]
-            self.available_scopes_json = []
+            self.available_scopes_json = [{"id": "read"}]
             self.raw_provider_metadata_json = {"source_type": "third_party"}
 
     page_apps = [FakeApp("alpha", "Alpha"), FakeApp("beta", "Beta")]
@@ -450,10 +450,47 @@ def test_get_apps_uses_sql_page_and_batched_response_lookups(
         def list_enabled_apps_page(self, **kwargs):
             assert kwargs["limit"] == 2
             assert kwargs["offset"] == 4
+            assert kwargs["statuses"] == [
+                "not_connected",
+                "connected",
+                "configured",
+            ]
             return page_apps
 
         def count_enabled_apps(self, **kwargs):
+            assert kwargs["statuses"] == [
+                "not_connected",
+                "connected",
+                "configured",
+            ]
             return 1043
+
+        def app_catalog_facets(self, **kwargs):
+            assert kwargs["query_text"] == ""
+            return {
+                "total": 1043,
+                "source_type": {"native": 0, "third_party": 1043},
+                "status": {
+                    "connected": 1,
+                    "configured": 0,
+                    "pending": 0,
+                    "missing_scope": 0,
+                    "missing_secrets": 0,
+                    "needs_reconnect": 0,
+                    "expired": 0,
+                    "revoked": 0,
+                    "error": 0,
+                    "not_connected": 1042,
+                },
+                "status_group": {
+                    "connected": 1,
+                    "needs_attention": 0,
+                    "not_connected": 1042,
+                },
+            }
+
+        def app_catalog_version(self):
+            return "catalog-v1"
 
         def tool_counts_by_app(self, canonical_app_slugs):
             assert list(canonical_app_slugs) == ["alpha", "beta"]
@@ -462,6 +499,10 @@ def test_get_apps_uses_sql_page_and_batched_response_lookups(
         def best_connections_by_app(self, *, owner, canonical_app_slugs):
             assert list(canonical_app_slugs) == ["alpha", "beta"]
             return {}
+
+        def effective_app_statuses_by_slug(self, *, owner, canonical_app_slugs):
+            assert list(canonical_app_slugs) == ["alpha", "beta"]
+            return {"alpha": "connected", "beta": "not_connected"}
 
         def list_enabled_apps(self, **kwargs):
             raise AssertionError("get_apps must not load the full app catalog")
@@ -478,12 +519,26 @@ def test_get_apps_uses_sql_page_and_batched_response_lookups(
 
     response = operations.get_apps(
         session=object(),
-        body=operations.ProviderAppGetRequest(limit=2, offset=4),
+        body=operations.ProviderAppGetRequest(
+            limit=2,
+            offset=4,
+            status=["not_connected"],
+            status_group=["connected"],
+            detail_level="summary",
+        ),
     )
 
     assert response.total == 1043
     assert [item.canonical_app_slug for item in response.items] == ["alpha", "beta"]
     assert [item.tool_count for item in response.items] == [10, 20]
+    assert [item.connection_status for item in response.items] == [
+        "connected",
+        "not_connected",
+    ]
+    assert all(item.available_scopes == [] for item in response.items)
+    assert response.facets.total == 1043
+    assert response.facets.status_group.not_connected == 1042
+    assert response.catalog_version == "catalog-v1"
 
 
 def test_get_tools_uses_sql_page_for_unconnected_catalog(

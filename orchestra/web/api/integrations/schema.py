@@ -19,6 +19,20 @@ ConnectionStatus = Literal[
     "disconnected",
     "error",
 ]
+ProviderAppStatus = Literal[
+    "connected",
+    "configured",
+    "pending",
+    "missing_scope",
+    "missing_secrets",
+    "needs_reconnect",
+    "expired",
+    "revoked",
+    "error",
+    "not_connected",
+]
+ProviderAppStatusGroup = Literal["connected", "needs_attention", "not_connected"]
+ProviderAppDetailLevel = Literal["full", "summary"]
 ActivationState = Literal[
     "connected_ready",
     "not_connected",
@@ -145,7 +159,7 @@ class DynamicIntegrationAppResponse(BaseModel):
     available_actions: list[Any] = Field(default_factory=list)
     tool_count: int = 0
     api_key_schema: Optional[dict[str, Any]] = None
-    connection_status: Optional[ConnectionStatus] = None
+    connection_status: Optional[ProviderAppStatus] = None
     connection_id: Optional[str] = None
     external_account_label: Optional[str] = None
     overlay: dict[str, Any] = Field(default_factory=dict)
@@ -155,6 +169,9 @@ class DynamicIntegrationAppResponse(BaseModel):
 class ProviderAppGetRequest(BaseModel):
     query: Optional[str] = None
     source_type: Optional[IntegrationSourceType] = None
+    status: list[ProviderAppStatus] = Field(default_factory=list)
+    status_group: list[ProviderAppStatusGroup] = Field(default_factory=list)
+    detail_level: ProviderAppDetailLevel = "full"
     owner_scope: OwnerScope = "assistant"
     org_id: Optional[int] = None
     team_id: Optional[int] = None
@@ -164,11 +181,53 @@ class ProviderAppGetRequest(BaseModel):
     offset: int = Field(0, ge=0)
 
 
+class ProviderAppCatalogSourceTypeFacet(BaseModel):
+    native: int = 0
+    third_party: int = 0
+
+
+class ProviderAppCatalogStatusFacet(BaseModel):
+    connected: int = 0
+    configured: int = 0
+    pending: int = 0
+    missing_scope: int = 0
+    missing_secrets: int = 0
+    needs_reconnect: int = 0
+    expired: int = 0
+    revoked: int = 0
+    error: int = 0
+    not_connected: int = 0
+
+
+class ProviderAppCatalogStatusGroupFacet(BaseModel):
+    connected: int = 0
+    needs_attention: int = 0
+    not_connected: int = 0
+
+
+class ProviderAppCatalogFacets(BaseModel):
+    total: int = 0
+    source_type: ProviderAppCatalogSourceTypeFacet = Field(
+        default_factory=ProviderAppCatalogSourceTypeFacet,
+    )
+    status: ProviderAppCatalogStatusFacet = Field(
+        default_factory=ProviderAppCatalogStatusFacet,
+    )
+    status_group: ProviderAppCatalogStatusGroupFacet = Field(
+        default_factory=ProviderAppCatalogStatusGroupFacet,
+    )
+
+
 class ProviderAppGetResponse(BaseModel):
     items: list[DynamicIntegrationAppResponse] = Field(default_factory=list)
     total: int = 0
     limit: int
     offset: int
+    facets: ProviderAppCatalogFacets = Field(
+        default_factory=ProviderAppCatalogFacets,
+    )
+    catalog_version: Optional[str] = None
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class ProviderAppSearchRequest(BaseModel):
