@@ -1752,6 +1752,24 @@ async def delete_assistant_contact(
             contact_type,
         )
 
+        # Coordinator contacts are platform-managed: the shared universal
+        # email / phone / WhatsApp pools are owned by the repair path
+        # (``ensure_coordinator_*``), so a deleted platform contact would
+        # just be re-provisioned on the owner's next visit — leaving a
+        # confusing gap in inbound routing meanwhile. Block deletion of
+        # those. Legacy ``provisioned_by="user"`` rows that predate the
+        # connect gating stay deletable so leftover BYOD contacts can
+        # still be cleaned up (here and via the disconnect endpoint).
+        if (
+            assistant.is_coordinator
+            and contact is not None
+            and contact.provisioned_by != "user"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="coordinator_contacts_are_platform_managed",
+            )
+
         if contact:
             # BYOD contacts: skip external deprovisioning (we don't own the resource).
             # Email contacts are BYOD-only since platform mailboxes were retired,

@@ -5451,6 +5451,73 @@ class TestConnectEndpointOrg:
         assert resp.json()["detail"] == "coordinator_contacts_are_platform_managed"
 
     @pytest.mark.anyio
+    async def test_coordinator_platform_contact_cannot_be_deleted(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """A platform-provisioned Coordinator contact can't be deleted — the
+        repair path owns it, so removal would only re-provision later."""
+        from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+        AssistantContactDAO(dbsession).upsert_assistant_contact(
+            assistant_id=agent_id,
+            contact_type="email",
+            contact_value="marty@unify.ai",
+            provider="google_workspace",
+            provisioned_by="platform",
+        )
+        dbsession.commit()
+
+        resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "email"},
+            headers=owner["headers"],
+        )
+
+        assert resp.status_code == status.HTTP_409_CONFLICT
+        assert resp.json()["detail"] == "coordinator_contacts_are_platform_managed"
+
+    @pytest.mark.anyio
+    async def test_coordinator_legacy_byod_contact_is_deletable(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Legacy BYOD (provisioned_by='user') Coordinator contacts that predate
+        the connect gating stay deletable so they can be cleaned up."""
+        from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+        AssistantContactDAO(dbsession).upsert_assistant_contact(
+            assistant_id=agent_id,
+            contact_type="email",
+            contact_value="legacy-byod@personal.com",
+            provider="google",
+            provisioned_by="user",
+        )
+        dbsession.commit()
+
+        resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{agent_id}/contact",
+            json={"contact_type": "email"},
+            headers=owner["headers"],
+        )
+
+        assert resp.status_code == status.HTTP_200_OK
+
+    @pytest.mark.anyio
     async def test_org_member_cannot_write_secret_for_other_members_workspace_coordinator(
         self,
         client: AsyncClient,
