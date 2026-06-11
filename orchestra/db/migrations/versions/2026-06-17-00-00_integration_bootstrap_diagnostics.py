@@ -1,6 +1,6 @@
 """Persist integration bootstrap sync diagnostics.
 
-Revision ID: integration_bootstrap_diagnostics
+Revision ID: integration_bootstrap_diag
 Revises: integration_bootstrap_state
 Create Date: 2026-06-17 00:00:00.000000
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "integration_bootstrap_diagnostics"
+revision = "integration_bootstrap_diag"
 down_revision = "integration_bootstrap_state"
 branch_labels = None
 depends_on = None
