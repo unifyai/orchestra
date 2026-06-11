@@ -7,6 +7,7 @@ import uuid
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from scripts.cloud_bootstrap_provider_integrations import apply_plan, provider_plans
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -210,6 +211,155 @@ def test_provider_catalog_unique_constraints(dbsession: Session) -> None:
     with pytest.raises(IntegrityError):
         dbsession.flush()
     dbsession.rollback()
+
+
+async def test_bootstrap_state_admin_api_round_trips(client: AsyncClient) -> None:
+    payload = {
+        "environment": "staging",
+        "backend_id": "composio",
+        "desired_hash": "abc123",
+        "desired_config": {
+            "backend": {"backend_id": "composio", "status": "enabled"},
+        },
+        "last_status": "success",
+        "apps_upserted": 3,
+        "tools_upserted": 12,
+    }
+
+    saved = await client.put(
+        "/v0/admin/integrations/bootstrap-state",
+        headers=ADMIN_HEADERS,
+        json=payload,
+    )
+    assert saved.status_code == status.HTTP_200_OK, saved.json()
+    assert saved.json()["desired_hash"] == "abc123"
+    assert saved.json()["last_synced_at"] is not None
+
+    fetched = await client.get(
+        "/v0/admin/integrations/bootstrap-state",
+        headers=ADMIN_HEADERS,
+        params={"environment": "staging", "backend_id": "composio"},
+    )
+    assert fetched.status_code == status.HTTP_200_OK, fetched.json()
+    assert fetched.json()["desired_config"] == payload["desired_config"]
+
+    updated_payload = {
+        **payload,
+        "desired_hash": "def456",
+        "last_status": "failed",
+        "last_error": "provider catalog unavailable",
+    }
+    updated = await client.put(
+        "/v0/admin/integrations/bootstrap-state",
+        headers=ADMIN_HEADERS,
+        json=updated_payload,
+    )
+    assert updated.status_code == status.HTTP_200_OK, updated.json()
+    assert updated.json()["id"] == saved.json()["id"]
+    assert updated.json()["desired_hash"] == "def456"
+    assert updated.json()["last_status"] == "failed"
+    assert updated.json()["last_error"] == "provider catalog unavailable"
+
+
+def test_cloud_bootstrap_manifest_hash_is_stable() -> None:
+    manifest = {
+        "schema_version": 1,
+        "environment": "staging",
+        "providers": {
+            "composio": {
+                "status": "enabled",
+                "sync": {
+                    "mode": "partial",
+                    "app_slugs": ["GMAIL", "SLACK"],
+                    "tool_limit_per_app": 25,
+                },
+            },
+        },
+    }
+
+    first = provider_plans(manifest)[0]
+    second = provider_plans(manifest)[0]
+
+    assert first.desired_hash == second.desired_hash
+    assert first.sync_payload is not None
+    assert first.sync_payload["cache_version"].startswith(
+        "cloud-bootstrap-staging-composio-",
+    )
+
+
+def test_cloud_bootstrap_manifest_supports_manifest_defined_provider_ids() -> None:
+    manifest = {
+        "schema_version": 1,
+        "environment": "staging",
+        "providers": {
+            "custom_provider": {
+                "kind": "custom",
+                "status": "enabled",
+                "display_name": "Custom Provider",
+                "sync": {
+                    "mode": "partial",
+                    "app_slugs": ["custom_app"],
+                    "tool_limit_per_app": 0,
+                },
+            },
+        },
+    }
+
+    plan = provider_plans(manifest)[0]
+
+    assert plan.backend_id == "custom_provider"
+    assert plan.backend_payload["kind"] == "custom"
+    assert plan.sync_payload is not None
+    assert plan.sync_payload["backend_id"] == "custom_provider"
+    assert plan.sync_payload["tool_limit_per_app"] == 0
+
+
+def test_cloud_bootstrap_skips_unchanged_successful_sync() -> None:
+    manifest = {
+        "schema_version": 1,
+        "environment": "production",
+        "providers": {
+            "pipedream": {
+                "status": "enabled",
+                "sync": {
+                    "mode": "partial",
+                    "app_slugs": ["slack"],
+                    "component_limit_per_app": 20,
+                },
+            },
+        },
+    }
+    plan = provider_plans(manifest)[0]
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def request(self, method: str, path: str, payload=None):
+            self.calls.append((method, path))
+            return {}
+
+        def bootstrap_state(self, *, environment: str, backend_id: str):
+            return {
+                "environment": environment,
+                "backend_id": backend_id,
+                "desired_hash": plan.desired_hash,
+                "last_status": "success",
+            }
+
+        def put_bootstrap_state(self, **_kwargs):
+            raise AssertionError("unchanged successful sync should not update state")
+
+    client = FakeClient()
+
+    result = apply_plan(
+        client=client,
+        environment="production",
+        plan=plan,
+    )
+
+    assert result == "skipped"
+    assert client.calls == [("POST", "/admin/integrations/backends")]
 
 
 @pytest.mark.anyio
