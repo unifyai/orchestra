@@ -352,7 +352,6 @@ def _sync_diagnostics(
     if result:
         for field in (
             "status",
-            "skipped_apps",
             "error",
             "warning",
             "auth_configs_created",
@@ -361,8 +360,10 @@ def _sync_diagnostics(
         ):
             if field in result:
                 diagnostics[field] = result[field]
-        if sync_mode != "full" and "matched_app_slugs" in result:
-            diagnostics["matched_app_slugs"] = result["matched_app_slugs"]
+        if sync_mode != "full":
+            for field in ("skipped_apps", "matched_app_slugs"):
+                if field in result:
+                    diagnostics[field] = result[field]
     return diagnostics
 
 
@@ -593,33 +594,30 @@ def apply_plan(
     ):
         print(f"{plan.backend_id}: sync skipped, manifest hash already applied")
         if not dry_run:
+            previous_diagnostics = state.get("last_sync_diagnostics") or {}
+            skip_result = {
+                "status": "skipped",
+                "apps_upserted": state.get("apps_upserted", 0),
+                "tools_upserted": state.get("tools_upserted", 0),
+                "cache_version": previous_diagnostics.get("cache_version"),
+                "warning": "Manifest hash already applied; catalog sync skipped.",
+            }
+            sync_config = plan.desired_config.get("sync") or {}
+            sync_mode = sync_config.get("mode") or sync_config.get("sync_mode")
+            if sync_mode != "full":
+                skip_result["skipped_apps"] = previous_diagnostics.get(
+                    "skipped_apps",
+                    [],
+                )
+                skip_result["matched_app_slugs"] = previous_diagnostics.get(
+                    "matched_app_slugs",
+                    [],
+                )
             client.put_bootstrap_state(
                 environment=environment,
                 plan=plan,
                 status="skipped",
-                result={
-                    "status": "skipped",
-                    "apps_upserted": state.get("apps_upserted", 0),
-                    "tools_upserted": state.get("tools_upserted", 0),
-                    "skipped_apps": (
-                        (state.get("last_sync_diagnostics") or {}).get(
-                            "skipped_apps",
-                            [],
-                        )
-                    ),
-                    "matched_app_slugs": (
-                        (state.get("last_sync_diagnostics") or {}).get(
-                            "matched_app_slugs",
-                            [],
-                        )
-                    ),
-                    "cache_version": (
-                        (state.get("last_sync_diagnostics") or {}).get(
-                            "cache_version",
-                        )
-                    ),
-                    "warning": "Manifest hash already applied; catalog sync skipped.",
-                },
+                result=skip_result,
             )
         return "skipped"
 

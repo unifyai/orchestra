@@ -392,6 +392,70 @@ def test_cloud_bootstrap_skips_unchanged_successful_sync() -> None:
     )
 
 
+def test_cloud_bootstrap_full_skip_drops_stale_batch_diagnostics() -> None:
+    manifest = {
+        "schema_version": 1,
+        "environment": "staging",
+        "providers": {
+            "composio": {
+                "status": "enabled",
+                "sync": {
+                    "mode": "full",
+                    "include_all_managed_apps": True,
+                    "tool_limit_per_app": 0,
+                    "create_auth_configs": False,
+                },
+            },
+        },
+    }
+    plan = provider_plans(manifest)[0]
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.state_updates: list[dict] = []
+
+        def request(self, method: str, path: str, payload=None):
+            return {}
+
+        def bootstrap_state(self, *, environment: str, backend_id: str):
+            return {
+                "environment": environment,
+                "backend_id": backend_id,
+                "desired_hash": plan.desired_hash,
+                "last_status": "success",
+                "apps_upserted": 1043,
+                "tools_upserted": 43133,
+                "last_sync_diagnostics": {
+                    "cache_version": "cloud-bootstrap-staging-composio-abc123",
+                    "skipped_apps": [{"slug": "STALE", "reason": "not_found"}],
+                    "matched_app_slugs": ["stale"],
+                },
+            }
+
+        def put_bootstrap_state(self, **kwargs):
+            self.state_updates.append(kwargs)
+
+    client = FakeClient()
+
+    result = apply_plan(
+        client=client,
+        environment="staging",
+        plan=plan,
+    )
+
+    assert result == "skipped"
+    skip_result = client.state_updates[0]["result"]
+    assert skip_result["apps_upserted"] == 1043
+    assert skip_result["tools_upserted"] == 43133
+    assert "skipped_apps" not in skip_result
+    assert "matched_app_slugs" not in skip_result
+    diagnostics = _sync_diagnostics(plan=plan, result=skip_result)
+    assert diagnostics["sync_mode"] == "full"
+    assert diagnostics["requested_app_slugs"] == []
+    assert "skipped_apps" not in diagnostics
+    assert "matched_app_slugs" not in diagnostics
+
+
 def test_cloud_bootstrap_batches_composio_full_sync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -435,6 +499,7 @@ def test_cloud_bootstrap_batches_composio_full_sync(
                 "status": "success",
                 "apps_upserted": len(payload["app_slugs"]),
                 "tools_upserted": len(payload["app_slugs"]) * 10,
+                "skipped_apps": [{"slug": "STALE", "reason": "not_found"}],
                 "requested_app_slugs": payload["app_slugs"],
                 "matched_app_slugs": payload["app_slugs"],
                 "sync_mode": "partial",
@@ -477,6 +542,7 @@ def test_cloud_bootstrap_batches_composio_full_sync(
     )
     assert final_diagnostics["sync_mode"] == "full"
     assert final_diagnostics["requested_app_slugs"] == []
+    assert "skipped_apps" not in final_diagnostics
     assert "matched_app_slugs" not in final_diagnostics
 
     partial_plan = provider_plans(
