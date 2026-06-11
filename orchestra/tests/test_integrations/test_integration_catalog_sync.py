@@ -254,6 +254,58 @@ def test_composio_full_sync_handler_does_not_eagerly_create_auth_configs(
     assert response.skipped_apps == []
 
 
+def test_composio_app_only_sync_does_not_fetch_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, session) -> None:
+            self.session = session
+
+        def get_backend(self, backend_id: str):
+            assert backend_id == "composio"
+            return FakeBackend()
+
+    class AppOnlyAdapter(FakeComposioCatalogAdapter):
+        def list_tools(self, *, toolkit_slug: str, limit: int | None = None):
+            raise AssertionError("app-only sync must not fetch toolkit tools")
+
+    def fake_sync_catalog_rows(session, body):
+        assert len(body.apps) == 2
+        assert body.tools == []
+        return {"apps_upserted": 2, "tools_upserted": 0}
+
+    monkeypatch.setattr(
+        operations,
+        "seed_default_provider_catalog",
+        lambda session: None,
+    )
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: AppOnlyAdapter(),
+    )
+    monkeypatch.setattr(operations, "_sync_catalog_rows", fake_sync_catalog_rows)
+
+    response = operations._composio_live_catalog_handler(
+        session=object(),
+        body=operations.IntegrationCatalogSyncRequest(
+            backend_id="composio",
+            sync_mode="full",
+            include_all_managed_apps=True,
+            sync_tools=False,
+        ),
+    )
+
+    assert response.status == "success"
+    assert response.apps_upserted == 2
+    assert response.tools_upserted == 0
+
+
 def test_composio_connect_lazily_creates_missing_auth_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -368,6 +420,228 @@ def test_composio_connect_logs_auth_config_creation_failure(
     assert "connection_id=ic_failure" in caplog.text
     assert "provider_status_code=400" in caplog.text
     assert "invalid toolkit auth config" in caplog.text
+
+
+def test_get_apps_uses_sql_page_and_batched_response_lookups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeApp:
+        def __init__(self, slug: str, display_name: str) -> None:
+            self.backend_id = "composio"
+            self.provider_app_id = slug.upper()
+            self.canonical_app_slug = slug
+            self.display_name = display_name
+            self.description = None
+            self.category = None
+            self.icon_url = None
+            self.auth_modes = ["oauth"]
+            self.available_scopes_json = []
+            self.raw_provider_metadata_json = {"source_type": "third_party"}
+
+    page_apps = [FakeApp("alpha", "Alpha"), FakeApp("beta", "Beta")]
+
+    class FakeDAO:
+        def __init__(self, session) -> None:
+            self.session = session
+
+        def list_overlays_by_slug(self):
+            return {}
+
+        def list_enabled_apps_page(self, **kwargs):
+            assert kwargs["limit"] == 2
+            assert kwargs["offset"] == 4
+            return page_apps
+
+        def count_enabled_apps(self, **kwargs):
+            return 1043
+
+        def tool_counts_by_app(self, canonical_app_slugs):
+            assert list(canonical_app_slugs) == ["alpha", "beta"]
+            return {"alpha": 10, "beta": 20}
+
+        def best_connections_by_app(self, *, owner, canonical_app_slugs):
+            assert list(canonical_app_slugs) == ["alpha", "beta"]
+            return {}
+
+        def list_enabled_apps(self, **kwargs):
+            raise AssertionError("get_apps must not load the full app catalog")
+
+        def tool_count_for_app(self, canonical_app_slug: str):
+            raise AssertionError("get_apps must not count tools per app")
+
+    monkeypatch.setattr(
+        operations,
+        "seed_default_provider_catalog",
+        lambda session: None,
+    )
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+
+    response = operations.get_apps(
+        session=object(),
+        body=operations.ProviderAppGetRequest(limit=2, offset=4),
+    )
+
+    assert response.total == 1043
+    assert [item.canonical_app_slug for item in response.items] == ["alpha", "beta"]
+    assert [item.tool_count for item in response.items] == [10, 20]
+
+
+def test_get_tools_uses_sql_page_for_unconnected_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeTool:
+        tool_id = "composio:alpha:list_items"
+        backend_id = "composio"
+        provider_app_id = "ALPHA"
+        provider_tool_id = "ALPHA_LIST_ITEMS"
+        canonical_name = "primitives.integrations.alpha.list_items"
+        function_manager_name = "primitives_integrations__alpha__list_items"
+        name = "list_items"
+        canonical_app_slug = "alpha"
+        display_name = "List Items"
+        description = "List items"
+        action_class = "read"
+        required_scopes_json = []
+        confirmation_required = False
+        overlay_rank_boost = 0
+        enabled_by_default = True
+
+    class FakeApp:
+        canonical_app_slug = "alpha"
+        display_name = "Alpha"
+        icon_url = None
+
+    class FakeDAO:
+        def __init__(self, session) -> None:
+            self.session = session
+
+        def list_tools_page(self, **kwargs):
+            assert kwargs["limit"] == 1
+            assert kwargs["offset"] == 3
+            return [FakeTool()]
+
+        def count_tools(self, **kwargs):
+            return 43324
+
+        def list_apps_by_slug(self, canonical_app_slugs):
+            assert list(canonical_app_slugs) == ["alpha"]
+            return {"alpha": FakeApp()}
+
+        def best_connections_by_app(self, *, owner, canonical_app_slugs):
+            assert list(canonical_app_slugs) == ["alpha"]
+            return {}
+
+        def list_tools(self, **kwargs):
+            raise AssertionError("get_tools must not load the full tool catalog")
+
+        def list_all_apps(self):
+            raise AssertionError("get_tools must not load all apps")
+
+    monkeypatch.setattr(
+        operations,
+        "seed_default_provider_catalog",
+        lambda session: None,
+    )
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+
+    response = operations.get_tools(
+        session=object(),
+        body=operations.ProviderToolGetRequest(
+            include_unconnected=True,
+            limit=1,
+            offset=3,
+        ),
+    )
+
+    assert response.total == 43324
+    assert [item.tool_id for item in response.items] == ["composio:alpha:list_items"]
+
+
+def test_empty_search_apps_uses_paginated_get_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_apps(session, body):
+        assert body.query is None
+        return operations.ProviderAppGetResponse(
+            items=[
+                operations.DynamicIntegrationAppResponse(
+                    backend_id="composio",
+                    provider_app_id="ALPHA",
+                    canonical_app_slug="alpha",
+                    display_name="Alpha",
+                    source_type="third_party",
+                    source_label="Third-party",
+                    auth_modes=["oauth"],
+                    tool_count=1,
+                ),
+            ],
+            total=1,
+            limit=body.limit,
+            offset=body.offset,
+        )
+
+    monkeypatch.setattr(
+        operations,
+        "seed_default_provider_catalog",
+        lambda session: None,
+    )
+    monkeypatch.setattr(operations, "get_apps", fake_get_apps)
+
+    response = operations.search_apps(
+        session=object(),
+        body=operations.ProviderAppSearchRequest(limit=1, offset=2),
+    )
+
+    assert response[0].canonical_app_slug == "alpha"
+    assert response[0].match_reason == "all supported integrations"
+
+
+def test_empty_search_tools_uses_paginated_get_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = operations.ProviderToolSearchResult(
+        tool_id="composio:alpha:list_items",
+        backend_id="composio",
+        provider_app_id="ALPHA",
+        provider_tool_id="ALPHA_LIST_ITEMS",
+        canonical_name="primitives.integrations.alpha.list_items",
+        function_manager_name="primitives_integrations__alpha__list_items",
+        app_slug="alpha",
+        app_display_name="Alpha",
+        tool_display_name="List Items",
+        description="List items",
+        match_reason="filtered provider tool",
+        activation_state="not_connected",
+        action_class="read",
+    )
+
+    def fake_get_tools(session, body):
+        assert body.limit == 1
+        assert body.offset == 2
+        return operations.ProviderToolGetResponse(
+            items=[item],
+            total=1,
+            limit=body.limit,
+            offset=body.offset,
+        )
+
+    monkeypatch.setattr(
+        operations,
+        "seed_default_provider_catalog",
+        lambda session: None,
+    )
+    monkeypatch.setattr(operations, "get_tools", fake_get_tools)
+
+    response = operations.search_tools(
+        session=object(),
+        body=operations.ProviderToolSearchRequest(
+            limit=1,
+            offset=2,
+            include_unconnected=True,
+        ),
+    )
+
+    assert response == [item]
 
 
 def test_composio_adapter_fetches_catalog_and_manages_auth_configs(

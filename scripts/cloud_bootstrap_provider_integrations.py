@@ -19,12 +19,15 @@ from typing import Any
 from urllib import error, parse, request
 
 BOOTSTRAP_STATUS_SUCCESS = "success"
+DEFAULT_SYNC_BATCH_SIZE = 25
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 120
 SYNC_PASSTHROUGH_FIELDS = {
     "tool_limit_per_app",
     "component_limit_per_app",
     "include_all_managed_apps",
     "include_all_apps",
     "create_auth_configs",
+    "sync_tools",
 }
 
 
@@ -184,9 +187,16 @@ def provider_plans(
 
 
 class AdminClient:
-    def __init__(self, *, base_url: str, admin_key: str):
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        admin_key: str,
+        timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    ):
         self.base_url = base_url.rstrip("/")
         self.admin_key = admin_key
+        self.timeout_seconds = timeout_seconds
 
     def request(
         self,
@@ -206,7 +216,7 @@ class AdminClient:
             },
         )
         try:
-            with request.urlopen(req, timeout=300) as response:
+            with request.urlopen(req, timeout=self.timeout_seconds) as response:
                 body = response.read().decode("utf-8")
                 return json.loads(body) if body else {}
         except error.HTTPError as exc:
@@ -313,6 +323,149 @@ def _print_sync_result(backend_id: str, result: dict[str, Any]) -> None:
         )
 
 
+def _merge_sync_results(
+    *,
+    base: dict[str, Any] | None,
+    batch: dict[str, Any],
+    app_count: int | None = None,
+) -> dict[str, Any]:
+    merged = dict(base or {})
+    merged["status"] = batch.get("status") or merged.get("status") or "success"
+    if app_count is not None:
+        merged["apps_upserted"] = app_count
+    else:
+        merged["apps_upserted"] = int(merged.get("apps_upserted", 0) or 0) + int(
+            batch.get("apps_upserted", 0) or 0,
+        )
+    merged["tools_upserted"] = int(merged.get("tools_upserted", 0) or 0) + int(
+        batch.get("tools_upserted", 0) or 0,
+    )
+    merged["skipped_apps"] = [
+        *(merged.get("skipped_apps") or []),
+        *(batch.get("skipped_apps") or []),
+    ]
+    matched = {
+        str(slug)
+        for slug in [
+            *(merged.get("matched_app_slugs") or []),
+            *(batch.get("matched_app_slugs") or []),
+        ]
+        if slug
+    }
+    merged["matched_app_slugs"] = sorted(matched)
+    for field in (
+        "requested_app_slugs",
+        "sync_mode",
+        "cache_version",
+        "warning",
+        "error",
+    ):
+        if batch.get(field) is not None:
+            merged[field] = batch[field]
+    merged["auth_configs_created"] = int(
+        merged.get("auth_configs_created", 0) or 0,
+    ) + int(batch.get("auth_configs_created", 0) or 0)
+    merged["auth_configs_reused"] = int(
+        merged.get("auth_configs_reused", 0) or 0,
+    ) + int(batch.get("auth_configs_reused", 0) or 0)
+    return merged
+
+
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _should_batch_composio_full_sync(plan: ProviderPlan) -> bool:
+    payload = plan.sync_payload or {}
+    return (
+        plan.backend_id == "composio"
+        and payload.get("sync_mode") == "full"
+        and bool(payload.get("include_all_managed_apps"))
+        and bool(payload.get("sync_tools", True))
+    )
+
+
+def _batched_composio_sync(
+    *,
+    client: AdminClient,
+    environment: str,
+    plan: ProviderPlan,
+    batch_size: int,
+) -> dict[str, Any]:
+    assert plan.sync_payload is not None
+    print(
+        f"{plan.backend_id}: syncing app catalog before tool batches "
+        f"batch_size={batch_size}",
+    )
+    app_payload = {
+        **plan.sync_payload,
+        "sync_tools": False,
+        "app_slugs": [],
+        "include_all_managed_apps": True,
+    }
+    app_result = client.request("POST", "/admin/integrations/sync", app_payload)
+    app_count = int(app_result.get("apps_upserted", 0) or 0)
+    aggregate = _merge_sync_results(base=None, batch=app_result, app_count=app_count)
+    client.put_bootstrap_state(
+        environment=environment,
+        plan=plan,
+        status=aggregate.get("status") or BOOTSTRAP_STATUS_SUCCESS,
+        result=aggregate,
+    )
+    _print_sync_result(plan.backend_id, app_result)
+    if app_result.get("status") == "failed":
+        raise SyncFailed(
+            app_result.get("error") or f"{plan.backend_id}: app catalog sync failed",
+        )
+
+    matched_slugs = [str(slug) for slug in app_result.get("matched_app_slugs") or []]
+    if not matched_slugs:
+        raise SyncFailed(f"{plan.backend_id}: app catalog sync returned no app slugs")
+
+    batches = _chunks(matched_slugs, max(1, batch_size))
+    for index, batch_slugs in enumerate(batches, start=1):
+        print(
+            f"{plan.backend_id}: syncing tool batch {index}/{len(batches)} "
+            f"apps={len(batch_slugs)} first={batch_slugs[0]}",
+        )
+        batch_payload = {
+            **plan.sync_payload,
+            "sync_mode": "partial",
+            "app_slugs": batch_slugs,
+            "include_all_managed_apps": False,
+            "sync_tools": True,
+        }
+        batch_result = client.request(
+            "POST",
+            "/admin/integrations/sync",
+            batch_payload,
+        )
+        aggregate = _merge_sync_results(
+            base=aggregate,
+            batch=batch_result,
+            app_count=app_count,
+        )
+        client.put_bootstrap_state(
+            environment=environment,
+            plan=plan,
+            status=aggregate.get("status") or BOOTSTRAP_STATUS_SUCCESS,
+            result=aggregate,
+        )
+        print(
+            f"{plan.backend_id}: tool batch {index}/{len(batches)} complete "
+            f"batch_apps={batch_result.get('apps_upserted', 0)} "
+            f"batch_tools={batch_result.get('tools_upserted', 0)} "
+            f"cumulative_tools={aggregate.get('tools_upserted', 0)}",
+        )
+        if batch_result.get("status") == "failed":
+            _print_sync_result(plan.backend_id, batch_result)
+            raise SyncFailed(
+                batch_result.get("error")
+                or f"{plan.backend_id}: tool batch {index} failed",
+            )
+    return aggregate
+
+
 def apply_plan(
     *,
     client: AdminClient,
@@ -415,11 +568,25 @@ def apply_plan(
             f"sync_mode={plan.sync_payload.get('sync_mode')} "
             f"cache_version={plan.sync_payload.get('cache_version')}",
         )
-        result = client.request(
-            "POST",
-            "/admin/integrations/sync",
-            plan.sync_payload,
-        )
+        if _should_batch_composio_full_sync(plan):
+            batch_size = int(
+                os.environ.get(
+                    "ORCHESTRA_INTEGRATION_BOOTSTRAP_BATCH_SIZE",
+                    DEFAULT_SYNC_BATCH_SIZE,
+                ),
+            )
+            result = _batched_composio_sync(
+                client=client,
+                environment=environment,
+                plan=plan,
+                batch_size=batch_size,
+            )
+        else:
+            result = client.request(
+                "POST",
+                "/admin/integrations/sync",
+                plan.sync_payload,
+            )
         client.put_bootstrap_state(
             environment=environment,
             plan=plan,
@@ -474,7 +641,16 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = _load_manifest(args.manifest)
     plans = provider_plans(manifest, providers=_csv(args.providers) or None)
-    client = AdminClient(base_url=base_url, admin_key=args.admin_key)
+    client = AdminClient(
+        base_url=base_url,
+        admin_key=args.admin_key,
+        timeout_seconds=int(
+            os.environ.get(
+                "ORCHESTRA_INTEGRATION_BOOTSTRAP_REQUEST_TIMEOUT_SECONDS",
+                DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            ),
+        ),
+    )
     for plan in plans:
         apply_plan(
             client=client,

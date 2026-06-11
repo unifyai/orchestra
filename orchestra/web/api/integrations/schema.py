@@ -153,7 +153,7 @@ class DynamicIntegrationAppResponse(BaseModel):
 
 
 class ProviderAppGetRequest(BaseModel):
-    query: str = ""
+    query: Optional[str] = None
     source_type: Optional[IntegrationSourceType] = None
     owner_scope: OwnerScope = "assistant"
     org_id: Optional[int] = None
@@ -172,7 +172,7 @@ class ProviderAppGetResponse(BaseModel):
 
 
 class ProviderAppSearchRequest(BaseModel):
-    query: str = ""
+    query: Optional[str] = None
     source_type: Optional[IntegrationSourceType] = None
     owner_scope: OwnerScope = "assistant"
     org_id: Optional[int] = None
@@ -298,6 +298,7 @@ class IntegrationCatalogSyncRequest(BaseModel):
     include_all_managed_apps: bool = False
     include_all_apps: bool = False
     create_auth_configs: bool = True
+    sync_tools: bool = True
 
 
 class IntegrationCatalogSyncResponse(BaseModel):
@@ -316,7 +317,7 @@ class IntegrationCatalogSyncResponse(BaseModel):
 
 
 class ProviderToolSearchRequest(BaseModel):
-    query: str = ""
+    query: Optional[str] = None
     owner_scope: OwnerScope = "assistant"
     org_id: Optional[int] = None
     team_id: Optional[int] = None

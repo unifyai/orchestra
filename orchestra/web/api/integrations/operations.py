@@ -581,6 +581,7 @@ def _composio_live_catalog_handler(
 ) -> IntegrationCatalogSyncResponse:
     """Fetch and normalize a bounded Composio catalog into provider tables."""
 
+    started_at = time.perf_counter()
     seed_default_provider_catalog(session)
     backend = IntegrationProviderDAO(session).get_backend("composio")
     config = (backend.config_json if backend else {}) or {}
@@ -612,6 +613,16 @@ def _composio_live_catalog_handler(
         if body.include_all_managed_apps or not requested_slugs
         else [slug for slug in requested_slugs if slug in toolkits_by_slug]
     )
+    logger.info(
+        "Composio catalog sync start mode=%s include_all=%s sync_tools=%s "
+        "requested=%s selected=%s cache_version=%s",
+        body.sync_mode or ("full" if body.include_all_managed_apps else "partial"),
+        body.include_all_managed_apps,
+        body.sync_tools,
+        len(requested_slugs),
+        len(selected_toolkit_slugs),
+        body.cache_version,
+    )
 
     skipped_apps = [
         {"slug": slug, "reason": "not_found"}
@@ -637,8 +648,9 @@ def _composio_live_catalog_handler(
     auth_configs_created = 0
     auth_configs_reused = 0
     should_create_auth_configs = body.create_auth_configs and bool(requested_slugs)
+    tool_fetch_started_at = time.perf_counter()
 
-    for toolkit_slug in selected_toolkit_slugs:
+    for index, toolkit_slug in enumerate(selected_toolkit_slugs, start=1):
         toolkit = toolkits_by_slug[toolkit_slug]
         canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
         auth_config_id = None
@@ -681,49 +693,62 @@ def _composio_live_catalog_handler(
                 "raw_provider_metadata": raw_provider_metadata,
             },
         )
-        tool_limit = body.tool_limit_per_app if body.tool_limit_per_app > 0 else None
-        for tool in adapter.list_tools(toolkit_slug=toolkit_slug, limit=tool_limit):
-            provider_tool_id = str(tool.get("slug") or tool.get("id") or "")
-            if not provider_tool_id:
-                continue
-            tool_app_slug = (_composio_toolkit_slug(tool) or toolkit_slug).upper()
-            if (
-                not body.include_all_managed_apps
-                and requested_set
-                and tool_app_slug not in requested_set
-                and tool_app_slug != toolkit_slug
-            ):
-                continue
-            tool_name = _composio_tool_name(provider_tool_id, toolkit_slug)
-            action_class = _composio_action_class(tool, canonical_app_slug)
-            tools.append(
-                {
-                    "provider_app_id": toolkit_slug,
-                    "canonical_app_slug": canonical_app_slug,
-                    "provider_tool_id": provider_tool_id,
-                    "name": tool_name,
-                    "display_name": tool.get("name")
-                    or tool_name.replace("_", " ").title(),
-                    "description": tool.get("description")
-                    or tool_name.replace("_", " ").title(),
-                    "required_scopes": _composio_tool_scopes(tool),
-                    "input_schema": _composio_tool_input_schema(tool),
-                    "output_schema": _composio_tool_output_schema(tool),
-                    "action_class": action_class,
-                    "confirmation_required": action_class
-                    in {"write", "destructive", "bulk_export"},
-                    "category": toolkit.get("category"),
-                    "tags": [
-                        canonical_app_slug,
-                        str(toolkit.get("category") or "").lower(),
-                    ],
-                    "raw_provider_metadata": {
-                        "source": "composio_live_sync",
-                        "toolkit_slug": toolkit_slug,
-                        "tool_version": tool.get("version"),
-                        "raw_tool": tool,
+        if body.sync_tools:
+            tool_limit = (
+                body.tool_limit_per_app if body.tool_limit_per_app > 0 else None
+            )
+            for tool in adapter.list_tools(toolkit_slug=toolkit_slug, limit=tool_limit):
+                provider_tool_id = str(tool.get("slug") or tool.get("id") or "")
+                if not provider_tool_id:
+                    continue
+                tool_app_slug = (_composio_toolkit_slug(tool) or toolkit_slug).upper()
+                if (
+                    not body.include_all_managed_apps
+                    and requested_set
+                    and tool_app_slug not in requested_set
+                    and tool_app_slug != toolkit_slug
+                ):
+                    continue
+                tool_name = _composio_tool_name(provider_tool_id, toolkit_slug)
+                action_class = _composio_action_class(tool, canonical_app_slug)
+                tools.append(
+                    {
+                        "provider_app_id": toolkit_slug,
+                        "canonical_app_slug": canonical_app_slug,
+                        "provider_tool_id": provider_tool_id,
+                        "name": tool_name,
+                        "display_name": tool.get("name")
+                        or tool_name.replace("_", " ").title(),
+                        "description": tool.get("description")
+                        or tool_name.replace("_", " ").title(),
+                        "required_scopes": _composio_tool_scopes(tool),
+                        "input_schema": _composio_tool_input_schema(tool),
+                        "output_schema": _composio_tool_output_schema(tool),
+                        "action_class": action_class,
+                        "confirmation_required": action_class
+                        in {"write", "destructive", "bulk_export"},
+                        "category": toolkit.get("category"),
+                        "tags": [
+                            canonical_app_slug,
+                            str(toolkit.get("category") or "").lower(),
+                        ],
+                        "raw_provider_metadata": {
+                            "source": "composio_live_sync",
+                            "toolkit_slug": toolkit_slug,
+                            "tool_version": tool.get("version"),
+                            "raw_tool": tool,
+                        },
                     },
-                },
+                )
+        if index == len(selected_toolkit_slugs) or index % 25 == 0:
+            logger.info(
+                "Composio catalog sync progress processed_toolkits=%s/%s "
+                "apps=%s tools=%s elapsed_seconds=%.3f",
+                index,
+                len(selected_toolkit_slugs),
+                len(apps),
+                len(tools),
+                time.perf_counter() - started_at,
             )
 
     if selected_toolkit_slugs and not apps:
@@ -744,6 +769,7 @@ def _composio_live_catalog_handler(
             cache_version=body.cache_version,
         )
 
+    db_started_at = time.perf_counter()
     sync_body = IntegrationCatalogSyncRequest(
         backend_id="composio",
         cache_version=(
@@ -757,6 +783,19 @@ def _composio_live_catalog_handler(
     summary = _sync_catalog_rows(
         session,
         sync_body,
+    )
+    elapsed = time.perf_counter() - started_at
+    logger.info(
+        "Composio catalog sync complete status=success apps=%s tools=%s "
+        "selected_toolkits=%s tool_fetch_seconds=%.3f db_seconds=%.3f "
+        "elapsed_seconds=%.3f cache_version=%s",
+        summary["apps_upserted"],
+        summary["tools_upserted"],
+        len(selected_toolkit_slugs),
+        db_started_at - tool_fetch_started_at,
+        time.perf_counter() - db_started_at,
+        elapsed,
+        sync_body.cache_version,
     )
     return IntegrationCatalogSyncResponse(
         status="success",
@@ -1473,11 +1512,26 @@ def _app_response(
         owner=owner,
         canonical_app_slug=app.canonical_app_slug,
     )
-    metadata = _app_metadata(app)
-    source_type = _app_source_type(app)
     tool_count = IntegrationProviderDAO(session).tool_count_for_app(
         app.canonical_app_slug,
     )
+    return _app_response_from_preloaded(
+        app=app,
+        conn=conn,
+        overlay=overlay,
+        tool_count=tool_count,
+    )
+
+
+def _app_response_from_preloaded(
+    *,
+    app: DynamicProviderApp,
+    conn: IntegrationConnection | None,
+    overlay: IntegrationOverlay | None,
+    tool_count: int,
+) -> DynamicIntegrationAppResponse:
+    metadata = _app_metadata(app)
+    source_type = _app_source_type(app)
     return DynamicIntegrationAppResponse(
         backend_id=app.backend_id,
         provider_app_id=app.provider_app_id,
@@ -1660,27 +1714,30 @@ def _semantic_app_scores(
     }
 
 
-def list_apps(
-    session: Session,
+def _app_responses_from_preloaded(
     *,
-    query_text: str = "",
+    dao: IntegrationProviderDAO,
+    apps: list[DynamicProviderApp],
     owner: OwnerContext,
-    source_type: str | None = None,
+    overlays: dict[str, IntegrationOverlay],
 ) -> list[DynamicIntegrationAppResponse]:
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    overlays = dao.list_overlays_by_slug()
-    results: list[DynamicIntegrationAppResponse] = []
-    for app in dao.list_enabled_apps(query_text=query_text):
-        if source_type and _app_source_type(app) != source_type:
-            continue
-        overlay = overlays.get(app.canonical_app_slug)
-        results.append(_app_response(session, app=app, owner=owner, overlay=overlay))
-    return results
+    slugs = [app.canonical_app_slug for app in apps]
+    tool_counts = dao.tool_counts_by_app(slugs)
+    connections = dao.best_connections_by_app(owner=owner, canonical_app_slugs=slugs)
+    return [
+        _app_response_from_preloaded(
+            app=app,
+            conn=connections.get(app.canonical_app_slug),
+            overlay=overlays.get(app.canonical_app_slug),
+            tool_count=tool_counts.get(app.canonical_app_slug, 0),
+        )
+        for app in apps
+    ]
 
 
 def get_apps(session: Session, body: ProviderAppGetRequest) -> ProviderAppGetResponse:
     seed_default_provider_catalog(session)
+    dao = IntegrationProviderDAO(session)
     owner = OwnerContext(
         owner_scope=body.owner_scope,
         org_id=body.org_id,
@@ -1688,15 +1745,25 @@ def get_apps(session: Session, body: ProviderAppGetRequest) -> ProviderAppGetRes
         user_id=body.user_id,
         assistant_id=body.assistant_id,
     )
-    items = list_apps(
-        session,
-        query_text=body.query,
+    overlays = dao.list_overlays_by_slug()
+    apps = dao.list_enabled_apps_page(
+        query_text=body.query or "",
+        source_type=body.source_type,
+        limit=body.limit,
+        offset=body.offset,
+    )
+    items = _app_responses_from_preloaded(
+        dao=dao,
+        apps=apps,
         owner=owner,
+        overlays=overlays,
+    )
+    total = dao.count_enabled_apps(
+        query_text=body.query or "",
         source_type=body.source_type,
     )
-    total = len(items)
     return ProviderAppGetResponse(
-        items=items[body.offset : body.offset + body.limit],
+        items=items,
         total=total,
         limit=body.limit,
         offset=body.offset,
@@ -1708,6 +1775,7 @@ def search_apps(
     body: ProviderAppSearchRequest,
 ) -> list[ProviderAppSearchResult]:
     seed_default_provider_catalog(session)
+    query_text = (body.query or "").strip()
     owner = OwnerContext(
         owner_scope=body.owner_scope,
         org_id=body.org_id,
@@ -1715,20 +1783,44 @@ def search_apps(
         user_id=body.user_id,
         assistant_id=body.assistant_id,
     )
+    if not query_text:
+        page = get_apps(
+            session,
+            ProviderAppGetRequest(
+                query=None,
+                source_type=body.source_type,
+                owner_scope=body.owner_scope,
+                org_id=body.org_id,
+                team_id=body.team_id,
+                user_id=body.user_id,
+                assistant_id=body.assistant_id,
+                limit=body.limit,
+                offset=body.offset,
+            ),
+        )
+        return [
+            ProviderAppSearchResult(
+                **item.model_dump(),
+                supported=True,
+                score=1.0,
+                match_reason="all supported integrations",
+            )
+            for item in page.items
+        ]
     dao = IntegrationProviderDAO(session)
     overlays = dao.list_overlays_by_slug()
     apps = dao.list_enabled_apps()
     if body.source_type:
         apps = [app for app in apps if _app_source_type(app) == body.source_type]
-    semantic_scores = _semantic_app_scores(session, body.query.strip(), apps)
+    semantic_scores = _semantic_app_scores(session, query_text, apps)
     scored: list[ProviderAppSearchResult] = []
     for app in apps:
-        score, reason = _score_app_match(app, body.query)
+        score, reason = _score_app_match(app, query_text)
         semantic_score, semantic_reason = semantic_scores.get(
             _app_embedding_ref_id(app),
             (0.0, ""),
         )
-        if body.query.strip() and score <= 0 and semantic_score <= 0:
+        if query_text and score <= 0 and semantic_score <= 0:
             continue
         if semantic_score > 0:
             score += semantic_score
@@ -2347,6 +2439,29 @@ def _tool_search_result(
     )
 
 
+def _tool_results_from_preloaded(
+    *,
+    tools: list[ProviderToolCatalog],
+    apps: dict[str, DynamicProviderApp],
+    connections: dict[str, IntegrationConnection],
+    match_reason: str,
+) -> list[ProviderToolSearchResult]:
+    return [
+        _tool_search_result(
+            tool=tool,
+            app=apps.get(tool.canonical_app_slug),
+            conn=connections.get(tool.canonical_app_slug),
+            activation_state=_activation_state(
+                tool,
+                connections.get(tool.canonical_app_slug),
+            ),
+            match_reason=match_reason,
+            score=float(tool.overlay_rank_boost or 0),
+        )
+        for tool in tools
+    ]
+
+
 def get_tools(
     session: Session,
     body: ProviderToolGetRequest,
@@ -2360,33 +2475,59 @@ def get_tools(
         user_id=body.user_id,
         assistant_id=body.assistant_id,
     )
-    tools = dao.list_tools(canonical_app_slug=body.canonical_app_slug)
-    apps = {app.canonical_app_slug: app for app in dao.list_all_apps()}
-    results: list[ProviderToolSearchResult] = []
-    for tool in tools:
-        conn = _best_connection(
-            session,
+    if body.include_unconnected and body.activation_state is None:
+        tools = dao.list_tools_page(
+            canonical_app_slug=body.canonical_app_slug,
+            limit=body.limit,
+            offset=body.offset,
+        )
+        slugs = [tool.canonical_app_slug for tool in tools]
+        apps = dao.list_apps_by_slug(slugs)
+        connections = dao.best_connections_by_app(
             owner=owner,
-            canonical_app_slug=tool.canonical_app_slug,
+            canonical_app_slugs=slugs,
         )
-        activation_state = _activation_state(tool, conn)
-        if body.activation_state and activation_state != body.activation_state:
-            continue
-        if not body.include_unconnected and activation_state != "connected_ready":
-            continue
-        results.append(
-            _tool_search_result(
-                tool=tool,
-                app=apps.get(tool.canonical_app_slug),
-                conn=conn,
-                activation_state=activation_state,
-                match_reason="filtered provider tool",
-                score=float(tool.overlay_rank_boost or 0),
-            ),
+        results = _tool_results_from_preloaded(
+            tools=tools,
+            apps=apps,
+            connections=connections,
+            match_reason="filtered provider tool",
         )
-    total = len(results)
+        total = dao.count_tools(canonical_app_slug=body.canonical_app_slug)
+        return ProviderToolGetResponse(
+            items=results,
+            total=total,
+            limit=body.limit,
+            offset=body.offset,
+        )
+
+    activation_state = body.activation_state or "connected_ready"
+    tools = dao.list_tools_page_by_activation_state(
+        owner=owner,
+        activation_state=activation_state,
+        canonical_app_slug=body.canonical_app_slug,
+        limit=body.limit,
+        offset=body.offset,
+    )
+    slugs = [tool.canonical_app_slug for tool in tools]
+    apps = dao.list_apps_by_slug(slugs)
+    connections = dao.best_connections_by_app(
+        owner=owner,
+        canonical_app_slugs=slugs,
+    )
+    matched = _tool_results_from_preloaded(
+        tools=tools,
+        apps=apps,
+        connections=connections,
+        match_reason="filtered provider tool",
+    )
+    total = dao.count_tools_by_activation_state(
+        owner=owner,
+        activation_state=activation_state,
+        canonical_app_slug=body.canonical_app_slug,
+    )
     return ProviderToolGetResponse(
-        items=results[body.offset : body.offset + body.limit],
+        items=matched,
         total=total,
         limit=body.limit,
         offset=body.offset,
@@ -2406,7 +2547,23 @@ def search_tools(
         user_id=body.user_id,
         assistant_id=body.assistant_id,
     )
-    query_text = body.query.strip()
+    query_text = (body.query or "").strip()
+    if not query_text:
+        return get_tools(
+            session,
+            ProviderToolGetRequest(
+                owner_scope=body.owner_scope,
+                org_id=body.org_id,
+                team_id=body.team_id,
+                user_id=body.user_id,
+                assistant_id=body.assistant_id,
+                canonical_app_slug=body.canonical_app_slug,
+                activation_state=None,
+                include_unconnected=body.include_unconnected,
+                limit=body.limit,
+                offset=body.offset,
+            ),
+        ).items
     tools = dao.list_tools(canonical_app_slug=body.canonical_app_slug)
     semantic_scores = _semantic_tool_scores(session, query_text, tools)
 
