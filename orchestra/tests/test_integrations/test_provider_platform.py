@@ -107,7 +107,9 @@ async def _sync_integrations(
                             "properties": {"query": {"type": "string"}},
                         },
                         "output_schema": {"type": "object"},
-                        "required_scopes": required_scopes or ["read"],
+                        "required_scopes": (
+                            required_scopes if required_scopes is not None else ["read"]
+                        ),
                         "action_class": action_class,
                         "confirmation_required": action_class
                         in {"write", "destructive", "bulk_export"},
@@ -758,6 +760,176 @@ async def test_native_app_sync_search_and_connection_rejection(
 
 
 @pytest.mark.anyio
+async def test_connection_start_derives_requested_scopes_generically(
+    client: AsyncClient,
+) -> None:
+    assistant_id = 120_000 + (uuid.uuid4().int % 1000)
+    await _sync_integrations(
+        client,
+        app_slug="scope_slack",
+        display_name="Scope Slack",
+        tool_name="send_message",
+        required_scopes=["chat:write"],
+    )
+    await _sync_integrations(
+        client,
+        app_slug="scope_mail",
+        display_name="Scope Mail",
+        tool_name="fetch_messages",
+        required_scopes=[
+            "https://mail.google.com/",
+            "https://www.googleapis.com/auth/gmail.readonly",
+        ],
+    )
+    await _sync_integrations(
+        client,
+        app_slug="scope_free",
+        display_name="Scope Free",
+        tool_name="ping",
+        required_scopes=[],
+    )
+
+    slack_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_slack",
+            "backend_id": "composio",
+            "requested_scopes": [],
+            "auth_mode": "oauth",
+        },
+    )
+    assert slack_start.status_code == status.HTTP_200_OK, slack_start.json()
+    assert slack_start.json()["requested_scopes"] == ["chat:write"]
+    assert slack_start.json()["connection"]["granted_scopes"] == ["chat:write"]
+
+    slack_id = slack_start.json()["connection"]["connection_id"]
+    slack_complete = await client.post(
+        f"/v0/integrations/connections/{slack_id}/complete",
+        headers=HEADERS,
+        json={
+            "provider_connection_id": "provider-scope-slack",
+            "granted_scopes": [],
+            "status": "connected",
+        },
+    )
+    assert slack_complete.status_code == status.HTTP_200_OK, slack_complete.json()
+    assert slack_complete.json()["granted_scopes"] == ["chat:write"]
+
+    connected_tools = await client.get(
+        "/v0/integrations/tools",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_slack",
+            "activation_state": "connected_ready",
+        },
+    )
+    assert connected_tools.status_code == status.HTTP_200_OK, connected_tools.json()
+    assert connected_tools.json()["total"] == 1
+    assert connected_tools.json()["items"][0]["activation_state"] == "connected_ready"
+
+    mail_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_mail",
+            "backend_id": "composio",
+            "requested_scopes": [],
+            "auth_mode": "oauth",
+        },
+    )
+    assert mail_start.status_code == status.HTTP_200_OK, mail_start.json()
+    assert mail_start.json()["requested_scopes"] == [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ]
+
+    explicit_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_mail",
+            "backend_id": "composio",
+            "requested_scopes": ["https://mail.google.com/"],
+            "auth_mode": "oauth",
+        },
+    )
+    assert explicit_start.status_code == status.HTTP_200_OK, explicit_start.json()
+    assert explicit_start.json()["requested_scopes"] == ["https://mail.google.com/"]
+
+    scope_free_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_free",
+            "backend_id": "composio",
+            "requested_scopes": [],
+            "auth_mode": "oauth",
+        },
+    )
+    assert scope_free_start.status_code == status.HTTP_200_OK, scope_free_start.json()
+    assert scope_free_start.json()["requested_scopes"] == []
+    assert scope_free_start.json()["connection"]["granted_scopes"] == []
+
+    api_key_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_mail",
+            "backend_id": "composio",
+            "requested_scopes": [],
+            "auth_mode": "api_key",
+            "api_key_fields": {"token": "secret"},
+        },
+    )
+    assert api_key_start.status_code == status.HTTP_200_OK, api_key_start.json()
+    assert api_key_start.json()["requested_scopes"] == [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ]
+    assert api_key_start.json()["connection"]["granted_scopes"] == [
+        "https://mail.google.com/",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ]
+
+    api_key_tools = await client.get(
+        "/v0/integrations/tools",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_mail",
+            "activation_state": "connected_ready",
+        },
+    )
+    assert api_key_tools.status_code == status.HTTP_200_OK, api_key_tools.json()
+    assert api_key_tools.json()["total"] == 1
+
+    api_key_scope_free_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "scope_free",
+            "backend_id": "composio",
+            "requested_scopes": [],
+            "auth_mode": "api_key",
+            "api_key_fields": {"token": "secret"},
+        },
+    )
+    assert (
+        api_key_scope_free_start.status_code == status.HTTP_200_OK
+    ), api_key_scope_free_start.json()
+    assert api_key_scope_free_start.json()["requested_scopes"] == []
+    assert api_key_scope_free_start.json()["connection"]["granted_scopes"] == []
+
+
+@pytest.mark.anyio
 async def test_app_catalog_status_filters_facets_and_summary_payload(
     client: AsyncClient,
 ) -> None:
@@ -833,7 +1005,7 @@ async def test_app_catalog_status_filters_facets_and_summary_payload(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "jira",
             "backend_id": "composio",
-            "requested_scopes": [],
+            "requested_scopes": ["issues.comment"],
             "auth_mode": "oauth",
         },
     )

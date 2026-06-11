@@ -1431,6 +1431,20 @@ def _derive_scopes(
     return list(scopes_by_id.values())
 
 
+def _scope_ids(scopes: list[dict[str, Any]]) -> list[str]:
+    return [str(scope["id"]) for scope in scopes if scope.get("id")]
+
+
+def _effective_requested_scopes(
+    app: DynamicProviderApp,
+    tools: list[ProviderToolCatalog],
+    requested_scopes: list[str],
+) -> list[str]:
+    if requested_scopes:
+        return requested_scopes
+    return _scope_ids(_derive_scopes(app, tools))
+
+
 def _tool_preview(
     tool: ProviderToolCatalog,
     conn: IntegrationConnection | None,
@@ -1969,7 +1983,7 @@ def start_connection(
     created_by: Optional[str],
     redirect_url: Optional[str],
     account_label: Optional[str] = None,
-) -> tuple[IntegrationConnectionResponse, Optional[str], str, bool]:
+) -> tuple[IntegrationConnectionResponse, Optional[str], str, bool, list[str]]:
     seed_default_provider_catalog(session)
     dao = IntegrationProviderDAO(session)
     app = dao.get_app_by_slug(canonical_app_slug, backend_id=backend_id)
@@ -1984,6 +1998,12 @@ def start_connection(
         )
 
     chosen_auth_mode = auth_mode or ((app.auth_modes or ["oauth"])[0])
+    tools = dao.list_tools(canonical_app_slug=app.canonical_app_slug)
+    effective_requested_scopes = _effective_requested_scopes(
+        app,
+        tools,
+        requested_scopes,
+    )
     status = (
         "connected" if chosen_auth_mode == "api_key" and api_key_fields else "pending"
     )
@@ -2004,7 +2024,7 @@ def start_connection(
                 f"local_{uuid.uuid4().hex}" if status == "connected" else None
             ),
             "status": status,
-            "granted_scopes_json": requested_scopes,
+            "granted_scopes_json": effective_requested_scopes,
             "enabled_capabilities_json": _capability_ids(
                 app.available_actions_json or [],
             ),
@@ -2034,6 +2054,7 @@ def start_connection(
         connect_url,
         chosen_auth_mode,
         chosen_auth_mode == "oauth",
+        effective_requested_scopes,
     )
 
 

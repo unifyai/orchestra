@@ -449,25 +449,29 @@ def start_integration_connect(
     session: Session = Depends(get_db_session),
 ) -> IntegrationConnectStartResponse:
     try:
-        connection, connect_url, auth_mode, requires_browser_redirect = (
-            start_connection(
-                session,
-                owner=OwnerContext(
-                    owner_scope=body.owner_scope,
-                    org_id=body.org_id,
-                    team_id=body.team_id,
-                    user_id=body.user_id,
-                    assistant_id=body.assistant_id,
-                ),
-                canonical_app_slug=body.canonical_app_slug,
-                backend_id=body.backend_id,
-                requested_scopes=body.requested_scopes,
-                auth_mode=body.auth_mode,
-                api_key_fields=body.api_key_fields,
-                created_by=body.created_by,
-                redirect_url=body.redirect_url,
-                account_label=body.account_label,
-            )
+        (
+            connection,
+            connect_url,
+            auth_mode,
+            requires_browser_redirect,
+            requested_scopes,
+        ) = start_connection(
+            session,
+            owner=OwnerContext(
+                owner_scope=body.owner_scope,
+                org_id=body.org_id,
+                team_id=body.team_id,
+                user_id=body.user_id,
+                assistant_id=body.assistant_id,
+            ),
+            canonical_app_slug=body.canonical_app_slug,
+            backend_id=body.backend_id,
+            requested_scopes=body.requested_scopes,
+            auth_mode=body.auth_mode,
+            api_key_fields=body.api_key_fields,
+            created_by=body.created_by,
+            redirect_url=body.redirect_url,
+            account_label=body.account_label,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -479,7 +483,7 @@ def start_integration_connect(
         connect_url=connect_url,
         auth_mode=auth_mode,
         requires_browser_redirect=requires_browser_redirect,
-        requested_scopes=body.requested_scopes,
+        requested_scopes=requested_scopes,
     )
 
 
