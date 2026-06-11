@@ -634,12 +634,13 @@ def _composio_live_catalog_handler(
     tools: list[dict[str, Any]] = []
     auth_configs_created = 0
     auth_configs_reused = 0
+    should_create_auth_configs = body.create_auth_configs and bool(requested_slugs)
 
     for toolkit_slug in selected_toolkit_slugs:
         toolkit = toolkits_by_slug[toolkit_slug]
         canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
         auth_config_id = None
-        if body.create_auth_configs and "oauth" in _composio_auth_modes(toolkit):
+        if should_create_auth_configs and "oauth" in _composio_auth_modes(toolkit):
             try:
                 auth_config_id = adapter.get_or_create_auth_config(toolkit_slug)
             except Exception as exc:
@@ -1120,9 +1121,22 @@ def _provider_connect_url(
                 (app.raw_provider_metadata_json if app else {}) or {}
             ).get("auth_config_id")
             if not auth_config_id:
-                raise ValueError(
-                    f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
+                if not hasattr(adapter, "get_or_create_auth_config"):
+                    raise ValueError(
+                        f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
+                    )
+                auth_config_id = adapter.get_or_create_auth_config(
+                    connection.provider_app_id,
                 )
+                if not auth_config_id:
+                    raise ValueError(
+                        f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
+                    )
+                if app:
+                    app.raw_provider_metadata_json = {
+                        **(app.raw_provider_metadata_json or {}),
+                        "auth_config_id": str(auth_config_id),
+                    }
             connect_url, connected_account_id, error = adapter.create_auth_link(
                 user_id=external_user_id,
                 auth_config_id=str(auth_config_id),
@@ -1785,8 +1799,7 @@ def start_connection(
             connection=connection,
             redirect_url=redirect_url,
         )
-        if connection.provider_connection_id:
-            session.commit()
+        session.commit()
     return (
         _connection_to_response(connection),
         connect_url,

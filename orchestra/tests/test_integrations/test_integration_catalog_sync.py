@@ -16,6 +16,7 @@ from orchestra.db.models.integration_provider_models import (
 from orchestra.integrations.providers.composio import ComposioProviderAdapter
 from orchestra.integrations.providers.pagination import ProviderPaginationError
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
+from orchestra.web.api.integrations import operations
 
 
 class FakeResponse:
@@ -129,7 +130,17 @@ class FakeComposioCatalogAdapterWithAuthConfigFailure(FakeComposioCatalogAdapter
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         if toolkit_slug == "BROKEN":
-            raise AssertionError("broken toolkit should be skipped before tools sync")
+            return [
+                {
+                    "slug": "BROKEN_DO_THING",
+                    "name": "Do thing",
+                    "description": "Do a broken app thing.",
+                    "toolkit": {"slug": "BROKEN"},
+                    "input_parameters": {"type": "object"},
+                    "output_parameters": {"type": "object"},
+                    "scopes": [],
+                },
+            ][:limit]
         return super().list_tools(toolkit_slug=toolkit_slug, limit=limit)
 
     def get_or_create_auth_config(self, toolkit_slug: str) -> str:
@@ -182,6 +193,124 @@ class FakePipedreamCatalogAdapter:
                 "description": "List repositories.",
             },
         ][:limit]
+
+
+def test_composio_full_sync_handler_does_not_eagerly_create_auth_configs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, session) -> None:
+            self.session = session
+
+        def get_backend(self, backend_id: str):
+            assert backend_id == "composio"
+            return FakeBackend()
+
+    class NoEagerAuthConfigAdapter(FakeComposioCatalogAdapterWithAuthConfigFailure):
+        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+            raise AssertionError("full sync should not create Composio auth configs")
+
+    def fake_sync_catalog_rows(session, body):
+        assert sorted(app["canonical_app_slug"] for app in body.apps) == [
+            "broken",
+            "discord",
+        ]
+        assert len(body.tools) == 2
+        return {"apps_upserted": len(body.apps), "tools_upserted": len(body.tools)}
+
+    monkeypatch.setattr(
+        operations,
+        "seed_default_provider_catalog",
+        lambda session: None,
+    )
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: NoEagerAuthConfigAdapter(),
+    )
+    monkeypatch.setattr(operations, "_sync_catalog_rows", fake_sync_catalog_rows)
+
+    response = operations._composio_live_catalog_handler(
+        session=object(),
+        body=operations.IntegrationCatalogSyncRequest(
+            backend_id="composio",
+            sync_mode="full",
+            include_all_managed_apps=True,
+            create_auth_configs=True,
+            tool_limit_per_app=1,
+        ),
+    )
+
+    assert response.status == "success"
+    assert response.apps_upserted == 2
+    assert response.tools_upserted == 2
+    assert sorted(response.matched_app_slugs) == ["broken", "discord"]
+    assert response.skipped_apps == []
+
+
+def test_composio_connect_lazily_creates_missing_auth_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeApp:
+        raw_provider_metadata_json = {}
+
+    class FakeConnection:
+        backend_id = "composio"
+        provider_app_id = "DISCORD"
+        connection_id = "ic_test"
+        provider_connection_id = None
+
+    class FakeAdapter:
+        def __init__(self) -> None:
+            self.created_for: list[str] = []
+
+        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+            self.created_for.append(toolkit_slug)
+            return "authcfg_discord"
+
+        def create_auth_link(
+            self,
+            *,
+            user_id,
+            auth_config_id,
+            callback_url=None,
+            alias=None,
+        ):
+            assert auth_config_id == "authcfg_discord"
+            assert alias == "ic_test"
+            return "https://backend.composio.dev/connect/discord", "ca_discord", None
+
+    adapter = FakeAdapter()
+    app = FakeApp()
+    conn = FakeConnection()
+
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    url = operations._provider_connect_url(
+        backend=FakeBackend(),
+        app=app,
+        owner=operations.OwnerContext(user_id="user-1"),
+        connection=conn,
+        redirect_url="https://console.example/callback",
+    )
+
+    assert url == "https://backend.composio.dev/connect/discord"
+    assert adapter.created_for == ["DISCORD"]
+    assert app.raw_provider_metadata_json["auth_config_id"] == "authcfg_discord"
+    assert conn.provider_connection_id == "ca_discord"
 
 
 def test_composio_adapter_fetches_catalog_and_manages_auth_configs(
@@ -371,7 +500,51 @@ async def test_sync_route_honors_explicit_composio_subset_and_reports_missing(
 
 
 @pytest.mark.anyio
-async def test_composio_full_sync_skips_auth_config_failures(
+async def test_composio_full_sync_does_not_eagerly_create_auth_configs(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoEagerAuthConfigAdapter(FakeComposioCatalogAdapterWithAuthConfigFailure):
+        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+            raise AssertionError("full sync should not create Composio auth configs")
+
+    monkeypatch.setattr(
+        "orchestra.web.api.integrations.operations.get_provider_adapter",
+        lambda *_args, **_kwargs: NoEagerAuthConfigAdapter(),
+    )
+
+    response = await client.post(
+        "/v0/admin/integrations/sync",
+        headers=ADMIN_HEADERS,
+        json={
+            "backend_id": "composio",
+            "sync_mode": "full",
+            "include_all_managed_apps": True,
+            "create_auth_configs": True,
+            "tool_limit_per_app": 1,
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["apps_upserted"] == 2
+    assert payload["tools_upserted"] == 2
+    assert payload["matched_app_slugs"] == ["discord", "broken"]
+    assert payload["skipped_apps"] == []
+    assert (
+        dbsession.query(DynamicProviderApp)
+        .filter_by(canonical_app_slug="discord")
+        .one()
+    )
+    assert (
+        dbsession.query(DynamicProviderApp).filter_by(canonical_app_slug="broken").one()
+    )
+
+
+@pytest.mark.anyio
+async def test_composio_partial_sync_skips_auth_config_failures(
     client: AsyncClient,
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -386,8 +559,8 @@ async def test_composio_full_sync_skips_auth_config_failures(
         headers=ADMIN_HEADERS,
         json={
             "backend_id": "composio",
-            "sync_mode": "full",
-            "include_all_managed_apps": True,
+            "app_slugs": ["DISCORD", "BROKEN"],
+            "sync_mode": "partial",
             "create_auth_configs": True,
             "tool_limit_per_app": 1,
         },
