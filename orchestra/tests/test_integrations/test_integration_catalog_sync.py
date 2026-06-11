@@ -32,7 +32,12 @@ class FakeResponse:
 class FakeComposioCatalogAdapter:
     last_auth_config_was_created = False
 
-    def list_toolkits(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+    def list_toolkits(
+        self,
+        *,
+        page_size: int = 1000,
+        search: str | None = None,
+    ) -> list[dict[str, Any]]:
         return [
             {
                 "slug": "DISCORD",
@@ -95,6 +100,42 @@ class FakeComposioCatalogAdapter:
 
     def get_or_create_auth_config(self, toolkit_slug: str) -> str:
         return f"authcfg_{toolkit_slug.lower()}"
+
+
+class FakeComposioCatalogAdapterWithAuthConfigFailure(FakeComposioCatalogAdapter):
+    def list_toolkits(
+        self,
+        *,
+        page_size: int = 1000,
+        search: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "slug": "DISCORD",
+                "name": "Discord",
+                "auth_schemes": ["OAUTH2"],
+            },
+            {
+                "slug": "BROKEN",
+                "name": "Broken",
+                "auth_schemes": ["OAUTH2"],
+            },
+        ]
+
+    def list_tools(
+        self,
+        *,
+        toolkit_slug: str,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if toolkit_slug == "BROKEN":
+            raise AssertionError("broken toolkit should be skipped before tools sync")
+        return super().list_tools(toolkit_slug=toolkit_slug, limit=limit)
+
+    def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+        if toolkit_slug == "BROKEN":
+            raise ValueError("Composio rejected managed auth config")
+        return super().get_or_create_auth_config(toolkit_slug)
 
 
 class FakePipedreamCatalogAdapter:
@@ -224,7 +265,7 @@ def test_composio_adapter_uses_bounded_cursor_pagination(
         max_pages=5,
     )
 
-    assert adapter.list_toolkits(limit=1) == [{"slug": "A"}, {"slug": "B"}]
+    assert adapter.list_toolkits(page_size=1) == [{"slug": "A"}, {"slug": "B"}]
     assert cursor_calls == [None, "cursor-2"]
 
 
@@ -242,7 +283,7 @@ def test_composio_adapter_rejects_repeated_pagination_cursor(
     )
 
     with pytest.raises(ProviderPaginationError):
-        adapter.list_toolkits(limit=1)
+        adapter.list_toolkits(page_size=1)
 
 
 @pytest.mark.anyio
@@ -324,6 +365,55 @@ async def test_sync_route_honors_explicit_composio_subset_and_reports_missing(
     assert (
         dbsession.query(DynamicProviderApp)
         .filter_by(canonical_app_slug="google_drive")
+        .one_or_none()
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_composio_full_sync_skips_auth_config_failures(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "orchestra.web.api.integrations.operations.get_provider_adapter",
+        lambda *_args, **_kwargs: FakeComposioCatalogAdapterWithAuthConfigFailure(),
+    )
+
+    response = await client.post(
+        "/v0/admin/integrations/sync",
+        headers=ADMIN_HEADERS,
+        json={
+            "backend_id": "composio",
+            "sync_mode": "full",
+            "include_all_managed_apps": True,
+            "create_auth_configs": True,
+            "tool_limit_per_app": 1,
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["apps_upserted"] == 1
+    assert payload["tools_upserted"] == 1
+    assert payload["matched_app_slugs"] == ["discord"]
+    assert payload["skipped_apps"] == [
+        {
+            "slug": "BROKEN",
+            "reason": "auth_config_failed",
+            "message": "Composio rejected managed auth config",
+        },
+    ]
+    assert (
+        dbsession.query(DynamicProviderApp)
+        .filter_by(canonical_app_slug="discord")
+        .one()
+    )
+    assert (
+        dbsession.query(DynamicProviderApp)
+        .filter_by(canonical_app_slug="broken")
         .one_or_none()
         is None
     )

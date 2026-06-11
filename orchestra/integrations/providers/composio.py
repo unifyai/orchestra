@@ -63,7 +63,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         search: str | None = None,
     ) -> Iterable[dict[str, Any]]:
         return iter(
-            self.list_toolkits(limit=limit or self.MAX_PAGE_SIZE, search=search),
+            self.list_toolkits(page_size=limit or self.MAX_PAGE_SIZE, search=search),
         )
 
     def iter_tools(
@@ -77,7 +77,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
     def list_toolkits(
         self,
         *,
-        limit: int = MAX_PAGE_SIZE,
+        page_size: int = MAX_PAGE_SIZE,
         search: str | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch all available Composio toolkits with bounded cursor pagination."""
@@ -118,7 +118,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         return collect_cursor_pages(
             fetch_page,
             limits=PaginationLimits(
-                page_size=limit,
+                page_size=page_size,
                 max_page_size=self.MAX_PAGE_SIZE,
                 max_pages=self.max_pages,
                 max_items=self.max_items,

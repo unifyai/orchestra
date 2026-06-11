@@ -590,7 +590,7 @@ def _composio_live_catalog_handler(
     )
     requested_slugs = [slug.strip().upper() for slug in body.app_slugs if slug.strip()]
     requested_set = set(requested_slugs)
-    toolkits = adapter.list_toolkits(limit=1000)
+    toolkits = adapter.list_toolkits()
     toolkits_by_slug = {
         str(
             toolkit.get("slug")
@@ -640,7 +640,17 @@ def _composio_live_catalog_handler(
         canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
         auth_config_id = None
         if body.create_auth_configs and "oauth" in _composio_auth_modes(toolkit):
-            auth_config_id = adapter.get_or_create_auth_config(toolkit_slug)
+            try:
+                auth_config_id = adapter.get_or_create_auth_config(toolkit_slug)
+            except Exception as exc:
+                skipped_apps.append(
+                    {
+                        "slug": toolkit_slug,
+                        "reason": "auth_config_failed",
+                        "message": str(exc)[:300],
+                    },
+                )
+                continue
             if getattr(adapter, "last_auth_config_was_created", False):
                 auth_configs_created += 1
             elif auth_config_id:
@@ -713,6 +723,24 @@ def _composio_live_catalog_handler(
                 },
             )
 
+    if selected_toolkit_slugs and not apps:
+        error_message = "No Composio apps produced catalog rows during live sync."
+        return IntegrationCatalogSyncResponse(
+            status="failed",
+            apps_upserted=0,
+            tools_upserted=0,
+            skipped_apps=skipped_apps,
+            requested_app_slugs=requested_slugs,
+            matched_app_slugs=[],
+            sync_mode=body.sync_mode
+            or ("full" if body.include_all_managed_apps else "partial"),
+            error=error_message,
+            warning=error_message,
+            auth_configs_created=auth_configs_created,
+            auth_configs_reused=auth_configs_reused,
+            cache_version=body.cache_version,
+        )
+
     sync_body = IntegrationCatalogSyncRequest(
         backend_id="composio",
         cache_version=(
@@ -734,7 +762,9 @@ def _composio_live_catalog_handler(
         skipped_apps=skipped_apps,
         requested_app_slugs=requested_slugs,
         matched_app_slugs=[
-            _composio_canonical_app_slug(slug) for slug in selected_toolkit_slugs
+            str(app["canonical_app_slug"])
+            for app in apps
+            if app.get("canonical_app_slug")
         ],
         sync_mode=body.sync_mode
         or ("full" if body.include_all_managed_apps else "partial"),
