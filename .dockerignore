@@ -2,6 +2,9 @@
 
 batch_eval/
 deploy/
+# Self-host runs the provider-integration catalog sync inside the image, so
+# the bootstrap manifests must ship with it.
+!deploy/integrations/
 .idea/
 .vscode/
 .git/
