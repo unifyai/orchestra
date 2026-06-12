@@ -26,6 +26,7 @@ from orchestra.integrations.providers.local_echo import LocalEchoProviderAdapter
 from orchestra.integrations.providers.pipedream import PipedreamProviderAdapter
 from orchestra.integrations.providers.registry import get_provider_adapter
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
+from orchestra.web.api.integrations import operations
 from orchestra.web.api.integrations.operations import (
     create_confirmation_token,
     seed_default_provider_catalog,
@@ -217,6 +218,43 @@ def test_provider_catalog_unique_constraints(dbsession: Session) -> None:
     with pytest.raises(IntegrityError):
         dbsession.flush()
     dbsession.rollback()
+
+
+def test_tool_semantic_search_is_read_only_on_steady_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeTool:
+        tool_id = "composio:alpha:list_items"
+
+    class FakeEmbeddings:
+        def __init__(self) -> None:
+            self.search_calls = 0
+
+        def search(self, *args, **kwargs):
+            self.search_calls += 1
+            assert (
+                kwargs["namespace"] == operations.INTEGRATION_TOOL_EMBEDDING_NAMESPACE
+            )
+            assert kwargs["ref_ids"] == ["composio:alpha:list_items"]
+            return {"composio:alpha:list_items": (0.92, "pre-indexed match")}
+
+        def upsert(self, *args, **kwargs):
+            raise AssertionError("steady-state search must not upsert per tool")
+
+        def upsert_many(self, *args, **kwargs):
+            raise AssertionError("steady-state search must not batch upsert")
+
+    fake_embeddings = FakeEmbeddings()
+    monkeypatch.setattr(operations, "CATALOG_ARTIFACT_EMBEDDINGS", fake_embeddings)
+
+    scores = operations._artifact_tool_scores(
+        session=object(),
+        query_text="alpha list",
+        tools=[FakeTool()],
+    )
+
+    assert scores == {"composio:alpha:list_items": (0.92, "pre-indexed match")}
+    assert fake_embeddings.search_calls == 1
 
 
 async def test_bootstrap_state_admin_api_round_trips(client: AsyncClient) -> None:
@@ -1298,7 +1336,68 @@ async def test_connection_tool_pagination_run_policy_and_audit(
 
 
 @pytest.mark.anyio
-async def test_run_tool_confirmation_envelope(client: AsyncClient) -> None:
+async def test_run_tool_uses_owner_external_user_id_when_body_user_missing(
+    client: AsyncClient,
+) -> None:
+    assistant_id = 78_000 + (uuid.uuid4().int % 1000)
+    await _sync_integrations(
+        client,
+        app_slug="gmail",
+        display_name="Gmail",
+        tool_name="list_labels",
+        tool_display_name="List Gmail labels",
+        required_scopes=["https://www.googleapis.com/auth/gmail.labels"],
+    )
+    start_response = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            "owner_scope": "assistant",
+            "assistant_id": assistant_id,
+            "canonical_app_slug": "gmail",
+            "backend_id": "composio",
+            "requested_scopes": ["https://www.googleapis.com/auth/gmail.labels"],
+            "auth_mode": "api_key",
+            "api_key_fields": {"token": "secret"},
+        },
+    )
+    assert start_response.status_code == status.HTTP_200_OK, start_response.json()
+    connection_id = start_response.json()["connection"]["connection_id"]
+
+    tools = await client.get(
+        "/v0/integrations/tools",
+        headers=HEADERS,
+        params={
+            "owner_scope": "assistant",
+            "assistant_id": assistant_id,
+            "canonical_app_slug": "gmail",
+            "activation_state": "connected_ready",
+            "limit": 1,
+        },
+    )
+    assert tools.status_code == status.HTTP_200_OK, tools.json()
+    tool_id = tools.json()["items"][0]["tool_id"]
+
+    run = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            "owner_scope": "assistant",
+            "assistant_id": assistant_id,
+            "connection_id": connection_id,
+            "arguments": {"user_id": "me"},
+        },
+    )
+    assert run.status_code == status.HTTP_200_OK, run.json()
+    assert run.json()["status"] == "ok"
+    assert run.json()["result"]["user_id"] == f"assistant:{assistant_id}"
+
+
+@pytest.mark.anyio
+async def test_run_tool_confirmation_envelope(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
     assistant_id = 88_000 + (uuid.uuid4().int % 1000)
     await _sync_integrations(
         client,
@@ -1348,7 +1447,27 @@ async def test_run_tool_confirmation_envelope(client: AsyncClient) -> None:
     assert (
         missing_confirmation.status_code == status.HTTP_200_OK
     ), missing_confirmation.json()
-    assert missing_confirmation.json()["status"] == "confirmation_required"
+    missing_payload = missing_confirmation.json()
+    assert missing_payload["status"] == "confirmation_required"
+    confirmation = missing_payload["confirmation"]
+    assert confirmation["audit_id"] == missing_payload["audit_id"]
+    assert confirmation["connection_id"] == connection_id
+    assert confirmation["tool_id"] == tool_id
+    assert confirmation["app_slug"] == "slack"
+    assert confirmation["action_class"] == "write"
+    assert confirmation["behavior_hints"] == ["mutates_state"]
+    assert confirmation["arguments_summary"] == {
+        "keys": ["channel", "text"],
+        "total_keys": 2,
+    }
+    assert "once" in confirmation["approval_options"]
+    pending_audit = dbsession.query(ProviderActionAudit).get(
+        missing_payload["audit_id"],
+    )
+    assert pending_audit is not None
+    assert pending_audit.status == "pending_confirmation"
+    assert pending_audit.tool_id == tool_id
+    assert pending_audit.arguments_hash
 
     valid_token = create_confirmation_token(
         tool_id=tool_id,
@@ -1366,3 +1485,192 @@ async def test_run_tool_confirmation_envelope(client: AsyncClient) -> None:
     )
     assert confirmed.status_code == status.HTTP_200_OK, confirmed.json()
     assert confirmed.json()["status"] == "ok"
+
+    pending_once = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_id,
+            "arguments": {"channel": "general", "text": "approve once"},
+        },
+    )
+    assert pending_once.status_code == status.HTTP_200_OK, pending_once.json()
+    once_audit_id = pending_once.json()["audit_id"]
+    approval = await client.post(
+        f"/v0/integrations/tool-executions/{once_audit_id}/approve",
+        headers=HEADERS,
+        json={"scope": "once", "actor_id": "user:test"},
+    )
+    assert approval.status_code == status.HTTP_200_OK, approval.json()
+    assert approval.json()["status"] == "approved"
+    assert approval.json()["policy_updated"] is False
+
+    approved_retry = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_id,
+            "approval_audit_id": once_audit_id,
+            "arguments": {"channel": "general", "text": "approve once"},
+        },
+    )
+    assert approved_retry.status_code == status.HTTP_200_OK, approved_retry.json()
+    assert approved_retry.json()["status"] == "ok"
+    dbsession.expire_all()
+    approved_audit = dbsession.query(ProviderActionAudit).get(once_audit_id)
+    assert approved_audit.status == "ok"
+    assert approved_audit.approved_by == "user:test"
+
+    pending_deny = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_id,
+            "arguments": {"channel": "general", "text": "deny"},
+        },
+    )
+    deny_audit_id = pending_deny.json()["audit_id"]
+    denial = await client.post(
+        f"/v0/integrations/tool-executions/{deny_audit_id}/deny",
+        headers=HEADERS,
+        json={"scope": "once", "actor_id": "user:test", "reason": "no"},
+    )
+    assert denial.status_code == status.HTTP_200_OK, denial.json()
+    assert denial.json()["status"] == "denied"
+    denied_retry = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_id,
+            "approval_audit_id": deny_audit_id,
+            "arguments": {"channel": "general", "text": "deny"},
+        },
+    )
+    assert denied_retry.status_code == status.HTTP_200_OK, denied_retry.json()
+    assert denied_retry.json()["status"] == "confirmation_required"
+    assert denied_retry.json()["error"]["code"] == "invalid_approval"
+
+    pending_persist = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_id,
+            "arguments": {"channel": "general", "text": "persist"},
+        },
+    )
+    persist_audit_id = pending_persist.json()["audit_id"]
+    persisted = await client.post(
+        f"/v0/integrations/tool-executions/{persist_audit_id}/approve",
+        headers=HEADERS,
+        json={
+            "scope": "tool",
+            "persist_policy": True,
+            "approval_level": "auto",
+            "actor_id": "user:test",
+        },
+    )
+    assert persisted.status_code == status.HTTP_200_OK, persisted.json()
+    assert persisted.json()["policy_updated"] is True
+    auto_allowed = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_id,
+            "arguments": {"channel": "general", "text": "future"},
+        },
+    )
+    assert auto_allowed.status_code == status.HTTP_200_OK, auto_allowed.json()
+    assert auto_allowed.json()["status"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_tool_policy_is_scoped_to_connection_account(
+    client: AsyncClient,
+) -> None:
+    assistant_id = 89_000 + (uuid.uuid4().int % 1000)
+    await _sync_integrations(
+        client,
+        app_slug="asana",
+        display_name="Asana",
+        tool_name="create_task",
+        tool_display_name="Create Asana task",
+        action_class="write",
+        required_scopes=["tasks:write"],
+    )
+    connection_ids: list[str] = []
+    for label in ["Work Asana", "Personal Asana"]:
+        response = await client.post(
+            "/v0/integrations/connect/start",
+            headers=HEADERS,
+            json={
+                **_owner_payload(assistant_id=assistant_id),
+                "canonical_app_slug": "asana",
+                "backend_id": "composio",
+                "requested_scopes": ["tasks:write"],
+                "auth_mode": "api_key",
+                "api_key_fields": {"token": "secret"},
+                "account_label": label,
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK, response.json()
+        connection_ids.append(response.json()["connection"]["connection_id"])
+
+    tools = await client.get(
+        "/v0/integrations/tools",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "asana",
+            "activation_state": "connected_ready",
+            "limit": 1,
+        },
+    )
+    assert tools.status_code == status.HTTP_200_OK, tools.json()
+    tool_id = tools.json()["items"][0]["tool_id"]
+
+    patched = await client.patch(
+        f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
+        headers=HEADERS,
+        json={"tool_policies": {tool_id: "auto"}},
+    )
+    assert patched.status_code == status.HTTP_200_OK, patched.json()
+
+    other_policy = await client.get(
+        f"/v0/integrations/connections/{connection_ids[1]}/tool-policy",
+        headers=HEADERS,
+    )
+    assert other_policy.status_code == status.HTTP_200_OK, other_policy.json()
+    other_item = next(
+        item for item in other_policy.json()["policies"] if item["tool_id"] == tool_id
+    )
+    assert other_item["approval_level"] == "specific_approval"
+
+    auto_run = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_ids[0],
+            "arguments": {"name": "ship account scoped policy"},
+        },
+    )
+    assert auto_run.status_code == status.HTTP_200_OK, auto_run.json()
+    assert auto_run.json()["status"] == "ok"
+
+    confirm_run = await client.post(
+        f"/v0/integrations/tools/{tool_id}/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "connection_id": connection_ids[1],
+            "arguments": {"name": "ask on other account"},
+        },
+    )
+    assert confirm_run.status_code == status.HTTP_200_OK, confirm_run.json()
+    assert confirm_run.json()["status"] == "confirmation_required"

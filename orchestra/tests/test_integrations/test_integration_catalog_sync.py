@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -14,6 +15,7 @@ from orchestra.db.models.integration_provider_models import (
     DynamicProviderApp,
     ProviderToolCatalog,
 )
+from orchestra.integrations.providers.base import ProviderExecutionRequest
 from orchestra.integrations.providers.composio import ComposioProviderAdapter
 from orchestra.integrations.providers.pagination import ProviderPaginationError
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
@@ -21,13 +23,23 @@ from orchestra.web.api.integrations import operations
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
         self.payload = payload
+        self.status_code = status_code
+        self.text = json.dumps(payload)
 
     def json(self) -> dict[str, Any]:
         return self.payload
 
     def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            import requests
+
+            error = requests.HTTPError(
+                f"{self.status_code} Client Error: Test Error",
+            )
+            error.response = self
+            raise error
         return None
 
 
@@ -77,6 +89,7 @@ class FakeComposioCatalogAdapter:
                     "input_parameters": {"type": "object"},
                     "output_parameters": {"type": "object"},
                     "scopes": ["guilds"],
+                    "tags": ["readOnlyHint", "openWorldHint"],
                 },
                 {
                     "slug": "DISCORD_SEND_MESSAGE",
@@ -86,6 +99,7 @@ class FakeComposioCatalogAdapter:
                     "input_parameters": {"type": "object"},
                     "output_parameters": {"type": "object"},
                     "scopes": ["messages.write"],
+                    "tags": ["createHint", "openWorldHint"],
                 },
             ][:limit]
         return [
@@ -97,6 +111,7 @@ class FakeComposioCatalogAdapter:
                 "input_parameters": {"type": "object"},
                 "output_parameters": {"type": "object"},
                 "scopes": ["drive.readonly"],
+                "tags": ["readOnlyHint", "openWorldHint"],
             },
         ][:limit]
 
@@ -140,6 +155,7 @@ class FakeComposioCatalogAdapterWithAuthConfigFailure(FakeComposioCatalogAdapter
                     "input_parameters": {"type": "object"},
                     "output_parameters": {"type": "object"},
                     "scopes": [],
+                    "tags": ["readOnlyHint"],
                 },
             ][:limit]
         return super().list_tools(toolkit_slug=toolkit_slug, limit=limit)
@@ -184,6 +200,11 @@ class FakePipedreamCatalogAdapter:
                     "key": "slack-send-message",
                     "name": "Send Message",
                     "description": "Send a Slack message.",
+                    "annotations": {
+                        "destructiveHint": False,
+                        "openWorldHint": True,
+                        "readOnlyHint": False,
+                    },
                     "props": {"channel": {"type": "string"}},
                 },
             ][:limit]
@@ -192,6 +213,11 @@ class FakePipedreamCatalogAdapter:
                 "key": "github-list-repositories",
                 "name": "List Repositories",
                 "description": "List repositories.",
+                "annotations": {
+                    "destructiveHint": False,
+                    "openWorldHint": True,
+                    "readOnlyHint": True,
+                },
             },
         ][:limit]
 
@@ -556,6 +582,7 @@ def test_get_tools_uses_sql_page_for_unconnected_catalog(
         display_name = "List Items"
         description = "List items"
         action_class = "read"
+        behavior_hints_json = ["read_only"]
         required_scopes_json = []
         confirmation_required = False
         overlay_rank_boost = 0
@@ -801,6 +828,139 @@ def test_composio_adapter_rejects_repeated_pagination_cursor(
         adapter.list_toolkits(page_size=1)
 
 
+def test_provider_action_class_uses_native_hints_not_descriptions() -> None:
+    assert operations._composio_behavior_hints(
+        {
+            "slug": "GMAIL_LIST_LABELS",
+            "name": "List Gmail labels",
+            "description": "Labels can be added or removed elsewhere.",
+            "tags": ["readOnlyHint", "openWorldHint"],
+        },
+    ) == ["read_only", "external"]
+    assert (
+        operations._composio_action_class(
+            {
+                "slug": "GMAIL_LIST_LABELS",
+                "name": "List Gmail labels",
+                "description": "Labels can be added or removed elsewhere.",
+                "tags": ["readOnlyHint", "openWorldHint"],
+            },
+        )
+        == "read"
+    )
+    assert operations._composio_behavior_hints(
+        {
+            "slug": "GMAIL_DELETE_DRAFT",
+            "name": "Delete draft",
+            "tags": ["destructiveHint", "idempotentHint", "openWorldHint"],
+        },
+    ) == ["mutates_state", "destructive", "idempotent", "external"]
+    assert (
+        operations._composio_action_class(
+            {
+                "slug": "GMAIL_DELETE_DRAFT",
+                "name": "Delete draft",
+                "tags": ["destructiveHint", "idempotentHint", "openWorldHint"],
+            },
+        )
+        == "destructive"
+    )
+    assert operations._composio_behavior_hints(
+        {
+            "slug": "GMAIL_SEND_EMAIL",
+            "name": "Send email",
+            "tags": ["createHint", "openWorldHint"],
+        },
+    ) == ["mutates_state", "external", "creates_resource"]
+    assert (
+        operations._composio_action_class(
+            {
+                "slug": "GMAIL_SEND_EMAIL",
+                "name": "Send email",
+                "tags": ["createHint", "openWorldHint"],
+            },
+        )
+        == "write"
+    )
+    assert operations._pipedream_behavior_hints(
+        {
+            "key": "stripe-search-customers",
+            "annotations": {
+                "destructiveHint": False,
+                "openWorldHint": True,
+                "readOnlyHint": True,
+            },
+        },
+    ) == ["read_only", "external"]
+    assert (
+        operations._pipedream_action_class(
+            {
+                "key": "stripe-search-customers",
+                "annotations": {
+                    "destructiveHint": False,
+                    "openWorldHint": True,
+                    "readOnlyHint": True,
+                },
+            },
+        )
+        == "read"
+    )
+
+
+def test_composio_execute_preserves_provider_error_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_post(url, *, headers, json, timeout):
+        assert url.endswith("/tools/execute/GMAIL_LIST_LABELS")
+        assert json["user_id"] == "assistant:2115"
+        assert json["connected_account_id"] == "ca_test"
+        return FakeResponse(
+            {
+                "error": {
+                    "message": "Connected account user ID does not match.",
+                    "slug": "ActionExecute_ConnectedAccountEntityIdMismatch",
+                },
+            },
+            status_code=400,
+        )
+
+    monkeypatch.setattr("requests.post", fake_post)
+    adapter = ComposioProviderAdapter(
+        api_key="composio-key",
+        timeout_seconds=9,
+    )
+
+    result = adapter.execute(
+        ProviderExecutionRequest(
+            backend_id="composio",
+            tool_id="composio:gmail:list_labels",
+            canonical_app_slug="gmail",
+            provider_tool_id="GMAIL_LIST_LABELS",
+            connection_id="ic_test",
+            provider_connection_id="ca_test",
+            action_class="read",
+            user_id="assistant:2115",
+            arguments={"user_id": "me"},
+        ),
+    )
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert result.error["code"] == "provider_request_failed"
+    assert result.error["provider_status_code"] == 400
+    assert (
+        "ActionExecute_ConnectedAccountEntityIdMismatch"
+        in result.error["provider_response_body"]
+    )
+    assert result.error["provider_request"] == {
+        "provider_tool_id": "GMAIL_LIST_LABELS",
+        "payload_keys": ["arguments", "connected_account_id", "user_id"],
+        "argument_keys": ["user_id"],
+        "user_id_present": True,
+        "connected_account_id_present": True,
+    }
+
+
 @pytest.mark.anyio
 async def test_sync_route_imports_all_composio_apps_without_default_allowlist(
     client: AsyncClient,
@@ -836,13 +996,26 @@ async def test_sync_route_imports_all_composio_apps_without_default_allowlist(
         .filter_by(canonical_app_slug="google_drive")
         .one()
     )
-    assert (
+    discord_send_message = (
         dbsession.query(ProviderToolCatalog)
         .filter_by(canonical_name="primitives.integrations.discord.send_message")
         .one()
-        .confirmation_required
-        is True
     )
+    assert discord_send_message.confirmation_required is True
+    assert discord_send_message.action_class == "write"
+    assert discord_send_message.behavior_hints_json == [
+        "mutates_state",
+        "external",
+        "creates_resource",
+    ]
+    discord_list_guilds = (
+        dbsession.query(ProviderToolCatalog)
+        .filter_by(canonical_name="primitives.integrations.discord.list_my_guilds")
+        .one()
+    )
+    assert discord_list_guilds.confirmation_required is False
+    assert discord_list_guilds.action_class == "read"
+    assert discord_list_guilds.behavior_hints_json == ["read_only", "external"]
 
 
 @pytest.mark.anyio
@@ -917,7 +1090,7 @@ async def test_composio_full_sync_does_not_eagerly_create_auth_configs(
     assert payload["status"] == "success"
     assert payload["apps_upserted"] == 2
     assert payload["tools_upserted"] == 2
-    assert payload["matched_app_slugs"] == ["discord", "broken"]
+    assert sorted(payload["matched_app_slugs"]) == ["broken", "discord"]
     assert payload["skipped_apps"] == []
     assert (
         dbsession.query(DynamicProviderApp)
@@ -1014,6 +1187,8 @@ async def test_sync_route_imports_pipedream_apps_and_actions(
         .one()
     )
     assert tool.confirmation_required is True
+    assert tool.action_class == "write"
+    assert tool.behavior_hints_json == ["mutates_state", "external"]
 
 
 @pytest.mark.anyio
