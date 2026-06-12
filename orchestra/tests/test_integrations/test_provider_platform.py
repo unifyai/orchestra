@@ -1225,6 +1225,24 @@ async def test_connection_tool_pagination_run_policy_and_audit(
     assert tools.json()["total"] == 1
     tool = tools.json()["items"][0]
     assert tool["activation_state"] == "connected_ready"
+    assert "input_schema" not in tool
+
+    tools_with_schema = await client.get(
+        "/v0/integrations/tools",
+        headers=HEADERS,
+        params={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "hubspot",
+            "activation_state": "connected_ready",
+            "include_schema": True,
+            "limit": 1,
+            "offset": 0,
+        },
+    )
+    assert tools_with_schema.status_code == status.HTTP_200_OK, tools_with_schema.json()
+    tool_with_schema = tools_with_schema.json()["items"][0]
+    assert tool_with_schema["input_schema"]["properties"]["query"]["type"] == "string"
+    assert tool_with_schema["output_schema"] == {"type": "object"}
 
     schema = await client.get(
         f"/v0/integrations/tools/{tool['tool_id']}/schema?{_owner_query(assistant_id)}",

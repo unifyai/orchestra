@@ -384,6 +384,7 @@ class ProviderToolSearchRequest(BaseModel):
     assistant_id: Optional[int] = None
     canonical_app_slug: Optional[str] = None
     include_unconnected: bool = False
+    include_schema: bool = False
     limit: int = Field(100, ge=1, le=500)
     offset: int = Field(0, ge=0)
 
@@ -397,6 +398,7 @@ class ProviderToolGetRequest(BaseModel):
     canonical_app_slug: Optional[str] = None
     activation_state: Optional[ActivationState] = None
     include_unconnected: bool = False
+    include_schema: bool = False
     limit: int = Field(100, ge=1, le=500)
     offset: int = Field(0, ge=0)
 
@@ -421,6 +423,9 @@ class ProviderToolSearchResult(BaseModel):
     confirmation_required: bool = False
     approval_level: ToolApprovalLevel = "auto"
     schema_available: bool = True
+    input_schema: Optional[dict[str, Any]] = None
+    output_schema: Optional[dict[str, Any]] = None
+    examples: Optional[list[dict[str, Any]]] = None
     score: float = 0.0
 
 

@@ -648,7 +648,7 @@ def patch_integration_tool_policy(
         ) from exc
 
 
-@router.get("/tools/search")
+@router.get("/tools/search", response_model_exclude_none=True)
 def search_provider_tools(
     query: str | None = Query(None),
     owner_scope: str = Query("assistant"),
@@ -658,6 +658,7 @@ def search_provider_tools(
     assistant_id: int | None = None,
     canonical_app_slug: str | None = None,
     include_unconnected: bool = False,
+    include_schema: bool = False,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
@@ -673,13 +674,14 @@ def search_provider_tools(
             assistant_id=assistant_id,
             canonical_app_slug=canonical_app_slug,
             include_unconnected=include_unconnected,
+            include_schema=include_schema,
             limit=limit,
             offset=offset,
         ),
     )
 
 
-@router.get("/tools")
+@router.get("/tools", response_model_exclude_none=True)
 def get_provider_tools(
     owner_scope: str = Query("assistant"),
     org_id: int | None = None,
@@ -689,6 +691,7 @@ def get_provider_tools(
     canonical_app_slug: str | None = None,
     activation_state: str | None = None,
     include_unconnected: bool = False,
+    include_schema: bool = False,
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
@@ -704,6 +707,7 @@ def get_provider_tools(
             canonical_app_slug=canonical_app_slug,
             activation_state=activation_state,
             include_unconnected=include_unconnected,
+            include_schema=include_schema,
             limit=limit,
             offset=offset,
         ),

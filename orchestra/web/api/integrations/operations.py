@@ -2495,8 +2495,9 @@ def _tool_search_result(
     activation_state: str,
     match_reason: str,
     score: float,
+    include_schema: bool = False,
 ) -> ProviderToolSearchResult:
-    return ProviderToolSearchResult(
+    result = ProviderToolSearchResult(
         tool_id=tool.tool_id,
         backend_id=tool.backend_id,
         provider_app_id=tool.provider_app_id,
@@ -2517,6 +2518,11 @@ def _tool_search_result(
         approval_level=_effective_tool_policy_level(tool, conn),
         score=score,
     )
+    if include_schema:
+        result.input_schema = tool.input_schema_json or {}
+        result.output_schema = tool.output_schema_json or {}
+        result.examples = tool.examples_json or []
+    return result
 
 
 def _tool_results_from_preloaded(
@@ -2525,6 +2531,7 @@ def _tool_results_from_preloaded(
     apps: dict[str, DynamicProviderApp],
     connections: dict[str, IntegrationConnection],
     match_reason: str,
+    include_schema: bool = False,
 ) -> list[ProviderToolSearchResult]:
     return [
         _tool_search_result(
@@ -2537,6 +2544,7 @@ def _tool_results_from_preloaded(
             ),
             match_reason=match_reason,
             score=float(tool.overlay_rank_boost or 0),
+            include_schema=include_schema,
         )
         for tool in tools
     ]
@@ -2572,6 +2580,7 @@ def get_tools(
             apps=apps,
             connections=connections,
             match_reason="filtered provider tool",
+            include_schema=body.include_schema,
         )
         total = dao.count_tools(canonical_app_slug=body.canonical_app_slug)
         return ProviderToolGetResponse(
@@ -2600,6 +2609,7 @@ def get_tools(
         apps=apps,
         connections=connections,
         match_reason="filtered provider tool",
+        include_schema=body.include_schema,
     )
     total = dao.count_tools_by_activation_state(
         owner=owner,
@@ -2640,6 +2650,7 @@ def search_tools(
                 canonical_app_slug=body.canonical_app_slug,
                 activation_state=None,
                 include_unconnected=body.include_unconnected,
+                include_schema=body.include_schema,
                 limit=body.limit,
                 offset=body.offset,
             ),
@@ -2678,6 +2689,7 @@ def search_tools(
                 activation_state=activation_state,
                 match_reason=reason,
                 score=score,
+                include_schema=body.include_schema,
             ),
         )
     sorted_results = sorted(results, key=lambda item: item.score, reverse=True)
