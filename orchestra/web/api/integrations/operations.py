@@ -13,12 +13,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import os
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -34,6 +35,7 @@ from orchestra.db.models.integration_provider_models import (
     IntegrationBackend,
     IntegrationConnection,
     IntegrationOverlay,
+    ProviderActionAudit,
     ProviderToolCatalog,
 )
 from orchestra.integrations.providers import (
@@ -46,6 +48,8 @@ from orchestra.web.api.integrations.schema import (
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
     IntegrationConnectionResponse,
+    IntegrationToolExecutionApprovalRequest,
+    IntegrationToolExecutionApprovalResponse,
     IntegrationToolPolicyItem,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
@@ -53,6 +57,7 @@ from orchestra.web.api.integrations.schema import (
     ProviderAppGetResponse,
     ProviderAppSearchRequest,
     ProviderAppSearchResult,
+    ProviderToolConfirmationPayload,
     ProviderToolGetRequest,
     ProviderToolGetResponse,
     ProviderToolRunRequest,
@@ -229,65 +234,134 @@ def _normalize_account_label(value: Optional[str]) -> Optional[str]:
     return (value or "").strip() or None
 
 
-def _composio_action_class(tool: dict[str, Any], canonical_app_slug: str) -> str:
-    return _provider_action_class(
-        provider_tool_id=str(tool.get("slug") or ""),
-        name=str(tool.get("name") or ""),
-        description=str(tool.get("description") or ""),
-        canonical_app_slug=canonical_app_slug,
+def _provider_tags(value: Any) -> set[str]:
+    if isinstance(value, list):
+        return {str(tag) for tag in value if tag}
+    if isinstance(value, dict):
+        return {str(tag) for tag, enabled in value.items() if enabled}
+    return set()
+
+
+ORCHESTRA_BEHAVIOR_HINT_ORDER = (
+    "read_only",
+    "mutates_state",
+    "destructive",
+    "sensitive_data",
+    "bulk_data",
+    "idempotent",
+    "external",
+    "creates_resource",
+    "updates_resource",
+    "unknown_effects",
+)
+
+
+def _normalized_behavior_hints(
+    *,
+    tags: set[str],
+    annotations: dict[str, Any] | None = None,
+) -> list[str]:
+    annotations = annotations or {}
+    destructive = (
+        "destructiveHint" in tags or annotations.get("destructiveHint") is True
+    )
+    creates = "createHint" in tags or annotations.get("createHint") is True
+    updates = "updateHint" in tags or annotations.get("updateHint") is True
+    read_only = "readOnlyHint" in tags or annotations.get("readOnlyHint") is True
+    mutates = (
+        destructive or creates or updates or annotations.get("readOnlyHint") is False
+    )
+
+    hints: set[str] = set()
+    if read_only and not mutates:
+        hints.add("read_only")
+    if mutates:
+        hints.add("mutates_state")
+    if destructive:
+        hints.add("destructive")
+    if "idempotentHint" in tags or annotations.get("idempotentHint") is True:
+        hints.add("idempotent")
+    if "openWorldHint" in tags or annotations.get("openWorldHint") is True:
+        hints.add("external")
+    if creates:
+        hints.add("creates_resource")
+    if updates:
+        hints.add("updates_resource")
+    if not hints:
+        hints.add("unknown_effects")
+    return [hint for hint in ORCHESTRA_BEHAVIOR_HINT_ORDER if hint in hints]
+
+
+def _normalize_behavior_hints(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    allowed = set(ORCHESTRA_BEHAVIOR_HINT_ORDER)
+    normalized = [str(hint) for hint in value if str(hint) in allowed]
+    seen: set[str] = set()
+    return [hint for hint in normalized if not (hint in seen or seen.add(hint))]
+
+
+def _action_class_from_behavior_hints(behavior_hints: list[str]) -> str:
+    hints = set(behavior_hints)
+    if "destructive" in hints:
+        return "destructive"
+    if "bulk_data" in hints:
+        return "bulk_export"
+    if "sensitive_data" in hints and "read_only" in hints:
+        return "sensitive_read"
+    if (
+        "mutates_state" in hints
+        or "creates_resource" in hints
+        or "updates_resource" in hints
+    ):
+        return "write"
+    if "read_only" in hints:
+        return "read"
+    return "write"
+
+
+def _behavior_hints_from_action_class(action_class: str | None) -> list[str]:
+    if action_class == "read":
+        return ["read_only"]
+    if action_class == "sensitive_read":
+        return ["read_only", "sensitive_data"]
+    if action_class == "bulk_export":
+        return ["read_only", "bulk_data"]
+    if action_class == "destructive":
+        return ["mutates_state", "destructive"]
+    if action_class == "write":
+        return ["mutates_state"]
+    return ["unknown_effects"]
+
+
+def _action_class_from_hints(
+    *,
+    tags: set[str],
+    annotations: dict[str, Any] | None = None,
+) -> str:
+    return _action_class_from_behavior_hints(
+        _normalized_behavior_hints(tags=tags, annotations=annotations),
     )
 
 
-def _provider_action_class(
-    *,
-    provider_tool_id: str,
-    name: str,
-    description: str,
-    canonical_app_slug: str,
-) -> str:
-    text = " ".join([provider_tool_id, name, description]).lower()
-    if any(word in text for word in ["delete", "remove", "revoke", "destroy"]):
-        return "destructive"
-    if any(
-        word in text
-        for word in [
-            "send",
-            "create",
-            "update",
-            "write",
-            "post",
-            "upload",
-            "invite",
-            "add ",
-        ]
-    ):
-        return "write"
-    sensitive_apps = {
-        "gmail",
-        "google_drive",
-        "google_docs",
-        "one_drive",
-        "share_point",
-        "slack",
-        "discord",
-        "discordbot",
-    }
-    sensitive_terms = [
-        "message",
-        "history",
-        "email",
-        "file",
-        "drive",
-        "document",
-        "content",
-        "guild",
-        "channel",
-    ]
-    if canonical_app_slug in sensitive_apps and any(
-        term in text for term in sensitive_terms
-    ):
-        return "sensitive_read"
-    return "read"
+def _composio_behavior_hints(tool: dict[str, Any]) -> list[str]:
+    return _normalized_behavior_hints(tags=_provider_tags(tool.get("tags")))
+
+
+def _composio_action_class(tool: dict[str, Any]) -> str:
+    return _action_class_from_behavior_hints(_composio_behavior_hints(tool))
+
+
+def _pipedream_behavior_hints(component: dict[str, Any]) -> list[str]:
+    annotations = component.get("annotations")
+    return _normalized_behavior_hints(
+        tags=set(),
+        annotations=annotations if isinstance(annotations, dict) else None,
+    )
+
+
+def _pipedream_action_class(component: dict[str, Any]) -> str:
+    return _action_class_from_behavior_hints(_pipedream_behavior_hints(component))
 
 
 def _pipedream_app_slug(app: dict[str, Any]) -> str:
@@ -450,6 +524,7 @@ def _sync_catalog_rows(
     tools_upserted = 0
     action_previews_by_app: dict[tuple[str, str], list[dict[str, Any]]] = {}
     app_keys_to_index: set[tuple[str, str]] = set()
+    tool_ids_to_index: set[str] = set()
 
     for app_data in body.apps:
         provider_app_id = app_data["provider_app_id"]
@@ -516,6 +591,12 @@ def _sync_catalog_rows(
         display_name = tool_data.get("display_name") or name.replace("_", " ").title()
         description = tool_data.get("description") or display_name
         required_scopes = tool_data.get("required_scopes") or []
+        behavior_hints = _normalize_behavior_hints(tool_data.get("behavior_hints"))
+        action_class = tool_data.get("action_class")
+        if not behavior_hints:
+            behavior_hints = _behavior_hints_from_action_class(action_class)
+        if not action_class:
+            action_class = _action_class_from_behavior_hints(behavior_hints)
         search_text = " ".join(
             [
                 canonical_app_slug,
@@ -524,6 +605,7 @@ def _sync_catalog_rows(
                 display_name,
                 description,
                 " ".join(required_scopes),
+                " ".join(behavior_hints),
             ],
         ).lower()
         values = {
@@ -543,7 +625,8 @@ def _sync_catalog_rows(
             "input_schema_json": tool_data.get("input_schema") or {"type": "object"},
             "output_schema_json": tool_data.get("output_schema") or {"type": "object"},
             "required_scopes_json": required_scopes,
-            "action_class": tool_data.get("action_class") or "read",
+            "action_class": action_class,
+            "behavior_hints_json": behavior_hints,
             "data_categories_json": tool_data.get("data_categories") or [],
             "examples_json": tool_data.get("examples") or [],
             "provider_raw_metadata_json": tool_data.get("raw_provider_metadata") or {},
@@ -565,9 +648,11 @@ def _sync_catalog_rows(
                 "description": description,
                 "activation_state": "not_connected",
                 "action_class": values["action_class"],
+                "behavior_hints": behavior_hints,
             },
         )
         tools_upserted += 1
+        tool_ids_to_index.add(tool_id)
 
     for (
         backend_id,
@@ -585,6 +670,10 @@ def _sync_catalog_rows(
         session.flush()
         apps_to_index = dao.catalog_apps_for_keys(app_keys_to_index)
         _index_app_catalog_embeddings(session, apps_to_index)
+    if tool_ids_to_index:
+        session.flush()
+        tools_to_index = dao.catalog_tools_for_ids(tool_ids_to_index)
+        _index_tool_catalog_embeddings(session, tools_to_index)
     session.commit()
     return {"apps_upserted": apps_upserted, "tools_upserted": tools_upserted}
 
@@ -724,7 +813,8 @@ def _composio_live_catalog_handler(
                 ):
                     continue
                 tool_name = _composio_tool_name(provider_tool_id, toolkit_slug)
-                action_class = _composio_action_class(tool, canonical_app_slug)
+                behavior_hints = _composio_behavior_hints(tool)
+                action_class = _action_class_from_behavior_hints(behavior_hints)
                 tools.append(
                     {
                         "provider_app_id": toolkit_slug,
@@ -739,6 +829,7 @@ def _composio_live_catalog_handler(
                         "input_schema": _composio_tool_input_schema(tool),
                         "output_schema": _composio_tool_output_schema(tool),
                         "action_class": action_class,
+                        "behavior_hints": behavior_hints,
                         "confirmation_required": action_class
                         in {"write", "destructive", "bulk_export"},
                         "category": toolkit.get("category"),
@@ -930,12 +1021,8 @@ def _pipedream_live_catalog_handler(
                 or component.get("name")
                 or tool_name.replace("_", " ").title()
             )
-            action_class = _provider_action_class(
-                provider_tool_id=provider_tool_id,
-                name=str(component.get("name") or ""),
-                description=str(description or ""),
-                canonical_app_slug=canonical_app_slug,
-            )
+            behavior_hints = _pipedream_behavior_hints(component)
+            action_class = _action_class_from_behavior_hints(behavior_hints)
             tools.append(
                 {
                     "provider_app_id": provider_app_id,
@@ -949,6 +1036,7 @@ def _pipedream_live_catalog_handler(
                     "input_schema": _pipedream_input_schema(component),
                     "output_schema": {"type": "object"},
                     "action_class": action_class,
+                    "behavior_hints": behavior_hints,
                     "confirmation_required": action_class
                     in {"write", "destructive", "bulk_export"},
                     "category": _pipedream_category(provider_app),
@@ -1373,6 +1461,7 @@ def _tool_to_search_result(
         match_reason=match_reason,
         activation_state=_activation_state(tool, conn),
         action_class=tool.action_class,
+        behavior_hints=tool.behavior_hints_json or [],
         required_scopes=tool.required_scopes_json or [],
         connection_id=conn.connection_id if conn else None,
         confirmation_required=_tool_requires_confirmation(tool, conn, None),
@@ -1456,6 +1545,7 @@ def _tool_preview(
         "description": tool.description,
         "activation_state": _activation_state(tool, conn),
         "action_class": tool.action_class,
+        "behavior_hints": tool.behavior_hints_json or [],
         "provider_tool_id": tool.provider_tool_id,
         "canonical_name": tool.canonical_name,
         "required_scopes": tool.required_scopes_json or [],
@@ -1518,6 +1608,39 @@ def _index_app_catalog_embeddings(
                 },
             }
             for app in apps
+        ],
+    )
+    return changed_count
+
+
+def _index_tool_catalog_embeddings(
+    session: Session,
+    tools: list[ProviderToolCatalog],
+) -> int:
+    """Batch-index provider tool rows outside the steady-state search path."""
+
+    if not tools:
+        return 0
+    dao = IntegrationProviderDAO(session)
+    apps = dao.list_apps_by_slug(tool.canonical_app_slug for tool in tools)
+    _rows, changed_count = CATALOG_ARTIFACT_EMBEDDINGS.upsert_many(
+        session,
+        namespace=INTEGRATION_TOOL_EMBEDDING_NAMESPACE,
+        artifacts=[
+            {
+                "ref_id": tool.tool_id,
+                "source_text": _tool_catalog_embedding_text(
+                    tool,
+                    apps.get(tool.canonical_app_slug),
+                ),
+                "metadata": {
+                    "backend_id": tool.backend_id,
+                    "canonical_app_slug": tool.canonical_app_slug,
+                    "provider_tool_id": tool.provider_tool_id,
+                    "canonical_name": tool.canonical_name,
+                },
+            }
+            for tool in tools
         ],
     )
     return changed_count
@@ -1702,6 +1825,7 @@ def _tool_catalog_embedding_text(
             tool.provider_app_id,
             tool.category or "",
             tool.action_class,
+            _json_text(tool.behavior_hints_json),
             _json_text(tool.tags_json),
             _json_text(tool.required_scopes_json),
             _json_text(tool.data_categories_json),
@@ -2264,6 +2388,7 @@ def get_connection_tool_policy(
                 canonical_name=tool.canonical_name,
                 display_name=tool.display_name,
                 action_class=tool.action_class,
+                behavior_hints=tool.behavior_hints_json or [],
                 default_approval_level=_default_tool_policy_level(tool),
                 approval_level=_effective_tool_policy_level(tool, conn),
                 activation_state=_activation_state(tool, conn),
@@ -2306,6 +2431,142 @@ def patch_connection_tool_policy(
     dao.set_connection_tool_policy(conn, policy)
     session.commit()
     return get_connection_tool_policy(session, connection_id)
+
+
+def _set_policy_for_approval_scope(
+    *,
+    dao: IntegrationProviderDAO,
+    conn: IntegrationConnection,
+    audit: ProviderActionAudit,
+    scope: str,
+    approval_level: str,
+) -> bool:
+    policy = dict(_connection_tool_policy(conn))
+    if scope == "tool":
+        if not audit.tool_id:
+            return False
+        policy[audit.tool_id] = approval_level
+    elif scope == "app_action_class":
+        tools = dao.list_tools(canonical_app_slug=audit.canonical_app_slug)
+        for tool in tools:
+            if tool.action_class == audit.action_class:
+                policy[tool.tool_id] = approval_level
+    else:
+        return False
+    dao.set_connection_tool_policy(conn, policy)
+    return True
+
+
+def approve_tool_execution(
+    session: Session,
+    audit_id: int,
+    body: IntegrationToolExecutionApprovalRequest,
+) -> IntegrationToolExecutionApprovalResponse:
+    dao = IntegrationProviderDAO(session)
+    audit = dao.get_action_audit(audit_id)
+    if not audit:
+        raise ValueError(f"Unknown provider action audit: {audit_id}")
+    conn = dao.get_connection(audit.connection_id) if audit.connection_id else None
+    if audit.expires_at:
+        expires_at = audit.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            dao.update_action_audit(audit, status="expired")
+            session.commit()
+            return IntegrationToolExecutionApprovalResponse(
+                status="expired",
+                audit_id=audit.id,
+                connection_id=audit.connection_id,
+                tool_id=audit.tool_id,
+                approval_scope=body.scope,
+                approval_level=body.approval_level,
+                expires_at=audit.expires_at,
+                policy_updated=False,
+            )
+
+    policy_updated = False
+    if body.persist_policy and conn:
+        policy_updated = _set_policy_for_approval_scope(
+            dao=dao,
+            conn=conn,
+            audit=audit,
+            scope=body.scope,
+            approval_level=body.approval_level,
+        )
+
+    expires_at = body.expires_at or audit.expires_at or _confirmation_expires_at()
+    confirmation_token = (
+        create_confirmation_token(
+            tool_id=audit.tool_id,
+            connection_id=audit.connection_id,
+            ttl_seconds=_confirmation_ttl_seconds(),
+        )
+        if audit.tool_id and audit.connection_id
+        else None
+    )
+    dao.update_action_audit(
+        audit,
+        status="approved",
+        approval_scope=body.scope,
+        approval_level=body.approval_level,
+        approved_by=body.actor_id,
+        approved_at=datetime.now(timezone.utc),
+        expires_at=expires_at,
+    )
+    session.commit()
+    return IntegrationToolExecutionApprovalResponse(
+        status="approved",
+        audit_id=audit.id,
+        connection_id=audit.connection_id,
+        tool_id=audit.tool_id,
+        approval_scope=body.scope,
+        approval_level=body.approval_level,
+        confirmation_token=confirmation_token,
+        expires_at=expires_at,
+        policy_updated=policy_updated,
+    )
+
+
+def deny_tool_execution(
+    session: Session,
+    audit_id: int,
+    body: IntegrationToolExecutionApprovalRequest,
+) -> IntegrationToolExecutionApprovalResponse:
+    dao = IntegrationProviderDAO(session)
+    audit = dao.get_action_audit(audit_id)
+    if not audit:
+        raise ValueError(f"Unknown provider action audit: {audit_id}")
+    conn = dao.get_connection(audit.connection_id) if audit.connection_id else None
+    policy_updated = False
+    if body.persist_policy and conn:
+        policy_updated = _set_policy_for_approval_scope(
+            dao=dao,
+            conn=conn,
+            audit=audit,
+            scope=body.scope if body.scope != "once" else "tool",
+            approval_level="forbidden",
+        )
+    dao.update_action_audit(
+        audit,
+        status="denied",
+        approval_scope=body.scope,
+        approval_level="forbidden",
+        denied_by=body.actor_id,
+        denied_at=datetime.now(timezone.utc),
+        error_code=body.reason or "user_denied",
+    )
+    session.commit()
+    return IntegrationToolExecutionApprovalResponse(
+        status="denied",
+        audit_id=audit.id,
+        connection_id=audit.connection_id,
+        tool_id=audit.tool_id,
+        approval_scope=body.scope,
+        approval_level="forbidden",
+        expires_at=audit.expires_at,
+        policy_updated=policy_updated,
+    )
 
 
 def _activation_state(
@@ -2454,25 +2715,6 @@ def _artifact_tool_scores(
 ) -> dict[str, tuple[float, str]]:
     if not tools:
         return {}
-    dao = IntegrationProviderDAO(session)
-    apps = {app.canonical_app_slug: app for app in dao.list_all_apps()}
-    for tool in tools:
-        CATALOG_ARTIFACT_EMBEDDINGS.upsert(
-            session,
-            namespace=INTEGRATION_TOOL_EMBEDDING_NAMESPACE,
-            ref_id=tool.tool_id,
-            source_text=_tool_catalog_embedding_text(
-                tool,
-                apps.get(tool.canonical_app_slug),
-            ),
-            metadata={
-                "backend_id": tool.backend_id,
-                "canonical_app_slug": tool.canonical_app_slug,
-                "provider_tool_id": tool.provider_tool_id,
-                "canonical_name": tool.canonical_name,
-            },
-        )
-    session.flush()
     raw_scores = CATALOG_ARTIFACT_EMBEDDINGS.search(
         session,
         namespace=INTEGRATION_TOOL_EMBEDDING_NAMESPACE,
@@ -2480,6 +2722,19 @@ def _artifact_tool_scores(
         ref_ids=[tool.tool_id for tool in tools],
         limit=len(tools),
     )
+    if not raw_scores:
+        # Catalog sync should normally pre-index provider tools. This fallback
+        # keeps older local/dev catalogs searchable without doing one embedding
+        # upsert per candidate on every search request.
+        _index_tool_catalog_embeddings(session, tools)
+        session.flush()
+        raw_scores = CATALOG_ARTIFACT_EMBEDDINGS.search(
+            session,
+            namespace=INTEGRATION_TOOL_EMBEDDING_NAMESPACE,
+            query_text=query_text,
+            ref_ids=[tool.tool_id for tool in tools],
+            limit=len(tools),
+        )
     return {
         tool_id: (score, reason)
         for tool_id, (score, reason) in raw_scores.items()
@@ -2512,6 +2767,7 @@ def _tool_search_result(
         match_reason=match_reason,
         activation_state=activation_state,
         action_class=tool.action_class,
+        behavior_hints=tool.behavior_hints_json or [],
         required_scopes=tool.required_scopes_json or [],
         connection_id=conn.connection_id if conn else None,
         confirmation_required=_tool_requires_confirmation(tool, conn, None),
@@ -2729,6 +2985,7 @@ def get_tool_schema(
         output_schema=tool.output_schema_json or {},
         required_scopes=tool.required_scopes_json or [],
         action_class=tool.action_class,
+        behavior_hints=tool.behavior_hints_json or [],
         confirmation_required=_tool_requires_confirmation(tool, conn, None),
         approval_level=_effective_tool_policy_level(tool, conn),
         examples=tool.examples_json or [],
@@ -2740,6 +2997,231 @@ def get_tool_schema(
 def _redact_summary(payload: dict[str, Any]) -> str:
     keys = sorted(payload.keys())
     return f"keys={keys[:20]}"
+
+
+def _arguments_hash(arguments: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        arguments or {},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _arguments_summary(arguments: dict[str, Any]) -> dict[str, Any]:
+    keys = sorted((arguments or {}).keys())
+    return {
+        "keys": keys[:20],
+        "total_keys": len(keys),
+    }
+
+
+def _provider_status_code(error: dict[str, Any] | None) -> int | None:
+    if not error:
+        return None
+    value = error.get("provider_status_code")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_request_summary(error: dict[str, Any] | None) -> dict[str, Any]:
+    if not error:
+        return {}
+    summary = error.get("provider_request")
+    return summary if isinstance(summary, dict) else {}
+
+
+def _confirmation_ttl_seconds() -> int:
+    try:
+        return int(os.getenv("INTEGRATION_CONFIRMATION_TTL_SECONDS", "900"))
+    except ValueError:
+        return 900
+
+
+def _confirmation_expires_at() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(seconds=_confirmation_ttl_seconds())
+
+
+def _approval_options(tool: ProviderToolCatalog) -> list[str]:
+    options = ["once", "tool"]
+    if tool.action_class in {"read", "sensitive_read"}:
+        options.append("app_action_class")
+    return options
+
+
+def _build_confirmation_payload(
+    *,
+    audit: ProviderActionAudit,
+    tool: ProviderToolCatalog,
+    conn: IntegrationConnection | None,
+    confirmation_token: str | None,
+) -> ProviderToolConfirmationPayload:
+    return ProviderToolConfirmationPayload(
+        audit_id=audit.id,
+        connection_id=conn.connection_id if conn else None,
+        tool_id=tool.tool_id,
+        app_slug=tool.canonical_app_slug,
+        account_label=conn.external_account_label if conn else None,
+        action_class=tool.action_class,
+        behavior_hints=tool.behavior_hints_json or [],
+        arguments_summary=audit.arguments_summary_json or {},
+        approval_options=_approval_options(tool),
+        confirmation_token=confirmation_token,
+        expires_at=audit.expires_at,
+    )
+
+
+@dataclass(frozen=True)
+class ApprovalResolution:
+    decision: str
+    audit: ProviderActionAudit | None = None
+    confirmation: ProviderToolConfirmationPayload | None = None
+    error: dict[str, Any] | None = None
+
+
+def _audit_values(
+    *,
+    body: ProviderToolRunRequest,
+    tool: ProviderToolCatalog,
+    conn: IntegrationConnection | None,
+    status: str,
+    start: float,
+    result: dict[str, Any] | None = None,
+    error: dict[str, Any] | None = None,
+    expires_at: datetime | None = None,
+) -> dict[str, Any]:
+    return {
+        "org_id": body.org_id,
+        "team_id": body.team_id,
+        "user_id": body.user_id,
+        "assistant_id": body.assistant_id,
+        "conversation_id": body.conversation_id,
+        "connection_id": conn.connection_id if conn else None,
+        "provider_connection_id": conn.provider_connection_id if conn else None,
+        "backend_id": tool.backend_id,
+        "canonical_app_slug": tool.canonical_app_slug,
+        "tool_id": tool.tool_id,
+        "provider_action_id": tool.provider_tool_id,
+        "provider_tool_id": tool.provider_tool_id,
+        "unify_tool_id": tool.unify_tool_id,
+        "action_class": tool.action_class,
+        "behavior_hints_json": tool.behavior_hints_json or [],
+        "status": status,
+        "latency_ms": int((time.monotonic() - start) * 1000),
+        "arguments_hash": _arguments_hash(body.arguments),
+        "arguments_summary_json": _arguments_summary(body.arguments),
+        "redacted_input_summary": _redact_summary(body.arguments),
+        "redacted_output_summary": _redact_summary(result or {}) if result else None,
+        "error_code": error.get("code") if error else None,
+        "provider_status_code": _provider_status_code(error),
+        "provider_response_body": (error or {}).get("provider_response_body"),
+        "provider_request_summary_json": _provider_request_summary(error),
+        "expires_at": expires_at,
+    }
+
+
+def _approved_audit_matches(
+    *,
+    audit: ProviderActionAudit,
+    tool: ProviderToolCatalog,
+    conn: IntegrationConnection | None,
+    arguments_hash: str,
+) -> bool:
+    if audit.status != "approved":
+        return False
+    if audit.tool_id and audit.tool_id != tool.tool_id:
+        return False
+    if audit.connection_id != (conn.connection_id if conn else None):
+        return False
+    if audit.arguments_hash and audit.arguments_hash != arguments_hash:
+        return False
+    expires_at = audit.expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at and expires_at < datetime.now(timezone.utc):
+        return False
+    return True
+
+
+def _resolve_tool_approval(
+    *,
+    dao: IntegrationProviderDAO,
+    body: ProviderToolRunRequest,
+    tool: ProviderToolCatalog,
+    conn: IntegrationConnection | None,
+    overlay: IntegrationOverlay | None,
+    start: float,
+) -> ApprovalResolution:
+    if not _tool_requires_confirmation(tool, conn, overlay):
+        return ApprovalResolution(decision="auto")
+    arguments_hash = _arguments_hash(body.arguments)
+    if body.approval_audit_id is not None:
+        approved_audit = dao.get_action_audit(body.approval_audit_id)
+        if approved_audit and _approved_audit_matches(
+            audit=approved_audit,
+            tool=tool,
+            conn=conn,
+            arguments_hash=arguments_hash,
+        ):
+            dao.update_action_audit(
+                approved_audit,
+                status="executing",
+                latency_ms=int((time.monotonic() - start) * 1000),
+            )
+            return ApprovalResolution(decision="approved", audit=approved_audit)
+        return ApprovalResolution(
+            decision="needs_confirmation",
+            error={
+                "code": "invalid_approval",
+                "message": "Approval is invalid, expired, or does not match this tool call.",
+            },
+        )
+    if _valid_confirmation_token(
+        body.confirmation_token,
+        tool_id=tool.tool_id,
+        connection_id=conn.connection_id if conn else None,
+    ):
+        return ApprovalResolution(decision="approved")
+
+    expires_at = _confirmation_expires_at()
+    error = {
+        "code": "confirmation_required",
+        "message": "This action requires explicit confirmation before execution.",
+    }
+    audit = dao.add_action_audit(
+        _audit_values(
+            body=body,
+            tool=tool,
+            conn=conn,
+            status="pending_confirmation",
+            start=start,
+            error=error,
+            expires_at=expires_at,
+        ),
+    )
+    confirmation_token = (
+        create_confirmation_token(
+            tool_id=tool.tool_id,
+            connection_id=conn.connection_id,
+            ttl_seconds=_confirmation_ttl_seconds(),
+        )
+        if conn
+        else None
+    )
+    return ApprovalResolution(
+        decision="needs_confirmation",
+        audit=audit,
+        confirmation=_build_confirmation_payload(
+            audit=audit,
+            tool=tool,
+            conn=conn,
+            confirmation_token=confirmation_token,
+        ),
+        error=error,
+    )
 
 
 def run_tool(
@@ -2781,6 +3263,8 @@ def run_tool(
     error: Optional[dict[str, Any]] = None
     status = "ok"
     result: dict[str, Any] = {}
+    confirmation: ProviderToolConfirmationPayload | None = None
+    audit: ProviderActionAudit | None = None
     if policy_error:
         status = "blocked_by_policy"
         error = policy_error
@@ -2809,77 +3293,68 @@ def run_tool(
             "code": activation_state,
             "message": "Reconnect or test this integration in Console.",
         }
-    elif (
-        _tool_requires_confirmation(tool, conn, overlay) and not body.confirmation_token
-    ):
-        status = "confirmation_required"
-        error = {
-            "code": "confirmation_required",
-            "message": "This action requires explicit confirmation before execution.",
-        }
-    elif _tool_requires_confirmation(
-        tool,
-        conn,
-        overlay,
-    ) and not _valid_confirmation_token(
-        body.confirmation_token,
-        tool_id=tool.tool_id,
-        connection_id=conn.connection_id if conn else None,
-    ):
-        status = "confirmation_required"
-        error = {
-            "code": "invalid_confirmation",
-            "message": "Confirmation token is invalid or expired.",
-        }
     else:
-        adapter = get_provider_adapter(
-            tool.backend_id,
-            backend_config=(backend.config_json if backend else {}),
-            backend_status=backend.status if backend else "enabled",
+        approval = _resolve_tool_approval(
+            dao=dao,
+            body=body,
+            tool=tool,
+            conn=conn,
+            overlay=overlay,
+            start=start,
         )
-        adapter_result = adapter.execute(
-            ProviderExecutionRequest(
-                backend_id=tool.backend_id,
-                tool_id=tool.tool_id,
-                canonical_app_slug=tool.canonical_app_slug,
-                provider_tool_id=tool.provider_tool_id,
-                connection_id=conn.connection_id if conn else None,
-                provider_connection_id=conn.provider_connection_id if conn else None,
-                action_class=tool.action_class,
-                user_id=body.user_id,
-                arguments=body.arguments,
-            ),
-        )
-        if adapter_result.status == "ok":
-            result = adapter_result.result
+        audit = approval.audit
+        if approval.decision == "needs_confirmation":
+            status = "confirmation_required"
+            error = approval.error
+            confirmation = approval.confirmation
         else:
-            status = "provider_error"
-            error = adapter_result.error or {
-                "code": "provider_error",
-                "message": "Provider execution failed.",
-            }
+            adapter = get_provider_adapter(
+                tool.backend_id,
+                backend_config=(backend.config_json if backend else {}),
+                backend_status=backend.status if backend else "enabled",
+            )
+            provider_user_id = _owner_external_user_id(
+                owner,
+                conn.connection_id if conn else None,
+            )
+            adapter_result = adapter.execute(
+                ProviderExecutionRequest(
+                    backend_id=tool.backend_id,
+                    tool_id=tool.tool_id,
+                    canonical_app_slug=tool.canonical_app_slug,
+                    provider_tool_id=tool.provider_tool_id,
+                    connection_id=conn.connection_id if conn else None,
+                    provider_connection_id=(
+                        conn.provider_connection_id if conn else None
+                    ),
+                    action_class=tool.action_class,
+                    user_id=provider_user_id,
+                    arguments=body.arguments,
+                ),
+            )
+            if adapter_result.status == "ok":
+                result = adapter_result.result
+            else:
+                status = "provider_error"
+                error = adapter_result.error or {
+                    "code": "provider_error",
+                    "message": "Provider execution failed.",
+                }
 
-    audit = dao.add_action_audit(
-        {
-            "org_id": body.org_id,
-            "team_id": body.team_id,
-            "user_id": body.user_id,
-            "assistant_id": body.assistant_id,
-            "conversation_id": body.conversation_id,
-            "connection_id": conn.connection_id if conn else None,
-            "backend_id": tool.backend_id,
-            "canonical_app_slug": tool.canonical_app_slug,
-            "provider_action_id": tool.provider_tool_id,
-            "provider_tool_id": tool.provider_tool_id,
-            "unify_tool_id": tool.unify_tool_id,
-            "action_class": tool.action_class,
-            "status": status,
-            "latency_ms": int((time.monotonic() - start) * 1000),
-            "redacted_input_summary": _redact_summary(body.arguments),
-            "redacted_output_summary": _redact_summary(result) if result else None,
-            "error_code": error.get("code") if error else None,
-        },
+    audit_values = _audit_values(
+        body=body,
+        tool=tool,
+        conn=conn,
+        status="pending_confirmation" if status == "confirmation_required" else status,
+        start=start,
+        result=result,
+        error=error,
+        expires_at=audit.expires_at if audit else None,
     )
+    if audit:
+        dao.update_action_audit(audit, **audit_values)
+    else:
+        audit = dao.add_action_audit(audit_values)
     session.commit()
 
     return ProviderToolRunResponse(
@@ -2890,4 +3365,5 @@ def run_tool(
         result=result,
         error=error,
         audit_id=audit.id,
+        confirmation=confirmation,
     )

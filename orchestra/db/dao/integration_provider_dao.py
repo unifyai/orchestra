@@ -287,6 +287,20 @@ class IntegrationProviderDAO:
                 apps.append(app)
         return apps
 
+    def catalog_tools_for_ids(
+        self,
+        tool_ids: Iterable[str],
+    ) -> list[ProviderToolCatalog]:
+        ids = list(dict.fromkeys(tool_ids))
+        if not ids:
+            return []
+        return (
+            self.session.query(ProviderToolCatalog)
+            .filter(ProviderToolCatalog.tool_id.in_(ids))
+            .order_by(ProviderToolCatalog.id.asc())
+            .all()
+        )
+
     def list_overlays_by_slug(self) -> dict[str, IntegrationOverlay]:
         return {
             overlay.canonical_app_slug: overlay
@@ -1111,5 +1125,20 @@ class IntegrationProviderDAO:
     def add_action_audit(self, values: dict[str, Any]) -> ProviderActionAudit:
         audit = ProviderActionAudit(**values)
         self.session.add(audit)
+        self.session.flush()
+        return audit
+
+    def get_action_audit(self, audit_id: int) -> ProviderActionAudit | None:
+        return (
+            self.session.query(ProviderActionAudit).filter_by(id=audit_id).one_or_none()
+        )
+
+    def update_action_audit(
+        self,
+        audit: ProviderActionAudit,
+        **values: Any,
+    ) -> ProviderActionAudit:
+        for key, value in values.items():
+            setattr(audit, key, value)
         self.session.flush()
         return audit

@@ -173,6 +173,11 @@ class ProviderToolCatalog(Base):
         server_default=JSON_EMPTY_ARRAY,
     )
     action_class = Column(String, nullable=False, server_default="read", index=True)
+    behavior_hints_json = Column(
+        JSONB,
+        nullable=False,
+        server_default=JSON_EMPTY_ARRAY,
+    )
     data_categories_json = Column(
         JSONB,
         nullable=False,
@@ -328,15 +333,38 @@ class ProviderActionAudit(Base):
     assistant_id = Column(Integer, nullable=True, index=True)
     conversation_id = Column(String, nullable=True, index=True)
     connection_id = Column(String, nullable=True, index=True)
+    provider_connection_id = Column(String, nullable=True, index=True)
     backend_id = Column(String, nullable=False, index=True)
     canonical_app_slug = Column(String, nullable=False, index=True)
+    tool_id = Column(String, nullable=True, index=True)
     provider_action_id = Column(String, nullable=False)
     provider_tool_id = Column(String, nullable=False)
     unify_tool_id = Column(String, nullable=False, index=True)
     action_class = Column(String, nullable=False, index=True)
+    behavior_hints_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_ARRAY)
     status = Column(String, nullable=False, index=True)
     latency_ms = Column(Integer, nullable=True)
+    arguments_hash = Column(String, nullable=True, index=True)
+    arguments_summary_json = Column(
+        JSONB,
+        nullable=False,
+        server_default=JSON_EMPTY_OBJECT,
+    )
+    approval_scope = Column(String, nullable=True, index=True)
+    approval_level = Column(String, nullable=True)
+    approved_by = Column(String, nullable=True)
+    denied_by = Column(String, nullable=True)
+    approved_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    denied_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=True, index=True)
     redacted_input_summary = Column(Text, nullable=True)
     redacted_output_summary = Column(Text, nullable=True)
     error_code = Column(String, nullable=True)
+    provider_status_code = Column(Integer, nullable=True)
+    provider_response_body = Column(Text, nullable=True)
+    provider_request_summary_json = Column(
+        JSONB,
+        nullable=False,
+        server_default=JSON_EMPTY_OBJECT,
+    )
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

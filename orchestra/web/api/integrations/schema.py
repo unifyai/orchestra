@@ -42,8 +42,21 @@ ActivationState = Literal[
     "error",
 ]
 ActionClass = Literal["read", "write", "destructive", "bulk_export", "sensitive_read"]
+ToolBehaviorHint = Literal[
+    "read_only",
+    "mutates_state",
+    "destructive",
+    "sensitive_data",
+    "bulk_data",
+    "idempotent",
+    "external",
+    "creates_resource",
+    "updates_resource",
+    "unknown_effects",
+]
 OwnerScope = Literal["org", "team", "user", "assistant"]
 ToolApprovalLevel = Literal["auto", "specific_approval", "forbidden"]
+ToolApprovalScope = Literal["once", "tool", "app_action_class"]
 IntegrationSourceType = Literal["native", "third_party"]
 
 
@@ -418,6 +431,7 @@ class ProviderToolSearchResult(BaseModel):
     match_reason: str
     activation_state: ActivationState
     action_class: ActionClass
+    behavior_hints: list[ToolBehaviorHint] = Field(default_factory=list)
     required_scopes: list[str] = Field(default_factory=list)
     connection_id: Optional[str] = None
     confirmation_required: bool = False
@@ -452,6 +466,7 @@ class ProviderToolSchemaResponse(BaseModel):
     output_schema: dict[str, Any]
     required_scopes: list[str] = Field(default_factory=list)
     action_class: ActionClass
+    behavior_hints: list[ToolBehaviorHint] = Field(default_factory=list)
     confirmation_required: bool = False
     approval_level: ToolApprovalLevel = "auto"
     examples: list[dict[str, Any]] = Field(default_factory=list)
@@ -465,6 +480,7 @@ class IntegrationToolPolicyItem(BaseModel):
     canonical_name: str
     display_name: str
     action_class: ActionClass
+    behavior_hints: list[ToolBehaviorHint] = Field(default_factory=list)
     default_approval_level: ToolApprovalLevel
     approval_level: ToolApprovalLevel
     activation_state: ActivationState
@@ -493,7 +509,22 @@ class ProviderToolRunRequest(BaseModel):
     assistant_id: Optional[int] = None
     connection_id: Optional[str] = None
     conversation_id: Optional[str] = None
+    approval_audit_id: Optional[int] = None
     confirmation_token: Optional[str] = None
+
+
+class ProviderToolConfirmationPayload(BaseModel):
+    audit_id: int
+    connection_id: Optional[str] = None
+    tool_id: str
+    app_slug: str
+    account_label: Optional[str] = None
+    action_class: ActionClass
+    behavior_hints: list[ToolBehaviorHint] = Field(default_factory=list)
+    arguments_summary: dict[str, Any] = Field(default_factory=dict)
+    approval_options: list[ToolApprovalScope] = Field(default_factory=list)
+    confirmation_token: Optional[str] = None
+    expires_at: Optional[datetime] = None
 
 
 class ProviderToolRunResponse(BaseModel):
@@ -504,3 +535,25 @@ class ProviderToolRunResponse(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
     error: Optional[dict[str, Any]] = None
     audit_id: Optional[int] = None
+    confirmation: Optional[ProviderToolConfirmationPayload] = None
+
+
+class IntegrationToolExecutionApprovalRequest(BaseModel):
+    scope: ToolApprovalScope = "once"
+    persist_policy: bool = False
+    approval_level: ToolApprovalLevel = "auto"
+    expires_at: Optional[datetime] = None
+    actor_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class IntegrationToolExecutionApprovalResponse(BaseModel):
+    status: str
+    audit_id: int
+    connection_id: Optional[str] = None
+    tool_id: Optional[str] = None
+    approval_scope: Optional[ToolApprovalScope] = None
+    approval_level: Optional[ToolApprovalLevel] = None
+    confirmation_token: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    policy_updated: bool = False

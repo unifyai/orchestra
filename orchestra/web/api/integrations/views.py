@@ -17,9 +17,11 @@ from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.integrations.operations import (
     OwnerContext,
+    approve_tool_execution,
     cancel_connection,
     complete_connection,
     complete_connection_by_provider_connection_id,
+    deny_tool_execution,
     disconnect_connection,
     get_app_detail,
     get_apps,
@@ -56,6 +58,8 @@ from orchestra.web.api.integrations.schema import (
     IntegrationConnectStartRequest,
     IntegrationConnectStartResponse,
     IntegrationHealthResponse,
+    IntegrationToolExecutionApprovalRequest,
+    IntegrationToolExecutionApprovalResponse,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
     ProviderAppDetailLevel,
@@ -641,6 +645,42 @@ def patch_integration_tool_policy(
 ) -> IntegrationToolPolicyResponse:
     try:
         return patch_connection_tool_policy(session, connection_id, body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/tool-executions/{audit_id}/approve",
+    response_model=IntegrationToolExecutionApprovalResponse,
+)
+def approve_integration_tool_execution(
+    audit_id: int,
+    body: IntegrationToolExecutionApprovalRequest,
+    session: Session = Depends(get_db_session),
+) -> IntegrationToolExecutionApprovalResponse:
+    try:
+        return approve_tool_execution(session, audit_id, body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/tool-executions/{audit_id}/deny",
+    response_model=IntegrationToolExecutionApprovalResponse,
+)
+def deny_integration_tool_execution(
+    audit_id: int,
+    body: IntegrationToolExecutionApprovalRequest,
+    session: Session = Depends(get_db_session),
+) -> IntegrationToolExecutionApprovalResponse:
+    try:
+        return deny_tool_execution(session, audit_id, body)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
