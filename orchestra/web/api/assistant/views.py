@@ -60,6 +60,7 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
+    SharedPoolNumber,
     Team,
     TeamAssistantMembership,
     User,
@@ -86,6 +87,7 @@ from orchestra.services.coordinator_service import (
     emit_secret_landed_event,
     ensure_coordinator_owner_contact_rows,
     get_coordinator_state,
+    heal_coordinator_universal_contacts,
     require_authorized_coordinator,
     require_authorized_delegate_target,
     reset_coordinator_state,
@@ -97,6 +99,13 @@ from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabs
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.services.team_cleanup_service import purge_assistant_memberships
+from orchestra.services.universal_unity_contacts import (
+    missing_universal_coordinator_contact_types,
+)
+from orchestra.services.universal_unity_discord import (
+    get_universal_unity_discord_bot_id,
+    notify_comms_discord_sync,
+)
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AdminUpdateAssistant,
@@ -689,6 +698,106 @@ def _is_hidden_workspace_coordinator_for_user(
         assistant.is_coordinator
         and assistant.organization_id is not None
         and assistant.user_id != user_id
+    )
+
+
+def _self_heal_coordinator_contacts(
+    session: Session,
+    *,
+    coordinators: List[Assistant],
+    contacts_by_assistant: dict[int, list],
+    contact_dao: AssistantContactDAO,
+) -> bool:
+    """Backfill universal contacts for the given Coordinators on read.
+
+    Coordinator contacts (email / phone / WhatsApp / Discord) are
+    platform-managed pools provisioned at Coordinator creation. Coordinators
+    that predate that rollout (or a newly added channel) otherwise only get them
+    via the onboarding provisioning call, so a long-lived Coordinator can show
+    missing contacts indefinitely. Healing here, on the natural read path,
+    closes that gap without a console round-trip.
+
+    ``coordinators`` must already be filtered to rows the requesting user owns
+    and is authorized to provision (callers do their own ownership/permission
+    checks). Only channels actually configured for this deployment but absent on
+    the Coordinator are provisioned (so we never touch existing contacts or
+    chase a channel that isn't set up), and ``contacts_by_assistant`` is
+    refreshed in place so the freshly provisioned contacts surface in this same
+    response.
+
+    Best-effort: any failure is swallowed (the next read retries) and the
+    session is left usable for the rest of the response build.
+
+    Returns ``True`` when Unity should be pinged to (re)sync the shared Discord
+    bot pool — i.e. this read seeded the universal Discord pool row for the
+    first time. Discord is the only channel that needs an out-of-band sync;
+    Unity resolves email/phone/WhatsApp routing per message.
+    """
+    if not coordinators:
+        return False
+
+    universal_discord_bot_id = get_universal_unity_discord_bot_id()
+    discord_pool_existed_before = bool(universal_discord_bot_id) and (
+        session.query(SharedPoolNumber)
+        .filter(
+            SharedPoolNumber.platform == "discord",
+            SharedPoolNumber.number == universal_discord_bot_id,
+        )
+        .first()
+        is not None
+    )
+
+    healed_ids: list[int] = []
+    healed_discord = False
+    for coordinator in coordinators:
+        present_types = [
+            c.contact_type
+            for c in contacts_by_assistant.get(coordinator.agent_id, [])
+        ]
+        missing = missing_universal_coordinator_contact_types(present_types)
+        if not missing:
+            continue
+        try:
+            heal_coordinator_universal_contacts(
+                session,
+                coordinator=coordinator,
+                missing_contact_types=missing,
+            )
+        except Exception:
+            logging.warning(
+                "Coordinator contact self-heal failed for %s",
+                coordinator.agent_id,
+                exc_info=True,
+            )
+            continue
+        healed_ids.append(coordinator.agent_id)
+        if "discord" in missing:
+            healed_discord = True
+
+    if not healed_ids:
+        return False
+
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        logging.warning(
+            "Coordinator contact self-heal commit failed",
+            exc_info=True,
+        )
+        return False
+
+    # Surface the freshly provisioned contacts in this same response.
+    refreshed = contact_dao.get_active_contacts_for_assistants(healed_ids)
+    for healed_id in healed_ids:
+        contacts_by_assistant[healed_id] = []
+    for contact in refreshed:
+        contacts_by_assistant.setdefault(contact.assistant_id, []).append(contact)
+
+    return bool(
+        universal_discord_bot_id
+        and healed_discord
+        and not discord_pool_existed_before
     )
 
 
@@ -1511,6 +1620,7 @@ async def delegate_to_colleague_endpoint(
 )
 def list_assistants(
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
     phone: Optional[str] = Query(
         None,
@@ -1601,6 +1711,22 @@ def list_assistants(
         contacts_by_assistant: dict[int, list] = {}
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
+
+        # Backfill any missing platform-managed Coordinator contacts on read so
+        # Coordinators predating the universal-contact rollout self-heal on the
+        # owner's next visit. Mutates ``contacts_by_assistant`` in place. Also 
+        # useful to self-heal existing coordinators after new contact types are
+        # configured. 
+        owned_coordinators = [
+            a for a in assistants if a.is_coordinator and a.user_id == user_id
+        ]
+        if _self_heal_coordinator_contacts(
+            session,
+            coordinators=owned_coordinators,
+            contacts_by_assistant=contacts_by_assistant,
+            contact_dao=contact_dao,
+        ):
+            background_tasks.add_task(notify_comms_discord_sync)
 
         team_dao = TeamDAO(session)
         assistant_ids = [a.agent_id for a in assistants]
@@ -2328,6 +2454,22 @@ async def list_assistant_contacts(
 
     contact_dao = AssistantContactDAO(session)
     contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+
+    # Backfill missing platform-managed contacts for the owner's Coordinator on
+    # this single-resource read too (same self-heal as the list endpoint), so a
+    # Coordinator predating the universal-contact rollout repairs itself however
+    # its contacts are fetched.
+    if assistant.is_coordinator and assistant.user_id == user_id:
+        contacts_by_assistant: dict[int, list] = {assistant_id: list(contacts)}
+        if _self_heal_coordinator_contacts(
+            session,
+            coordinators=[assistant],
+            contacts_by_assistant=contacts_by_assistant,
+            contact_dao=contact_dao,
+        ):
+            await notify_comms_discord_sync()
+        contacts = contacts_by_assistant.get(assistant_id, contacts)
+
     contact_reads = [
         AssistantContactRead(
             id=c.id,

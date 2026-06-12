@@ -1920,6 +1920,78 @@ class TestListContactsEndpoint:
         )
         assert owner_visible.status_code == status.HTTP_200_OK, owner_visible.json()
 
+    @pytest.mark.anyio
+    async def test_list_self_heals_missing_coordinator_contact(
+        self,
+        client: AsyncClient,
+        mock_all_infra,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Reading a Coordinator's contacts backfills a configured-but-missing
+        universal channel (self-heal on read)."""
+        from orchestra.settings import settings
+
+        # Discord not configured when the Coordinator is first provisioned, so it
+        # starts without a Discord contact — the pre-rollout / newly-added-channel
+        # situation the read-path heal exists to fix.
+        monkeypatch.setattr(settings, "unity_coordinator_discord_id", None)
+        monkeypatch.setattr(settings, "unity_coordinator_discord_token", None)
+
+        credits_resp = await client.get("/v0/credits", headers=HEADERS)
+        user_id = credits_resp.json()["id"]
+
+        with patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic:
+            mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+            provision_resp = await client.post(
+                f"/v0/user/{user_id}/coordinator",
+                headers=HEADERS,
+            )
+        assert provision_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), provision_resp.json()
+        coordinator_id = int(provision_resp.json()["coordinator_id"])
+
+        before = await client.get(
+            f"/v0/assistant/{coordinator_id}/contacts",
+            headers=HEADERS,
+        )
+        assert before.status_code == status.HTTP_200_OK
+        assert all(c["contact_type"] != "discord" for c in before.json()["info"])
+
+        # Configure the shared Discord bot, then re-read: the contact self-heals
+        # and Unity is pinged because the pool row is seeded for the first time.
+        monkeypatch.setattr(
+            settings,
+            "unity_coordinator_discord_id",
+            "1514612855071178964",
+        )
+        monkeypatch.setattr(
+            settings,
+            "unity_coordinator_discord_token",
+            "fake.discord.token",
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.notify_comms_discord_sync",
+            new_callable=AsyncMock,
+        ) as mock_notify:
+            healed = await client.get(
+                f"/v0/assistant/{coordinator_id}/contacts",
+                headers=HEADERS,
+            )
+        assert healed.status_code == status.HTTP_200_OK, healed.json()
+        discord_contacts = [
+            c for c in healed.json()["info"] if c["contact_type"] == "discord"
+        ]
+        assert len(discord_contacts) == 1
+        assert discord_contacts[0]["contact_value"] == "1514612855071178964"
+        assert discord_contacts[0]["provisioned_by"] == "platform"
+        mock_notify.assert_awaited_once()
+
 
 class TestUpdateContactEndpoint:
     """Tests for PUT /assistant/{id}/contact."""

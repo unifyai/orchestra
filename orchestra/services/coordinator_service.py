@@ -312,6 +312,43 @@ def _repair_existing_coordinator_state(
     seed_initial_coordinator_state(session, coordinator=coordinator)
 
 
+def heal_coordinator_universal_contacts(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    missing_contact_types: Sequence[str],
+) -> None:
+    """Provision only the named universal contacts on a Coordinator.
+
+    A focused, idempotent subset of :func:`_repair_existing_coordinator_state`
+    used by the read path to backfill Coordinators that predate the
+    universal-contact rollout (or a newly added channel). Only the channels in
+    ``missing_contact_types`` are touched, so existing contacts are never
+    re-provisioned. Each ``ensure_*`` call is itself a no-op when the contact
+    already exists.
+
+    The phone backfill uses the platform default country rather than the
+    visitor's geo (the read request doesn't carry it); new Coordinators still
+    get geo-aware phone selection through the onboarding provisioning path.
+    """
+    if not coordinator.is_coordinator:
+        return
+
+    missing = set(missing_contact_types)
+    if "email" in missing:
+        ensure_coordinator_universal_email_contact(session, coordinator=coordinator)
+    if "whatsapp" in missing:
+        ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
+    if "discord" in missing:
+        ensure_coordinator_universal_discord_contact(session, coordinator=coordinator)
+    if "phone" in missing:
+        ensure_coordinator_universal_phone_contact(
+            session,
+            coordinator=coordinator,
+            assignment_source="repair",
+        )
+
+
 def create_workspace_coordinator(
     session: Session,
     *,
