@@ -44,7 +44,7 @@ def test_create_workspace_coordinator_attaches_universal_whatsapp(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "unity_whatsapp_pool_number", "+15550700001")
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", "+15550700001")
     user = _make_user(dbsession, "create")
 
     coordinator, created = create_workspace_coordinator(
@@ -75,7 +75,7 @@ def test_existing_workspace_coordinator_repair_attaches_universal_whatsapp(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "unity_whatsapp_pool_number", None)
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", None)
     user = _make_user(dbsession, "repair")
     coordinator, created = create_workspace_coordinator(
         dbsession,
@@ -85,7 +85,7 @@ def test_existing_workspace_coordinator_repair_attaches_universal_whatsapp(
     assert created is True
     assert _active_whatsapp_contact(dbsession, coordinator) is None
 
-    monkeypatch.setattr(settings, "unity_whatsapp_pool_number", "+15550700002")
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", "+15550700002")
     repaired, repaired_created = create_workspace_coordinator(
         dbsession,
         user_id=user.id,

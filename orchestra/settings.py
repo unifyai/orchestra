@@ -361,9 +361,11 @@ class Settings(BaseSettings):
 
     # Assistant creation
     assistant_creation_cost: float = 0.0
-    unity_whatsapp_pool_number: Optional[str] = os.environ.get(
-        "UNITY_WHATSAPP_POOL_NUMBER",
-    ) or os.environ.get("ORCHESTRA_UNITY_WHATSAPP_POOL_NUMBER")
+    unity_coordinator_whatsapp_number: Optional[str] = (
+        os.environ.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
+        or os.environ.get("UNITY_WHATSAPP_POOL_NUMBER")
+        or os.environ.get("ORCHESTRA_UNITY_WHATSAPP_POOL_NUMBER")
+    )
     unity_coordinator_email_address: Optional[str] = (
         os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
         or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")

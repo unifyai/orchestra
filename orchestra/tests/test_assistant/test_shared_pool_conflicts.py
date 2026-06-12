@@ -1037,7 +1037,7 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
         )
         user = _make_user(dbsession, "unity-owner@test.com", "+15550610001")
         coordinator = _make_assistant(
@@ -1069,7 +1069,7 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
         )
         user = _make_user(dbsession, "unity-known@test.com", "+15550620001")
         coordinator = _make_assistant(
@@ -1092,7 +1092,7 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
         )
         user = _make_user(dbsession, "unity-ambiguous@test.com", "+15550630001")
         org = _make_org(dbsession, user, "UnityAmbiguous")
@@ -1124,7 +1124,7 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
         )
         user = _make_user(dbsession, "regular-assignment@test.com", "+15550640001")
         assistant = _make_assistant(dbsession, user, "Regular")
@@ -1141,7 +1141,7 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
         )
         user = _make_user(dbsession, "unity-owner-route@test.com", "+15550650001")
         coordinator = _make_assistant(
@@ -1178,7 +1178,7 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_whatsapp_pool_number", pool_numbers[0].number
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
         )
         user = _make_user(dbsession, "unity-external-route@test.com", "+15550660001")
         coordinator = _make_assistant(

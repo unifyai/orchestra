@@ -16,7 +16,7 @@ UNIVERSAL_UNITY_WHATSAPP_METADATA = {"universal_unity": True}
 
 
 def get_universal_unity_whatsapp_number() -> str | None:
-    number = settings.unity_whatsapp_pool_number
+    number = settings.unity_coordinator_whatsapp_number
     if not number:
         return None
     return number.replace("whatsapp:", "").strip() or None
