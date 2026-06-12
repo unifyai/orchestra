@@ -234,7 +234,7 @@ def test_sync_notify_silent_when_mode_is_working() -> None:
 
 
 def test_classify_secret_workspace_prefix_yields_workspace_subtype() -> None:
-    """GOOGLE_*/MICROSOFT_* secrets must route to the workspace subtype."""
+    """GOOGLE_*/MICROSOFT_*/AZURE_* secrets must route to the workspace subtype."""
     subtype, msg = svc._classify_secret_for_onboarding("GOOGLE_REFRESH_TOKEN")
     assert subtype == svc.SUBTYPE_WORKSPACE_CONNECTED
     assert "Google workspace" in msg
@@ -245,9 +245,85 @@ def test_classify_secret_workspace_prefix_yields_workspace_subtype() -> None:
     assert subtype == svc.SUBTYPE_WORKSPACE_CONNECTED
     assert "Microsoft workspace" in msg
 
+    subtype, msg = svc._classify_secret_for_onboarding("AZURE_ACCESS_TOKEN")
+    assert subtype == svc.SUBTYPE_WORKSPACE_CONNECTED
+    assert "Microsoft workspace" in msg
+
 
 def test_classify_secret_generic_name_yields_integration_subtype() -> None:
     """Non-workspace secrets fall back to the integration subtype."""
     subtype, msg = svc._classify_secret_for_onboarding("SLACK_BOT_TOKEN")
     assert subtype == svc.SUBTYPE_INTEGRATION_CONNECTED
     assert "SLACK_BOT_TOKEN" in msg
+
+
+def test_derive_onboarding_progress_orders_steps_canonically() -> None:
+    """Derivation composes the per-step checks in checklist order."""
+    coordinator = _fake_coordinator()
+    with (
+        patch.object(svc, "_has_workspace_email", return_value=True),
+        patch.object(svc, "_has_app_secret", return_value=False),
+        patch.object(svc, "_has_root_action", return_value=True),
+        patch.object(svc, "_has_scheduled_task", return_value=True),
+    ):
+        derived = svc.derive_onboarding_progress(
+            MagicMock(),
+            coordinator=coordinator,
+        )
+    assert derived == [
+        svc.ONBOARDING_STEP_WORKSPACE,
+        svc.ONBOARDING_STEP_ACT,
+        svc.ONBOARDING_STEP_SCHEDULE,
+    ]
+
+
+@pytest.mark.anyio
+async def test_session_started_event_embeds_server_derived_steps() -> None:
+    """The picker event carries the server-derived completion snapshot.
+
+    This is the contract that fixes pre-completed steps: a workspace
+    connected in an earlier session never fires a transition event,
+    so the opener relies entirely on this derivation being attached.
+    """
+    coordinator = _fake_coordinator(agent_id=11)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(
+            svc,
+            "derive_onboarding_progress",
+            return_value=["workspace", "apps"],
+        ) as derive,
+        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.emit_onboarding_session_started_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            medium="chat",
+        )
+    assert result is True
+    derive.assert_called_once()
+    fields = post.await_args.kwargs["extra_event_fields"]
+    assert fields["subtype"] == svc.SUBTYPE_ONBOARDING_SESSION_STARTED
+    assert fields["details"] == {
+        "medium": "chat",
+        "completed_step_ids": ["workspace", "apps"],
+    }
+
+
+@pytest.mark.anyio
+async def test_session_started_event_omits_empty_step_snapshot() -> None:
+    """A fresh workspace produces a compact payload without an empty list."""
+    coordinator = _fake_coordinator(agent_id=12)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "derive_onboarding_progress", return_value=[]),
+        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.emit_onboarding_session_started_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            medium="chat",
+        )
+    assert result is True
+    fields = post.await_args.kwargs["extra_event_fields"]
+    assert fields["details"] == {"medium": "chat"}

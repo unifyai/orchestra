@@ -626,6 +626,85 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     assert payload["onboarding_step"] is None
     assert payload["started_at"] is not None
     assert payload["ended_at"] is None
+    # A fresh Coordinator has completed nothing — notably the
+    # platform-provisioned universal Unity email contact must NOT
+    # count as a connected workspace.
+    assert payload["completed_step_ids"] == []
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_read_derives_completed_steps(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """``completed_step_ids`` re-derives from durable domain state.
+
+    Pins the fix for pre-completed steps: a BYOD workspace email
+    contact and a non-workspace integration secret created in an
+    *earlier* session (here: written directly to the DB, with no
+    transition events fired) must surface as completed steps on the
+    next state read — and disappear from the payload once the
+    Coordinator leaves onboarding mode.
+    """
+    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+    from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+
+    owner = await _create_user(client, "state-derived-steps")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    contact_dao = AssistantContactDAO(dbsession)
+    # Replace any platform-provisioned mailbox with a BYOD one — the
+    # workspace OAuth flow writes a user-provisioned email contact.
+    contact_dao.soft_delete_assistant_contact(
+        assistant_id=coordinator_id,
+        contact_type="email",
+    )
+    contact_dao.upsert_assistant_contact(
+        assistant_id=coordinator_id,
+        contact_type="email",
+        contact_value="boss@example.com",
+        provider="google_workspace",
+        provisioned_by="user",
+    )
+    # Workspace OAuth tokens must not count as an app integration…
+    AssistantSecretDAO(dbsession).upsert(
+        user_id=owner["id"],
+        agent_id=coordinator_id,
+        name="GOOGLE_ACCESS_TOKEN",
+        value="token",
+    )
+    # …but a custom integration secret does.
+    AssistantSecretDAO(dbsession).upsert(
+        user_id=owner["id"],
+        agent_id=coordinator_id,
+        name="SLACK_BOT_TOKEN",
+        value="xoxb-123",
+    )
+    dbsession.commit()
+
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert response.json()["info"]["completed_step_ids"] == ["workspace", "apps"]
+
+    # Leaving onboarding skips derivation entirely.
+    promote = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working"},
+        headers=owner["headers"],
+    )
+    assert promote.status_code == status.HTTP_200_OK, promote.json()
+    assert promote.json()["info"]["completed_step_ids"] == []
 
 
 @pytest.mark.anyio

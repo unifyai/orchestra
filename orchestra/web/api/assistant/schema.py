@@ -569,17 +569,15 @@ class OnboardingSessionStarted(BaseModel):
 
     Console POSTs this the moment the user picks "I'd rather chat"
     or "Start Call" in the Coordinator onboarding picker. The body
-    is intentionally tiny — Unity reads ``Coordinator/State`` and
-    the chat-history snapshot itself when generating the opener,
-    and only needs a hint about which medium and a best-effort
-    snapshot of the client-side onboarding step progress to lean on when
-    narrating the recap path.
+    is intentionally tiny — the server derives the completed-step
+    snapshot itself (``derive_onboarding_progress``) and Unity reads
+    ``Coordinator/State`` plus the chat-history snapshot when
+    generating the opener, so only the medium needs to travel.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     medium: Literal["chat", "call"]
-    completed_step_ids: Optional[List[str]] = Field(default=None)
 
 
 class OnboardingSessionStartedResponse(BaseModel):
@@ -669,13 +667,21 @@ class CoordinatorStateUpdate(BaseModel):
 
 
 class CoordinatorStateResponse(BaseModel):
-    """Snapshot of the latest Coordinator/State row."""
+    """Snapshot of the latest Coordinator/State row.
+
+    ``completed_step_ids`` is not stored on the row — it is derived
+    from durable domain state on every read (workspace email contact,
+    integration secrets, action history, Tasks rows) so consumers see
+    steps completed in earlier sessions without any transition event.
+    Always ``[]`` outside onboarding mode, where derivation is skipped.
+    """
 
     coordinator_id: int
     mode: Literal["onboarding", "working"]
     onboarding_step: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
+    completed_step_ids: List[str] = Field(default_factory=list)
 
 
 class DemoAssistantCreate(BaseModel):

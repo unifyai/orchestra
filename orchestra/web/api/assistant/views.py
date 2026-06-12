@@ -83,6 +83,8 @@ from orchestra.services.contact_membership_service import (
     ensure_team_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
+    COORDINATOR_MODE_ONBOARDING,
+    derive_onboarding_progress,
     emit_onboarding_session_started_event,
     emit_secret_landed_event,
     ensure_coordinator_owner_contact_rows,
@@ -1398,6 +1400,33 @@ async def reset_coordinator_endpoint(
     )
 
 
+def _coordinator_state_response(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> CoordinatorStateResponse:
+    """Compose the state snapshot plus derived onboarding progress.
+
+    ``completed_step_ids`` is re-derived from durable domain state on
+    every read (see ``derive_onboarding_progress``) so the console
+    checklist and Unity's openers agree on what is already done even
+    when the completing action happened in an earlier session. The
+    derivation queries are skipped outside onboarding mode, where the
+    checklist no longer renders.
+    """
+    state = get_coordinator_state(session, coordinator=coordinator)
+    completed_step_ids = (
+        derive_onboarding_progress(session, coordinator=coordinator)
+        if state["mode"] == COORDINATOR_MODE_ONBOARDING
+        else []
+    )
+    return CoordinatorStateResponse(
+        coordinator_id=coordinator.agent_id,
+        completed_step_ids=completed_step_ids,
+        **state,
+    )
+
+
 @router.get(
     "/assistant/{coordinator_id}/state",
     response_model=InfoResponse[CoordinatorStateResponse],
@@ -1416,12 +1445,8 @@ async def get_coordinator_state_endpoint(
         coordinator_id=coordinator_id,
         user_id=request.state.user_id,
     )
-    state = get_coordinator_state(session, coordinator=coordinator)
     return InfoResponse(
-        info=CoordinatorStateResponse(
-            coordinator_id=coordinator.agent_id,
-            **state,
-        ),
+        info=_coordinator_state_response(session, coordinator=coordinator),
     )
 
 
@@ -1459,12 +1484,8 @@ async def update_coordinator_state_endpoint(
         clear_onboarding_step=update.clear_onboarding_step,
     )
     session.commit()
-    state = get_coordinator_state(session, coordinator=coordinator)
     return InfoResponse(
-        info=CoordinatorStateResponse(
-            coordinator_id=coordinator.agent_id,
-            **state,
-        ),
+        info=_coordinator_state_response(session, coordinator=coordinator),
     )
 
 
@@ -1499,7 +1520,6 @@ async def notify_onboarding_session_started_endpoint(
         session,
         coordinator=coordinator,
         medium=body.medium,
-        completed_step_ids=body.completed_step_ids,
     )
     return InfoResponse(
         info=OnboardingSessionStartedResponse(

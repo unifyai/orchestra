@@ -7,10 +7,12 @@ from typing import Any, Sequence
 
 import httpx
 from fastapi import HTTPException, status
-from sqlalchemy import Integer, and_, literal, select, text
+from sqlalchemy import Integer, and_, func, literal, select, text
 from sqlalchemy.orm import Session, aliased
 
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -18,6 +20,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
@@ -1264,8 +1267,149 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
 # ``store_*_tokens``). The narration helper uses these to split the
 # secret-create signal into ``workspace_connected`` vs. the generic
 # ``integration_connected`` subtype — same emission path, two
-# different narration cues on the Unity side.
-_WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_")
+# different narration cues on the Unity side. Mirrored by Console's
+# ``WORKSPACE_MANAGED_SECRET_PREFIXES``
+# (src/hooks/Assistants/useAssistantIntegrations.ts) — keep in sync.
+_WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_", "AZURE_")
+
+# Managers whose event trees are hidden from the Actions panel and
+# therefore must not count as "the user saw work happen" for the
+# ``act`` step. Mirrors Console's ``EXCLUDED_MANAGERS``
+# (src/lib/assistants/event-filters.ts).
+_ACTION_EXCLUDED_MANAGERS: tuple[str, ...] = ("MemoryManager",)
+
+# Onboarding checklist step ids derivable from durable domain state.
+# ``meet`` (picker resolution) and ``hire-specialist`` (ends
+# onboarding) are deliberately absent: the former is session-local to
+# the console, the latter flips ``mode`` to ``working`` so derivation
+# never runs for it.
+ONBOARDING_STEP_WORKSPACE = "workspace"
+ONBOARDING_STEP_APPS = "apps"
+ONBOARDING_STEP_ACT = "act"
+ONBOARDING_STEP_SCHEDULE = "schedule"
+
+COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT = "Events/ManagerMethod"
+COORDINATOR_TASKS_CONTEXT = "Tasks"
+
+
+def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
+    """Workspace step: a BYOD email contact with a provider is live.
+
+    ``provisioned_by == 'user'`` is what distinguishes the workspace
+    OAuth handshake's contact row from the platform-provisioned
+    universal Unity mailbox every Coordinator gets at creation — the
+    latter must not count as "the user connected their workspace".
+    """
+    contacts = AssistantContactDAO(session).get_active_contacts_for_assistant(
+        coordinator.agent_id,
+    )
+    return any(
+        contact.contact_type == "email"
+        and contact.provisioned_by == "user"
+        and bool(contact.contact_value)
+        and bool(contact.provider)
+        for contact in contacts
+    )
+
+
+def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
+    """Apps step: any owned secret that is NOT a workspace OAuth token."""
+    secret_names = AssistantSecretDAO(session).get_all(coordinator.agent_id).keys()
+    return any(
+        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES)
+        for name in secret_names
+    )
+
+
+def _has_root_action(session: Session, *, coordinator: Assistant) -> bool:
+    """Act step: any root manager-method event was ever dispatched.
+
+    Mirrors the Actions-panel query: root events are
+    ``len(hierarchy) == 1`` rows in the per-assistant
+    ``Events/ManagerMethod`` context, excluding managers the panel
+    hides entirely.
+    """
+    project = _project_for_coordinator(session, coordinator)
+    context = _get_context(
+        session,
+        project_id=project.id,
+        context_name=_coordinator_context_name(
+            coordinator,
+            COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT,
+        ),
+    )
+    if context is None:
+        return False
+    row = session.scalar(
+        select(LogEvent.id)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(
+            LogEventContext.context_id == context.id,
+            func.jsonb_array_length(LogEvent.data["hierarchy"]) == 1,
+            func.coalesce(LogEvent.data["manager"].astext, "").notin_(
+                _ACTION_EXCLUDED_MANAGERS,
+            ),
+        )
+        .limit(1),
+    )
+    return row is not None
+
+
+def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
+    """Schedule step: any row exists in a readable ``Tasks`` context.
+
+    Reads across the Coordinator's roots — the personal context plus
+    one per live team membership — mirroring the Tasks panel.
+    """
+    project = _project_for_coordinator(session, coordinator)
+    context_names = [
+        _coordinator_context_name(coordinator, COORDINATOR_TASKS_CONTEXT),
+    ]
+    team_ids = TeamDAO(session).team_ids_for_assistant(coordinator.agent_id)
+    context_names.extend(
+        f"Teams/{team_id}/{COORDINATOR_TASKS_CONTEXT}" for team_id in team_ids
+    )
+    row = session.scalar(
+        select(LogEvent.id)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(Context, Context.id == LogEventContext.context_id)
+        .where(
+            Context.project_id == project.id,
+            Context.name.in_(context_names),
+        )
+        .limit(1),
+    )
+    return row is not None
+
+
+def derive_onboarding_progress(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> list[str]:
+    """Derive the completed onboarding steps from durable domain state.
+
+    Single source of truth for "which checklist steps are already
+    done" — consumed by the ``Coordinator/State`` read (so the
+    console checklist seeds correctly on load), by
+    :func:`emit_onboarding_session_started_event` (so Unity's
+    session-opening turn names the actual next pending step), and by
+    Unity's voice opener via the state endpoint. Nothing is
+    persisted: each call re-derives from the data, so a workspace
+    connected last week reads as done without any transition event
+    having fired this session.
+    """
+    checks: tuple[tuple[str, Any], ...] = (
+        (ONBOARDING_STEP_WORKSPACE, _has_workspace_email),
+        (ONBOARDING_STEP_APPS, _has_app_secret),
+        (ONBOARDING_STEP_ACT, _has_root_action),
+        (ONBOARDING_STEP_SCHEDULE, _has_scheduled_task),
+    )
+    return [
+        step_id
+        for step_id, check in checks
+        if check(session, coordinator=coordinator)
+    ]
 
 
 def _is_coordinator_in_onboarding(
@@ -1591,7 +1735,6 @@ async def emit_onboarding_session_started_event(
     *,
     coordinator: Assistant,
     medium: str,
-    completed_step_ids: list[str] | None = None,
 ) -> bool:
     """Notify Unity that the user just resolved the onboarding picker.
 
@@ -1603,17 +1746,15 @@ async def emit_onboarding_session_started_event(
     Coordinator messages exist). On the call branch the event is
     informational: the actual call greeting is produced by the
     voice-agent's own sidecar LLM, which reads
-    ``Coordinator/State.mode`` and the call's chat-history snapshot
-    to pick between intro and recap. We still fire it on call so
-    we have a single auditable signal of "the user just engaged
-    the Coordinator" regardless of medium.
+    ``Coordinator/State`` (mode + derived progress) and the call's
+    chat-history snapshot to pick between intro and recap. We still
+    fire it on call so we have a single auditable signal of "the
+    user just engaged the Coordinator" regardless of medium.
 
-    ``completed_step_ids`` is a best-effort, lightweight client
-    snapshot of the Onboarding-tab step keys the console considers done
-    at picker time (e.g. ``["meet", "workspace"]``). It piggybacks
-    on the existing ``details`` channel so Unity can mention it
-    explicitly when narrating the recap path without needing a
-    server-side step registry lookup.
+    ``completed_step_ids`` on the event details is the authoritative
+    server-side derivation (:func:`derive_onboarding_progress`), so
+    steps completed in earlier sessions — which never produce
+    transition events — are still visible to Unity's opening turn.
 
     Gated on ``Coordinator/State.mode == 'onboarding'`` like the
     other onboarding events; emissions outside onboarding are
@@ -1626,8 +1767,9 @@ async def emit_onboarding_session_started_event(
         )
         return False
     details: dict[str, Any] = {"medium": medium}
+    completed_step_ids = derive_onboarding_progress(session, coordinator=coordinator)
     if completed_step_ids:
-        details["completed_step_ids"] = list(completed_step_ids)
+        details["completed_step_ids"] = completed_step_ids
     message = (
         "User just opened the onboarding chat with you — "
         "respond with one short opening turn."
