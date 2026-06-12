@@ -30,7 +30,10 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
-from orchestra.services.coordinator_personas import COORDINATOR_BIO
+from orchestra.services.coordinator_service import (
+    COORDINATOR_DEFAULT_FIRST_NAME,
+    COORDINATOR_DEFAULT_JOB_TITLE,
+)
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
@@ -261,7 +264,9 @@ def _assert_coordinator_provisioned(
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    assert coordinator.about == COORDINATOR_BIO
+    assert coordinator.about == ""
+    assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
+    assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
     org_scoped_coordinator = dbsession.scalar(
         select(Assistant).where(
             Assistant.organization_id == org_data["id"],
@@ -279,7 +284,9 @@ def _assert_coordinator_provisioned(
     assert (
         org_scoped_coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
     )
-    assert org_scoped_coordinator.about == COORDINATOR_BIO
+    assert org_scoped_coordinator.about == ""
+    assert org_scoped_coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
+    assert org_scoped_coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
     assert {
         (membership.contact_id, membership.relationship)
         for membership in _personal_memberships(
@@ -1076,7 +1083,9 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     assert coordinator is not None
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    assert coordinator.about == COORDINATOR_BIO
+    assert coordinator.about == ""
+    assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
+    assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
     coordinator.nationality = None
     coordinator.desktop_mode = None
     dbsession.commit()
@@ -1090,7 +1099,9 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     dbsession.refresh(coordinator)
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    assert coordinator.about == COORDINATOR_BIO
+    assert coordinator.about == ""
+    assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
+    assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
 
     dbsession.execute(
         delete(ContactMembership).where(
