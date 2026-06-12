@@ -372,11 +372,27 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             response.raise_for_status()
             data = response.json()
         except Exception as exc:
+            response = getattr(exc, "response", None)
+            provider_status_code = getattr(response, "status_code", None)
+            provider_response_body = ""
+            if response is not None:
+                provider_response_body = str(getattr(response, "text", "") or "")[:1000]
             return ProviderExecutionResult(
                 status="error",
                 error={
                     "code": "provider_request_failed",
                     "message": str(exc),
+                    "provider_status_code": provider_status_code,
+                    "provider_response_body": provider_response_body,
+                    "provider_request": {
+                        "provider_tool_id": request.provider_tool_id,
+                        "payload_keys": sorted(payload.keys()),
+                        "argument_keys": sorted(request.arguments.keys()),
+                        "user_id_present": bool(payload.get("user_id")),
+                        "connected_account_id_present": bool(
+                            payload.get("connected_account_id"),
+                        ),
+                    },
                 },
             )
         if not isinstance(data, dict):

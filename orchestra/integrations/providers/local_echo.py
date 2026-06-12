@@ -21,6 +21,7 @@ class LocalEchoProviderAdapter(BaseIntegrationProviderAdapter):
                 "provider": request.backend_id,
                 "provider_tool_id": request.provider_tool_id,
                 "connection_id": request.connection_id,
+                "user_id": request.user_id,
                 "arguments": request.arguments,
                 "message": "Provider execution adapter boundary reached.",
             },
