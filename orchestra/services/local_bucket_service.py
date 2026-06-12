@@ -530,4 +530,6 @@ class LocalBucketService:
         sidecar = path.with_suffix(path.suffix + ".content-type")
         if sidecar.is_file():
             content_type = sidecar.read_text(encoding="utf-8")
+        if not content_type:
+            content_type, _ = mimetypes.guess_type(path.name)
         return path.read_bytes(), content_type
