@@ -8,6 +8,7 @@ from typing import Any, Iterable, Optional
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.artifact_embedding_models import ArtifactEmbedding
@@ -104,18 +105,49 @@ class ArtifactEmbeddingDAO:
         artifacts: Iterable[dict[str, Any]],
         vectors: Iterable[list[float]],
     ) -> list[ArtifactEmbedding]:
-        rows: list[ArtifactEmbedding] = []
-        for item, vector in zip(artifacts, vectors):
-            rows.append(
-                self.upsert_preembedded(
-                    namespace=namespace,
-                    ref_id=str(item["ref_id"]),
-                    source_text=str(item["source_text"]),
-                    vector=vector,
-                    metadata=item.get("metadata") or {},
-                ),
+        payload = [
+            {
+                "namespace": namespace,
+                "ref_id": str(item["ref_id"]),
+                "key": self.key,
+                "model": self.model,
+                "source_text": str(item["source_text"]),
+                "source_text_hash": artifact_source_text_hash(str(item["source_text"])),
+                "vector": vector,
+                "metadata_json": item.get("metadata") or {},
+                "is_deleted": False,
+            }
+            for item, vector in zip(artifacts, vectors)
+            if item.get("ref_id") and item.get("source_text") and vector
+        ]
+        if not payload:
+            return []
+
+        table = ArtifactEmbedding.__table__
+        for start in range(0, len(payload), 1000):
+            chunk = payload[start : start + 1000]
+            stmt = insert(table).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_artifact_embedding_ref",
+                set_={
+                    "source_text": stmt.excluded.source_text,
+                    "source_text_hash": stmt.excluded.source_text_hash,
+                    "vector": stmt.excluded.vector,
+                    "metadata_json": stmt.excluded.metadata_json,
+                    "is_deleted": False,
+                    "updated_at": sa.func.now(),
+                },
             )
-        return rows
+            self.session.execute(stmt)
+        self.session.flush()
+
+        ref_ids = [item["ref_id"] for item in payload]
+        return list(
+            self.session.query(ArtifactEmbedding)
+            .filter_by(namespace=namespace, key=self.key, model=self.model)
+            .filter(ArtifactEmbedding.ref_id.in_(ref_ids))
+            .all(),
+        )
 
     def soft_delete_stale(
         self,
