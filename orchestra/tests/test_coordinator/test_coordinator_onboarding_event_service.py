@@ -216,6 +216,33 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
     assert payload["extra_event_fields"]["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECTED
 
 
+@pytest.mark.anyio
+async def test_step_skipped_event_embeds_step_snapshots() -> None:
+    """Skip events tell Unity which step was skipped and what is resolved so far."""
+    coordinator = _fake_coordinator(agent_id=15)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.emit_onboarding_step_skipped_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            step_id="workspace",
+            completed_step_ids=["apps"],
+            skipped_step_ids=["workspace"],
+        )
+    assert result is True
+    fields = post.await_args.kwargs["extra_event_fields"]
+    assert fields == {
+        "subtype": svc.SUBTYPE_ONBOARDING_STEP_SKIPPED,
+        "details": {
+            "step_id": "workspace",
+            "completed_step_ids": ["apps"],
+            "skipped_step_ids": ["workspace"],
+        },
+    }
+
+
 def test_sync_notify_silent_when_mode_is_working() -> None:
     """Gate applies symmetrically across sync + async variants."""
     coordinator = _fake_coordinator()
@@ -287,7 +314,11 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
     """
     coordinator = _fake_coordinator(agent_id=11)
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(
+            svc,
+            "get_coordinator_state",
+            return_value={"mode": "onboarding", "skipped_step_ids": ["schedule"]},
+        ),
         patch.object(
             svc,
             "derive_onboarding_progress",
@@ -307,6 +338,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
     assert fields["details"] == {
         "medium": "chat",
         "completed_step_ids": ["workspace", "apps"],
+        "skipped_step_ids": ["schedule"],
     }
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -779,6 +779,67 @@ async def test_coordinator_state_patch_records_onboarding_step(
 
 
 @pytest.mark.anyio
+async def test_coordinator_state_patch_records_skipped_steps(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Skipped onboarding steps persist separately from completed steps."""
+    owner = await _create_user(client, "state-skipped-step")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch(
+        "orchestra.web.api.assistant.views.emit_onboarding_step_skipped_event",
+        new=AsyncMock(return_value=True),
+    ) as emit:
+        skip_apps = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "apps"},
+            headers=owner["headers"],
+        )
+        assert skip_apps.status_code == status.HTTP_200_OK, skip_apps.json()
+        assert skip_apps.json()["info"]["skipped_step_ids"] == ["apps"]
+
+        skip_workspace = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "workspace"},
+            headers=owner["headers"],
+        )
+        assert skip_workspace.status_code == status.HTTP_200_OK, skip_workspace.json()
+        assert skip_workspace.json()["info"]["skipped_step_ids"] == [
+            "workspace",
+            "apps",
+        ]
+
+        duplicate = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "apps"},
+            headers=owner["headers"],
+        )
+        assert duplicate.status_code == status.HTTP_200_OK, duplicate.json()
+        assert duplicate.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
+
+    assert emit.await_count == 3
+    assert emit.await_args.kwargs["skipped_step_ids"] == ["workspace", "apps"]
+
+    promote = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working", "clear_onboarding_step": True},
+        headers=owner["headers"],
+    )
+    assert promote.status_code == status.HTTP_200_OK, promote.json()
+    assert promote.json()["info"]["completed_step_ids"] == []
+    assert promote.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
     client: AsyncClient,
     dbsession: Session,
@@ -917,6 +978,13 @@ async def test_coordinator_state_patch_rejects_invalid_values(
         headers=owner["headers"],
     )
     assert empty_step.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    unknown_skip = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"skip_onboarding_step": "not-a-step"},
+        headers=owner["headers"],
+    )
+    assert unknown_skip.status_code == status.HTTP_400_BAD_REQUEST
 
 
 @pytest.mark.anyio

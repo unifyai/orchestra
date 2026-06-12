@@ -952,6 +952,7 @@ def _coordinator_state_entry(
     *,
     mode: str,
     onboarding_step: str | None,
+    skipped_step_ids: Sequence[str],
     previous: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build a fully-formed ``Coordinator/State`` row.
@@ -985,6 +986,7 @@ def _coordinator_state_entry(
     return {
         "mode": mode,
         "onboarding_step": onboarding_step,
+        "skipped_step_ids": list(skipped_step_ids),
         "started_at": started_at,
         "ended_at": ended_at,
         "timestamp": now,
@@ -1044,6 +1046,7 @@ def get_coordinator_state(
         return {
             "mode": COORDINATOR_MODE_ONBOARDING,
             "onboarding_step": None,
+            "skipped_step_ids": [],
             "started_at": None,
             "ended_at": None,
         }
@@ -1056,6 +1059,7 @@ def get_coordinator_state(
     return {
         "mode": mode,
         "onboarding_step": onboarding_step,
+        "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
     }
@@ -1092,6 +1096,7 @@ def seed_initial_coordinator_state(
     entry = _coordinator_state_entry(
         mode=COORDINATOR_MODE_ONBOARDING,
         onboarding_step=None,
+        skipped_step_ids=[],
         previous=None,
     )
     log_event_id = _write_coordinator_state_row(
@@ -1110,6 +1115,7 @@ def set_coordinator_state(
     mode: str | None = None,
     onboarding_step: str | None = None,
     clear_onboarding_step: bool = False,
+    skip_onboarding_step: str | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1139,6 +1145,14 @@ def set_coordinator_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid_onboarding_step",
         )
+    if skip_onboarding_step is not None and (
+        not isinstance(skip_onboarding_step, str)
+        or skip_onboarding_step not in SKIPPABLE_ONBOARDING_STEPS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_skip_onboarding_step",
+        )
     _lock_coordinator_context(
         session,
         coordinator=coordinator,
@@ -1161,9 +1175,22 @@ def set_coordinator_state(
         next_step = None
     else:
         next_step = (previous or {}).get("onboarding_step")
+    next_skipped_step_ids = normalize_onboarding_step_ids(
+        (previous or {}).get("skipped_step_ids"),
+    )
+    if (
+        skip_onboarding_step is not None
+        and skip_onboarding_step not in next_skipped_step_ids
+    ):
+        next_skipped_step_ids = [
+            step_id
+            for step_id in SKIPPABLE_ONBOARDING_STEPS
+            if step_id == skip_onboarding_step or step_id in next_skipped_step_ids
+        ]
     entry = _coordinator_state_entry(
         mode=next_mode,
         onboarding_step=next_step,
+        skipped_step_ids=next_skipped_step_ids,
         previous=previous,
     )
     _write_coordinator_state_row(
@@ -1229,6 +1256,7 @@ COORDINATOR_ONBOARDING_EVENT_TYPE = "coordinator_onboarding_event"
 #    channel, so narrating it again in chat is redundant.
 SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
 SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
+SUBTYPE_ONBOARDING_STEP_SKIPPED = "step_skipped"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1258,6 +1286,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
     {
         SUBTYPE_WORKSPACE_CONNECTED,
         SUBTYPE_INTEGRATION_CONNECTED,
+        SUBTYPE_ONBOARDING_STEP_SKIPPED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1287,9 +1316,26 @@ ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
 ONBOARDING_STEP_ACT = "act"
 ONBOARDING_STEP_SCHEDULE = "schedule"
+ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
+SKIPPABLE_ONBOARDING_STEPS = (
+    ONBOARDING_STEP_WORKSPACE,
+    ONBOARDING_STEP_APPS,
+    ONBOARDING_STEP_ACT,
+    ONBOARDING_STEP_SCHEDULE,
+    ONBOARDING_STEP_HIRE_SPECIALIST,
+)
+SKIPPABLE_ONBOARDING_STEP_SET = frozenset(SKIPPABLE_ONBOARDING_STEPS)
 
 COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT = "Events/ManagerMethod"
 COORDINATOR_TASKS_CONTEXT = "Tasks"
+
+
+def normalize_onboarding_step_ids(value: Any) -> list[str]:
+    """Return unique onboarding step ids in checklist order."""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    seen = {str(item) for item in value if isinstance(item, str)}
+    return [step_id for step_id in SKIPPABLE_ONBOARDING_STEPS if step_id in seen]
 
 
 def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
@@ -1316,8 +1362,7 @@ def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
     """Apps step: any owned secret that is NOT a workspace OAuth token."""
     secret_names = AssistantSecretDAO(session).get_all(coordinator.agent_id).keys()
     return any(
-        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES)
-        for name in secret_names
+        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES) for name in secret_names
     )
 
 
@@ -1406,9 +1451,7 @@ def derive_onboarding_progress(
         (ONBOARDING_STEP_SCHEDULE, _has_scheduled_task),
     )
     return [
-        step_id
-        for step_id, check in checks
-        if check(session, coordinator=coordinator)
+        step_id for step_id, check in checks if check(session, coordinator=coordinator)
     ]
 
 
@@ -1730,6 +1773,38 @@ async def emit_secret_landed_event(
     )
 
 
+async def emit_onboarding_step_skipped_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that the user intentionally skipped one onboarding step."""
+    completed = list(
+        completed_step_ids
+        or derive_onboarding_progress(session, coordinator=coordinator)
+    )
+    skipped = normalize_onboarding_step_ids(
+        skipped_step_ids
+        or get_coordinator_state(session, coordinator=coordinator).get(
+            "skipped_step_ids"
+        ),
+    )
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_SKIPPED,
+        message=f"User skipped the '{step_id}' onboarding step.",
+        details={
+            "step_id": step_id,
+            "completed_step_ids": completed,
+            "skipped_step_ids": skipped,
+        },
+    )
+
+
 async def emit_onboarding_session_started_event(
     session: Session,
     *,
@@ -1768,8 +1843,14 @@ async def emit_onboarding_session_started_event(
         return False
     details: dict[str, Any] = {"medium": medium}
     completed_step_ids = derive_onboarding_progress(session, coordinator=coordinator)
+    skipped_step_ids = get_coordinator_state(session, coordinator=coordinator).get(
+        "skipped_step_ids",
+        [],
+    )
     if completed_step_ids:
         details["completed_step_ids"] = completed_step_ids
+    if skipped_step_ids:
+        details["skipped_step_ids"] = normalize_onboarding_step_ids(skipped_step_ids)
     message = (
         "User just opened the onboarding chat with you — "
         "respond with one short opening turn."

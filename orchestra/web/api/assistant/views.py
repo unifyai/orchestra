@@ -86,6 +86,7 @@ from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
+    emit_onboarding_step_skipped_event,
     emit_secret_landed_event,
     ensure_coordinator_owner_contact_rows,
     get_coordinator_state,
@@ -753,8 +754,7 @@ def _self_heal_coordinator_contacts(
     healed_discord = False
     for coordinator in coordinators:
         present_types = [
-            c.contact_type
-            for c in contacts_by_assistant.get(coordinator.agent_id, [])
+            c.contact_type for c in contacts_by_assistant.get(coordinator.agent_id, [])
         ]
         missing = missing_universal_coordinator_contact_types(present_types)
         if not missing:
@@ -797,9 +797,7 @@ def _self_heal_coordinator_contacts(
         contacts_by_assistant.setdefault(contact.assistant_id, []).append(contact)
 
     return bool(
-        universal_discord_bot_id
-        and healed_discord
-        and not discord_pool_existed_before
+        universal_discord_bot_id and healed_discord and not discord_pool_existed_before
     )
 
 
@@ -1476,13 +1474,27 @@ async def update_coordinator_state_endpoint(
         coordinator_id=coordinator_id,
         user_id=request.state.user_id,
     )
-    set_coordinator_state(
+    next_state = set_coordinator_state(
         session,
         coordinator=coordinator,
         mode=update.mode,
         onboarding_step=update.onboarding_step,
         clear_onboarding_step=update.clear_onboarding_step,
+        skip_onboarding_step=update.skip_onboarding_step,
     )
+    if update.skip_onboarding_step:
+        completed_step_ids = (
+            derive_onboarding_progress(session, coordinator=coordinator)
+            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+            else []
+        )
+        await emit_onboarding_step_skipped_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.skip_onboarding_step,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
     session.commit()
     return InfoResponse(
         info=_coordinator_state_response(session, coordinator=coordinator),
@@ -1734,9 +1746,9 @@ def list_assistants(
 
         # Backfill any missing platform-managed Coordinator contacts on read so
         # Coordinators predating the universal-contact rollout self-heal on the
-        # owner's next visit. Mutates ``contacts_by_assistant`` in place. Also 
+        # owner's next visit. Mutates ``contacts_by_assistant`` in place. Also
         # useful to self-heal existing coordinators after new contact types are
-        # configured. 
+        # configured.
         owned_coordinators = [
             a for a in assistants if a.is_coordinator and a.user_id == user_id
         ]

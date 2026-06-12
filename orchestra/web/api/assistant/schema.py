@@ -653,7 +653,8 @@ class CoordinatorStateUpdate(BaseModel):
     ``onboarding_step`` advances the in-flight step marker without
     leaving ``onboarding``. Passing ``clear_onboarding_step=True``
     resets the step (used when moving to ``working`` so a future
-    re-entry doesn't carry stale step state).
+    re-entry doesn't carry stale step state). ``skip_onboarding_step``
+    records an intentional user skip separately from real completion.
 
     Note: the call-vs-chat picker is intentionally *not* persisted —
     the design re-asks on every entry into the onboarding view.
@@ -664,6 +665,7 @@ class CoordinatorStateUpdate(BaseModel):
     mode: Optional[Literal["onboarding", "working"]] = Field(None)
     onboarding_step: Optional[str] = Field(None, min_length=1)
     clear_onboarding_step: bool = Field(False)
+    skip_onboarding_step: Optional[str] = Field(None, min_length=1)
 
 
 class CoordinatorStateResponse(BaseModel):
@@ -682,6 +684,7 @@ class CoordinatorStateResponse(BaseModel):
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     completed_step_ids: List[str] = Field(default_factory=list)
+    skipped_step_ids: List[str] = Field(default_factory=list)
 
 
 class DemoAssistantCreate(BaseModel):
