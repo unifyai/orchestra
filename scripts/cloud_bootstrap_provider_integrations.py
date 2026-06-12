@@ -63,8 +63,10 @@ def _load_manifest(path: str) -> dict[str, Any]:
             manifest = tomllib.load(file)
     if not isinstance(manifest, dict):
         raise ValueError("Manifest must be a JSON object")
-    if manifest.get("environment") not in {"staging", "production"}:
-        raise ValueError("Manifest environment must be staging or production")
+    if manifest.get("environment") not in {"staging", "production", "selfhost"}:
+        raise ValueError(
+            "Manifest environment must be staging, production, or selfhost",
+        )
     if not isinstance(manifest.get("providers"), dict):
         raise ValueError("Manifest providers must be an object")
     return manifest

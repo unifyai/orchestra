@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_dao import AuthDAO
+from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
@@ -25,6 +26,7 @@ from orchestra.services.coordinator_service import (
     ensure_personal_coordinator_provisioned,
     get_personal_coordinator,
 )
+from orchestra.web.api.integrations.operations import seed_default_provider_catalog
 from orchestra.web.api.users.views import generate_key
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,22 @@ def ensure_platform_billing_defaults(session: Session) -> None:
         ),
     )
     session.flush()
+
+
+def ensure_provider_integration_backends(session: Session) -> None:
+    """Align integration backend status with the configured provider credentials.
+
+    Composio executes live only when ``COMPOSIO_API_KEY`` is configured, so the
+    backend row is enabled exactly when the key is present and disabled
+    otherwise. Catalog sync stays with the admin bootstrap script
+    (``scripts/cloud_bootstrap_provider_integrations.py``), which the compose
+    stack runs as a one-shot job against the running API.
+    """
+    seed_default_provider_catalog(session)
+    status = "enabled" if os.environ.get("COMPOSIO_API_KEY", "").strip() else "disabled"
+    IntegrationProviderDAO(session).patch_backend("composio", {"status": status})
+    session.flush()
+    logger.info("Composio integration backend %s for self-host", status)
 
 
 def _resolve_password() -> str:
