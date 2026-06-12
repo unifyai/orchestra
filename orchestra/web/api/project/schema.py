@@ -63,6 +63,11 @@ class ProjectConfig(BaseModel):
         description="Optional description of the project",
         max_length=256,
     )
+    is_public_read: bool = Field(
+        default=False,
+        description="Whether the project is readable (data-plane reads only) "
+        "by any authenticated account. Writes remain owner-only.",
+    )
 
 
 class ProjectUpdate(BaseModel):
@@ -97,6 +102,11 @@ class ProjectUpdate(BaseModel):
         None,
         description="Optional description of the project",
         max_length=256,
+    )
+    is_public_read: Optional[bool] = Field(
+        None,
+        description="Whether the project is readable (data-plane reads only) "
+        "by any authenticated account. Writes remain owner-only.",
     )
 
 

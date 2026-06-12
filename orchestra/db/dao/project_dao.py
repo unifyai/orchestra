@@ -66,6 +66,7 @@ class ProjectDAO:
         description: Optional[str] = None,
         icon: Optional[str] = "folder",
         order: Optional[int] = None,
+        is_public_read: bool = False,
     ) -> None:
 
         if user_id is None and organization_id is None:
@@ -96,6 +97,7 @@ class ProjectDAO:
                 description=description,
                 icon=icon,
                 order=order_value,
+                is_public_read=is_public_read,
             ),
         )
 
@@ -128,6 +130,7 @@ class ProjectDAO:
         icon: Optional[str] = None,
         description: Optional[str] = None,
         order: Optional[int] = None,
+        is_public_read: Optional[bool] = None,
     ) -> None:
         self._validate_description(description)
 
@@ -148,6 +151,8 @@ class ProjectDAO:
                 setattr(entry, "icon", icon)
             if order is not None:
                 setattr(entry, "order", order)
+            if is_public_read is not None:
+                setattr(entry, "is_public_read", is_public_read)
 
     def rename(
         self,
@@ -483,6 +488,38 @@ class ProjectDAO:
             name=name,
         )
         return projects[0][0] if projects else None
+
+    def get_public_by_name(self, name: str) -> Optional[Project]:
+        """Return a public-read project by name, if one exists."""
+        query = (
+            select(Project)
+            .where(Project.is_public_read.is_(True), Project.name == name)
+            .order_by(Project.id)
+        )
+        return self.session.execute(query).scalars().first()
+
+    def get_readable_by_user_and_name(
+        self,
+        user_id: str,
+        name: str,
+        organization_id: Optional[int] = None,
+    ) -> Optional[Project]:
+        """
+        Resolve a project for read-only access.
+
+        Owned/granted projects take precedence; when the caller has no access
+        of their own, a public-read project with the same name is returned.
+        Write paths must keep using :meth:`get_by_user_and_name` so public
+        projects stay read-only for non-owners.
+        """
+        project = self.get_by_user_and_name(
+            user_id=user_id,
+            name=name,
+            organization_id=organization_id,
+        )
+        if project is not None:
+            return project
+        return self.get_public_by_name(name)
 
     def get_by_user_and_name_any_context(
         self,

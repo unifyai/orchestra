@@ -51,6 +51,10 @@ class Project(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
+    # Public-read projects are readable (data-plane reads only) by any
+    # authenticated account. Used for platform-wide read-only datasets such as
+    # the builtin function primitives catalogue.
+    is_public_read = Column(Boolean, nullable=False, server_default="f")
     current_commit_hash = Column(String, nullable=True)
     contexts = relationship("Context", back_populates="project", passive_deletes=True)
 

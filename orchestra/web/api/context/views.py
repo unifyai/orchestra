@@ -324,7 +324,7 @@ def get_contexts(
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project = project_dao.get_by_user_and_name(
+        project = project_dao.get_readable_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
             organization_id=organization_id,
@@ -382,7 +382,7 @@ def get_context_commits(
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
 
-    project = project_dao.get_by_user_and_name(
+    project = project_dao.get_readable_by_user_and_name(
         user_id=user_id,
         name=project_name,
         organization_id=organization_id,
@@ -452,7 +452,7 @@ def get_context(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project = project_dao.get_by_user_and_name(
+        project = project_dao.get_readable_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
             organization_id=organization_id,

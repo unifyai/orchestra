@@ -3543,6 +3543,10 @@ def get_logs(
         "42",
         description="If provided, use this seed for deterministic random ordering instead of the default.",
     ),
+    return_sort_distance: bool = Query(
+        False,
+        description="If true and sorting takes the vector ANN fast-path, include the computed distance in each entry under the reserved '_sort_distance' key.",
+    ),
     session=Depends(get_db_session),
 ):
     """
@@ -3583,7 +3587,7 @@ def get_logs(
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = project_dao.get_readable_by_user_and_name(
             name=project_name,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -3627,6 +3631,7 @@ def get_logs(
                 session=session,
                 randomize=randomize,
                 seed=seed,
+                return_sort_distance=return_sort_distance,
             )
 
             # Handle return_ids_only mode
@@ -3938,7 +3943,7 @@ def query_logs_post(
     # Validate project
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = project_dao.get_readable_by_user_and_name(
             name=body.project_name,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -4343,7 +4348,7 @@ def get_logs_metric(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = project_dao.get_readable_by_user_and_name(
             name=project_name,
             user_id=user_id,
             organization_id=organization_id,
@@ -4985,7 +4990,7 @@ def join_query(
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = project_dao.get_readable_by_user_and_name(
             user_id=user_id,
             name=request.project_name,
             organization_id=organization_id,
@@ -5193,7 +5198,7 @@ def get_fields(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = project_dao.get_readable_by_user_and_name(
             name=project_name,
             user_id=user_id,
             organization_id=organization_id,
