@@ -979,10 +979,7 @@ class AssistantDAO:
 
         Updates ``last_correspondence_at`` and clears
         ``last_followup_sent_at`` so that a subsequent lapse can fire a
-        fresh follow-up. Deliberately does *not* clear
-        ``termination_initiated_at`` — cancelling an in-flight
-        termination requires an explicit brain decision, not mere
-        message traffic.
+        fresh re-engagement nudge.
 
         :param agent_id: Assistant agent ID.
         :param when: Timestamp of the correspondence event (tz-aware).
@@ -1016,37 +1013,26 @@ class AssistantDAO:
         )
         return result.rowcount
 
-    def mark_termination_initiated(
+    def set_inactivity_followup_opt_out(
         self,
         agent_id: int,
-        when: datetime,
+        opted_out: bool,
     ) -> int:
-        """Mark an assistant as entering the pre-cleanup grace period.
+        """Opt an assistant in or out of inactivity re-engagement follow-ups.
+
+        Setting ``opted_out=True`` excludes this Coordinator from the
+        follow-up routine until it is cleared. Called when the boss
+        explicitly declines further follow-ups (and again to re-enable
+        them if they later re-engage).
 
         :param agent_id: Assistant agent ID.
-        :param when: Timestamp of the termination decision (tz-aware).
-        :return: Number of rows updated.
+        :param opted_out: New opt-out state.
+        :return: Number of rows updated (0 if agent_id does not exist).
         """
         result = self.session.execute(
             update(Assistant)
             .where(Assistant.agent_id == agent_id)
-            .values(termination_initiated_at=when),
-        )
-        return result.rowcount
-
-    def clear_termination_initiated(self, agent_id: int) -> int:
-        """Cancel an in-flight termination.
-
-        Called when the brain decides that fresh engagement should rescue
-        an assistant that had been marked for cleanup.
-
-        :param agent_id: Assistant agent ID.
-        :return: Number of rows updated.
-        """
-        result = self.session.execute(
-            update(Assistant)
-            .where(Assistant.agent_id == agent_id)
-            .values(termination_initiated_at=None),
+            .values(inactivity_followup_opted_out=opted_out),
         )
         return result.rowcount
 
@@ -1057,79 +1043,69 @@ class AssistantDAO:
         include_demo: bool = False,
         include_local: bool = False,
     ) -> List[Assistant]:
-        """Return assistants whose next action is an inactivity follow-up.
+        """Return personal Coordinators whose owner is due a follow-up.
 
-        An assistant qualifies when its most recent correspondence
-        pre-dates ``followup_cutoff`` and no follow-up is already in
-        flight and it has not been marked for termination.
+        This is a *per-user* query: a user is due a re-engagement
+        follow-up when they have not interacted with **any** of their
+        assistants (the Coordinator included) for ``followup_cutoff``.
+        The returned rows are the users' personal Coordinators (the
+        assistant that follows up); ``last_followup_sent_at`` on the
+        Coordinator row records the last follow-up so we don't re-fire
+        every run.
 
-        :param followup_cutoff: Only consider assistants with
-            ``last_correspondence_at < followup_cutoff``.
+        Activity is the most recent ``last_correspondence_at`` across all
+        of a user's assistants. That column carries a ``server_default``
+        of ``now()`` at row creation, so a user who signed up and never
+        engaged still has a baseline timestamp (their signup time) and is
+        followed up with once the window elapses — no separate "never
+        engaged" case is needed.
+
+        The follow-up re-arms automatically: once the user engages again
+        (any assistant's ``last_correspondence_at`` moves past the
+        Coordinator's ``last_followup_sent_at``), a fresh lapse becomes
+        eligible. A follow-up already sent after the latest activity is
+        not repeated. Coordinators whose owner has opted out
+        (``inactivity_followup_opted_out``) are excluded entirely.
+
+        :param followup_cutoff: Activity older than this triggers a
+            follow-up.
         :param limit: Optional cap on the returned batch.
-        :param include_demo: Include demo assistants (default: False).
-        :param include_local: Include ``is_local=True`` (local-runtime
-            test) assistants (default: False).
-        :return: Candidate assistants.
+        :param include_demo: Include demo assistants in the activity
+            aggregate and as Coordinators (default: False).
+        :param include_local: Include ``is_local=True`` assistants
+            (default: False).
+        :return: Personal Coordinator rows to follow up with.
         """
-        stmt = select(Assistant).where(
-            Assistant.last_correspondence_at.isnot(None),
-            Assistant.last_correspondence_at < followup_cutoff,
-            Assistant.last_followup_sent_at.is_(None),
-            Assistant.termination_initiated_at.is_(None),
+        activity_query = select(
+            Assistant.user_id.label("user_id"),
+            func.max(Assistant.last_correspondence_at).label("last_activity"),
+        ).where(Assistant.user_id.isnot(None))
+        if not include_demo:
+            activity_query = activity_query.where(Assistant.demo_id.is_(None))
+        if not include_local:
+            activity_query = activity_query.where(Assistant.is_local.is_(False))
+        activity_subq = activity_query.group_by(Assistant.user_id).subquery()
+
+        stmt = (
+            select(Assistant)
+            .join(activity_subq, activity_subq.c.user_id == Assistant.user_id)
+            .where(
+                Assistant.is_coordinator.is_(True),
+                Assistant.organization_id.is_(None),
+                Assistant.inactivity_followup_opted_out.is_(False),
+                activity_subq.c.last_activity.isnot(None),
+                activity_subq.c.last_activity < followup_cutoff,
+                or_(
+                    Assistant.last_followup_sent_at.is_(None),
+                    Assistant.last_followup_sent_at < activity_subq.c.last_activity,
+                ),
+            )
         )
         if not include_demo:
             stmt = stmt.where(Assistant.demo_id.is_(None))
         if not include_local:
             stmt = stmt.where(Assistant.is_local.is_(False))
-        stmt = stmt.order_by(Assistant.last_correspondence_at.asc())
-        if limit is not None:
-            stmt = stmt.limit(limit)
-        return list(self.session.execute(stmt).scalars().all())
-
-    def find_auto_cleanup_candidates(
-        self,
-        cleanup_cutoff: datetime,
-        limit: Optional[int] = None,
-        include_demo: bool = False,
-        include_local: bool = False,
-    ) -> List[Assistant]:
-        """Return assistants eligible for deprovision + hard-delete.
-
-        Two paths feed this query:
-          * **Silent** — ``last_followup_sent_at < cleanup_cutoff`` with
-            no fresh inbound since. The inbound-clears-followup rule in
-            :meth:`touch_last_correspondence_at` makes the mere presence
-            of ``last_followup_sent_at`` a sufficient stand-in for "no
-            reply since the follow-up".
-          * **Explicit** — ``termination_initiated_at < cleanup_cutoff``,
-            set by the brain when the user declines to continue.
-
-        :param cleanup_cutoff: Only consider assistants whose relevant
-            timestamp pre-dates this value.
-        :param limit: Optional cap on the returned batch.
-        :param include_demo: Include demo assistants (default: False).
-        :param include_local: Include ``is_local=True`` (local-runtime
-            test) assistants (default: False).
-        :return: Candidate assistants.
-        """
-        stmt = select(Assistant).where(
-            or_(
-                and_(
-                    Assistant.termination_initiated_at.isnot(None),
-                    Assistant.termination_initiated_at < cleanup_cutoff,
-                ),
-                and_(
-                    Assistant.last_followup_sent_at.isnot(None),
-                    Assistant.last_followup_sent_at < cleanup_cutoff,
-                    Assistant.termination_initiated_at.is_(None),
-                ),
-            ),
-        )
-        if not include_demo:
-            stmt = stmt.where(Assistant.demo_id.is_(None))
-        if not include_local:
-            stmt = stmt.where(Assistant.is_local.is_(False))
-        stmt = stmt.order_by(Assistant.agent_id.asc())
+        stmt = stmt.order_by(activity_subq.c.last_activity.asc())
         if limit is not None:
             stmt = stmt.limit(limit)
         return list(self.session.execute(stmt).scalars().all())

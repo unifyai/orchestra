@@ -1893,9 +1893,11 @@ class Assistant(Base):
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     # Re-engagement tracking. last_correspondence_at is touched on any
     # inbound/outbound message across all contacts; last_followup_sent_at
-    # records when the inactivity follow-up fired and is cleared when fresh
-    # activity resumes; termination_initiated_at marks entry into the
-    # pre-cleanup grace period.
+    # records when the inactivity re-engagement follow-up fired and is
+    # cleared when fresh activity resumes (re-arming the follow-up);
+    # inactivity_followup_opted_out is set when the boss explicitly asks
+    # not to be followed up with again, and excludes this Coordinator
+    # from the routine until it is cleared.
     last_correspondence_at = Column(
         TIMESTAMP(timezone=True),
         nullable=True,
@@ -1903,10 +1905,11 @@ class Assistant(Base):
         index=True,
     )
     last_followup_sent_at = Column(TIMESTAMP(timezone=True), nullable=True)
-    termination_initiated_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=True,
-        index=True,
+    inactivity_followup_opted_out = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
     )
     voice_id = sa.Column(
         sa.String,

@@ -7373,27 +7373,24 @@ def admin_touch_assistant_activity(
 
 
 @admin_router.post(
-    "/assistant/{assistant_id}/terminate",
+    "/assistant/{assistant_id}/opt-out-followups",
     status_code=status.HTTP_200_OK,
-    summary="Admin: mark an assistant for auto-cleanup",
+    summary="Admin: opt an assistant out of inactivity follow-ups",
     description=(
-        "Sets ``termination_initiated_at = now()`` so the assistant "
-        "enters the pre-cleanup grace period. The Unity brain calls "
-        "this when the boss explicitly declines to continue. Actual "
-        "deprovisioning and hard-delete happen on the next daily run "
-        "of the inactivity follow-up routine, once the grace period "
-        "elapses."
+        "Sets ``inactivity_followup_opted_out = true`` so the inactivity "
+        "re-engagement routine never follows up via this Coordinator "
+        "again. The Unity brain calls this when the boss explicitly asks "
+        "not to be contacted further. Nothing is deleted — this only "
+        "silences future follow-ups until the boss opts back in."
     ),
     tags=["Assistants", "Admin"],
 )
-def admin_terminate_assistant(
+def admin_opt_out_assistant_followups(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> dict:
-    from datetime import datetime, timezone
-
     dao = AssistantDAO(session)
-    rows = dao.mark_termination_initiated(assistant_id, datetime.now(timezone.utc))
+    rows = dao.set_inactivity_followup_opt_out(assistant_id, True)
     if rows == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -7404,22 +7401,23 @@ def admin_terminate_assistant(
 
 
 @admin_router.post(
-    "/assistant/{assistant_id}/cancel-termination",
+    "/assistant/{assistant_id}/opt-in-followups",
     status_code=status.HTTP_200_OK,
-    summary="Admin: cancel an in-flight termination",
+    summary="Admin: re-enable inactivity follow-ups for an assistant",
     description=(
-        "Clears ``termination_initiated_at`` so the assistant is no "
-        "longer on the auto-cleanup path. The Unity brain calls this "
-        "when the boss re-engages during the grace period."
+        "Clears ``inactivity_followup_opted_out`` so the inactivity "
+        "re-engagement routine can follow up via this Coordinator again. "
+        "The Unity brain calls this when the boss re-engages after having "
+        "previously opted out."
     ),
     tags=["Assistants", "Admin"],
 )
-def admin_cancel_assistant_termination(
+def admin_opt_in_assistant_followups(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> dict:
     dao = AssistantDAO(session)
-    rows = dao.clear_termination_initiated(assistant_id)
+    rows = dao.set_inactivity_followup_opt_out(assistant_id, False)
     if rows == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

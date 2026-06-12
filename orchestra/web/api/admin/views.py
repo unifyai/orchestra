@@ -749,26 +749,22 @@ async def trigger_inactivity_followup(
     session=Depends(get_db_session),
 ) -> dict:
     """
-    Trigger the re-engagement follow-up + auto-cleanup routine.
+    Trigger the per-user re-engagement nudge routine.
 
-    Two stages:
-      1. Dispatch an inactivity follow-up for assistants whose most
-         recent correspondence pre-dates ``inactivity_followup_days``
-         and who do not yet have a follow-up in flight. Assistants
-         with a provisioned email channel wake the Unity brain via
-         the communication adapter so the brain composes and sends
-         from the assistant's own mailbox; assistants without an
-         email instead receive an orchestra-sent first-person email
-         from ``hello@unify.ai`` redirecting the boss to the Unify
-         console. Orchestra records ``last_followup_sent_at`` after
-         a successful send on either path.
-      2. Notify the assistant's lifecycle owner, then deprovision +
-         hard-delete assistants whose silent/explicit termination
-         grace period has elapsed (``inactivity_auto_cleanup_days``).
+    Finds users who have not interacted with any of their assistants
+    (the Coordinator included) for ``inactivity_followup_days`` and whose
+    personal Coordinator has not already followed up since their last
+    activity (and has not opted out), then wakes each user's Coordinator
+    via the communication adapter so the **brain composes and sends** a
+    personalised re-engagement message, recording ``last_followup_sent_at``
+    on the Coordinator after a successful dispatch.
 
-    Called by Cloud Scheduler at 01:15 and 13:15 UTC
-    (``15 1,13 * * *``) — twice daily, staggered 15 min after the
-    billing suspension routine at 01:00 UTC.
+    This routine never deletes or deprovisions assistants — contact
+    lifecycle/cost is governed solely by the billing suspension routine.
+
+    Called by the ``inactivity-followup`` GitHub Actions workflow at
+    01:15 and 13:15 UTC (``15 1,13 * * *``) — twice daily, staggered
+    15 min after the billing suspension routine at 01:00 UTC.
     """
     try:
         from orchestra.routines.inactivity_followup import run_inactivity_followup
@@ -781,9 +777,6 @@ async def trigger_inactivity_followup(
             "followup_candidates_found": result.followup_candidates_found,
             "followups_dispatched": result.followups_dispatched,
             "followups_failed": result.followups_failed,
-            "cleanup_candidates_found": result.cleanup_candidates_found,
-            "cleanups_completed": result.cleanups_completed,
-            "cleanups_failed": result.cleanups_failed,
         }
 
     except Exception as e:

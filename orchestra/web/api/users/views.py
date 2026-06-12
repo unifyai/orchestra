@@ -137,6 +137,25 @@ async def create_user(
             await delete_pubsub_topic(str(coordinator_id))
         raise
 
+    if created_coordinator:
+        # Best-effort welcome email from the new user's Coordinator.
+        # Runs post-commit so a mail hiccup can never undo the signup.
+        try:
+            from orchestra.routines.inactivity_notifications import (
+                send_coordinator_welcome_email,
+            )
+
+            await send_coordinator_welcome_email(
+                recipient_email=new_user.email,
+                owner_first_name=new_user.name,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to send Coordinator welcome email for user %s",
+                new_user.id,
+                exc_info=True,
+            )
+
     return {
         "id": new_user.id,
         "name": new_user.name,
