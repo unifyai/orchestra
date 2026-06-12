@@ -37,18 +37,17 @@ from orchestra.services.contact_membership_service import (
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
 )
-from orchestra.services.coordinator_personas import COORDINATOR_BIO
 from orchestra.services.universal_unity_email import (
     ensure_coordinator_universal_email_contact,
-)
-from orchestra.services.universal_unity_whatsapp import (
-    ensure_coordinator_universal_whatsapp_contact,
 )
 from orchestra.services.universal_unity_discord import (
     ensure_coordinator_universal_discord_contact,
 )
 from orchestra.services.universal_unity_phone import (
     ensure_coordinator_universal_phone_contact,
+)
+from orchestra.services.universal_unity_whatsapp import (
+    ensure_coordinator_universal_whatsapp_contact,
 )
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
@@ -65,6 +64,8 @@ ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
 COORDINATOR_DEFAULT_NATIONALITY = "United States"
 COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
+COORDINATOR_DEFAULT_FIRST_NAME = "Marty"
+COORDINATOR_DEFAULT_JOB_TITLE = "Coordinator"
 COORDINATOR_STATE_CONTEXT = "Coordinator/State"
 COORDINATOR_RESET_CONTEXTS = (
     COORDINATOR_STATE_CONTEXT,
@@ -170,14 +171,14 @@ def create_coordinator_assistant(
     """Create a Coordinator assistant row for one workspace scope."""
     assistant = AssistantDAO(session).create_assistant(
         user_id=owner_user_id,
-        first_name="Unity",
+        first_name=COORDINATOR_DEFAULT_FIRST_NAME,
         surname=None,
         age=None,
         nationality=COORDINATOR_DEFAULT_NATIONALITY,
         profile_photo=None,
         profile_video=None,
         desktop_mode=COORDINATOR_DEFAULT_DESKTOP_MODE,
-        about=COORDINATOR_BIO,
+        about="",
         weekly_limit=None,
         max_parallel=None,
         voice_id=None,
@@ -186,7 +187,7 @@ def create_coordinator_assistant(
         organization_id=organization_id,
         is_local=False,
         is_coordinator=True,
-        job_title="Unity",
+        job_title=COORDINATOR_DEFAULT_JOB_TITLE,
     )
     session.flush()
     return assistant
