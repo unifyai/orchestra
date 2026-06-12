@@ -490,6 +490,8 @@ class IntegrationToolPolicyItem(BaseModel):
 class IntegrationToolPolicyResponse(BaseModel):
     connection_id: str
     canonical_app_slug: str
+    app_display_name: Optional[str] = None
+    account_label: Optional[str] = None
     policies: list[IntegrationToolPolicyItem] = Field(default_factory=list)
 
 
@@ -518,10 +520,13 @@ class ProviderToolConfirmationPayload(BaseModel):
     connection_id: Optional[str] = None
     tool_id: str
     app_slug: str
+    app_display_name: Optional[str] = None
     account_label: Optional[str] = None
+    tool_display_name: Optional[str] = None
     action_class: ActionClass
     behavior_hints: list[ToolBehaviorHint] = Field(default_factory=list)
     arguments_summary: dict[str, Any] = Field(default_factory=dict)
+    approval_level: ToolApprovalLevel = "specific_approval"
     approval_options: list[ToolApprovalScope] = Field(default_factory=list)
     confirmation_token: Optional[str] = None
     expires_at: Optional[datetime] = None
@@ -539,6 +544,11 @@ class ProviderToolRunResponse(BaseModel):
 
 
 class IntegrationToolExecutionApprovalRequest(BaseModel):
+    owner_scope: OwnerScope = "assistant"
+    org_id: Optional[int] = None
+    team_id: Optional[int] = None
+    user_id: Optional[str] = None
+    assistant_id: Optional[int] = None
     scope: ToolApprovalScope = "once"
     persist_policy: bool = False
     approval_level: ToolApprovalLevel = "auto"

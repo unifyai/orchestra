@@ -132,6 +132,31 @@ def _owner_from_query(
     )
 
 
+def _optional_owner_from_query(
+    owner_scope: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+) -> OwnerContext | None:
+    if not any(
+        [
+            org_id is not None,
+            team_id is not None,
+            user_id,
+            assistant_id is not None,
+        ],
+    ):
+        return None
+    return _owner_from_query(
+        owner_scope or "assistant",
+        org_id,
+        team_id,
+        user_id,
+        assistant_id,
+    )
+
+
 def _bootstrap_state_response(state) -> IntegrationBootstrapStateResponse:
     desired_config = state.desired_config_json or {}
     sync_config = desired_config.get("sync") if isinstance(desired_config, dict) else {}
@@ -272,6 +297,16 @@ def patch_integration_backend(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
 
@@ -426,6 +461,16 @@ def get_integration_app_detail(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
 
@@ -626,13 +671,30 @@ def test_integration_connection(
 @router.get("/connections/{connection_id}/tool-policy")
 def get_integration_tool_policy(
     connection_id: str,
+    owner_scope: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
     session: Session = Depends(get_db_session),
 ) -> IntegrationToolPolicyResponse:
     try:
-        return get_connection_tool_policy(session, connection_id)
+        owner = _optional_owner_from_query(
+            owner_scope,
+            org_id,
+            team_id,
+            user_id,
+            assistant_id,
+        )
+        return get_connection_tool_policy(session, connection_id, owner=owner)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
 
@@ -641,13 +703,30 @@ def get_integration_tool_policy(
 def patch_integration_tool_policy(
     connection_id: str,
     body: IntegrationToolPolicyPatchRequest,
+    owner_scope: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
     session: Session = Depends(get_db_session),
 ) -> IntegrationToolPolicyResponse:
     try:
-        return patch_connection_tool_policy(session, connection_id, body)
+        owner = _optional_owner_from_query(
+            owner_scope,
+            org_id,
+            team_id,
+            user_id,
+            assistant_id,
+        )
+        return patch_connection_tool_policy(session, connection_id, body, owner=owner)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
 
@@ -668,6 +747,11 @@ def approve_integration_tool_execution(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post(
@@ -684,6 +768,11 @@ def deny_integration_tool_execution(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
 

@@ -1222,6 +1222,48 @@ def _owner_external_user_id(
     return fallback
 
 
+def _owner_is_empty(owner: OwnerContext | None) -> bool:
+    return owner is None or (
+        owner.org_id is None
+        and owner.team_id is None
+        and not owner.user_id
+        and owner.assistant_id is None
+    )
+
+
+def _assert_connection_owner(
+    dao: IntegrationProviderDAO,
+    conn: IntegrationConnection,
+    owner: OwnerContext | None,
+) -> None:
+    if _owner_is_empty(owner):
+        return
+    owned = dao.best_connection(
+        owner=owner,
+        canonical_app_slug=conn.canonical_app_slug,
+        connection_id=conn.connection_id,
+    )
+    if not owned:
+        raise PermissionError("Connection does not belong to the requested owner.")
+
+
+def _assert_audit_owner(
+    audit: ProviderActionAudit,
+    owner: OwnerContext | None,
+) -> None:
+    if _owner_is_empty(owner):
+        return
+    assert owner is not None
+    if owner.org_id is not None and audit.org_id != owner.org_id:
+        raise PermissionError("Execution audit does not belong to the requested owner.")
+    if owner.team_id is not None and audit.team_id != owner.team_id:
+        raise PermissionError("Execution audit does not belong to the requested owner.")
+    if owner.user_id and audit.user_id != owner.user_id:
+        raise PermissionError("Execution audit does not belong to the requested owner.")
+    if owner.assistant_id is not None and audit.assistant_id != owner.assistant_id:
+        raise PermissionError("Execution audit does not belong to the requested owner.")
+
+
 def _owner_tokens(owner: OwnerContext) -> set[str]:
     tokens = {owner.owner_scope}
     if owner.org_id is not None:
@@ -2372,15 +2414,20 @@ def test_connection(
 def get_connection_tool_policy(
     session: Session,
     connection_id: str,
+    owner: OwnerContext | None = None,
 ) -> IntegrationToolPolicyResponse:
     dao = IntegrationProviderDAO(session)
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
+    _assert_connection_owner(dao, conn, owner)
+    app = dao.get_app_by_slug(conn.canonical_app_slug, backend_id=conn.backend_id)
     tools = dao.list_tools(canonical_app_slug=conn.canonical_app_slug)
     return IntegrationToolPolicyResponse(
         connection_id=conn.connection_id,
         canonical_app_slug=conn.canonical_app_slug,
+        app_display_name=app.display_name if app else None,
+        account_label=conn.external_account_label,
         policies=[
             IntegrationToolPolicyItem(
                 tool_id=tool.tool_id,
@@ -2403,11 +2450,13 @@ def patch_connection_tool_policy(
     session: Session,
     connection_id: str,
     body: IntegrationToolPolicyPatchRequest,
+    owner: OwnerContext | None = None,
 ) -> IntegrationToolPolicyResponse:
     dao = IntegrationProviderDAO(session)
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
+    _assert_connection_owner(dao, conn, owner)
     tools = dao.list_tools(canonical_app_slug=conn.canonical_app_slug)
     policy = {} if body.reset_to_defaults else dict(_connection_tool_policy(conn))
     tools_by_key: dict[str, ProviderToolCatalog] = {}
@@ -2430,7 +2479,7 @@ def patch_connection_tool_policy(
 
     dao.set_connection_tool_policy(conn, policy)
     session.commit()
-    return get_connection_tool_policy(session, connection_id)
+    return get_connection_tool_policy(session, connection_id, owner=owner)
 
 
 def _set_policy_for_approval_scope(
@@ -2457,6 +2506,18 @@ def _set_policy_for_approval_scope(
     return True
 
 
+def _approval_request_owner(
+    body: IntegrationToolExecutionApprovalRequest,
+) -> OwnerContext:
+    return OwnerContext(
+        owner_scope=body.owner_scope,
+        org_id=body.org_id,
+        team_id=body.team_id,
+        user_id=body.user_id,
+        assistant_id=body.assistant_id,
+    )
+
+
 def approve_tool_execution(
     session: Session,
     audit_id: int,
@@ -2466,7 +2527,10 @@ def approve_tool_execution(
     audit = dao.get_action_audit(audit_id)
     if not audit:
         raise ValueError(f"Unknown provider action audit: {audit_id}")
+    _assert_audit_owner(audit, _approval_request_owner(body))
     conn = dao.get_connection(audit.connection_id) if audit.connection_id else None
+    if conn:
+        _assert_connection_owner(dao, conn, _approval_request_owner(body))
     if audit.expires_at:
         expires_at = audit.expires_at
         if expires_at.tzinfo is None:
@@ -2537,7 +2601,10 @@ def deny_tool_execution(
     audit = dao.get_action_audit(audit_id)
     if not audit:
         raise ValueError(f"Unknown provider action audit: {audit_id}")
+    _assert_audit_owner(audit, _approval_request_owner(body))
     conn = dao.get_connection(audit.connection_id) if audit.connection_id else None
+    if conn:
+        _assert_connection_owner(dao, conn, _approval_request_owner(body))
     policy_updated = False
     if body.persist_policy and conn:
         policy_updated = _set_policy_for_approval_scope(
@@ -3056,6 +3123,7 @@ def _build_confirmation_payload(
     *,
     audit: ProviderActionAudit,
     tool: ProviderToolCatalog,
+    app: DynamicProviderApp | None,
     conn: IntegrationConnection | None,
     confirmation_token: str | None,
 ) -> ProviderToolConfirmationPayload:
@@ -3064,10 +3132,13 @@ def _build_confirmation_payload(
         connection_id=conn.connection_id if conn else None,
         tool_id=tool.tool_id,
         app_slug=tool.canonical_app_slug,
+        app_display_name=app.display_name if app else None,
         account_label=conn.external_account_label if conn else None,
+        tool_display_name=tool.display_name,
         action_class=tool.action_class,
         behavior_hints=tool.behavior_hints_json or [],
         arguments_summary=audit.arguments_summary_json or {},
+        approval_level=_effective_tool_policy_level(tool, conn),
         approval_options=_approval_options(tool),
         confirmation_token=confirmation_token,
         expires_at=audit.expires_at,
@@ -3217,6 +3288,10 @@ def _resolve_tool_approval(
         confirmation=_build_confirmation_payload(
             audit=audit,
             tool=tool,
+            app=dao.get_app_by_slug(
+                tool.canonical_app_slug,
+                backend_id=tool.backend_id,
+            ),
             conn=conn,
             confirmation_token=confirmation_token,
         ),
