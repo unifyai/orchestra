@@ -1418,6 +1418,7 @@ async def test_run_tool_confirmation_envelope(
             "requested_scopes": ["chat:write"],
             "auth_mode": "api_key",
             "api_key_fields": {"token": "secret"},
+            "account_label": "Workspace Slack",
         },
     )
     assert start_response.status_code == status.HTTP_200_OK, start_response.json()
@@ -1454,8 +1455,12 @@ async def test_run_tool_confirmation_envelope(
     assert confirmation["connection_id"] == connection_id
     assert confirmation["tool_id"] == tool_id
     assert confirmation["app_slug"] == "slack"
+    assert confirmation["app_display_name"] == "Slack"
+    assert confirmation["account_label"] == "Workspace Slack"
+    assert confirmation["tool_display_name"] == "Send Slack message"
     assert confirmation["action_class"] == "write"
     assert confirmation["behavior_hints"] == ["mutates_state"]
+    assert confirmation["approval_level"] == "specific_approval"
     assert confirmation["arguments_summary"] == {
         "keys": ["channel", "text"],
         "total_keys": 2,
@@ -1497,13 +1502,37 @@ async def test_run_tool_confirmation_envelope(
     )
     assert pending_once.status_code == status.HTTP_200_OK, pending_once.json()
     once_audit_id = pending_once.json()["audit_id"]
+    wrong_owner_approval = await client.post(
+        f"/v0/integrations/tool-executions/{once_audit_id}/approve",
+        headers=HEADERS,
+        json={
+            "owner_scope": "assistant",
+            "assistant_id": assistant_id + 1,
+            "scope": "once",
+            "actor_id": "user:test",
+        },
+    )
+    assert wrong_owner_approval.status_code == status.HTTP_403_FORBIDDEN
+
     approval = await client.post(
         f"/v0/integrations/tool-executions/{once_audit_id}/approve",
         headers=HEADERS,
-        json={"scope": "once", "actor_id": "user:test"},
+        json={
+            "owner_scope": "assistant",
+            "assistant_id": assistant_id,
+            "scope": "once",
+            "actor_id": "user:test",
+        },
     )
     assert approval.status_code == status.HTTP_200_OK, approval.json()
     assert approval.json()["status"] == "approved"
+    assert approval.json()["audit_id"] == once_audit_id
+    assert approval.json()["connection_id"] == connection_id
+    assert approval.json()["tool_id"] == tool_id
+    assert approval.json()["approval_scope"] == "once"
+    assert approval.json()["approval_level"] == "auto"
+    assert approval.json()["confirmation_token"]
+    assert approval.json()["expires_at"]
     assert approval.json()["policy_updated"] is False
 
     approved_retry = await client.post(
@@ -1536,10 +1565,22 @@ async def test_run_tool_confirmation_envelope(
     denial = await client.post(
         f"/v0/integrations/tool-executions/{deny_audit_id}/deny",
         headers=HEADERS,
-        json={"scope": "once", "actor_id": "user:test", "reason": "no"},
+        json={
+            "owner_scope": "assistant",
+            "assistant_id": assistant_id,
+            "scope": "once",
+            "actor_id": "user:test",
+            "reason": "no",
+        },
     )
     assert denial.status_code == status.HTTP_200_OK, denial.json()
     assert denial.json()["status"] == "denied"
+    assert denial.json()["audit_id"] == deny_audit_id
+    assert denial.json()["connection_id"] == connection_id
+    assert denial.json()["tool_id"] == tool_id
+    assert denial.json()["approval_scope"] == "once"
+    assert denial.json()["approval_level"] == "forbidden"
+    assert denial.json()["confirmation_token"] is None
     denied_retry = await client.post(
         f"/v0/integrations/tools/{tool_id}/run",
         headers=HEADERS,
@@ -1603,6 +1644,15 @@ async def test_tool_policy_is_scoped_to_connection_account(
         action_class="write",
         required_scopes=["tasks:write"],
     )
+    await _sync_integrations(
+        client,
+        app_slug="asana",
+        display_name="Asana",
+        tool_name="list_tasks",
+        tool_display_name="List Asana tasks",
+        action_class="read",
+        required_scopes=["tasks:read"],
+    )
     connection_ids: list[str] = []
     for label in ["Work Asana", "Personal Asana"]:
         response = await client.post(
@@ -1612,7 +1662,7 @@ async def test_tool_policy_is_scoped_to_connection_account(
                 **_owner_payload(assistant_id=assistant_id),
                 "canonical_app_slug": "asana",
                 "backend_id": "composio",
-                "requested_scopes": ["tasks:write"],
+                "requested_scopes": ["tasks:write", "tasks:read"],
                 "auth_mode": "api_key",
                 "api_key_fields": {"token": "secret"},
                 "account_label": label,
@@ -1632,18 +1682,53 @@ async def test_tool_policy_is_scoped_to_connection_account(
         },
     )
     assert tools.status_code == status.HTTP_200_OK, tools.json()
-    tool_id = tools.json()["items"][0]["tool_id"]
+    policy_before = await client.get(
+        f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
+        headers=HEADERS,
+        params={"owner_scope": "assistant", "assistant_id": assistant_id},
+    )
+    assert policy_before.status_code == status.HTTP_200_OK, policy_before.json()
+    assert policy_before.json()["account_label"] == "Work Asana"
+    assert policy_before.json()["app_display_name"] == "Asana"
+    policies_by_name = {
+        item["display_name"]: item for item in policy_before.json()["policies"]
+    }
+    tool_id = policies_by_name["Create Asana task"]["tool_id"]
+    read_tool_id = policies_by_name["List Asana tasks"]["tool_id"]
 
     patched = await client.patch(
         f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
         headers=HEADERS,
+        params={"owner_scope": "assistant", "assistant_id": assistant_id},
         json={"tool_policies": {tool_id: "auto"}},
     )
     assert patched.status_code == status.HTTP_200_OK, patched.json()
+    patched_by_id = {item["tool_id"]: item for item in patched.json()["policies"]}
+    assert patched_by_id[tool_id]["approval_level"] == "auto"
+    assert patched_by_id[read_tool_id]["approval_level"] == "auto"
+
+    second_patch = await client.patch(
+        f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
+        headers=HEADERS,
+        params={"owner_scope": "assistant", "assistant_id": assistant_id},
+        json={"tool_policies": {read_tool_id: "forbidden"}},
+    )
+    assert second_patch.status_code == status.HTTP_200_OK, second_patch.json()
+    second_by_id = {item["tool_id"]: item for item in second_patch.json()["policies"]}
+    assert second_by_id[tool_id]["approval_level"] == "auto"
+    assert second_by_id[read_tool_id]["approval_level"] == "forbidden"
+
+    forbidden_owner = await client.get(
+        f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
+        headers=HEADERS,
+        params={"owner_scope": "assistant", "assistant_id": assistant_id + 1},
+    )
+    assert forbidden_owner.status_code == status.HTTP_403_FORBIDDEN
 
     other_policy = await client.get(
         f"/v0/integrations/connections/{connection_ids[1]}/tool-policy",
         headers=HEADERS,
+        params={"owner_scope": "assistant", "assistant_id": assistant_id},
     )
     assert other_policy.status_code == status.HTTP_200_OK, other_policy.json()
     other_item = next(
