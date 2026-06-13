@@ -4,6 +4,7 @@ on:
   push:
     branches: [staging, main]
     paths:
+    - '.dockerignore'
     - 'deploy/**'
     - 'orchestra/**'
     - 'pyproject.toml'
