@@ -727,6 +727,18 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     },
                 )
 
+        # Reverse any referral reward funded by this (now refunded) invoice.
+        try:
+            from orchestra.lib.referrals import reverse_referral_for_invoice
+
+            reverse_referral_for_invoice(
+                session,
+                data_object.get("invoice"),
+                reason="refund",
+            )
+        except Exception:
+            logger.exception("Referral reversal (refund) failed")
+
     # ── Dispute created / funds withdrawn ─────────────────────────────
     elif event_type in ("charge.dispute.created", "charge.dispute.funds_withdrawn"):
         payment_intent_id = data_object.get("payment_intent")
@@ -876,6 +888,18 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     "payment_intent_id": payment_intent_id,
                 },
             )
+
+        # Reverse any referral reward funded by the disputed invoice.
+        try:
+            from orchestra.lib.referrals import reverse_referral_for_invoice
+
+            reverse_referral_for_invoice(
+                session,
+                invoice_id,
+                reason="dispute",
+            )
+        except Exception:
+            logger.exception("Referral reversal (dispute) failed")
 
     # ── Dispute closed ────────────────────────────────────────────────
     elif event_type == "charge.dispute.closed":

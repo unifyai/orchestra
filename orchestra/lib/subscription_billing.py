@@ -548,6 +548,19 @@ def apply_subscription_invoice_paid(
 
     session.flush()
 
+    # Referral reward: only the friend's *first* paid subscription invoice
+    # qualifies. Isolated so a referral failure can never break billing.
+    if invoice.get("billing_reason") == "subscription_create":
+        try:
+            from orchestra.lib.referrals import maybe_reward_referral
+
+            maybe_reward_referral(session, billing_account, invoice)
+        except Exception:
+            logger.exception(
+                "Referral reward processing failed for invoice %s",
+                invoice_id,
+            )
+
     logger.info(
         {
             "message": "Subscription cycle credits granted",

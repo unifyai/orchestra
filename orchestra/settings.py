@@ -343,6 +343,49 @@ class Settings(BaseSettings):
         os.environ.get("SIGNUP_CREDIT_GRANT", "100"),
     )
 
+    # ── Referral program ────────────────────────────────────────────────
+    #: Master switch. When False, referral codes can still exist but no
+    #: attribution or reward is processed.
+    referral_enabled: bool = os.environ.get(
+        "REFERRAL_ENABLED",
+        "true",
+    ).lower() not in ("0", "false", "no")
+
+    #: Referrer reward = ``referral_reward_pct`` × the referred friend's
+    #: first paid subscription invoice (USD), capped at
+    #: ``referral_reward_max_credits``. Paid in free (promotional) credits,
+    #: so the payout scales with realised revenue and stays a fraction of it.
+    referral_reward_pct: float = float(
+        os.environ.get("REFERRAL_REWARD_PCT", "0.10"),
+    )
+    referral_reward_max_credits: float = float(
+        os.environ.get("REFERRAL_REWARD_MAX_CREDITS", "50"),
+    )
+
+    #: Flat bonus (USD-denominated credits) granted to the *referred* friend
+    #: once their first payment clears. Two-sided incentive; payment-gated.
+    referral_referee_bonus_credits: float = float(
+        os.environ.get("REFERRAL_REFEREE_BONUS_CREDITS", "10"),
+    )
+
+    #: Referral reward/bonus credits expire this many days after they are
+    #: granted (unconsumed remainder is forfeited by the credit-grant sweep).
+    referral_reward_expiry_days: int = int(
+        os.environ.get("REFERRAL_REWARD_EXPIRY_DAYS", "90"),
+    )
+
+    #: Only the friend's first payment counts, and only if it is at least
+    #: this many USD — stops $1 plans from farming rewards.
+    referral_min_qualifying_payment: float = float(
+        os.environ.get("REFERRAL_MIN_QUALIFYING_PAYMENT", "50"),
+    )
+
+    #: Anti-abuse cap on how many referrals a single referrer can be
+    #: *rewarded* for, in total. ``0`` disables the cap.
+    referral_max_rewarded_per_referrer: int = int(
+        os.environ.get("REFERRAL_MAX_REWARDED_PER_REFERRER", "100"),
+    )
+
     #: Display-only credit framing. The wallet/ledger denominate in
     #: canonical USD value (1 internal unit = $1); customer-facing surfaces
     #: (console + outbound emails) render *credits* = USD × this multiplier.

@@ -36,7 +36,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -51,6 +51,11 @@ FORFEIT_CATEGORY = "forfeit"
 # Grant kinds that carry an expiry.
 GRANT_KIND_TRIAL = "trial"
 GRANT_KIND_PLAN = "plan"
+# Referral reward / referee bonus credits — free, expiring promotional
+# credits. The expiry/forfeit sweep is generic over ``grant_kind`` (it keys
+# off ``detail.expires_at``), so referral grants forfeit their unconsumed
+# remainder automatically once they lapse.
+GRANT_KIND_REFERRAL = "referral"
 
 # Ledger category per grant kind. The ``plan`` (subscription) grant is *paid*
 # — the customer pays the subscription invoice that funds it — so it records
@@ -357,14 +362,25 @@ def grant_expiring_credits(
     description: Optional[str] = None,
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
+    detail_extra: Optional[dict[str, Any]] = None,
 ) -> Optional[Decimal]:
     """Add a credit grant tagged with an expiry to the ledger + wallet.
 
     Thin wrapper over ``BillingAccountDAO.add_credits`` that stamps the
     ``grant_kind`` / ``expires_at`` into ``detail`` so the forfeit logic
-    can find it. Returns the new wallet balance (CREDITS mode).
+    can find it. ``detail_extra`` merges extra provenance fields into the
+    same ledger ``detail`` (e.g. the originating invoice id), which lets a
+    later clawback pin its forfeit to this exact grant lot. Returns the new
+    wallet balance (CREDITS mode).
     """
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+    detail: dict[str, Any] = {
+        "grant_kind": grant_kind,
+        "expires_at": _utc(expires_at).isoformat(),
+    }
+    if detail_extra:
+        detail.update(detail_extra)
 
     return BillingAccountDAO(session).add_credits(
         billing_account_id,
@@ -373,10 +389,7 @@ def grant_expiring_credits(
         user_id=user_id,
         organization_id=organization_id,
         description=description or f"{grant_kind} credit grant",
-        detail={
-            "grant_kind": grant_kind,
-            "expires_at": _utc(expires_at).isoformat(),
-        },
+        detail=detail,
     )
 
 
@@ -384,6 +397,23 @@ def signup_trial_expiry(reference: Optional[datetime] = None) -> datetime:
     """Trial grants expire one week after signup."""
     moment = _utc(reference) if reference is not None else datetime.now(timezone.utc)
     return moment + timedelta(days=7)
+
+
+def referral_reward_expiry(
+    reference: Optional[datetime] = None,
+    *,
+    days: Optional[int] = None,
+) -> datetime:
+    """Referral reward / referee bonus credits expire after N days.
+
+    Defaults to ``settings.referral_reward_expiry_days``; the unconsumed
+    remainder forfeits via the same expiry sweep as trial/plan grants.
+    """
+    from orchestra.settings import settings
+
+    moment = _utc(reference) if reference is not None else datetime.now(timezone.utc)
+    window = days if days is not None else settings.referral_reward_expiry_days
+    return moment + timedelta(days=int(window))
 
 
 def format_display_credits(usd_value: Decimal | float | int) -> str:

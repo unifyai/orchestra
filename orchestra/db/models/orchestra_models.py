@@ -2316,6 +2316,128 @@ class CreditGrantLinkClaim(Base):
     link = relationship("OneTimeCreditGrantLink", back_populates="claims")
 
 
+class ReferralCode(Base):
+    """A shareable referral code owned by a user.
+
+    A user may own *multiple* codes (e.g. one per channel/campaign); every
+    code resolves back to the same referrer. Generating and sharing many
+    links is allowed and harmless — the abuse surface lives entirely on the
+    *referee* side: a given user can be referred at most once (enforced by
+    ``ReferralAttribution``) and the reward is payment-gated and idempotent.
+    """
+
+    __tablename__ = "referral_code"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    code = Column(String, unique=True, index=True, nullable=False)
+    referrer_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    referrer_organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        comment=(
+            "Org that owns this code — reward credits go to the org's "
+            "billing account. NULL = personal code (reward to the user)."
+        ),
+    )
+    label = Column(
+        String,
+        nullable=True,
+        comment="Optional channel/campaign label (e.g. 'twitter')",
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    disabled_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class ReferralAttribution(Base):
+    """Records that a user signed up via a referral code.
+
+    Exactly one row per referee (``uq_referral_referee``): a person can be
+    referred only once, regardless of how many links exist or which code
+    they clicked. The reward fires at most once, when the referee makes
+    their first qualifying paid subscription, and is reversed on
+    refund/chargeback.
+
+    Lifecycle: ``pending`` → ``rewarded`` (friend paid) → ``reversed``
+    (refund/dispute clawback).
+    """
+
+    __tablename__ = "referral_attribution"
+    __table_args__ = (UniqueConstraint("referee_user_id", name="uq_referral_referee"),)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    code = Column(String, nullable=False, index=True)
+    referrer_user_id = Column(
+        String,
+        ForeignKey("user.id"),
+        nullable=False,
+        index=True,
+    )
+    referrer_organization_id = Column(
+        Integer,
+        ForeignKey("organization.id"),
+        nullable=True,
+        index=True,
+        comment="Org that earns the reward (copied from the code); NULL = personal",
+    )
+    referee_user_id = Column(
+        String,
+        ForeignKey("user.id"),
+        nullable=False,
+        index=True,
+    )
+    referee_billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id"),
+        nullable=True,
+        index=True,
+        comment="BA whose first paid invoice qualifies the reward",
+    )
+    referrer_billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id"),
+        nullable=True,
+        comment="BA the referrer reward was granted to (for clawback)",
+    )
+    status = Column(
+        String,
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        comment="pending | rewarded | reversed",
+    )
+    signup_ip = Column(
+        String,
+        nullable=True,
+        comment="Referee IP at attribution time (velocity/abuse scoring)",
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    rewarded_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    reversed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    first_payment_invoice_id = Column(
+        String,
+        nullable=True,
+        index=True,
+        comment="Stripe invoice id of the friend's qualifying first payment",
+    )
+    reward_amount = Column(
+        Numeric,
+        nullable=True,
+        comment="Credits granted to the referrer (USD-denominated)",
+    )
+    referee_bonus_amount = Column(
+        Numeric,
+        nullable=True,
+        comment="Bonus credits granted to the referee (USD-denominated)",
+    )
+
+
 class OnboardingStatus(Base):
     """
     Tracks user onboarding progress.

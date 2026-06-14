@@ -376,3 +376,64 @@ class OnboardingStatusCreateRequest(BaseModel):
     user_id: str
     current_step: OnboardingStep = "workspace_setup"
     step_data: Optional[Dict[str, Any]] = None
+
+
+# ── Referral program ───────────────────────────────────────────────────────
+
+
+class ReferralCodeResponse(BaseModel):
+    """A single referral code owned by the caller."""
+
+    code: str
+    label: Optional[str] = None
+    created_at: datetime
+    disabled: bool = False
+
+
+class ReferralCreateCodeRequest(BaseModel):
+    """Create an additional referral code (e.g. per channel)."""
+
+    label: OptionalSafeLabel = None
+
+
+class ReferralAttributionRequest(BaseModel):
+    """Apply a referral code to the (new) caller's account."""
+
+    code: str
+
+
+class ReferralAttributionResponse(BaseModel):
+    """Result of attempting to apply a referral code."""
+
+    attributed: bool
+    message: str
+    code: Optional[str] = None
+
+
+class ReferralSummaryResponse(BaseModel):
+    """The caller's referral dashboard: primary link + codes + stats."""
+
+    code: str
+    referral_url: str
+    codes: list[ReferralCodeResponse] = []
+    pending_count: int = 0
+    rewarded_count: int = 0
+    total_credits_earned: float = 0.0
+    reward_pct: float = 0.0
+    reward_max_credits: float = 0.0
+    referee_bonus_credits: float = 0.0
+
+
+class ReferralListItem(BaseModel):
+    """One referred friend and the state of their reward."""
+
+    status: str  # pending | rewarded | reversed
+    created_at: datetime
+    rewarded_at: Optional[datetime] = None
+    reward_amount: Optional[float] = None
+
+
+class ReferralListResponse(BaseModel):
+    """List of the caller's referrals (as referrer)."""
+
+    referrals: list[ReferralListItem] = []

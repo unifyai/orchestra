@@ -28,11 +28,13 @@ from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLi
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.referral_dao import ReferralDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.lib.referrals import ReferralError, attribute_referral
 from orchestra.services.coordinator_service import (
     ensure_personal_coordinator_provisioned,
     ensure_workspace_coordinator_provisioned,
@@ -43,6 +45,7 @@ from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
     run_user_runtime_cleanup_tasks,
 )
+from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     SpendingLimitReachedRequest,
     SpendingLimitReachedResponse,
@@ -64,6 +67,13 @@ from orchestra.web.api.users.schema import (
     PhoneVerificationConfirm,
     PhoneVerificationRequest,
     QueryLoggingStatus,
+    ReferralAttributionRequest,
+    ReferralAttributionResponse,
+    ReferralCodeResponse,
+    ReferralCreateCodeRequest,
+    ReferralListItem,
+    ReferralListResponse,
+    ReferralSummaryResponse,
     UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
     UserRequest,
@@ -1600,6 +1610,151 @@ def claim_credit_grant_link(
             status_code=500,
             detail=f"An unexpected error occurred: {str(e)}",
         )
+
+
+@router.get("/user/referral", response_model=ReferralSummaryResponse)
+def get_referral_summary(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Return the caller's referral link, codes, and reward stats.
+
+    A primary code is created lazily on first call so the user always has a
+    link to share.
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    dao = ReferralDAO(session)
+    primary = dao.get_or_create_primary_code(user_id, organization_id)
+    session.commit()
+
+    codes = dao.list_codes(user_id, organization_id)
+    attributions = dao.list_for_referrer(user_id, organization_id)
+    pending = sum(1 for a in attributions if a.status == "pending")
+    rewarded = sum(1 for a in attributions if a.status == "rewarded")
+
+    return ReferralSummaryResponse(
+        code=primary.code,
+        referral_url=f"{settings.console_url}/login?ref={primary.code}",
+        codes=[
+            ReferralCodeResponse(
+                code=c.code,
+                label=c.label,
+                created_at=c.created_at,
+                disabled=c.disabled_at is not None,
+            )
+            for c in codes
+        ],
+        pending_count=pending,
+        rewarded_count=rewarded,
+        total_credits_earned=dao.total_credits_earned(user_id, organization_id),
+        reward_pct=settings.referral_reward_pct,
+        reward_max_credits=settings.referral_reward_max_credits,
+        referee_bonus_credits=settings.referral_referee_bonus_credits,
+    )
+
+
+@router.post(
+    "/user/referral/codes",
+    response_model=ReferralCodeResponse,
+    status_code=201,
+)
+def create_referral_code(
+    payload: ReferralCreateCodeRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Create an additional referral code (e.g. one per channel/campaign).
+
+    Scoped to the active workspace: in an organization workspace the code is
+    org-owned and its rewards are credited to the organization.
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    dao = ReferralDAO(session)
+    code = dao.create_code(
+        user_id,
+        label=payload.label,
+        organization_id=organization_id,
+    )
+    session.commit()
+    return ReferralCodeResponse(
+        code=code.code,
+        label=code.label,
+        created_at=code.created_at,
+        disabled=False,
+    )
+
+
+@router.post(
+    "/user/referral/attribute",
+    response_model=ReferralAttributionResponse,
+)
+def attribute_referral_code(
+    payload: ReferralAttributionRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Apply a referral code to the (new) caller's account.
+
+    Idempotent: safe to retry on every login until it succeeds, mirroring
+    the credit-grant-link claim flow. Attribution only — the reward is
+    granted later, when the caller makes their first qualifying payment.
+    """
+    user_id = request.state.user_id
+    user_dao = UserDAO(session)
+    user_row = user_dao.get_by_id(user_id)
+    if not user_row:
+        raise not_found("User")
+    user_instance = user_row[0]
+
+    signup_ip = request.client.host if request.client else None
+    try:
+        result = attribute_referral(
+            session,
+            referee_user=user_instance,
+            code=payload.code,
+            signup_ip=signup_ip,
+        )
+        session.commit()
+    except ReferralError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=e.message)
+    except Exception:
+        session.rollback()
+        raise
+
+    return ReferralAttributionResponse(
+        attributed=result.attributed,
+        message=result.message,
+        code=result.code,
+    )
+
+
+@router.get("/user/referrals", response_model=ReferralListResponse)
+def list_referrals(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """List the caller's referrals (as referrer) and their reward status.
+
+    Scoped to the active workspace (personal vs the current organization).
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    dao = ReferralDAO(session)
+    items = [
+        ReferralListItem(
+            status=a.status,
+            created_at=a.created_at,
+            rewarded_at=a.rewarded_at,
+            reward_amount=(
+                float(a.reward_amount) if a.reward_amount is not None else None
+            ),
+        )
+        for a in dao.list_for_referrer(user_id, organization_id)
+    ]
+    return ReferralListResponse(referrals=items)
 
 
 @admin_router.post(
