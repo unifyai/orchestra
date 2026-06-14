@@ -633,6 +633,7 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     assert payload["onboarding_step"] is None
     assert payload["started_at"] is not None
     assert payload["ended_at"] is None
+    assert payload["intro_watched"] is False
     # A fresh Coordinator has completed nothing — notably the
     # platform-provisioned universal Unity email contact must NOT
     # count as a connected workspace.
@@ -844,6 +845,63 @@ async def test_coordinator_state_patch_records_skipped_steps(
     assert promote.status_code == status.HTTP_200_OK, promote.json()
     assert promote.json()["info"]["completed_step_ids"] == []
     assert promote.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_intro_watched_is_one_way_sticky(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """``intro_watched`` latches ``True`` and survives later transitions.
+
+    The console sets this once the user resolves the opening picker so
+    the ringing picker / auto-playing intro never re-appear on a later
+    page load. It must carry forward across unrelated PATCHes and must
+    not be resettable to ``False``.
+    """
+    owner = await _create_user(client, "state-intro-watched")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    watched = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"intro_watched": True},
+        headers=owner["headers"],
+    )
+    assert watched.status_code == status.HTTP_200_OK, watched.json()
+    assert watched.json()["info"]["intro_watched"] is True
+
+    # An unrelated PATCH carries the flag forward untouched.
+    step = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_step": "briefing"},
+        headers=owner["headers"],
+    )
+    assert step.status_code == status.HTTP_200_OK, step.json()
+    assert step.json()["info"]["intro_watched"] is True
+
+    # Attempting to reset to False is ignored (one-way sticky).
+    reset_attempt = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"intro_watched": False},
+        headers=owner["headers"],
+    )
+    assert reset_attempt.status_code == status.HTTP_200_OK, reset_attempt.json()
+    assert reset_attempt.json()["info"]["intro_watched"] is True
+
+    follow_up = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
+    assert follow_up.json()["info"]["intro_watched"] is True
 
 
 @pytest.mark.anyio

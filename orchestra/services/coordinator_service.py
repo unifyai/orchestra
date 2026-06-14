@@ -955,6 +955,7 @@ def _coordinator_state_entry(
     onboarding_step: str | None,
     skipped_step_ids: Sequence[str],
     previous: dict[str, Any] | None,
+    intro_watched: bool | None = None,
 ) -> dict[str, Any]:
     """Build a fully-formed ``Coordinator/State`` row.
 
@@ -984,12 +985,19 @@ def _coordinator_state_entry(
         # row is currently in onboarding so ``ended_at`` has no
         # meaning until we transition out again.
         ended_at = None
+    # ``intro_watched`` is one-way sticky: once the user has resolved the
+    # opening picker we never want the ringing picker / auto-playing intro
+    # to re-appear, so a later row cannot flip it back to ``False``.
+    next_intro_watched = bool((previous or {}).get("intro_watched")) or bool(
+        intro_watched,
+    )
     return {
         "mode": mode,
         "onboarding_step": onboarding_step,
         "skipped_step_ids": list(skipped_step_ids),
         "started_at": started_at,
         "ended_at": ended_at,
+        "intro_watched": next_intro_watched,
         "timestamp": now,
     }
 
@@ -1050,6 +1058,7 @@ def get_coordinator_state(
             "skipped_step_ids": [],
             "started_at": None,
             "ended_at": None,
+            "intro_watched": False,
         }
     mode = row.get("mode")
     if mode not in COORDINATOR_MODES:
@@ -1063,6 +1072,7 @@ def get_coordinator_state(
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
+        "intro_watched": bool(row.get("intro_watched", False)),
     }
 
 
@@ -1117,6 +1127,7 @@ def set_coordinator_state(
     onboarding_step: str | None = None,
     clear_onboarding_step: bool = False,
     skip_onboarding_step: str | None = None,
+    intro_watched: bool | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1129,10 +1140,11 @@ def set_coordinator_state(
     longer applies). Callers should not pass both ``onboarding_step``
     and ``clear_onboarding_step``; the explicit value wins if they do.
 
-    The user-facing picker (call vs chat) is *not* persisted here on
-    purpose: the design treats the picker as a per-session affordance
-    so a resumed onboarding always re-asks rather than locking the
-    user into a previously-chosen surface.
+    The specific call-vs-chat surface choice is *not* persisted — only
+    that the picker was resolved at all, via ``intro_watched``. Once
+    that flag is set the ringing picker and auto-playing intro never
+    re-appear on a later page load; the user replays the intro on
+    demand from the onboarding pane instead.
     """
     if mode is not None and mode not in COORDINATOR_MODES:
         raise HTTPException(
@@ -1193,6 +1205,7 @@ def set_coordinator_state(
         onboarding_step=next_step,
         skipped_step_ids=next_skipped_step_ids,
         previous=previous,
+        intro_watched=intro_watched,
     )
     _write_coordinator_state_row(
         session,
