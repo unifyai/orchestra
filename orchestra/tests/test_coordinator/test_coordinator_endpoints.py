@@ -834,6 +834,14 @@ async def test_coordinator_state_patch_records_skipped_steps(
         assert duplicate.status_code == status.HTTP_200_OK, duplicate.json()
         assert duplicate.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
 
+        unskip_apps = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"unskip_onboarding_step": "apps"},
+            headers=owner["headers"],
+        )
+        assert unskip_apps.status_code == status.HTTP_200_OK, unskip_apps.json()
+        assert unskip_apps.json()["info"]["skipped_step_ids"] == ["workspace"]
+
     assert emit.await_count == 3
     assert emit.await_args.kwargs["skipped_step_ids"] == ["workspace", "apps"]
 
@@ -844,7 +852,7 @@ async def test_coordinator_state_patch_records_skipped_steps(
     )
     assert promote.status_code == status.HTTP_200_OK, promote.json()
     assert promote.json()["info"]["completed_step_ids"] == []
-    assert promote.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
+    assert promote.json()["info"]["skipped_step_ids"] == ["workspace"]
 
 
 @pytest.mark.anyio

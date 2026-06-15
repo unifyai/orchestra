@@ -654,7 +654,8 @@ class CoordinatorStateUpdate(BaseModel):
     leaving ``onboarding``. Passing ``clear_onboarding_step=True``
     resets the step (used when moving to ``working`` so a future
     re-entry doesn't carry stale step state). ``skip_onboarding_step``
-    records an intentional user skip separately from real completion.
+    records an intentional user skip separately from real completion;
+    ``unskip_onboarding_step`` returns that step to the active checklist.
 
     ``intro_watched`` records that the user has resolved the opening
     picker (started the call or chose chat) so the ringing picker and
@@ -668,6 +669,7 @@ class CoordinatorStateUpdate(BaseModel):
     onboarding_step: Optional[str] = Field(None, min_length=1)
     clear_onboarding_step: bool = Field(False)
     skip_onboarding_step: Optional[str] = Field(None, min_length=1)
+    unskip_onboarding_step: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
 
 

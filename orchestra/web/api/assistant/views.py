@@ -1481,6 +1481,7 @@ async def update_coordinator_state_endpoint(
         onboarding_step=update.onboarding_step,
         clear_onboarding_step=update.clear_onboarding_step,
         skip_onboarding_step=update.skip_onboarding_step,
+        unskip_onboarding_step=update.unskip_onboarding_step,
         intro_watched=update.intro_watched,
     )
     if update.skip_onboarding_step:

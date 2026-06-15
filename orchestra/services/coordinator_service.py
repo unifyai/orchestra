@@ -1127,6 +1127,7 @@ def set_coordinator_state(
     onboarding_step: str | None = None,
     clear_onboarding_step: bool = False,
     skip_onboarding_step: str | None = None,
+    unskip_onboarding_step: str | None = None,
     intro_watched: bool | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
@@ -1166,6 +1167,14 @@ def set_coordinator_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid_skip_onboarding_step",
         )
+    if unskip_onboarding_step is not None and (
+        not isinstance(unskip_onboarding_step, str)
+        or unskip_onboarding_step not in SKIPPABLE_ONBOARDING_STEPS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_unskip_onboarding_step",
+        )
     _lock_coordinator_context(
         session,
         coordinator=coordinator,
@@ -1199,6 +1208,12 @@ def set_coordinator_state(
             step_id
             for step_id in SKIPPABLE_ONBOARDING_STEPS
             if step_id == skip_onboarding_step or step_id in next_skipped_step_ids
+        ]
+    if unskip_onboarding_step is not None:
+        next_skipped_step_ids = [
+            step_id
+            for step_id in next_skipped_step_ids
+            if step_id != unskip_onboarding_step
         ]
     entry = _coordinator_state_entry(
         mode=next_mode,
