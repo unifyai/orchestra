@@ -185,3 +185,7 @@ logs/*
 .DS_Store
 
 .pgdata/
+
+# Cursor local scratch files
+/.cursor/projects/
+/.cursor/plans/
