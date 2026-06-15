@@ -18,6 +18,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -466,8 +467,8 @@ def sync_integrations(
         status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
-        apps_pruned=summary["apps_pruned"],
-        tools_pruned=summary["tools_pruned"],
+        apps_pruned=summary.get("apps_pruned", 0),
+        tools_pruned=summary.get("tools_pruned", 0),
         apps=list(body.apps),
         tools=list(body.tools),
         requested_app_slugs=body.app_slugs,
@@ -755,6 +756,7 @@ def _composio_live_catalog_handler(
     auth_configs_reused = 0
     should_create_auth_configs = body.create_auth_configs and bool(requested_slugs)
     tool_fetch_started_at = time.perf_counter()
+    syncable_toolkit_slugs: list[str] = []
 
     for index, toolkit_slug in enumerate(selected_toolkit_slugs, start=1):
         toolkit = toolkits_by_slug[toolkit_slug]
@@ -799,11 +801,58 @@ def _composio_live_catalog_handler(
                 "raw_provider_metadata": raw_provider_metadata,
             },
         )
-        if body.sync_tools:
-            tool_limit = (
-                body.tool_limit_per_app if body.tool_limit_per_app > 0 else None
+        syncable_toolkit_slugs.append(toolkit_slug)
+        if index == len(selected_toolkit_slugs) or index % 25 == 0:
+            logger.info(
+                "Composio catalog sync progress processed_toolkits=%s/%s "
+                "apps=%s tools=%s elapsed_seconds=%.3f",
+                index,
+                len(selected_toolkit_slugs),
+                len(apps),
+                len(tools),
+                time.perf_counter() - started_at,
             )
-            for tool in adapter.list_tools(toolkit_slug=toolkit_slug, limit=tool_limit):
+
+    if body.sync_tools and syncable_toolkit_slugs:
+        tool_limit = body.tool_limit_per_app if body.tool_limit_per_app > 0 else None
+        tool_fetch_concurrency = max(1, int(config.get("tool_fetch_concurrency", 8)))
+        raw_tools_by_toolkit: dict[str, list[dict[str, Any]]] = {}
+
+        def fetch_tools(toolkit_slug: str) -> tuple[str, list[dict[str, Any]]]:
+            return (
+                toolkit_slug,
+                adapter.list_tools(toolkit_slug=toolkit_slug, limit=tool_limit),
+            )
+
+        logger.info(
+            "Composio tool fetch start toolkits=%s concurrency=%s tool_limit_per_app=%s",
+            len(syncable_toolkit_slugs),
+            tool_fetch_concurrency,
+            body.tool_limit_per_app,
+        )
+        with ThreadPoolExecutor(max_workers=tool_fetch_concurrency) as executor:
+            future_by_slug = {
+                executor.submit(fetch_tools, toolkit_slug): toolkit_slug
+                for toolkit_slug in syncable_toolkit_slugs
+            }
+            for completed, future in enumerate(as_completed(future_by_slug), start=1):
+                toolkit_slug, toolkit_tools = future.result()
+                raw_tools_by_toolkit[toolkit_slug] = toolkit_tools
+                if completed == len(future_by_slug) or completed % 25 == 0:
+                    logger.info(
+                        "Composio tool fetch progress completed_toolkits=%s/%s "
+                        "latest_toolkit=%s latest_tools=%s elapsed_seconds=%.3f",
+                        completed,
+                        len(future_by_slug),
+                        toolkit_slug,
+                        len(toolkit_tools),
+                        time.perf_counter() - tool_fetch_started_at,
+                    )
+
+        for toolkit_slug in syncable_toolkit_slugs:
+            toolkit = toolkits_by_slug[toolkit_slug]
+            canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
+            for tool in raw_tools_by_toolkit.get(toolkit_slug, []):
                 provider_tool_id = str(tool.get("slug") or tool.get("id") or "")
                 if not provider_tool_id:
                     continue
@@ -848,16 +897,6 @@ def _composio_live_catalog_handler(
                         },
                     },
                 )
-        if index == len(selected_toolkit_slugs) or index % 25 == 0:
-            logger.info(
-                "Composio catalog sync progress processed_toolkits=%s/%s "
-                "apps=%s tools=%s elapsed_seconds=%.3f",
-                index,
-                len(selected_toolkit_slugs),
-                len(apps),
-                len(tools),
-                time.perf_counter() - started_at,
-            )
 
     if selected_toolkit_slugs and not apps:
         error_message = "No Composio apps produced catalog rows during live sync."
@@ -913,8 +952,8 @@ def _composio_live_catalog_handler(
         status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
-        apps_pruned=summary["apps_pruned"],
-        tools_pruned=summary["tools_pruned"],
+        apps_pruned=summary.get("apps_pruned", 0),
+        tools_pruned=summary.get("tools_pruned", 0),
         apps=apps,
         tools=tools,
         skipped_apps=skipped_apps,
@@ -1080,8 +1119,8 @@ def _pipedream_live_catalog_handler(
         status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
-        apps_pruned=summary["apps_pruned"],
-        tools_pruned=summary["tools_pruned"],
+        apps_pruned=summary.get("apps_pruned", 0),
+        tools_pruned=summary.get("tools_pruned", 0),
         apps=apps,
         tools=tools,
         skipped_apps=skipped_apps,
