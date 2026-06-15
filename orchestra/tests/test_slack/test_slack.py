@@ -884,12 +884,47 @@ class TestCoordinatorAndTokenResolution:
         _make_assistant(dbsession, user, first_name="Solo", organization=None)
         assert AssistantDAO(dbsession).coordinator(user_id=user.id) is None
 
-    def test_coordinator_requires_owner_xor(self, dbsession: Session) -> None:
+    def test_coordinator_requires_at_least_one_owner(self, dbsession: Session) -> None:
         dao = AssistantDAO(dbsession)
         with pytest.raises(ValueError):
             dao.coordinator()  # neither
-        with pytest.raises(ValueError):
-            dao.coordinator(organization_id=1, user_id="x")  # both
+
+    def test_coordinator_by_membership_scope(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """``(user_id, organization_id)`` resolves that member's workspace
+        Coordinator unambiguously."""
+        coordinator = AssistantDAO(dbsession).coordinator(
+            organization_id=slack_world["org"].id,
+            user_id=slack_world["owner"].id,
+        )
+        assert coordinator is not None
+        assert coordinator.agent_id == slack_world["coordinator"].agent_id
+
+    def test_coordinator_org_scope_with_multiple_members_is_deterministic(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """A second member's workspace Coordinator in the same org must not
+        make the org-scoped lookup raise ``MultipleResultsFound``."""
+        org = slack_world["org"]
+        member2 = _make_user(dbsession, "member2")
+        coord2 = _make_assistant(
+            dbsession,
+            member2,
+            first_name="Cora",
+            organization=org,
+            is_coordinator=True,
+        )
+        result = AssistantDAO(dbsession).coordinator(organization_id=org.id)
+        assert result is not None
+        assert result.agent_id == min(
+            slack_world["coordinator"].agent_id,
+            coord2.agent_id,
+        )
 
     def test_resolve_token_unique_case_insensitive(
         self,
