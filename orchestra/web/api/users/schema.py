@@ -419,9 +419,9 @@ class ReferralSummaryResponse(BaseModel):
     pending_count: int = 0
     rewarded_count: int = 0
     total_credits_earned: float = 0.0
-    reward_pct: float = 0.0
-    reward_max_credits: float = 0.0
+    reward_credits: float = 0.0
     referee_bonus_credits: float = 0.0
+    qualifying_spend: float = 0.0
 
 
 class ReferralListItem(BaseModel):

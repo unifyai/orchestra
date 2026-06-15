@@ -1648,9 +1648,9 @@ def get_referral_summary(
         pending_count=pending,
         rewarded_count=rewarded,
         total_credits_earned=dao.total_credits_earned(user_id, organization_id),
-        reward_pct=settings.referral_reward_pct,
-        reward_max_credits=settings.referral_reward_max_credits,
+        reward_credits=settings.referral_reward_credits,
         referee_bonus_credits=settings.referral_referee_bonus_credits,
+        qualifying_spend=settings.referral_qualifying_spend,
     )
 
 

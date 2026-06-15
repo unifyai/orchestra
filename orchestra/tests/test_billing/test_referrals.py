@@ -4,8 +4,10 @@ Covers :mod:`orchestra.lib.referrals` and :class:`ReferralDAO`:
 
 * attribution guards (one-per-referee, self-referral, invalid code,
   must-be-pre-payment),
-* payment-gated reward (pct of first payment, capped, two-sided bonus),
-* minimum qualifying payment, per-referrer cap, idempotency,
+* spend-gated flat reward (two-sided: flat referrer reward + flat referee
+  welcome bonus), unlocking once cumulative real spend crosses the threshold,
+* qualifying-spend threshold (incl. unlock on a later cycle), per-referrer
+  cap, idempotency,
 * refund/chargeback clawback,
 * **organization support** — a referred friend who pays through an org they
   own still qualifies, and an org-scoped code credits the org.
@@ -48,18 +50,17 @@ from orchestra.tests.test_billing.conftest import (
 def _referral_settings(monkeypatch):
     """Deterministic referral economics for the assertions below."""
     monkeypatch.setattr(settings, "referral_enabled", True, raising=False)
-    monkeypatch.setattr(settings, "referral_reward_pct", 0.20, raising=False)
-    monkeypatch.setattr(settings, "referral_reward_max_credits", 100.0, raising=False)
+    monkeypatch.setattr(settings, "referral_reward_credits", 100.0, raising=False)
     monkeypatch.setattr(
         settings,
         "referral_referee_bonus_credits",
-        10.0,
+        50.0,
         raising=False,
     )
     monkeypatch.setattr(
         settings,
-        "referral_min_qualifying_payment",
-        50.0,
+        "referral_qualifying_spend",
+        100.0,
         raising=False,
     )
     monkeypatch.setattr(
@@ -162,7 +163,7 @@ def test_attribution_blocked_after_payment(dbsession: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_reward_on_first_payment(dbsession: Session) -> None:
+def test_reward_on_qualifying_spend(dbsession: Session) -> None:
     referrer, referrer_ba = make_user_with_billing(dbsession, "rw_referrer")
     referee, referee_ba = make_user_with_billing(dbsession, "rw_referee")
     code = ReferralDAO(dbsession).create_code(referrer.id)
@@ -172,35 +173,57 @@ def test_reward_on_first_payment(dbsession: Session) -> None:
     before_referrer = dao.get_credits(referrer_ba.id)
     before_referee = dao.get_credits(referee_ba.id)
 
-    reward = maybe_reward_referral(dbsession, referee_ba, _invoice(50.0))
+    # Friend subscribes and spends their first $100 of real money → unlocks.
+    _mark_paid(dbsession, referee_ba.id, amount_usd=100.0)
+    reward = maybe_reward_referral(dbsession, referee_ba, _invoice(100.0))
 
-    # 20% of $50 = $10 to the referrer; flat $10 bonus to the referee.
-    assert reward == Decimal("10.00")
-    assert dao.get_credits(referrer_ba.id) - before_referrer == Decimal("10.00")
-    assert dao.get_credits(referee_ba.id) - before_referee == Decimal("10")
+    # Flat $100 to the referrer; flat $50 welcome bonus to the referee.
+    assert reward == Decimal("100")
+    assert dao.get_credits(referrer_ba.id) - before_referrer == Decimal("100")
+    assert dao.get_credits(referee_ba.id) - before_referee == Decimal("50")
 
     attribution = ReferralDAO(dbsession).get_attribution_for_referee(referee.id)
     assert attribution.status == STATUS_REWARDED
     assert attribution.first_payment_invoice_id == "in_ref_1"
 
 
-def test_reward_capped(dbsession: Session, monkeypatch) -> None:
-    monkeypatch.setattr(settings, "referral_reward_max_credits", 25.0, raising=False)
-    referrer, referrer_ba = make_user_with_billing(dbsession, "cap_referrer")
-    referee, referee_ba = make_user_with_billing(dbsession, "cap_referee")
+def test_reward_unlocks_on_later_cycle(dbsession: Session) -> None:
+    """A lower tier qualifies only once cumulative real spend hits $100."""
+    referrer, referrer_ba = make_user_with_billing(dbsession, "cyc_referrer")
+    referee, referee_ba = make_user_with_billing(dbsession, "cyc_referee")
     code = ReferralDAO(dbsession).create_code(referrer.id)
     attribute_referral(dbsession, referee_user=referee, code=code.code)
 
     dao = BillingAccountDAO(dbsession)
     before = dao.get_credits(referrer_ba.id)
 
-    # 20% of $1000 = $200, capped at $25.
-    reward = maybe_reward_referral(dbsession, referee_ba, _invoice(1000.0))
-    assert reward == Decimal("25.00")
-    assert dao.get_credits(referrer_ba.id) - before == Decimal("25.00")
+    # First $50 cycle: below the $100 threshold → no reward, stays pending.
+    _mark_paid(dbsession, referee_ba.id, amount_usd=50.0)
+    assert (
+        maybe_reward_referral(dbsession, referee_ba, _invoice(50.0, invoice_id="in_c1"))
+        is None
+    )
+    assert dao.get_credits(referrer_ba.id) == before
+    assert (
+        ReferralDAO(dbsession).get_attribution_for_referee(referee.id).status
+        == STATUS_PENDING
+    )
+
+    # Second $50 cycle: cumulative $100 reached → flat reward unlocks.
+    _mark_paid(dbsession, referee_ba.id, amount_usd=50.0)
+    reward = maybe_reward_referral(
+        dbsession,
+        referee_ba,
+        _invoice(50.0, invoice_id="in_c2"),
+    )
+    assert reward == Decimal("100")
+    assert dao.get_credits(referrer_ba.id) - before == Decimal("100")
+    attribution = ReferralDAO(dbsession).get_attribution_for_referee(referee.id)
+    assert attribution.status == STATUS_REWARDED
+    assert attribution.first_payment_invoice_id == "in_c2"
 
 
-def test_reward_below_min_no_reward(dbsession: Session) -> None:
+def test_reward_below_threshold_no_reward(dbsession: Session) -> None:
     referrer, referrer_ba = make_user_with_billing(dbsession, "min_referrer")
     referee, referee_ba = make_user_with_billing(dbsession, "min_referee")
     code = ReferralDAO(dbsession).create_code(referrer.id)
@@ -209,7 +232,8 @@ def test_reward_below_min_no_reward(dbsession: Session) -> None:
     dao = BillingAccountDAO(dbsession)
     before = dao.get_credits(referrer_ba.id)
 
-    # $20 < $50 minimum → no reward, attribution stays pending.
+    # $20 real spend < $100 threshold → no reward, attribution stays pending.
+    _mark_paid(dbsession, referee_ba.id, amount_usd=20.0)
     reward = maybe_reward_referral(dbsession, referee_ba, _invoice(20.0))
     assert reward is None
     assert dao.get_credits(referrer_ba.id) == before
@@ -224,11 +248,12 @@ def test_reward_idempotent(dbsession: Session) -> None:
     attribute_referral(dbsession, referee_user=referee, code=code.code)
 
     dao = BillingAccountDAO(dbsession)
-    maybe_reward_referral(dbsession, referee_ba, _invoice(50.0))
+    _mark_paid(dbsession, referee_ba.id, amount_usd=100.0)
+    maybe_reward_referral(dbsession, referee_ba, _invoice(100.0))
     after_first = dao.get_credits(referrer_ba.id)
 
-    # Second delivery of the same first-payment must not double-grant.
-    second = maybe_reward_referral(dbsession, referee_ba, _invoice(50.0))
+    # Second delivery of a qualifying invoice must not double-grant.
+    second = maybe_reward_referral(dbsession, referee_ba, _invoice(100.0))
     assert second is None
     assert dao.get_credits(referrer_ba.id) == after_first
 
@@ -249,11 +274,13 @@ def test_per_referrer_cap(dbsession: Session, monkeypatch) -> None:
     attribute_referral(dbsession, referee_user=b, code=code.code)
 
     dao = BillingAccountDAO(dbsession)
-    assert maybe_reward_referral(dbsession, a_ba, _invoice(50.0)) == Decimal("10.00")
+    _mark_paid(dbsession, a_ba.id, amount_usd=100.0)
+    _mark_paid(dbsession, b_ba.id, amount_usd=100.0)
+    assert maybe_reward_referral(dbsession, a_ba, _invoice(100.0)) == Decimal("100")
     after_first = dao.get_credits(referrer_ba.id)
 
     # Second referee blocked by the cap.
-    assert maybe_reward_referral(dbsession, b_ba, _invoice(50.0)) is None
+    assert maybe_reward_referral(dbsession, b_ba, _invoice(100.0)) is None
     assert dao.get_credits(referrer_ba.id) == after_first
     assert (
         ReferralDAO(dbsession).get_attribution_for_referee(b.id).status
@@ -275,7 +302,8 @@ def test_clawback_reverses(dbsession: Session) -> None:
     dao = BillingAccountDAO(dbsession)
     before_referrer = dao.get_credits(referrer_ba.id)
     before_referee = dao.get_credits(referee_ba.id)
-    maybe_reward_referral(dbsession, referee_ba, _invoice(50.0, invoice_id="in_claw"))
+    _mark_paid(dbsession, referee_ba.id, amount_usd=100.0)
+    maybe_reward_referral(dbsession, referee_ba, _invoice(100.0, invoice_id="in_claw"))
 
     reversed_ok = reverse_referral_for_invoice(dbsession, "in_claw", reason="refund")
     assert reversed_ok is True
@@ -301,7 +329,8 @@ def test_clawback_tagged_to_originating_grant(dbsession: Session) -> None:
     referee, referee_ba = make_user_with_billing(dbsession, "tag_referee")
     code = ReferralDAO(dbsession).create_code(referrer.id)
     attribute_referral(dbsession, referee_user=referee, code=code.code)
-    maybe_reward_referral(dbsession, referee_ba, _invoice(50.0, invoice_id="in_tag"))
+    _mark_paid(dbsession, referee_ba.id, amount_usd=100.0)
+    maybe_reward_referral(dbsession, referee_ba, _invoice(100.0, invoice_id="in_tag"))
 
     # The reward grant carries the invoice/role provenance tags.
     grant = (
@@ -354,13 +383,14 @@ def test_org_referee_pays_via_org(dbsession: Session) -> None:
     before_referrer = dao.get_credits(referrer_ba.id)
     before_org = dao.get_credits(org_ba.id)
 
-    reward = maybe_reward_referral(dbsession, org_ba, _invoice(50.0))
+    _mark_paid(dbsession, org_ba.id, amount_usd=100.0)
+    reward = maybe_reward_referral(dbsession, org_ba, _invoice(100.0))
 
-    assert reward == Decimal("10.00")
+    assert reward == Decimal("100")
     # Personal code → referrer's personal account earns.
-    assert dao.get_credits(referrer_ba.id) - before_referrer == Decimal("10.00")
+    assert dao.get_credits(referrer_ba.id) - before_referrer == Decimal("100")
     # Referee bonus lands on the paying (org) account.
-    assert dao.get_credits(org_ba.id) - before_org == Decimal("10")
+    assert dao.get_credits(org_ba.id) - before_org == Decimal("50")
     assert (
         ReferralDAO(dbsession).get_attribution_for_referee(referee.id).status
         == STATUS_REWARDED
@@ -386,11 +416,12 @@ def test_org_scoped_code_rewards_org(dbsession: Session) -> None:
     before_org = dao.get_credits(earner_org_ba.id)
     before_referrer = dao.get_credits(referrer_ba.id)
 
-    reward = maybe_reward_referral(dbsession, referee_ba, _invoice(50.0))
+    _mark_paid(dbsession, referee_ba.id, amount_usd=100.0)
+    reward = maybe_reward_referral(dbsession, referee_ba, _invoice(100.0))
 
-    assert reward == Decimal("10.00")
+    assert reward == Decimal("100")
     # Reward goes to the org, not the referrer's personal account.
-    assert dao.get_credits(earner_org_ba.id) - before_org == Decimal("10.00")
+    assert dao.get_credits(earner_org_ba.id) - before_org == Decimal("100")
     assert dao.get_credits(referrer_ba.id) == before_referrer
 
 
@@ -447,7 +478,9 @@ def test_org_referrals_are_org_wide(dbsession: Session) -> None:
     assert dao.list_for_referrer(owner.id, None) == []
 
     # Earnings aggregate org-wide regardless of which member minted the code.
-    maybe_reward_referral(dbsession, f1_ba, _invoice(50.0, invoice_id="in_w1"))
-    maybe_reward_referral(dbsession, f2_ba, _invoice(50.0, invoice_id="in_w2"))
-    assert dao.total_credits_earned(member.id, org.id) == 20.0
+    _mark_paid(dbsession, f1_ba.id, amount_usd=100.0)
+    _mark_paid(dbsession, f2_ba.id, amount_usd=100.0)
+    maybe_reward_referral(dbsession, f1_ba, _invoice(100.0, invoice_id="in_w1"))
+    maybe_reward_referral(dbsession, f2_ba, _invoice(100.0, invoice_id="in_w2"))
+    assert dao.total_credits_earned(member.id, org.id) == 200.0
     assert dao.count_rewarded_for_referrer("anyone", org.id) == 2
