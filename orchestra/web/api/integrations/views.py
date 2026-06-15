@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
@@ -23,17 +22,11 @@ from orchestra.web.api.integrations.operations import (
     complete_connection_by_provider_connection_id,
     deny_tool_execution,
     disconnect_connection,
-    get_app_detail,
-    get_apps,
     get_connection_tool_policy,
-    get_tool_schema,
-    get_tools,
     list_connections,
     patch_connection_tool_policy,
     reconnect_connection,
     run_tool,
-    search_apps,
-    search_tools,
     seed_default_provider_catalog,
     start_connection,
 )
@@ -42,7 +35,6 @@ from orchestra.web.api.integrations.operations import (
 )
 from orchestra.web.api.integrations.operations import test_connection, update_connection
 from orchestra.web.api.integrations.schema import (
-    IntegrationAppDetailResponse,
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
     IntegrationBackendResponse,
@@ -62,58 +54,12 @@ from orchestra.web.api.integrations.schema import (
     IntegrationToolExecutionApprovalResponse,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
-    ProviderAppDetailLevel,
-    ProviderAppGetRequest,
-    ProviderAppGetResponse,
-    ProviderAppSearchRequest,
-    ProviderAppSearchResult,
-    ProviderAppStatus,
-    ProviderAppStatusGroup,
-    ProviderToolGetRequest,
-    ProviderToolGetResponse,
     ProviderToolRunRequest,
     ProviderToolRunResponse,
-    ProviderToolSchemaResponse,
-    ProviderToolSearchRequest,
-    ProviderToolSearchResult,
 )
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 admin_router = APIRouter(prefix="/integrations", tags=["Integration Admin"])
-
-_APP_STATUS_ADAPTER = TypeAdapter(list[ProviderAppStatus])
-_APP_STATUS_GROUP_ADAPTER = TypeAdapter(list[ProviderAppStatusGroup])
-
-
-def _split_query_list(values: list[str] | None) -> list[str]:
-    if not values:
-        return []
-    parsed: list[str] = []
-    for value in values:
-        parsed.extend(part.strip() for part in value.split(",") if part.strip())
-    return parsed
-
-
-def _validate_app_statuses(values: list[str] | None) -> list[ProviderAppStatus]:
-    try:
-        return _APP_STATUS_ADAPTER.validate_python(_split_query_list(values))
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=exc.errors(),
-        ) from exc
-
-
-def _validate_app_status_groups(
-    values: list[str] | None,
-) -> list[ProviderAppStatusGroup]:
-    try:
-        return _APP_STATUS_GROUP_ADAPTER.validate_python(_split_query_list(values))
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=exc.errors(),
-        ) from exc
 
 
 def _owner_from_query(
@@ -370,109 +316,6 @@ def sync_integrations(
     """
 
     return sync_integrations_operation(session, body)
-
-
-@router.get("/apps")
-def get_integration_apps(
-    query: str | None = Query(None),
-    source_type: str | None = None,
-    status: list[str] | None = Query(None),
-    status_group: list[str] | None = Query(None),
-    detail_level: ProviderAppDetailLevel = Query("full"),
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-) -> ProviderAppGetResponse:
-    return get_apps(
-        session,
-        ProviderAppGetRequest(
-            query=query,
-            source_type=source_type,
-            status=_validate_app_statuses(status),
-            status_group=_validate_app_status_groups(status_group),
-            detail_level=detail_level,
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            limit=limit,
-            offset=offset,
-        ),
-    )
-
-
-@router.get("/apps/search")
-def search_integration_apps(
-    query: str | None = Query(None),
-    source_type: str | None = None,
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    limit: int = Query(10, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-) -> list[ProviderAppSearchResult]:
-    return search_apps(
-        session,
-        ProviderAppSearchRequest(
-            query=query,
-            source_type=source_type,
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            limit=limit,
-            offset=offset,
-        ),
-    )
-
-
-@router.get("/apps/{canonical_app_slug}")
-def get_integration_app_detail(
-    canonical_app_slug: str,
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    session: Session = Depends(get_db_session),
-) -> IntegrationAppDetailResponse:
-    try:
-        return get_app_detail(
-            session,
-            canonical_app_slug=canonical_app_slug,
-            owner=_owner_from_query(
-                owner_scope,
-                org_id,
-                team_id,
-                user_id,
-                assistant_id,
-            ),
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
 
 
 @router.get("/connections")
@@ -773,101 +616,6 @@ def deny_integration_tool_execution(
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
-
-
-@router.get("/tools/search", response_model_exclude_none=True)
-def search_provider_tools(
-    query: str | None = Query(None),
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    canonical_app_slug: str | None = None,
-    include_unconnected: bool = False,
-    include_schema: bool = False,
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-) -> list[ProviderToolSearchResult]:
-    return search_tools(
-        session,
-        ProviderToolSearchRequest(
-            query=query,
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            canonical_app_slug=canonical_app_slug,
-            include_unconnected=include_unconnected,
-            include_schema=include_schema,
-            limit=limit,
-            offset=offset,
-        ),
-    )
-
-
-@router.get("/tools", response_model_exclude_none=True)
-def get_provider_tools(
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    canonical_app_slug: str | None = None,
-    activation_state: str | None = None,
-    include_unconnected: bool = False,
-    include_schema: bool = False,
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-) -> ProviderToolGetResponse:
-    return get_tools(
-        session,
-        ProviderToolGetRequest(
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            canonical_app_slug=canonical_app_slug,
-            activation_state=activation_state,
-            include_unconnected=include_unconnected,
-            include_schema=include_schema,
-            limit=limit,
-            offset=offset,
-        ),
-    )
-
-
-@router.get("/tools/{tool_id}/schema")
-def read_provider_tool_schema(
-    tool_id: str,
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    session: Session = Depends(get_db_session),
-) -> ProviderToolSchemaResponse:
-    try:
-        return get_tool_schema(
-            session,
-            tool_id=tool_id,
-            owner=_owner_from_query(
-                owner_scope,
-                org_id,
-                team_id,
-                user_id,
-                assistant_id,
-            ),
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
 
