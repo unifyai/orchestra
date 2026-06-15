@@ -279,60 +279,6 @@ steps:
   entrypoint: bash
   waitFor:
   - 'Deploy Orchestra'
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: Resolve Orchestra URL
-  entrypoint: bash
-  args:
-  - '-c'
-  - |
-    set -euo pipefail
-    SERVICE_JSON=$$(mktemp)
-    gcloud run services describe $_SERVICE_NAME \
-      --region=$_DEPLOY_REGION \
-      --platform=managed \
-      --format=json > "$$SERVICE_JSON"
-    export ORCHESTRA_URL=$$(python3 - "$$SERVICE_JSON" <<'PY'
-    import json
-    import sys
-
-    with open(sys.argv[1], encoding="utf-8") as service_file:
-        service = json.load(service_file)
-
-    for container in service.get("spec", {}).get("template", {}).get("spec", {}).get("containers", []):
-        for item in container.get("env", []) or []:
-            if item.get("name") == "ORCHESTRA_URL" and item.get("value"):
-                print(item["value"].rstrip("/"))
-                raise SystemExit(0)
-    PY
-    )
-    rm -f "$$SERVICE_JSON"
-    if [ -z "$$ORCHESTRA_URL" ]; then
-      echo "ORCHESTRA_URL is not set on Cloud Run service $_SERVICE_NAME" >&2
-      exit 1
-    fi
-    printf '%s\n' "$$ORCHESTRA_URL" > /workspace/orchestra-url.txt
-  waitFor:
-  - 'Route Orchestra Traffic'
-- name: 'gcr.io/cloud-builders/docker'
-  id: Bootstrap Provider Integrations
-  entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  args:
-  - '-c'
-  - |
-    set -euo pipefail
-    ORCHESTRA_URL=$$(cat /workspace/orchestra-url.txt)
-    UNITY_BOOTSTRAP_IMAGE="us-central1-docker.pkg.dev/${PROJECT_ID}/unity/unity-base-staging:latest"
-    docker run --rm \
-      -e ORCHESTRA_URL="$$ORCHESTRA_URL" \
-      -e ORCHESTRA_ADMIN_KEY="$$ORCHESTRA_ADMIN_KEY" \
-      -e UNIFY_KEY="$$ORCHESTRA_ADMIN_KEY" \
-      -v /workspace:/workspace:ro \
-      "$$UNITY_BOOTSTRAP_IMAGE" \
-      python3 scripts/seed_builtins_catalog.py \
-        --integration-bootstrap-manifest "/workspace/$_INTEGRATION_BOOTSTRAP_MANIFEST"
-  waitFor:
-  - 'Resolve Orchestra URL'
 images:
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
@@ -350,11 +296,6 @@ substitutions:
   _JOB_NAME: orchestra-staging-migrator
   _REINDEX_JOB_NAME: orchestra-staging-index-maintenance-reindex
   _CLOUDSQL_INSTANCE: gcp-project-saas:europe-west3:staging-ssd
-  _INTEGRATION_BOOTSTRAP_MANIFEST: deploy/integrations/bootstrap.staging.toml
-availableSecrets:
-  secretManager:
-  - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
-    env: 'ORCHESTRA_ADMIN_KEY'
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
