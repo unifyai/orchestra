@@ -2244,6 +2244,176 @@ class TestDispatcherCoordinatorIdentity:
         )
         assert resolution is None
 
+    def test_phase_two_ambiguous_name_match_falls_back_to_org_coordinator(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """Two members sharing a name make a name match ambiguous.
+
+        We never guess between them — an ambiguous match is refused and the
+        sender routes to the deterministic org Coordinator instead of the
+        wrong person's workspace Coordinator.
+        """
+        org = slack_world["org"]
+        first, _ = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="twin-a",
+            first_name="TwinA",
+        )
+        second, _ = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="twin-b",
+            first_name="TwinB",
+        )
+        # Collide their profile names so the sender name matches both.
+        for member in (first, second):
+            member.name = "Sam"
+            member.last_name = "Rivers"
+        dbsession.flush()
+
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hi",
+            sender_real_name="Sam Rivers",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == slack_world["coordinator"].agent_id
+        assert resolution.needs_sender_identity is False
+
+    def test_phase_two_empty_identity_is_loop_safe(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """``provided=True`` with no email/name (users.info returned nothing).
+
+        The gateway still marks identity as provided so routing cannot loop:
+        we fall back to the deterministic org Coordinator with
+        ``needs_sender_identity=False``, never asking for identity again.
+        """
+        # A member with a Coordinator exists, so owners are non-empty; the
+        # empty identity must still fail to match and fall back.
+        self._add_member_with_coordinator(
+            dbsession,
+            org=slack_world["org"],
+            suffix="present-member",
+            first_name="Present",
+            email="present@member.test",
+        )
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hi",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == slack_world["coordinator"].agent_id
+        assert resolution.needs_sender_identity is False
+        assert resolution.route_persisted is True
+
+    def test_phase_two_name_match_is_accent_case_and_order_insensitive(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """Name matching normalizes accents/case and tries either ordering."""
+        org = slack_world["org"]
+        member, member_coordinator = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="jose-owner",
+            first_name="Jose",
+            last_name="García",
+        )
+        member.name = "José"
+        dbsession.flush()
+
+        # Reversed order, lower-cased, accents stripped — still resolves.
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hi",
+            sender_real_name="garcia jose",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == member_coordinator.agent_id
+        assert resolution.needs_sender_identity is False
+
+    def test_phase_two_email_wins_over_conflicting_name(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """Email is the top of the matching ladder, ahead of a name match."""
+        org = slack_world["org"]
+        email_member, email_coordinator = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="by-email",
+            first_name="Mailer",
+            email="match@member.test",
+        )
+        name_member, _name_coordinator = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="by-name",
+            first_name="Named",
+        )
+        name_member.name = "Distinct"
+        name_member.last_name = "Person"
+        dbsession.flush()
+
+        # Email points at one member, real_name at the other — email wins.
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hi",
+            sender_email="match@member.test",
+            sender_real_name="Distinct Person",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == email_coordinator.agent_id
+
+    def test_phase_two_display_name_match_when_real_name_absent(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """The name ladder falls through real_name to display_name."""
+        org = slack_world["org"]
+        member, member_coordinator = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="display-owner",
+            first_name="Disp",
+            last_name="Lay",
+        )
+        member.name = "Disp"
+        dbsession.flush()
+
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hi",
+            sender_display_name="Disp Lay",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == member_coordinator.agent_id
+        assert resolution.needs_sender_identity is False
+
 
 # ============================================================================
 # Admin HTTP endpoints
