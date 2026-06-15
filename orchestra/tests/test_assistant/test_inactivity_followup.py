@@ -311,7 +311,9 @@ class TestDAOFindFollowupCandidates:
         defaults to now() at creation) is followed up with once that
         baseline ages past the window."""
         user = _make_user(dbsession, "fup_u5")
-        coord = _make_coordinator(dbsession, user.id, last_correspondence_at=_cutoff(10))
+        coord = _make_coordinator(
+            dbsession, user.id, last_correspondence_at=_cutoff(10)
+        )
 
         dao = AssistantDAO(dbsession)
         ids = {
