@@ -145,6 +145,44 @@ async def test_admin_delete_project(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
+async def test_admin_delete_builtins_project_is_rejected(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "admin_delete_builtins_owner@test.com")
+
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Admin Delete Builtins Org Test"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    project_dao.create(
+        name="Builtins",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(organization_id=org_id, name="Builtins")
+    project_id = projects[0][0].id
+
+    delete_response = await client.delete(
+        f"/v0/admin/project/{project_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert delete_response.status_code == 403
+    assert "cannot be deleted" in delete_response.json()["detail"]
+
+    remaining = project_dao.filter(organization_id=org_id, name="Builtins")
+    assert len(remaining) == 1
+
+
+@pytest.mark.anyio
 async def test_admin_delete_project_not_found(client: AsyncClient):
     """Test admin delete returns 404 for non-existent project."""
     delete_response = await client.delete(

@@ -32,6 +32,10 @@ from orchestra.web.api.context.schema import (
     CopyContextRequest,
     RenameContextRequest,
 )
+from orchestra.web.api.utils.builtins_project import (
+    is_builtins_project_name,
+    require_builtins_org_writer,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 logger = logging.getLogger(__name__)
@@ -40,6 +44,19 @@ router = APIRouter()
 
 # Admin router for protected endpoints
 admin_router = APIRouter()
+
+
+def _require_builtins_context_writer(
+    *,
+    project_name: str,
+    organization_id: Optional[int],
+    action: str,
+) -> None:
+    if is_builtins_project_name(project_name):
+        require_builtins_org_writer(
+            organization_id=organization_id,
+            action=action,
+        )
 
 
 @router.post(
@@ -158,6 +175,11 @@ def create_context(
         if not project:
             raise IndexError
         project_id = project.id
+        _require_builtins_context_writer(
+            project_name=project.name,
+            organization_id=organization_id,
+            action="modified",
+        )
 
         # Normalize request to always work with a list
         contexts_to_create = []
@@ -580,6 +602,11 @@ def delete_context(
         if not project:
             raise IndexError("Project not found")
         project_id = project.id
+        _require_builtins_context_writer(
+            project_name=project.name,
+            organization_id=organization_id,
+            action="modified",
+        )
 
         # Find contexts to delete
         if include_children:
@@ -699,6 +726,11 @@ def add_logs_to_context(
         if not project:
             raise IndexError("Project not found")
         project_id = project.id
+        _require_builtins_context_writer(
+            project_name=project.name,
+            organization_id=organization_id,
+            action="modified",
+        )
 
         # Try to get the context, or create it if it doesn't exist
         context_name = request.context_name
@@ -932,6 +964,11 @@ def rename_context(
     )
     if not project:
         raise not_found("Project")
+    _require_builtins_context_writer(
+        project_name=project.name,
+        organization_id=organization_id,
+        action="modified",
+    )
 
     ctx_list = context_dao.filter(project_id=project.id, name=context_name)
     if not ctx_list:
@@ -981,6 +1018,11 @@ def commit_context_version(
     )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    _require_builtins_context_writer(
+        project_name=project.name,
+        organization_id=organization_id,
+        action="modified",
+    )
 
     context_obj = context_dao.filter(project_id=project.id, name=context_name)
     if not context_obj:
@@ -1021,6 +1063,11 @@ def rollback_context_version(
     )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    _require_builtins_context_writer(
+        project_name=project.name,
+        organization_id=organization_id,
+        action="modified",
+    )
 
     context_obj = context_dao.filter(project_id=project.id, name=context_name)
     if not context_obj:

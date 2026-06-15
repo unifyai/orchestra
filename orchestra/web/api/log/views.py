@@ -99,6 +99,10 @@ from orchestra.web.api.log.utils import (
     compute_metric_for_key,
     create_logs_internal,
 )
+from orchestra.web.api.utils.builtins_project import (
+    is_builtins_project_name,
+    require_builtins_org_writer,
+)
 from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -139,6 +143,12 @@ def _check_project_write_permission(
     project_id: int,
 ) -> None:
     """Enforce project:write for org-context requests. Personal context is always allowed."""
+    project = session.get(Project, project_id)
+    if project and is_builtins_project_name(project.name):
+        require_builtins_org_writer(
+            organization_id=organization_id,
+            action="modified",
+        )
     if organization_id is None:
         return
     ra_dao = ResourceAccessDAO(session)

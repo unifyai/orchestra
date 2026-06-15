@@ -17,9 +17,61 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import create_test_org, create_test_user
 
 # ==================== Project Listing Tests ====================
+
+
+@pytest.mark.anyio
+async def test_builtins_requires_org_scoped_writer(
+    client: AsyncClient,
+    dbsession,
+):
+    """Builtins cannot be shadowed or mutated through a personal API key."""
+    owner = await create_test_user(client, "builtins_org_writer@test.com")
+
+    personal_create = await client.post(
+        "/v0/project",
+        json={"name": "Builtins"},
+        headers=owner["headers"],
+    )
+    assert personal_create.status_code == status.HTTP_403_FORBIDDEN
+
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    project_dao.create(name="Builtins", user_id=owner["id"])
+    dbsession.commit()
+
+    personal_log = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Builtins",
+            "context": "Integrations/Meta",
+            "entries": {"meta_id": 1},
+        },
+        headers=owner["headers"],
+    )
+    assert personal_log.status_code == status.HTTP_403_FORBIDDEN
+
+    org = await create_test_org(client, owner, "Builtins Writer Org")
+    org_create = await client.post(
+        "/v0/project",
+        json={"name": "Builtins", "is_public_read": True},
+        headers=org["headers"],
+    )
+    assert org_create.status_code == status.HTTP_200_OK, org_create.json()
+
+    org_log = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Builtins",
+            "context": "Integrations/Meta",
+            "entries": {"meta_id": 1},
+        },
+        headers=org["headers"],
+    )
+    assert org_log.status_code == status.HTTP_200_OK, org_log.json()
 
 
 @pytest.mark.anyio
