@@ -87,6 +87,24 @@ class DispatchRequest(BaseModel):
     text: str
     thread_ts: Optional[str] = None
     event_ts: str
+    sender_email: Optional[str] = Field(
+        None,
+        description="Sender's Slack profile email, resolved by the gateway "
+        "on the second dispatch pass (org installs).",
+    )
+    sender_real_name: Optional[str] = Field(
+        None,
+        description="Sender's Slack real_name, if resolved.",
+    )
+    sender_display_name: Optional[str] = Field(
+        None,
+        description="Sender's Slack display_name, if resolved.",
+    )
+    sender_identity_provided: bool = Field(
+        False,
+        description="True once the gateway has attempted a users.info lookup "
+        "(even if empty), so coordinator routing does not loop.",
+    )
 
 
 class DispatchResponse(BaseModel):
@@ -106,6 +124,18 @@ class DispatchResponse(BaseModel):
     thread_ts_for_route: Optional[str] = None
     route_persisted: bool = False
     routing_metadata: dict[str, Any] = Field(default_factory=dict)
+    needs_sender_identity: bool = Field(
+        False,
+        description=(
+            "True when this is a provisional org-Coordinator route and the "
+            "gateway should resolve the sender's identity (users.info) and "
+            "re-dispatch with sender_identity_provided=True so the message "
+            "is pinned to the sender's own workspace Coordinator. The "
+            "returned assistant_id is already a valid recipient; a caller "
+            "that ignores this flag degrades gracefully to deterministic "
+            "org-Coordinator routing."
+        ),
+    )
 
 
 class ChannelBindingRequest(BaseModel):
@@ -317,6 +347,10 @@ def dispatch_inbound(
         text=body.text,
         thread_ts=body.thread_ts,
         event_ts=body.event_ts,
+        sender_email=body.sender_email,
+        sender_real_name=body.sender_real_name,
+        sender_display_name=body.sender_display_name,
+        sender_identity_provided=body.sender_identity_provided,
     )
     if resolution is None:
         session.commit()
@@ -333,6 +367,7 @@ def dispatch_inbound(
         thread_ts_for_route=resolution.thread_ts_for_route,
         route_persisted=resolution.route_persisted,
         routing_metadata=resolution.routing_metadata,
+        needs_sender_identity=resolution.needs_sender_identity,
     )
 
 

@@ -1194,6 +1194,10 @@ def _dispatch(
     text: str,
     thread_ts: str | None = None,
     event_ts: str = "1700000000.000999",
+    sender_email: str | None = None,
+    sender_real_name: str | None = None,
+    sender_display_name: str | None = None,
+    sender_identity_provided: bool = False,
 ):
     return resolve_inbound(
         session,
@@ -1204,6 +1208,10 @@ def _dispatch(
         text=text,
         thread_ts=thread_ts,
         event_ts=event_ts,
+        sender_email=sender_email,
+        sender_real_name=sender_real_name,
+        sender_display_name=sender_display_name,
+        sender_identity_provided=sender_identity_provided,
     )
 
 
@@ -1336,6 +1344,9 @@ class TestDispatcherDM:
         assert resolution.assistant_id == slack_world["coordinator"].agent_id
         assert resolution.routing_metadata["reason"] == "initial_dm"
         assert resolution.route_persisted is False
+        # Org install, no sender identity yet → provisional coordinator route
+        # with a hint to re-dispatch for per-member precision.
+        assert resolution.needs_sender_identity is True
 
     def test_dm_with_unique_token_pins_dm_route(
         self,
@@ -1618,6 +1629,9 @@ class TestDispatcherPersonalInstall:
         assert resolution.routing_metadata["reason"] == "initial_dm"
         assert resolution.install.user_id == personal_slack_world["user"].id
         assert resolution.install.organization_id is None
+        # A personal install has exactly one Coordinator, so the sender's
+        # identity is irrelevant — never ask the gateway to re-dispatch.
+        assert resolution.needs_sender_identity is False
 
     def test_dm_token_routes_to_personal_assistant(
         self,
@@ -1814,9 +1828,11 @@ class TestDispatcherChannel:
         assert resolution is not None
         assert resolution.assistant_id == slack_world["coordinator"].agent_id
         assert resolution.routing_metadata["reason"] == "ambiguous_token"
-        # Coordinator gets the thread so it can clarify in place.
+        # Coordinator gets the thread so it can clarify in place. The
+        # provisional route is persisted even though identity is pending.
         assert resolution.route_persisted is True
         assert resolution.thread_ts_for_route == "1700000003.000000"
+        assert resolution.needs_sender_identity is True
 
     def test_channel_token_addressed_metadata(
         self,
@@ -1958,6 +1974,275 @@ class TestDispatcherChannel:
         )
         assert refreshed is not None
         assert refreshed.last_used_at > original_last_used - timedelta(hours=1)
+
+
+# ============================================================================
+# Dispatcher — coordinator sender identity (two-phase resolution)
+# ============================================================================
+
+
+class TestDispatcherCoordinatorIdentity:
+    """The default (coordinator) path is *personal to the sender* in an org.
+
+    Phase 1 (no identity) routes provisionally to the org's deterministic
+    Coordinator and asks the caller to re-dispatch. Phase 2 (identity
+    provided) pins the message to the sender's *own* workspace Coordinator,
+    matching the sender to the member who owns one by email or name.
+    """
+
+    def _add_member_with_coordinator(
+        self,
+        dbsession: Session,
+        org: Organization,
+        *,
+        suffix: str,
+        first_name: str,
+        email: str | None = None,
+        last_name: str | None = None,
+    ) -> tuple[User, Assistant]:
+        member = _make_user(dbsession, suffix)
+        if email is not None:
+            member.email = email
+        if last_name is not None:
+            member.last_name = last_name
+        dbsession.flush()
+        coordinator = _make_assistant(
+            dbsession,
+            member,
+            first_name=first_name,
+            organization=org,
+            is_coordinator=True,
+        )
+        return member, coordinator
+
+    def test_phase_one_dm_is_provisional_and_requests_identity(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hello there",
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == slack_world["coordinator"].agent_id
+        assert resolution.needs_sender_identity is True
+        # Provisional → not pinned, so the second pass can re-route.
+        assert resolution.route_persisted is False
+        assert (
+            SlackDAO(dbsession).get_dm_route(slack_world["install"].id, "D01HUMAN")
+            is None
+        )
+
+    def test_phase_two_dm_email_pins_senders_own_coordinator(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        org = slack_world["org"]
+        member, member_coordinator = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="cora-owner",
+            first_name="Cora",
+            email="cora@member.test",
+        )
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hello there",
+            sender_email="cora@member.test",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == member_coordinator.agent_id
+        assert resolution.assistant_id != slack_world["coordinator"].agent_id
+        assert resolution.needs_sender_identity is False
+        # Final → DM route pinned to the sender's own Coordinator.
+        assert resolution.route_persisted is True
+        route = SlackDAO(dbsession).get_dm_route(
+            slack_world["install"].id,
+            "D01HUMAN",
+        )
+        assert route is not None
+        assert route.assistant_id == member_coordinator.agent_id
+
+    def test_phase_two_dm_name_match_pins_senders_own_coordinator(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        org = slack_world["org"]
+        member, member_coordinator = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="dana-owner",
+            first_name="Dana",
+            email="dana@member.test",
+            last_name="Scully",
+        )
+        # No email on the event — fall back to the real_name match.
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hi",
+            sender_real_name=f"{member.name} Scully",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == member_coordinator.agent_id
+        assert resolution.needs_sender_identity is False
+
+    def test_phase_two_unknown_sender_falls_back_to_org_coordinator(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """An identity that matches no member routes to the deterministic
+        org Coordinator rather than dropping."""
+        resolution = _dispatch(
+            dbsession,
+            channel="D01HUMAN",
+            channel_type="im",
+            text="hello there",
+            sender_email="stranger@example.com",
+            sender_identity_provided=True,
+        )
+        assert resolution is not None
+        assert resolution.assistant_id == slack_world["coordinator"].agent_id
+        assert resolution.needs_sender_identity is False
+        assert resolution.route_persisted is True
+
+    def test_phase_two_routes_distinct_members_to_distinct_coordinators(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        org = slack_world["org"]
+        _, coord_a = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="member-a",
+            first_name="Aria",
+            email="a@member.test",
+        )
+        _, coord_b = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="member-b",
+            first_name="Bram",
+            email="b@member.test",
+        )
+        res_a = _dispatch(
+            dbsession,
+            channel="D0A",
+            channel_type="im",
+            text="hi",
+            sender_email="a@member.test",
+            sender_identity_provided=True,
+        )
+        res_b = _dispatch(
+            dbsession,
+            channel="D0B",
+            channel_type="im",
+            text="hi",
+            sender_email="b@member.test",
+            sender_identity_provided=True,
+        )
+        assert res_a is not None and res_b is not None
+        assert res_a.assistant_id == coord_a.agent_id
+        assert res_b.assistant_id == coord_b.agent_id
+        assert res_a.assistant_id != res_b.assistant_id
+
+    def test_phase_two_channel_repins_thread_to_member_coordinator(
+        self,
+        dbsession: Session,
+        slack_world: dict,
+    ) -> None:
+        """A second-pass channel dispatch re-pins the thread route from the
+        provisional org Coordinator to the sender's own Coordinator."""
+        org = slack_world["org"]
+        # Two "Sara"s make the token ambiguous → coordinator fallback.
+        another = _make_user(dbsession, "second-sara-id")
+        _make_assistant(
+            dbsession,
+            another,
+            first_name="Sara",
+            organization=org,
+        )
+        _, member_coordinator = self._add_member_with_coordinator(
+            dbsession,
+            org,
+            suffix="evan-owner",
+            first_name="Evan",
+            email="evan@member.test",
+        )
+        dao = SlackDAO(dbsession)
+
+        phase_one = _dispatch(
+            dbsession,
+            channel="C01TEAM",
+            channel_type="channel",
+            text="<@U01BOT> sara help",
+            event_ts="1700009000.000000",
+        )
+        assert phase_one is not None
+        assert phase_one.needs_sender_identity is True
+        assert phase_one.assistant_id == slack_world["coordinator"].agent_id
+        route = dao.get_thread_route(
+            slack_world["install"].id,
+            "C01TEAM",
+            "1700009000.000000",
+        )
+        assert route is not None
+        assert route.assistant_id == slack_world["coordinator"].agent_id
+
+        phase_two = _dispatch(
+            dbsession,
+            channel="C01TEAM",
+            channel_type="channel",
+            text="<@U01BOT> sara help",
+            event_ts="1700009000.000000",
+            sender_email="evan@member.test",
+            sender_identity_provided=True,
+        )
+        assert phase_two is not None
+        assert phase_two.needs_sender_identity is False
+        assert phase_two.assistant_id == member_coordinator.agent_id
+        repinned = dao.get_thread_route(
+            slack_world["install"].id,
+            "C01TEAM",
+            "1700009000.000000",
+        )
+        assert repinned is not None
+        assert repinned.assistant_id == member_coordinator.agent_id
+
+    def test_org_install_without_coordinator_drops_gracefully(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """No Coordinator anywhere in the org → drop (no crash, no 500)."""
+        owner = _make_user(dbsession, "no-coord-owner")
+        org = _make_org(dbsession, owner, "no-coord")
+        _make_assistant(dbsession, owner, first_name="Alex", organization=org)
+        _make_install(
+            dbsession,
+            organization=org,
+            slack_team_id="T_NO_COORD",
+            bot_user_id="U_NO_COORD_BOT",
+        )
+        resolution = _dispatch(
+            dbsession,
+            team_id="T_NO_COORD",
+            channel="D_NO_COORD",
+            channel_type="im",
+            text="anyone home?",
+        )
+        assert resolution is None
 
 
 # ============================================================================
@@ -2193,6 +2478,7 @@ class TestAdminEndpoints:
             "thread_ts_for_route": None,
             "route_persisted": False,
             "routing_metadata": {},
+            "needs_sender_identity": False,
         }
 
     async def test_channel_binding_lifecycle(
