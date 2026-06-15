@@ -17,61 +17,100 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.tests.utils import create_test_org, create_test_user
+from orchestra.tests.utils import create_test_user
 
 # ==================== Project Listing Tests ====================
 
 
 @pytest.mark.anyio
-async def test_builtins_requires_org_scoped_writer(
+async def test_builtins_seed_surfaces_allow_personal_writer(
     client: AsyncClient,
     dbsession,
 ):
-    """Builtins cannot be shadowed or mutated through a personal API key."""
-    owner = await create_test_user(client, "builtins_org_writer@test.com")
+    """Builtins can be converged through the same APIs used by the seed script."""
+    owner = await create_test_user(client, "builtins_seed_writer@test.com")
+    outsider = await create_test_user(client, "builtins_seed_outsider@test.com")
 
-    personal_create = await client.post(
+    create_response = await client.post(
         "/v0/project",
-        json={"name": "Builtins"},
+        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
         headers=owner["headers"],
     )
-    assert personal_create.status_code == status.HTTP_403_FORBIDDEN
+    assert create_response.status_code == status.HTTP_200_OK, create_response.json()
 
-    context_dao = ContextDAO(dbsession)
-    org_member_dao = OrganizationMemberDAO(dbsession)
-    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
-    project_dao.create(name="Builtins", user_id=owner["id"])
-    dbsession.commit()
+    outsider_create = await client.post(
+        "/v0/project",
+        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
+        headers=outsider["headers"],
+    )
+    assert outsider_create.status_code == status.HTTP_403_FORBIDDEN
 
-    personal_log = await client.post(
-        "/v0/logs",
+    patch_response = await client.patch(
+        "/v0/project/Builtins",
+        json={"is_public_read": True},
+        headers=owner["headers"],
+    )
+    assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
+
+    context_response = await client.post(
+        "/v0/project/Builtins/contexts",
         json={
-            "project_name": "Builtins",
-            "context": "Integrations/Meta",
-            "entries": {"meta_id": 1},
+            "name": "Smoke/BuiltinsSeed/test",
+            "description": "Builtins seed smoke context.",
+            "is_versioned": False,
+            "allow_duplicates": True,
+            "unique_keys": None,
         },
         headers=owner["headers"],
     )
-    assert personal_log.status_code == status.HTTP_403_FORBIDDEN
+    assert context_response.status_code == status.HTTP_200_OK, context_response.json()
 
-    org = await create_test_org(client, owner, "Builtins Writer Org")
-    org_create = await client.post(
-        "/v0/project",
-        json={"name": "Builtins", "is_public_read": True},
-        headers=org["headers"],
-    )
-    assert org_create.status_code == status.HTTP_200_OK, org_create.json()
-
-    org_log = await client.post(
+    log_response = await client.post(
         "/v0/logs",
         json={
             "project_name": "Builtins",
-            "context": "Integrations/Meta",
-            "entries": {"meta_id": 1},
+            "context": "Smoke/BuiltinsSeed/test",
+            "entries": {"smoke_id": "test", "value": "ok"},
         },
-        headers=org["headers"],
+        headers=owner["headers"],
     )
-    assert org_log.status_code == status.HTTP_200_OK, org_log.json()
+    assert log_response.status_code == status.HTTP_200_OK, log_response.json()
+    log_id = log_response.json()["log_event_ids"][0]
+
+    get_response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": "Builtins",
+            "context": "Smoke/BuiltinsSeed/test",
+            "filter_expr": 'smoke_id == "test"',
+            "limit": 1,
+        },
+        headers=owner["headers"],
+    )
+    assert get_response.status_code == status.HTTP_200_OK, get_response.json()
+
+    delete_log_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project_name": "Builtins",
+            "context": "Smoke/BuiltinsSeed/test",
+            "ids_and_fields": [[log_id, None]],
+            "source_type": "all",
+            "delete_empty_logs": True,
+            "delete_empty_fields": True,
+        },
+        headers=owner["headers"],
+    )
+    assert (
+        delete_log_response.status_code == status.HTTP_200_OK
+    ), delete_log_response.json()
+
+    delete_project_response = await client.delete(
+        "/v0/project/Builtins",
+        headers=owner["headers"],
+    )
+    assert delete_project_response.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.anyio

@@ -71,7 +71,7 @@ from orchestra.web.api.utils.builtins_project import (
     BUILTINS_PROJECT_NAME,
     is_builtins_project_name,
     reject_builtins_project_operation,
-    require_builtins_org_writer,
+    require_builtins_project_owner,
 )
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -686,10 +686,18 @@ def create_project(
     # Check if using an organization API key
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     if is_builtins_project_name(request.name):
-        require_builtins_org_writer(
-            organization_id=organization_id,
-            action="created",
-        )
+        existing_builtins_projects = project_dao.filter(name=request.name)
+        if existing_builtins_projects:
+            require_builtins_project_owner(
+                existing_builtins_projects[0][0],
+                user_id=request_fastapi.state.user_id,
+                organization_id=organization_id,
+                action="created",
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="A logging project with this name already exists.",
+            )
 
     try:
         if organization_id:
@@ -997,7 +1005,9 @@ def update_project(
             detail=f"The '{project.name}' project cannot be renamed.",
         )
     if is_builtins_project_name(project.name):
-        require_builtins_org_writer(
+        require_builtins_project_owner(
+            project,
+            user_id=request_fastapi.state.user_id,
             organization_id=getattr(request_fastapi.state, "organization_id", None),
             action="updated",
         )

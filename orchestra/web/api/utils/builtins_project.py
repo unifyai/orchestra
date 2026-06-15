@@ -12,19 +12,21 @@ def is_builtins_project_name(project_name: str | None) -> bool:
     return project_name == BUILTINS_PROJECT_NAME
 
 
-def require_builtins_org_writer(
+def require_builtins_project_owner(
+    project,
     *,
+    user_id: str,
     organization_id: Optional[int],
     action: str = "modify",
 ) -> None:
-    """Reject Builtins writes from personal API keys."""
-    if organization_id is not None:
+    """Allow Builtins catalogue convergence only through its owning principal."""
+    if project.user_id == user_id and project.organization_id == organization_id:
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail=(
             f"The '{BUILTINS_PROJECT_NAME}' project is reserved and cannot be "
-            f"{action} from a personal workspace."
+            f"{action} outside its owning principal."
         ),
     )
 

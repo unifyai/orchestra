@@ -101,7 +101,7 @@ from orchestra.web.api.log.utils import (
 )
 from orchestra.web.api.utils.builtins_project import (
     is_builtins_project_name,
-    require_builtins_org_writer,
+    require_builtins_project_owner,
 )
 from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
@@ -145,7 +145,9 @@ def _check_project_write_permission(
     """Enforce project:write for org-context requests. Personal context is always allowed."""
     project = session.get(Project, project_id)
     if project and is_builtins_project_name(project.name):
-        require_builtins_org_writer(
+        require_builtins_project_owner(
+            project,
+            user_id=user_id,
             organization_id=organization_id,
             action="modified",
         )
@@ -393,7 +395,12 @@ def create_logs(
     except (IndexError, AttributeError):
         raise not_found("Project")
 
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     # Get or create context_id
     if request.context:
@@ -729,7 +736,12 @@ def create_from_logs(
             status_code=404,
             detail=f"Project '{body.project_name}' not found.",
         )
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     # Get or create context_id
     if body.context:
@@ -1176,7 +1188,12 @@ def update_derived_log(
             status_code=404,
             detail=f"Project '{body.project_name}' not found.",
         )
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     # Get or create context_id
     if body.context:
@@ -1702,7 +1719,12 @@ def _atomic_upsert_mode(
         raise HTTPException(status_code=404, detail="Project not found.")
     project = projects[0][0]  # filter_by_user_access returns list of tuples
     project_id = project.id
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     context_dao = ContextDAO(session)
 
@@ -2118,7 +2140,12 @@ def _update_logs(
 
     # Get the common project_id for all logs
     project_id = next(iter(log_id_to_project.values()))
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
     project_obj = session.get(Project, project_id)
     project_name = project_obj.name if project_obj else None
 
@@ -3332,7 +3359,12 @@ def delete_logs(
             status_code=404,
             detail=f"Project '{body.project_name}' not found.",
         )
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     # Validate context
     context_name = body.context if body.context else ""
@@ -4719,7 +4751,12 @@ def rename_field(
                 detail=f"Project '{request.project_name}' not found",
             )
         project_id = project.id
-        _check_project_write_permission(session, user_id, organization_id, project_id)
+        _check_project_write_permission(
+            session,
+            user_id,
+            organization_id,
+            project_id,
+        )
 
         context_name = request.context if request.context else ""
         context_id = context_dao.get_or_create(project_id=project_id, name=context_name)
@@ -4880,7 +4917,12 @@ def join_logs(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     # Validate pair_of_args
     if not isinstance(request.pair_of_args, list) or len(request.pair_of_args) != 2:
@@ -5388,7 +5430,12 @@ def create_fields(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     # Get or create context
     context_name = request.context if request.context else ""
@@ -5543,7 +5590,12 @@ def update_field(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     context_name = request.context or ""
     if request.context:
@@ -5646,7 +5698,12 @@ def delete_fields(
             status_code=404,
             detail=f"Project '{request.project_name}' not found.",
         )
-    _check_project_write_permission(session, user_id, organization_id, project_id)
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
 
     # Get context
     context_name = request.context if request.context else ""
