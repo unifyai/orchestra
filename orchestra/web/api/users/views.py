@@ -36,9 +36,11 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.lib.referrals import ReferralError, attribute_referral
 from orchestra.services.coordinator_service import (
+    ensure_coordinator_intro_watched,
     ensure_personal_coordinator_provisioned,
     ensure_workspace_coordinator_provisioned,
     get_workspace_coordinator,
+    list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
 )
 from orchestra.services.user_account_cleanup_service import (
@@ -1408,6 +1410,7 @@ async def backfill_workspace_coordinators(
                     session,
                     user_id=user_id,
                     organization_id=organization_id,
+                    initial_intro_watched=True,
                 )
             )
             coordinator_id = coordinator.agent_id
@@ -1435,6 +1438,59 @@ async def backfill_workspace_coordinators(
         "target_count": len(target_memberships),
         "created": created,
         "skipped_existing": skipped,
+        "failed": len(errors),
+        "errors": errors,
+    }
+
+
+@admin_router.post("/coordinator/intro-watched/backfill")
+async def backfill_coordinator_intro_watched(
+    limit: int = Query(500, ge=1, le=5000),
+    dry_run: bool = Query(True),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Mark existing Coordinators as having resolved the intro picker."""
+    coordinators = list_coordinators_missing_intro_watched(session, limit=limit)
+    if dry_run:
+        return {
+            "dry_run": True,
+            "target_count": len(coordinators),
+            "targets": [
+                {
+                    "coordinator_id": coordinator.agent_id,
+                    "user_id": coordinator.user_id,
+                    "organization_id": coordinator.organization_id,
+                }
+                for coordinator in coordinators
+            ],
+        }
+
+    updated = 0
+    errors: list[dict[str, str]] = []
+    for coordinator in coordinators:
+        try:
+            if ensure_coordinator_intro_watched(session, coordinator=coordinator):
+                updated += 1
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            errors.append(
+                {
+                    "coordinator_id": str(coordinator.agent_id),
+                    "user_id": coordinator.user_id,
+                    "organization_id": (
+                        str(coordinator.organization_id)
+                        if coordinator.organization_id is not None
+                        else "null"
+                    ),
+                    "error": str(exc),
+                },
+            )
+
+    return {
+        "dry_run": False,
+        "target_count": len(coordinators),
+        "updated": updated,
         "failed": len(errors),
         "errors": errors,
     }

@@ -88,7 +88,6 @@ from orchestra.services.coordinator_service import (
     emit_onboarding_session_started_event,
     emit_onboarding_step_skipped_event,
     emit_secret_landed_event,
-    ensure_coordinator_owner_contact_rows,
     get_coordinator_state,
     heal_coordinator_universal_contacts,
     require_authorized_coordinator,
@@ -280,9 +279,6 @@ def _resolved_contact_ids_for_assistants(
     if not assistant_ids:
         return {}
 
-    ensure_personal_contact_memberships(session, assistant_ids)
-    ensure_coordinator_owner_contact_rows(session, assistant_ids)
-
     relationship_values = {
         CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
         CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
@@ -329,19 +325,21 @@ def _resolved_contact_ids_for_assistants(
         or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
     ]
     if missing_assistant_ids:
-        logging.error(
-            "Missing personal contact overlays for assistants: %s",
+        logging.warning(
+            "Missing personal contact overlays for assistants; using fallback contact ids: %s",
             missing_assistant_ids,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="missing_contact_overlay",
         )
 
     return {
         assistant_id: ResolvedContactIds(
-            self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
-            boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
+            self_contact_id=contact_ids.get(
+                CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                PERSONAL_SELF_CONTACT_ID,
+            ),
+            boss_contact_id=contact_ids.get(
+                CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                PERSONAL_BOSS_CONTACT_ID,
+            ),
         )
         for assistant_id, contact_ids in resolved.items()
     }

@@ -293,6 +293,7 @@ def _repair_existing_coordinator_state(
     *,
     coordinator: Assistant,
     preferred_phone_country: str | None = None,
+    intro_watched: bool = False,
 ) -> None:
     """Repair Coordinator defaults and required owner-facing overlays."""
     _ensure_coordinator_default_nationality(coordinator)
@@ -313,7 +314,13 @@ def _repair_existing_coordinator_state(
     # below; this branch picks up the long tail of pre-existing
     # Coordinators on their next visit. Idempotent — no-op when a state
     # row already exists.
-    seed_initial_coordinator_state(session, coordinator=coordinator)
+    seed_initial_coordinator_state(
+        session,
+        coordinator=coordinator,
+        intro_watched=intro_watched,
+    )
+    if intro_watched:
+        ensure_coordinator_intro_watched(session, coordinator=coordinator)
 
 
 def heal_coordinator_universal_contacts(
@@ -359,6 +366,7 @@ def create_workspace_coordinator(
     user_id: str,
     organization_id: int | None,
     preferred_phone_country: str | None = None,
+    initial_intro_watched: bool = False,
 ) -> tuple[Assistant, bool]:
     """Create or return the user's Coordinator for one workspace.
 
@@ -375,6 +383,7 @@ def create_workspace_coordinator(
             session,
             coordinator=existing,
             preferred_phone_country=preferred_phone_country,
+            intro_watched=initial_intro_watched,
         )
         return existing, False
 
@@ -407,7 +416,11 @@ def create_workspace_coordinator(
     # decide between the onboarding view and the regular view from a
     # single read. Freshly-created Coordinators land in
     # ``onboarding`` mode with no picker choice made yet.
-    seed_initial_coordinator_state(session, coordinator=assistant)
+    seed_initial_coordinator_state(
+        session,
+        coordinator=assistant,
+        intro_watched=initial_intro_watched,
+    )
     return assistant, True
 
 
@@ -415,6 +428,7 @@ def create_personal_coordinator(
     session: Session,
     user_id: str,
     preferred_phone_country: str | None = None,
+    initial_intro_watched: bool = False,
 ) -> tuple[Assistant, bool]:
     """Create or return the user's personal Coordinator."""
     return create_workspace_coordinator(
@@ -422,6 +436,7 @@ def create_personal_coordinator(
         user_id=user_id,
         organization_id=None,
         preferred_phone_country=preferred_phone_country,
+        initial_intro_watched=initial_intro_watched,
     )
 
 
@@ -431,6 +446,7 @@ async def ensure_workspace_coordinator_provisioned(
     user_id: str,
     organization_id: int | None,
     preferred_phone_country: str | None = None,
+    initial_intro_watched: bool = False,
 ) -> tuple[Assistant, bool]:
     """Ensure workspace Coordinator row and pubsub topic both exist.
 
@@ -442,6 +458,7 @@ async def ensure_workspace_coordinator_provisioned(
         user_id=user_id,
         organization_id=organization_id,
         preferred_phone_country=preferred_phone_country,
+        initial_intro_watched=initial_intro_watched,
     )
     pubsub_response = await create_pubsub_topic(
         str(coordinator.agent_id),
@@ -456,6 +473,7 @@ async def ensure_personal_coordinator_provisioned(
     *,
     user_id: str,
     preferred_phone_country: str | None = None,
+    initial_intro_watched: bool = False,
 ) -> tuple[Assistant, bool]:
     """Ensure personal Coordinator row and pubsub topic both exist."""
     return await ensure_workspace_coordinator_provisioned(
@@ -463,6 +481,7 @@ async def ensure_personal_coordinator_provisioned(
         user_id=user_id,
         organization_id=None,
         preferred_phone_country=preferred_phone_country,
+        initial_intro_watched=initial_intro_watched,
     )
 
 
@@ -1080,6 +1099,7 @@ def seed_initial_coordinator_state(
     session: Session,
     *,
     coordinator: Assistant,
+    intro_watched: bool = False,
 ) -> int | None:
     """Ensure a freshly-provisioned Coordinator has a starting state row.
 
@@ -1109,6 +1129,7 @@ def seed_initial_coordinator_state(
         onboarding_step=None,
         skipped_step_ids=[],
         previous=None,
+        intro_watched=intro_watched,
     )
     log_event_id = _write_coordinator_state_row(
         session,
@@ -1229,6 +1250,41 @@ def set_coordinator_state(
     )
     session.flush()
     return entry
+
+
+def ensure_coordinator_intro_watched(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> bool:
+    """Mark the Coordinator intro as watched without changing lifecycle state."""
+    state = get_coordinator_state(session, coordinator=coordinator)
+    if state.get("intro_watched") is True:
+        return False
+    set_coordinator_state(session, coordinator=coordinator, intro_watched=True)
+    return True
+
+
+def list_coordinators_missing_intro_watched(
+    session: Session,
+    *,
+    limit: int | None = None,
+) -> list[Assistant]:
+    """Return Coordinators whose latest state has not latched intro_watched."""
+    stmt = (
+        select(Assistant)
+        .where(Assistant.is_coordinator.is_(True))
+        .order_by(Assistant.created_at.asc(), Assistant.agent_id.asc())
+    )
+    coordinators = session.scalars(stmt).all()
+    missing: list[Assistant] = []
+    for coordinator in coordinators:
+        if get_coordinator_state(session, coordinator=coordinator).get("intro_watched"):
+            continue
+        missing.append(coordinator)
+        if limit is not None and len(missing) >= limit:
+            break
+    return missing
 
 
 # =========================================================================
